@@ -16,7 +16,7 @@ limitations under the License.
 
 use std::sync::Arc;
 
-use crate::arrow::map_data_type_to_array_builder;
+use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
 use arrow::array::ArrayBuilder;
 use arrow::array::ArrayRef;
 use arrow::array::BinaryBuilder;

@@ -1,7 +1,7 @@
 use arrow::datatypes::Fields;
 use sea_query::{Alias, ColumnDef, PostgresQueryBuilder, TableBuilder};
 
-use crate::statement::map_data_type_to_column_type;
+use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 
 pub struct TypeBuilder {
     name: String,

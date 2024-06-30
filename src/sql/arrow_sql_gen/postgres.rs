@@ -1,8 +1,8 @@
 use std::convert;
 use std::sync::Arc;
 
-use crate::arrow::map_data_type_to_array_builder_optional;
-use crate::statement::map_data_type_to_column_type;
+use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
+use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,

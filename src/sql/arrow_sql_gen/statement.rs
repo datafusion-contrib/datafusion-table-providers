@@ -53,7 +53,7 @@ impl CreateTableBuilder {
     #[must_use]
     #[cfg(feature = "postgres")]
     pub fn build_postgres(self) -> Vec<String> {
-        use crate::postgres::{
+        use crate::sql::arrow_sql_gen::postgres::{
             builder::TypeBuilder, get_postgres_composite_type_name,
             map_data_type_to_column_type_postgres,
         };
