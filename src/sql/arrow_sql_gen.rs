@@ -8,36 +8,38 @@
 //!
 //! ### `CREATE TABLE` statement
 //! ```rust
+//! use std::sync::Arc;
 //! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow_sql_gen::statement::CreateTableBuilder;
+//! use datafusion_table_providers::sql::arrow_sql_gen::statement::CreateTableBuilder;
 //!
-//! let schema = Schema::new(vec![
+//! let schema = Arc::new(Schema::new(vec![
 //!     Field::new("id", DataType::Int32, false),
 //!     Field::new("name", DataType::Utf8, false),
 //!     Field::new("age", DataType::Int32, false),
-//! ]);
+//! ]));
 //!
-//! let sql = CreateTableBuilder::new(&schema, "my_table").build();
+//! let sql = CreateTableBuilder::new(schema, "my_table").build_sqlite();
 //!
-//! assert_eq!("CREATE TABLE my_table (id INT32 NOT NULL, name UTF8 NOT NULL, age INT32 NOT NULL)", sql);
+//! assert_eq!(r#"CREATE TABLE IF NOT EXISTS "my_table" ( "id" integer NOT NULL, "name" text NOT NULL, "age" integer NOT NULL )"#, sql);
 //! ```
 //!
 //! With primary key constraints:
 //! ```rust
+//! use std::sync::Arc;
 //! use arrow::datatypes::{DataType, Field, Schema};
-//! use arrow_sql_gen::statement::CreateTableBuilder;
+//! use datafusion_table_providers::sql::arrow_sql_gen::statement::CreateTableBuilder;
 //!
-//! let schema = Schema::new(vec![
+//! let schema = Arc::new(Schema::new(vec![
 //!     Field::new("id", DataType::Int32, false),
 //!     Field::new("name", DataType::Utf8, false),
 //!     Field::new("age", DataType::Int32, false),
-//! ]);
+//! ]));
 //!
-//! let sql = CreateTableBuilder::new(&schema, "my_table")
+//! let sql = CreateTableBuilder::new(schema, "my_table")
 //!     .primary_keys(vec!["id"])
-//!     .build();
+//!     .build_sqlite();
 //!
-//! assert_eq!("CREATE TABLE my_table (id INT32 NOT NULL, name UTF8 NOT NULL, age INT32 NOT NULL, PRIMARY KEY (id))", sql);
+//! assert_eq!(r#"CREATE TABLE IF NOT EXISTS "my_table" ( "id" integer NOT NULL, "name" text NOT NULL, "age" integer NOT NULL, PRIMARY KEY ("id") )"#, sql);
 //! ```
 
 pub mod arrow;
