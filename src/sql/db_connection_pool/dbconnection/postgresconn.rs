@@ -151,7 +151,7 @@ impl<'a>
         };
 
         let first_chunk = first_chunk?;
-        let schema = first_chunk.schema(); // like clickhouse, pull out the schema from the first chunk to use in the DataFusion Stream Adapter
+        let schema = first_chunk.schema(); // pull out the schema from the first chunk to use in the DataFusion Stream Adapter
 
         let output_stream = stream! {
            yield Ok(first_chunk);
