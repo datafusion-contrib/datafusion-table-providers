@@ -6,3 +6,5 @@ pub mod util;
 pub mod duckdb;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
