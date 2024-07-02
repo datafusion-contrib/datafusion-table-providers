@@ -180,18 +180,18 @@ pub(crate) mod tests {
         .expect("valid constraints")
     }
 
-    // pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-    //     Constraints::new_from_table_constraints(
-    //         &[TableConstraint::PrimaryKey {
-    //             name: None,
-    //             index_name: None,
-    //             index_type: None,
-    //             columns: cols.iter().map(|col| Ident::new(*col)).collect(),
-    //             index_options: vec![],
-    //             characteristics: None,
-    //         }],
-    //         &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
-    //     )
-    //     .expect("valid constraints")
-    // }
+    pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
+        Constraints::new_from_table_constraints(
+            &[TableConstraint::PrimaryKey {
+                name: None,
+                index_name: None,
+                index_type: None,
+                columns: cols.iter().map(|col| Ident::new(*col)).collect(),
+                index_options: vec![],
+                characteristics: None,
+            }],
+            &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
+        )
+        .expect("valid constraints")
+    }
 }

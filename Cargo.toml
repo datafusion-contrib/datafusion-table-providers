@@ -19,6 +19,7 @@ duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "c7b8e2288500
   "r2d2",
   "vtab",
   "vtab-arrow",
+  "appender-arrow",
 ], optional = true }
 fallible-iterator = "0.3.0"
 futures = "0.3.30"
