@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
-use crate::ns_lookup::verify_ns_lookup_and_tcp_connect;
+use crate::util::ns_lookup::verify_ns_lookup_and_tcp_connect;
 use async_trait::async_trait;
 use bb8::ErrorSink;
 use bb8_postgres::{
@@ -36,7 +36,7 @@ pub enum Error {
 
     #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
     InvalidHostOrPortError {
-        source: crate::ns_lookup::Error,
+        source: crate::util::ns_lookup::Error,
         host: String,
         port: u16,
     },

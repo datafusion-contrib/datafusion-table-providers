@@ -1,2 +1,2 @@
-pub mod ns_lookup;
 pub mod sql;
+pub mod util;
