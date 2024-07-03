@@ -10,6 +10,7 @@ pub mod constraints;
 pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
+pub mod retriable_error;
 pub mod secrets;
 
 #[derive(Debug, Snafu)]
