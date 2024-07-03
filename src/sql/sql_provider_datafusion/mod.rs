@@ -393,7 +393,7 @@ mod tests {
         use super::*;
         use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
         use crate::sql::db_connection_pool::{duckdbpool::DuckDbConnectionPool, DbConnectionPool};
-        use duckdb::{AccessMode, DuckdbConnectionManager, ToSql};
+        use duckdb::{DuckdbConnectionManager, ToSql};
 
         #[tokio::test]
         async fn test_duckdb_table() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -403,7 +403,7 @@ mod tests {
                 dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
                     + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory(&AccessMode::ReadWrite)?);
+            > = Arc::new(DuckDbConnectionPool::new_memory()?);
             let conn = pool.connect().await?;
             let db_conn = conn
                 .as_any()
@@ -429,7 +429,7 @@ mod tests {
                 dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
                     + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory(&AccessMode::ReadWrite)?);
+            > = Arc::new(DuckDbConnectionPool::new_memory()?);
             let conn = pool.connect().await?;
             let db_conn = conn
                 .as_any()

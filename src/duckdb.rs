@@ -139,11 +139,9 @@ impl DuckDBTableProviderFactory {
     }
 
     #[must_use]
-    pub fn duckdb_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
-        options
-            .get(&self.db_path_param)
-            .cloned()
-            .unwrap_or_else(|| format!("{name}.db"))
+    pub fn duckdb_file_path(&self, name: &str, options: &mut HashMap<String, String>) -> String {
+        let db_path = remove_option(options, &self.db_path_param);
+        db_path.unwrap_or_else(|| format!("{name}.db"))
     }
 }
 
@@ -166,10 +164,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
-        let mode = options.remove("mode").unwrap_or_default();
+        let mode = remove_option(&mut options, "mode").unwrap_or_default();
         let mode: Mode = mode.as_str().into();
 
-        let indexes_option_str = options.remove("indexes");
+        let indexes_option_str = remove_option(&mut options, "indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
             Some(indexes_str) => util::hashmap_from_option_string(&indexes_str),
             None => HashMap::new(),
@@ -192,7 +190,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         }
 
         let mut on_conflict: Option<OnConflict> = None;
-        if let Some(on_conflict_str) = options.remove("on_conflict") {
+        if let Some(on_conflict_str) = remove_option(&mut options, "on_conflict") {
             on_conflict = Some(
                 OnConflict::try_from(on_conflict_str.as_str())
                     .context(UnableToParseOnConflictSnafu)
@@ -203,13 +201,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool: Arc<DuckDbConnectionPool> = Arc::new(match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
-                let db_path = self.duckdb_file_path(&name, &cmd.options);
+                let db_path = self.duckdb_file_path(&name, &mut options);
 
                 DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
                     .context(DbConnectionPoolSnafu)
                     .map_err(to_datafusion_error)?
             }
-            Mode::Memory => DuckDbConnectionPool::new_memory(&self.access_mode)
+            Mode::Memory => DuckDbConnectionPool::new_memory()
                 .context(DbConnectionPoolSnafu)
                 .map_err(to_datafusion_error)?,
         });
@@ -359,6 +357,12 @@ impl DuckDB {
     }
 }
 
+fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<String> {
+    options
+        .remove(key)
+        .or_else(|| options.remove(&format!("duckdb.{key}")))
+}
+
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
 }
@@ -369,7 +373,7 @@ impl DuckDBTableFactory {
         Self { pool }
     }
 
-    pub async fn read_only_table_provider(
+    pub async fn table_provider(
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
@@ -402,7 +406,7 @@ impl DuckDBTableFactory {
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        let read_provider = Self::read_only_table_provider(self, table_reference.clone()).await?;
+        let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
         let table_name = table_reference.to_string();

@@ -43,8 +43,8 @@ impl DuckDbConnectionPool {
     /// * `DuckDBSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
     /// * `UnableToConnectSnafu` - If there is an error connecting to the database
-    pub fn new_memory(access_mode: &AccessMode) -> Result<Self> {
-        let config = get_config(access_mode)?;
+    pub fn new_memory() -> Result<Self> {
+        let config = get_config(&AccessMode::ReadWrite)?;
         let manager = DuckdbConnectionManager::memory_with_flags(config).context(DuckDBSnafu)?;
         let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
 

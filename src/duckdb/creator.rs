@@ -340,8 +340,7 @@ pub(crate) mod tests {
 
     fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
         Arc::new(
-            DuckDbConnectionPool::new_memory(&duckdb::AccessMode::ReadWrite)
-                .expect("to get a memory duckdb connection pool"),
+            DuckDbConnectionPool::new_memory().expect("to get a memory duckdb connection pool"),
         )
     }
 
