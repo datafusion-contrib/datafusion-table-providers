@@ -1,0 +1,58 @@
+[package]
+name = "datafusion-table-providers"
+version = "0.1.0"
+readme = "README.md"
+edition = "2021"
+repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
+
+[dependencies]
+arrow = "52.0.0"
+async-stream = { version = "0.3.5", optional = true }
+async-trait = "0.1.80"
+bigdecimal = "0.4.5"
+bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
+byteorder = "1.5.0"
+chrono = "0.4.38"
+datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "f23af338e80e495b77fb38ced23f0ef88a94662c" }
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "c7b8e22885001e2013493aebbaf190039d826c05", features = [
+  "bundled",
+  "r2d2",
+  "vtab",
+  "vtab-arrow",
+  "appender-arrow",
+], optional = true }
+fallible-iterator = "0.3.0"
+futures = "0.3.30"
+mysql_async = { version = "0.34.1", features = ["native-tls-tls", "chrono"], optional = true }
+r2d2 = { version = "0.8.10", optional = true }
+rusqlite = { version = "0.31.0", optional = true }
+sea-query = { version = "0.30.7", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time"] }
+secrecy = "0.8.0"
+snafu = "0.8.3"
+time = "0.3.36"
+tokio = { version = "1.38.0", features = ["macros", "fs"] }
+tokio-postgres = { version = "0.7.10", features = ["with-chrono-0_4", "with-uuid-1"], optional = true }
+tracing = "0.1.40"
+uuid = { version = "1.9.1", optional = true }
+postgres-native-tls = { version = "0.5.0", optional = true }
+bb8 = { version = "0.8", optional = true }
+bb8-postgres = { version = "0.8", optional = true }
+native-tls = { version = "0.2.11", optional = true }
+trust-dns-resolver = "0.23.2"
+url = "2.5.2"
+pem = { version = "3.0.4", optional = true }
+tokio-rusqlite = { version = "0.5.1", optional = true }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "c3f696adceaad7f579af7f163cb933e08d7f8ba1" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", folder = "sources/sql", rev = "c3f696adceaad7f579af7f163cb933e08d7f8ba1" }
+itertools = "0.13.0"
+
+[dev-dependencies]
+reqwest = "0.12.5"
+secrecy = "0.8.0"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[features]
+mysql = ["dep:mysql_async"]
+postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
+sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
+duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
