@@ -21,15 +21,12 @@ use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 use tokio_rusqlite::Connection;
 
-use crate::{
-    delete::DeletionTableProviderAdapter,
-    util::{
-        self,
-        column_reference::{self, ColumnReference},
-        constraints::{self, get_primary_keys_from_constraints},
-        indexes::IndexType,
-        on_conflict::{self, OnConflict},
-    },
+use crate::util::{
+    self,
+    column_reference::{self, ColumnReference},
+    constraints::{self, get_primary_keys_from_constraints},
+    indexes::IndexType,
+    on_conflict::{self, OnConflict},
 };
 
 use self::write::SqliteTableWriter;
@@ -213,10 +210,11 @@ impl TableProviderFactory for SqliteTableFactory {
             .context(DanglingReferenceToSqliteSnafu)
             .map_err(to_datafusion_error)?;
 
-        let read_write_provider = SqliteTableWriter::create(read_provider, sqlite, on_conflict);
-
-        let delete_adapter = DeletionTableProviderAdapter::new(read_write_provider);
-        Ok(Arc::new(delete_adapter))
+        Ok(SqliteTableWriter::create(
+            read_provider,
+            sqlite,
+            on_conflict,
+        ))
     }
 }
 
@@ -315,24 +313,6 @@ impl Sqlite {
         transaction.execute(format!(r#"DELETE FROM "{}""#, self.table_name).as_str(), [])?;
 
         Ok(())
-    }
-
-    fn delete_from(
-        &self,
-        transaction: &Transaction<'_>,
-        where_clause: &str,
-    ) -> rusqlite::Result<u64> {
-        transaction.execute(
-            format!(
-                r#"DELETE FROM "{}" WHERE {}"#,
-                self.table_name, where_clause
-            )
-            .as_str(),
-            [],
-        )?;
-        let count: u64 = transaction.query_row("SELECT changes()", [], |row| row.get(0))?;
-
-        Ok(count)
     }
 
     fn create_table(

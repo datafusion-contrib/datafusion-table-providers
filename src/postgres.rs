@@ -33,16 +33,13 @@ use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{
-    delete::DeletionTableProviderAdapter,
-    util::{
-        self,
-        column_reference::{self, ColumnReference},
-        constraints::{self, get_primary_keys_from_constraints},
-        indexes::IndexType,
-        on_conflict::{self, OnConflict},
-        secrets::to_secret_map,
-    },
+use crate::util::{
+    self,
+    column_reference::{self, ColumnReference},
+    constraints::{self, get_primary_keys_from_constraints},
+    indexes::IndexType,
+    on_conflict::{self, OnConflict},
+    secrets::to_secret_map,
 };
 
 use self::write::PostgresTableWriter;
@@ -302,12 +299,11 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             Some(Engine::Postgres),
         ));
 
-        let delete_adapter = DeletionTableProviderAdapter::new(PostgresTableWriter::create(
+        Ok(PostgresTableWriter::create(
             read_provider,
             postgres,
             on_conflict,
-        ));
-        Ok(Arc::new(delete_adapter))
+        ))
     }
 }
 
@@ -419,25 +415,6 @@ impl Postgres {
             .context(UnableToDeleteAllTableDataSnafu)?;
 
         Ok(())
-    }
-
-    #[allow(clippy::cast_sign_loss)]
-    async fn delete_from(&self, transaction: &Transaction<'_>, where_clause: &str) -> Result<u64> {
-        let row = transaction
-          .query_one(
-              format!(
-                  r#"WITH deleted AS (DELETE FROM "{}" WHERE {} RETURNING *) SELECT COUNT(*) FROM deleted"#,
-                  self.table_name, where_clause
-              )
-              .as_str(),
-              &[],
-          )
-          .await
-          .context(UnableToDeleteDataSnafu)?;
-
-        let deleted: i64 = row.get(0);
-
-        Ok(deleted as u64)
     }
 
     async fn create_table(

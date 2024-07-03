@@ -1,4 +1,3 @@
-pub mod delete;
 pub mod sql;
 pub mod util;
 

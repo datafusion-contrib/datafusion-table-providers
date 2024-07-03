@@ -1,6 +1,5 @@
 use std::{any::Any, fmt, sync::Arc};
 
-use crate::sql::sql_provider_datafusion::expr::Engine;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::{
@@ -18,10 +17,7 @@ use datafusion::{
 use futures::StreamExt;
 use snafu::prelude::*;
 
-use crate::{
-    delete::{DeletionExec, DeletionSink, DeletionTableProvider},
-    util::{constraints, on_conflict::OnConflict},
-};
+use crate::util::{constraints, on_conflict::OnConflict};
 
 use super::{to_datafusion_error, Sqlite};
 
@@ -192,77 +188,23 @@ impl DisplayAs for SqliteDataSink {
     }
 }
 
-#[async_trait]
-impl DeletionTableProvider for SqliteTableWriter {
-    async fn delete_from(
-        &self,
-        _state: &SessionState,
-        filters: &[Expr],
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DeletionExec::new(
-            Arc::new(SqliteDeletionSink::new(Arc::clone(&self.sqlite), filters)),
-            &self.schema(),
-        )))
-    }
-}
-
-struct SqliteDeletionSink {
-    sqlite: Arc<Sqlite>,
-    filters: Vec<Expr>,
-}
-
-impl SqliteDeletionSink {
-    fn new(sqlite: Arc<Sqlite>, filters: &[Expr]) -> Self {
-        Self {
-            sqlite,
-            filters: filters.to_vec(),
-        }
-    }
-}
-
-#[async_trait]
-impl DeletionSink for SqliteDeletionSink {
-    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        let mut db_conn = self.sqlite.connect().await?;
-        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn)?;
-        let sqlite = Arc::clone(&self.sqlite);
-        let sql = crate::util::filters_to_sql(&self.filters, Some(Engine::SQLite))?;
-
-        let count: u64 = sqlite_conn
-            .conn
-            .call(move |conn| {
-                let tx = conn.transaction()?;
-
-                let count = sqlite.delete_from(&tx, &sql)?;
-
-                tx.commit()?;
-
-                Ok(count)
-            })
-            .await?;
-
-        Ok(count)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{Int64Array, RecordBatch, StringArray, UInt64Array},
+        array::{Int64Array, RecordBatch, StringArray},
         datatypes::{DataType, Schema},
     };
     use datafusion::{
         common::{Constraints, TableReference, ToDFSchema},
         datasource::provider::TableProviderFactory,
         execution::context::SessionContext,
-        logical_expr::{cast, col, lit, CreateExternalTable},
+        logical_expr::CreateExternalTable,
         physical_plan::{collect, test::exec::MockExec},
-        scalar::ScalarValue,
     };
 
-    use crate::{delete::get_deletion_provider, sqlite::SqliteTableFactory};
+    use crate::sqlite::SqliteTableFactory;
 
     #[tokio::test]
     #[allow(clippy::unreadable_literal)]
@@ -311,53 +253,5 @@ mod tests {
         collect(insertion, ctx.task_ctx())
             .await
             .expect("insert successful");
-
-        let table =
-            get_deletion_provider(table).expect("table should be returned as deletion provider");
-
-        let filter = cast(
-            col("time_in_string"),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
-        )
-        .lt(lit(ScalarValue::TimestampMillisecond(
-            Some(1354360272000),
-            None,
-        )));
-        let plan = table
-            .delete_from(&ctx.state(), &vec![filter])
-            .await
-            .expect("deletion should be successful");
-
-        let result = collect(plan, ctx.task_ctx())
-            .await
-            .expect("deletion successful");
-        let actual = result
-            .first()
-            .expect("result should have at least one batch")
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .expect("result should be UInt64Array");
-        let expected = UInt64Array::from(vec![2]);
-        assert_eq!(actual, &expected);
-
-        let filter = col("time_int").lt(lit(1354360273));
-        let plan = table
-            .delete_from(&ctx.state(), &vec![filter])
-            .await
-            .expect("deletion should be successful");
-
-        let result = collect(plan, ctx.task_ctx())
-            .await
-            .expect("deletion successful");
-        let actual = result
-            .first()
-            .expect("result should have at least one batch")
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .expect("result should be UInt64Array");
-        let expected = UInt64Array::from(vec![1]);
-        assert_eq!(actual, &expected);
     }
 }

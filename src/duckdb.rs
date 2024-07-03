@@ -8,15 +8,12 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion::{self, expr::Engine};
-use crate::{
-    delete::DeletionTableProviderAdapter,
-    util::{
-        self,
-        column_reference::{self, ColumnReference},
-        constraints,
-        indexes::IndexType,
-        on_conflict::{self, OnConflict},
-    },
+use crate::util::{
+    self,
+    column_reference::{self, ColumnReference},
+    constraints,
+    indexes::IndexType,
+    on_conflict::{self, OnConflict},
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -236,11 +233,11 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
         ));
 
-        let read_write_provider = DuckDBTableWriter::create(read_provider, duckdb, on_conflict);
-
-        let deleted_table_provider = DeletionTableProviderAdapter::new(read_write_provider);
-
-        Ok(Arc::new(deleted_table_provider))
+        Ok(DuckDBTableWriter::create(
+            read_provider,
+            duckdb,
+            on_conflict,
+        ))
     }
 }
 
@@ -276,14 +273,6 @@ impl DuckDB {
     #[must_use]
     pub fn constraints(&self) -> &Constraints {
         &self.constraints
-    }
-
-    async fn connect(
-        &self,
-    ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
-    > {
-        self.pool.connect().await.context(DbConnectionSnafu)
     }
 
     fn connect_sync(
@@ -367,36 +356,6 @@ impl DuckDB {
             .context(UnableToDeleteAllTableDataSnafu)?;
 
         Ok(())
-    }
-
-    fn delete_from(&self, duckdb_conn: &mut DuckDbConnection, where_clause: &str) -> Result<u64> {
-        let tx = duckdb_conn
-            .conn
-            .transaction()
-            .context(UnableToBeginTransactionSnafu)?;
-
-        let count_sql = format!(
-            r#"SELECT COUNT(*) FROM "{}" WHERE {}"#,
-            self.table_name, where_clause
-        );
-
-        let mut count: u64 = tx
-            .query_row(&count_sql, [], |row| row.get::<usize, u64>(0))
-            .context(UnableToQueryDataSnafu)?;
-
-        let sql = format!(
-            r#"DELETE FROM "{}" WHERE {}"#,
-            self.table_name, where_clause
-        );
-        tx.execute(&sql, [])
-            .context(UnableToDeleteDuckdbDataSnafu)?;
-
-        count -= tx
-            .query_row(&count_sql, [], |row| row.get::<usize, u64>(0))
-            .context(UnableToQueryDataSnafu)?;
-
-        tx.commit().context(UnableToCommitTransactionSnafu)?;
-        Ok(count)
     }
 }
 
