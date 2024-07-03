@@ -340,7 +340,7 @@ impl Postgres {
         &self.constraints
     }
 
-    async fn connect(&self) -> Result<Box<DynPostgresConnection>> {
+    pub async fn connect(&self) -> Result<Box<DynPostgresConnection>> {
         let mut conn = self.pool.connect().await.context(DbConnectionSnafu)?;
 
         let pg_conn = Self::postgres_conn(&mut conn)?;
@@ -355,7 +355,7 @@ impl Postgres {
         Ok(conn)
     }
 
-    fn postgres_conn(
+    pub fn postgres_conn(
         db_connection: &mut Box<DynPostgresConnection>,
     ) -> Result<&mut PostgresConnection> {
         db_connection
