@@ -204,7 +204,7 @@ mod tests {
         physical_plan::{collect, test::exec::MockExec},
     };
 
-    use crate::sqlite::SqliteTableFactory;
+    use crate::sqlite::SqliteTableProviderFactory;
 
     #[tokio::test]
     #[allow(clippy::unreadable_literal)]
@@ -229,7 +229,7 @@ mod tests {
             column_defaults: HashMap::default(),
         };
         let ctx = SessionContext::new();
-        let table = SqliteTableFactory::default()
+        let table = SqliteTableProviderFactory::default()
             .create(&ctx.state(), &external_table)
             .await
             .expect("table should be created");

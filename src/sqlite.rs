@@ -1,4 +1,5 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
+use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
@@ -74,15 +75,18 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
+
+    #[snafu(display("Unable to infer schema: {source}"))]
+    UnableToInferSchema { source: dbconnection::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct SqliteTableFactory {
+pub struct SqliteTableProviderFactory {
     db_path_param: String,
 }
 
-impl SqliteTableFactory {
+impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -99,7 +103,7 @@ impl SqliteTableFactory {
     }
 }
 
-impl Default for SqliteTableFactory {
+impl Default for SqliteTableProviderFactory {
     fn default() -> Self {
         Self::new()
     }
@@ -109,7 +113,7 @@ type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
 
 #[async_trait]
-impl TableProviderFactory for SqliteTableFactory {
+impl TableProviderFactory for SqliteTableProviderFactory {
     async fn create(
         &self,
         _state: &SessionState,
@@ -215,6 +219,41 @@ impl TableProviderFactory for SqliteTableFactory {
             sqlite,
             on_conflict,
         ))
+    }
+}
+
+pub struct SqliteTableFactory {
+    pool: Arc<SqliteConnectionPool>,
+}
+
+impl SqliteTableFactory {
+    #[must_use]
+    pub fn new(pool: Arc<SqliteConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    pub async fn table_provider(
+        &self,
+        table_reference: TableReference,
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
+        let pool = Arc::clone(&self.pool);
+
+        let conn = pool.connect().await.context(DbConnectionSnafu)?;
+        let schema = get_schema(conn, &table_reference)
+            .await
+            .context(UnableToInferSchemaSnafu)?;
+
+        let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
+
+        let read_provider = Arc::new(SqlTable::new_with_schema(
+            "sqlite",
+            &dyn_pool,
+            Arc::clone(&schema),
+            table_reference,
+            Some(Engine::SQLite),
+        ));
+
+        Ok(read_provider)
     }
 }
 

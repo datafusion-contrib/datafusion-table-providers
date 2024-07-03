@@ -47,7 +47,7 @@ impl MySQLTableFactory {
         Self { pool }
     }
 
-    pub async fn read_only_table_provider(
+    pub async fn table_provider(
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {

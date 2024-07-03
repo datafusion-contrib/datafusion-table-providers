@@ -142,7 +142,7 @@ impl PostgresTableFactory {
         Self { pool }
     }
 
-    pub async fn read_only_table_provider(
+    pub async fn table_provider(
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
@@ -167,7 +167,7 @@ impl PostgresTableFactory {
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        let read_provider = Self::read_only_table_provider(self, table_reference.clone()).await?;
+        let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
         let table_name = table_reference.to_string();

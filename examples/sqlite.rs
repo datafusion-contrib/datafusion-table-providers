@@ -2,28 +2,28 @@ use std::sync::Arc;
 
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
-    duckdb::DuckDBTableFactory, sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,
+    sql::db_connection_pool::{sqlitepool::SqliteConnectionPool, Mode},
+    sqlite::SqliteTableFactory,
 };
-use duckdb::AccessMode;
 
-/// This example demonstrates how to create a DuckDBTableFactory and use it to create TableProviders
+/// This example demonstrates how to create a SqliteTableFactory and use it to create TableProviders
 /// that can be registered with DataFusion.
 #[tokio::main]
 async fn main() {
-    // Opening in ReadOnly mode allows multiple reader processes to access the database at the same time.
-    let duckdb_pool = Arc::new(
-        DuckDbConnectionPool::new_file("examples/duckdb_example.db", &AccessMode::ReadOnly)
-            .expect("unable to create DuckDB connection pool"),
+    let sqlite_pool = Arc::new(
+        SqliteConnectionPool::new("examples/sqlite_example.db", Mode::File)
+            .await
+            .expect("unable to create Sqlite connection pool"),
     );
 
-    let duckdb_table_factory = DuckDBTableFactory::new(duckdb_pool);
+    let sqlite_table_factory = SqliteTableFactory::new(sqlite_pool);
 
-    let companies_table = duckdb_table_factory
+    let companies_table = sqlite_table_factory
         .table_provider(TableReference::bare("companies"))
         .await
         .expect("to create table provider");
 
-    let projects_table = duckdb_table_factory
+    let projects_table = sqlite_table_factory
         .table_provider(TableReference::bare("projects"))
         .await
         .expect("to create table provider");

@@ -111,29 +111,30 @@ impl PostgresConnectionPool {
             if let Some(pg_port) = params.get("pg_port").map(Secret::expose_secret) {
                 connection_string.push_str(format!("port={pg_port} ").as_str());
             }
-            if let Some(pg_sslmode) = params.get("pg_sslmode").map(Secret::expose_secret) {
-                match pg_sslmode.to_lowercase().as_str() {
-                    "disable" | "require" | "prefer" | "verify-ca" | "verify-full" => {
-                        ssl_mode = pg_sslmode.to_string();
+        }
+
+        if let Some(pg_sslmode) = params.get("pg_sslmode").map(Secret::expose_secret) {
+            match pg_sslmode.to_lowercase().as_str() {
+                "disable" | "require" | "prefer" | "verify-ca" | "verify-full" => {
+                    ssl_mode = pg_sslmode.to_string();
+                }
+                _ => {
+                    InvalidParameterSnafu {
+                        parameter_name: "pg_sslmode".to_string(),
                     }
-                    _ => {
-                        InvalidParameterSnafu {
-                            parameter_name: "pg_sslmode".to_string(),
-                        }
-                        .fail()?;
-                    }
+                    .fail()?;
                 }
             }
-            if let Some(pg_sslrootcert) = params.get("pg_sslrootcert").map(Secret::expose_secret) {
-                ensure!(
-                    std::path::Path::new(pg_sslrootcert).exists(),
-                    InvalidRootCertPathSnafu {
-                        path: pg_sslrootcert,
-                    }
-                );
+        }
+        if let Some(pg_sslrootcert) = params.get("pg_sslrootcert").map(Secret::expose_secret) {
+            ensure!(
+                std::path::Path::new(pg_sslrootcert).exists(),
+                InvalidRootCertPathSnafu {
+                    path: pg_sslrootcert,
+                }
+            );
 
-                ssl_rootcert_path = Some(PathBuf::from(pg_sslrootcert));
-            }
+            ssl_rootcert_path = Some(PathBuf::from(pg_sslrootcert));
         }
 
         let mode = match ssl_mode.as_str() {

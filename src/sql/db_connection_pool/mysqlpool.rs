@@ -83,31 +83,31 @@ impl MySQLConnectionPool {
                 connection_string =
                     connection_string.tcp_port(mysql_tcp_port.parse::<u16>().unwrap_or(3306));
             }
-            if let Some(mysql_sslmode) = params.get("mysql_sslmode").map(Secret::expose_secret) {
-                match mysql_sslmode.to_lowercase().as_str() {
-                    "disabled" | "required" | "preferred" => {
-                        ssl_mode = mysql_sslmode.as_str();
-                    }
-                    _ => {
-                        InvalidParameterSnafu {
-                            parameter_name: "mysql_sslmode".to_string(),
-                        }
-                        .fail()?;
-                    }
+        }
+
+        if let Some(mysql_sslmode) = params.get("mysql_sslmode").map(Secret::expose_secret) {
+            match mysql_sslmode.to_lowercase().as_str() {
+                "disabled" | "required" | "preferred" => {
+                    ssl_mode = mysql_sslmode.as_str();
                 }
-            }
-            if let Some(mysql_sslrootcert) =
-                params.get("mysql_sslrootcert").map(Secret::expose_secret)
-            {
-                if !std::path::Path::new(mysql_sslrootcert).exists() {
-                    InvalidRootCertPathSnafu {
-                        path: mysql_sslrootcert,
+                _ => {
+                    InvalidParameterSnafu {
+                        parameter_name: "mysql_sslmode".to_string(),
                     }
                     .fail()?;
                 }
-
-                ssl_rootcert_path = Some(PathBuf::from(mysql_sslrootcert));
             }
+        }
+        if let Some(mysql_sslrootcert) = params.get("mysql_sslrootcert").map(Secret::expose_secret)
+        {
+            if !std::path::Path::new(mysql_sslrootcert).exists() {
+                InvalidRootCertPathSnafu {
+                    path: mysql_sslrootcert,
+                }
+                .fail()?;
+            }
+
+            ssl_rootcert_path = Some(PathBuf::from(mysql_sslrootcert));
         }
 
         let ssl_opts = get_ssl_opts(ssl_mode, ssl_rootcert_path);
