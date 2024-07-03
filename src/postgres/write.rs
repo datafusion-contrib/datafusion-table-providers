@@ -40,6 +40,10 @@ impl PostgresTableWriter {
             on_conflict,
         })
     }
+
+    pub fn postgres(&self) -> Arc<Postgres> {
+        Arc::clone(&self.postgres)
+    }
 }
 
 #[async_trait]
