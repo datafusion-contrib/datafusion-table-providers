@@ -39,7 +39,7 @@ bb8 = { version = "0.8", optional = true }
 bb8-postgres = { version = "0.8", optional = true }
 native-tls = { version = "0.2.11", optional = true }
 trust-dns-resolver = "0.23.2"
-url = "2.5.2"
+url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "c3f696adceaad7f579af7f163cb933e08d7f8ba1" }
