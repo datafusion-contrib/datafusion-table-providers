@@ -42,6 +42,10 @@ impl DuckDBTableWriter {
             on_conflict,
         })
     }
+
+    pub fn duckdb(&self) -> Arc<DuckDB> {
+        Arc::clone(&self.duckdb)
+    }
 }
 
 #[async_trait]

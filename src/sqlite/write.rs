@@ -41,6 +41,10 @@ impl SqliteTableWriter {
             on_conflict,
         })
     }
+
+    pub fn sqlite(&self) -> Arc<Sqlite> {
+        Arc::clone(&self.sqlite)
+    }
 }
 
 #[async_trait]

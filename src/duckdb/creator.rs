@@ -501,10 +501,9 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn init_tracing(default_level: Option<&str>) -> DefaultGuard {
-        let filter = match (default_level, std::env::var("SPICED_LOG").ok()) {
-            (_, Some(log)) => EnvFilter::new(log),
-            (Some(level), None) => EnvFilter::new(level),
-            _ => EnvFilter::new("INFO,data_components=TRACE"),
+        let filter = match default_level {
+            Some(level) => EnvFilter::new(level),
+            _ => EnvFilter::new("INFO,datafusion_table_providers=TRACE"),
         };
 
         let subscriber = tracing_subscriber::FmtSubscriber::builder()
