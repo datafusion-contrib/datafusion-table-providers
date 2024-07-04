@@ -278,7 +278,7 @@ impl DuckDB {
         &self.constraints
     }
 
-    fn connect_sync(
+    pub fn connect_sync(
         &self,
     ) -> Result<
         Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
