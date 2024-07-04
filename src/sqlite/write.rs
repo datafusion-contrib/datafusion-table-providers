@@ -23,6 +23,7 @@ use crate::util::{
 
 use super::{to_datafusion_error, Sqlite};
 
+#[derive(Clone)]
 pub struct SqliteTableWriter {
     read_provider: Arc<dyn TableProvider>,
     sqlite: Arc<Sqlite>,

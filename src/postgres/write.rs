@@ -22,6 +22,7 @@ use crate::util::{
 
 use super::{to_datafusion_error, Postgres};
 
+#[derive(Clone)]
 pub struct PostgresTableWriter {
     read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
