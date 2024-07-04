@@ -286,6 +286,11 @@ impl Sqlite {
     }
 
     #[must_use]
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+
+    #[must_use]
     pub fn constraints(&self) -> &Constraints {
         &self.constraints
     }
