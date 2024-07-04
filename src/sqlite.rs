@@ -290,13 +290,13 @@ impl Sqlite {
         &self.constraints
     }
 
-    async fn connect(
+    pub async fn connect(
         &self,
     ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
         self.pool.connect().await.context(DbConnectionSnafu)
     }
 
-    fn sqlite_conn<'a>(
+    pub fn sqlite_conn<'a>(
         db_connection: &'a mut Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>,
     ) -> Result<&'a mut SqliteConnection> {
         db_connection
