@@ -122,7 +122,7 @@ impl DataSink for DuckDBDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let duckdb = self.duckdb.clone();
+        let duckdb = Arc::clone(&self.duckdb);
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
 
@@ -133,7 +133,7 @@ impl DataSink for DuckDBDataSink {
             flume::bounded(100);
 
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
-            tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
                 let mut db_conn = duckdb.connect_sync().map_err(to_datafusion_error)?;
 
                 let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_datafusion_error)?;
