@@ -1,7 +1,9 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
-use crate::util::{on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error};
+use crate::util::{
+    constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
+};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::common::Constraints;
@@ -162,6 +164,12 @@ impl DataSink for DuckDBDataSink {
 
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
+
+            constraints::validate_batch_with_constraints(&[batch.clone()], self.duckdb.constraints())
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
+    
             batch_tx.send(batch).map_err(|e| {
                 DataFusionError::Execution(format!("Unable to send RecordBatch to duckdb writer: {e}"))
             })?;
