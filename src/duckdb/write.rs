@@ -19,9 +19,9 @@ use datafusion::{
     },
 };
 use duckdb::Transaction;
-use flume::Iter;
 use futures::StreamExt;
 use snafu::prelude::*;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use super::to_datafusion_error;
@@ -126,11 +126,14 @@ impl DataSink for DuckDBDataSink {
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
 
-        // Limit channel size to a maximum of 100 RecordBatches queued for cases when DuckDB is slower than the writer stream, 
-        // so that we don't significantly increase memory usage. After the maximum RecordBatches are queued, the writer stream will wait 
+        // Limit channel size to a maximum of 100 RecordBatches queued for cases when DuckDB is slower than the writer stream,
+        // so that we don't significantly increase memory usage. After the maximum RecordBatches are queued, the writer stream will wait
         // until DuckDB is able to process more data.
-        let (batch_tx, batch_rx): (flume::Sender<RecordBatch>, flume::Receiver<RecordBatch>) =
-            flume::bounded(100);
+        let (batch_tx, batch_rx): (Sender<RecordBatch>, Receiver<RecordBatch>) = mpsc::channel(100);
+
+        // Since the main task/stream can be dropped or fail, we use a oneshot channel to signal that all data is received and we should commit the transaction
+        let (notify_commit_transaction, mut on_commit_transaction) =
+            tokio::sync::oneshot::channel();
 
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
@@ -145,15 +148,21 @@ impl DataSink for DuckDBDataSink {
                     .map_err(to_datafusion_error)?;
 
                 let num_rows = match **duckdb.constraints() {
-                    [] => try_write_all_no_constraints(duckdb, &tx, batch_rx.iter(), overwrite)?,
+                    [] => try_write_all_no_constraints(duckdb, &tx, batch_rx, overwrite)?,
                     _ => try_write_all_with_constraints(
                         duckdb,
                         &tx,
-                        batch_rx.iter(),
+                        batch_rx,
                         overwrite,
                         on_conflict,
                     )?,
                 };
+
+                if on_commit_transaction.try_recv().is_err() {
+                    return Err(DataFusionError::Execution(
+                        "No message to commit transaction has been received.".to_string(),
+                    ));
+                }
 
                 tx.commit()
                     .context(super::UnableToCommitTransactionSnafu)
@@ -165,15 +174,26 @@ impl DataSink for DuckDBDataSink {
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            constraints::validate_batch_with_constraints(&[batch.clone()], self.duckdb.constraints())
-                .await
-                .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?;
-    
-            batch_tx.send(batch).map_err(|e| {
-                DataFusionError::Execution(format!("Unable to send RecordBatch to duckdb writer: {e}"))
+            constraints::validate_batch_with_constraints(
+                &[batch.clone()],
+                self.duckdb.constraints(),
+            )
+            .await
+            .context(super::ConstraintViolationSnafu)
+            .map_err(to_datafusion_error)?;
+
+            batch_tx.send(batch).await.map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Unable to send RecordBatch to duckdb writer: {e}"
+                ))
             })?;
         }
+
+        if notify_commit_transaction.send(()).is_err() {
+            return Err(DataFusionError::Execution(format!(
+                "Unable to send message to commit transaction to duckdb writer."
+            )));
+        };
 
         // Drop the sender to signal the receiver that no more data is coming
         drop(batch_tx);
@@ -220,7 +240,7 @@ impl DisplayAs for DuckDBDataSink {
 fn try_write_all_with_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
-    data_batches: Iter<RecordBatch>,
+    mut data_batches: Receiver<RecordBatch>,
     overwrite: bool,
     on_conflict: Option<OnConflict>,
 ) -> datafusion::common::Result<u64> {
@@ -241,15 +261,12 @@ fn try_write_all_with_constraints(
         unreachable!()
     };
 
-    for (i, batch) in data_batches.enumerate() {
+    while let Some(batch) = data_batches.blocking_recv() {
         num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
             DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
         })?;
 
-        tracing::debug!(
-            "Inserting batch #{i} {} rows into cloned table.",
-            batch.num_rows()
-        );
+        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
         insert_table
             .insert_batch_no_constraints(tx, &batch)
             .map_err(to_datafusion_error)?;
@@ -275,7 +292,7 @@ fn try_write_all_with_constraints(
 fn try_write_all_no_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
-    data_batches: Iter<RecordBatch>,
+    mut data_batches: Receiver<RecordBatch>,
     overwrite: bool,
 ) -> datafusion::common::Result<u64> {
     let mut num_rows = 0;
@@ -287,12 +304,12 @@ fn try_write_all_no_constraints(
             .map_err(to_datafusion_error)?;
     }
 
-    for (i, batch) in data_batches.enumerate() {
+    while let Some(batch) = data_batches.blocking_recv() {
         num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
             DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
         })?;
 
-        tracing::debug!("Inserting batch #{i} {} rows into table.", batch.num_rows());
+        tracing::debug!("Inserting {} rows into table.", batch.num_rows());
 
         duckdb
             .insert_batch_no_constraints(tx, &batch)
