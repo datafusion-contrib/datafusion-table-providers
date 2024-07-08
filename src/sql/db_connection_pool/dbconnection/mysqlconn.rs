@@ -96,7 +96,6 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
                 .context(QuerySnafu)?;
 
             let Some(stream) = exec_iter.stream::<Row>().await.context(QuerySnafu)? else {
-                // This should expect exact one stream
                 yield Err(Error::QueryResultStreamError {});
                 return;
             };
