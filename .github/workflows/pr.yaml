@@ -1,0 +1,50 @@
+---
+    name: pr
+    
+    on:
+      pull_request:
+        branches:
+          - main
+
+    jobs:
+      lint:
+        name: Clippy
+        runs-on: ubuntu-latest
+    
+        steps:
+          - uses: actions/checkout@v4
+    
+          - uses: dtolnay/rust-toolchain@stable
+          
+          - name: Install Protoc
+            uses: arduino/setup-protoc@v3
+            with:
+              repo-token: ${{ secrets.GITHUB_TOKEN }}
+    
+          - run: cargo clippy --all-features -- -D warnings
+    
+      build:
+        name: Build
+        runs-on: ubuntu-latest
+    
+        steps:
+          - uses: actions/checkout@v4
+    
+          - uses: dtolnay/rust-toolchain@stable
+          
+          # Putting this into a GitHub Actions matrix will run a separate job per matrix item, whereas in theory 
+          # this can re-use the existing build cache to go faster.
+          - name: Build without default features
+            run: cargo check --no-default-features
+
+          - name: Build with only duckdb
+            run: cargo check --no-default-features --features duckdb
+
+          - name: Build with only postgres
+            run: cargo check --no-default-features --features postgres
+
+          - name: Build with only sqlite
+            run: cargo check --no-default-features --features sqlite
+
+          - name: Build with only mysql
+            run: cargo check --no-default-features --features mysql
