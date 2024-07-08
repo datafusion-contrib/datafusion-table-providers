@@ -190,9 +190,9 @@ impl DataSink for DuckDBDataSink {
         }
 
         if notify_commit_transaction.send(()).is_err() {
-            return Err(DataFusionError::Execution(format!(
-                "Unable to send message to commit transaction to duckdb writer."
-            )));
+            return Err(DataFusionError::Execution(
+                "Unable to send message to commit transaction to duckdb writer.".to_string(),
+            ));
         };
 
         // Drop the sender to signal the receiver that no more data is coming
