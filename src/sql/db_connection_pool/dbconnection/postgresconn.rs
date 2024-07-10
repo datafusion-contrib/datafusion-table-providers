@@ -2,7 +2,7 @@ use std::any::Any;
 use std::error::Error;
 use std::sync::Arc;
 
-use crate::sql::arrow_sql_gen::postgres::{columns_to_schema, rows_to_arrow};
+use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_stream::stream;
@@ -86,21 +86,14 @@ impl<'a>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        match self
+        let rows = match self
             .conn
-            .prepare(&format!(
-                "SELECT * FROM {} LIMIT 1",
-                table_reference.to_quoted_string()
-            ))
+            .query(&format!("SELECT * FROM {table_reference} LIMIT 1"), &[])
             .await
         {
-            Ok(statement) => {
-                return columns_to_schema(statement.columns())
-                    .boxed()
-                    .context(super::UnableToGetSchemaSnafu)
-            }
-            Err(err) => {
-                if let Some(error_source) = err.source() {
+            Ok(rows) => rows,
+            Err(e) => {
+                if let Some(error_source) = e.source() {
                     if let Some(pg_error) =
                         error_source.downcast_ref::<tokio_postgres::error::DbError>()
                     {
@@ -112,12 +105,23 @@ impl<'a>
                         }
                     }
                 }
-
                 return Err(super::Error::UnableToGetSchema {
-                    source: Box::new(err),
+                    source: Box::new(e),
                 });
             }
-        }
+        };
+
+        let rec = match rows_to_arrow(rows.as_slice()) {
+            Ok(rec) => rec,
+            Err(e) => {
+                return Err(super::Error::UnableToGetSchema {
+                    source: Box::new(PostgresError::ConversionError { source: e }),
+                })
+            }
+        };
+
+        let schema = rec.schema();
+        Ok(schema)
     }
 
     async fn query_arrow(

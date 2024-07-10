@@ -164,31 +164,6 @@ macro_rules! handle_composite_types {
     }
 }
 
-/// Converts Postgres Columns to Arrow Data Types
-///
-/// # Errors
-///
-/// Returns an error if the Postgres column type is not supported
-pub fn columns_to_schema(cols: &[Column]) -> Result<Arc<Schema>> {
-    let mut arrow_fields: Vec<Option<Field>> = Vec::new();
-
-    for column in cols {
-        let column_name = column.name();
-        let column_type = column.type_();
-        let data_type = map_column_type_to_data_type(column_type);
-        match &data_type {
-            Some(data_type) => {
-                arrow_fields.push(Some(Field::new(column_name, data_type.clone(), true)));
-            }
-            None => arrow_fields.push(None),
-        }
-    }
-
-    let arrow_fields = arrow_fields.into_iter().flatten().collect::<Vec<Field>>();
-
-    Ok(Arc::new(Schema::new(arrow_fields)))
-}
-
 /// Converts Postgres `Row`s to an Arrow `RecordBatch`. Assumes that all rows have the same schema and
 /// sets the schema based on the first row.
 ///
