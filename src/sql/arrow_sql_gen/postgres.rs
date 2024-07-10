@@ -20,7 +20,7 @@ use snafu::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind;
-use tokio_postgres::{types::Type, Column, Row};
+use tokio_postgres::{types::Type, Row};
 
 pub mod builder;
 pub mod composite;
