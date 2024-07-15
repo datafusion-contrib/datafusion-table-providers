@@ -2,7 +2,8 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::{
     common::{Constraint, Constraints},
     execution::context::SessionContext,
-    logical_expr::{col, count, lit, utils::COUNT_STAR_EXPANSION},
+    functions_aggregate::count::count,
+    logical_expr::{col, lit, utils::COUNT_STAR_EXPANSION},
 };
 use futures::future;
 use snafu::prelude::*;
