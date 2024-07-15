@@ -13,7 +13,7 @@ bigdecimal = "0.4.5"
 bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
 chrono = "0.4.38"
-datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "f865563b1ae8670df21e9a054c5307112f85fbf6" }
+datafusion = "40.0.0"
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "c7b8e22885001e2013493aebbaf190039d826c05", features = [
   "bundled",
   "r2d2",
@@ -42,8 +42,8 @@ trust-dns-resolver = "0.23.2"
 url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "1becf0c961da12993009f53216ded2099c38d425" }
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", folder = "sources/sql", rev = "1becf0c961da12993009f53216ded2099c38d425" }
+datafusion-federation = "0.1"
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", folder = "sources/sql", rev = "f430401ef978c3687a1c8d10342c5032ce842952" }
 itertools = "0.13.0"
 
 [dev-dependencies]
@@ -56,3 +56,6 @@ mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
+
+[patch.crates-io]
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "f430401ef978c3687a1c8d10342c5032ce842952" }
