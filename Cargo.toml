@@ -14,7 +14,7 @@ bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
 chrono = "0.4.38"
 datafusion = "40.0.0"
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "c7b8e22885001e2013493aebbaf190039d826c05", features = [
+duckdb = { version = "1", features = [
   "bundled",
   "r2d2",
   "vtab",
