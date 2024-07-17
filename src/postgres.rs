@@ -27,7 +27,7 @@ use datafusion::{
     error::{DataFusionError, Result as DataFusionResult},
     execution::context::SessionState,
     logical_expr::CreateExternalTable,
-    sql::TableReference,
+    sql::{unparser::dialect::PostgreSqlDialect, TableReference},
 };
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
@@ -148,12 +148,13 @@ impl PostgresTableFactory {
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
+
         let table_provider = Arc::new(
             SqlTable::new("postgres", &dyn_pool, table_reference, None)
                 .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
-
         let table_provider = Arc::new(
             table_provider
                 .create_federated_table_provider()
