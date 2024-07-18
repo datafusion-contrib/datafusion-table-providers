@@ -240,7 +240,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             );
         }
 
-        let params = Arc::new(to_secret_map(options));
+        let params = to_secret_map(options);
 
         let pool = Arc::new(
             PostgresConnectionPool::new(params)

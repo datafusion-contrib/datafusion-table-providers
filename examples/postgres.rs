@@ -29,16 +29,16 @@ use datafusion_table_providers::{
 #[tokio::main]
 async fn main() {
     let postgres_params = to_secret_map(HashMap::from([
-        ("pg_host".to_string(), "localhost".to_string()),
-        ("pg_user".to_string(), "postgres".to_string()),
-        ("pg_db".to_string(), "postgres_db".to_string()),
-        ("pg_pass".to_string(), "password".to_string()),
-        ("pg_port".to_string(), "5432".to_string()),
-        ("pg_sslmode".to_string(), "disable".to_string()),
+        ("host".to_string(), "localhost".to_string()),
+        ("user".to_string(), "postgres".to_string()),
+        ("db".to_string(), "postgres_db".to_string()),
+        ("pass".to_string(), "password".to_string()),
+        ("port".to_string(), "5432".to_string()),
+        ("sslmode".to_string(), "disable".to_string()),
     ]));
 
     let postgres_pool = Arc::new(
-        PostgresConnectionPool::new(Arc::new(postgres_params))
+        PostgresConnectionPool::new(postgres_params)
             .await
             .expect("unable to create Postgres connection pool"),
     );
