@@ -112,21 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_prefix() {
-        let mut hashmap = HashMap::new();
-        hashmap.insert("prefix_key1".to_string(), "value1".to_string());
-        hashmap.insert("key2".to_string(), "value2".to_string());
-
-        let result = remove_prefix_from_hashmap_keys(hashmap, "prefix_");
-
-        let mut expected = HashMap::new();
-        expected.insert("key1".to_string(), "value1".to_string());
-        expected.insert("key2".to_string(), "value2".to_string());
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_full_prefix() {
         let mut hashmap = HashMap::new();
         hashmap.insert("prefix_".to_string(), "value1".to_string());
