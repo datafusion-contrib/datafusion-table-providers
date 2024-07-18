@@ -46,3 +46,83 @@ where
         })
         .collect()
 }
+
+#[must_use]
+pub fn remove_prefix_from_hashmap_keys<V>(
+    hashmap: HashMap<String, V>,
+    prefix: &str,
+) -> HashMap<String, V> {
+    hashmap
+        .into_iter()
+        .map(|(key, value)| {
+            let new_key = key
+                .strip_prefix(prefix)
+                .map_or(key.clone(), |s| s.to_string());
+            (new_key, value)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_remove_prefix() {
+        let mut hashmap = HashMap::new();
+        hashmap.insert("prefix_key1".to_string(), "value1".to_string());
+        hashmap.insert("prefix_key2".to_string(), "value2".to_string());
+        hashmap.insert("key3".to_string(), "value3".to_string());
+
+        let result = remove_prefix_from_hashmap_keys(hashmap, "prefix_");
+
+        let mut expected = HashMap::new();
+        expected.insert("key1".to_string(), "value1".to_string());
+        expected.insert("key2".to_string(), "value2".to_string());
+        expected.insert("key3".to_string(), "value3".to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_no_prefix() {
+        let mut hashmap = HashMap::new();
+        hashmap.insert("key1".to_string(), "value1".to_string());
+        hashmap.insert("key2".to_string(), "value2".to_string());
+
+        let result = remove_prefix_from_hashmap_keys(hashmap, "prefix_");
+
+        let mut expected = HashMap::new();
+        expected.insert("key1".to_string(), "value1".to_string());
+        expected.insert("key2".to_string(), "value2".to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_empty_hashmap() {
+        let hashmap: HashMap<String, String> = HashMap::new();
+
+        let result = remove_prefix_from_hashmap_keys(hashmap, "prefix_");
+
+        let expected: HashMap<String, String> = HashMap::new();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_full_prefix() {
+        let mut hashmap = HashMap::new();
+        hashmap.insert("prefix_".to_string(), "value1".to_string());
+        hashmap.insert("prefix_key2".to_string(), "value2".to_string());
+
+        let result = remove_prefix_from_hashmap_keys(hashmap, "prefix_");
+
+        let mut expected = HashMap::new();
+        expected.insert("".to_string(), "value1".to_string());
+        expected.insert("key2".to_string(), "value2".to_string());
+
+        assert_eq!(result, expected);
+    }
+}

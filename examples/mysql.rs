@@ -30,14 +30,14 @@ use datafusion_table_providers::{
 async fn main() {
     let mysql_params = to_secret_map(HashMap::from([
         (
-            "mysql_connection_string".to_string(),
+            "connection_string".to_string(),
             "mysql://root:password@localhost:3306/mysql_db".to_string(),
         ),
-        ("mysql_sslmode".to_string(), "disabled".to_string()),
+        ("sslmode".to_string(), "disabled".to_string()),
     ]));
 
     let mysql_pool = Arc::new(
-        MySQLConnectionPool::new(Arc::new(mysql_params))
+        MySQLConnectionPool::new(mysql_params)
             .await
             .expect("unable to create MySQL connection pool"),
     );

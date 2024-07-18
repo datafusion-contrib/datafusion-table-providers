@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
-use crate::util::ns_lookup::verify_ns_lookup_and_tcp_connect;
+use crate::util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect};
 use async_trait::async_trait;
 use bb8::ErrorSink;
 use bb8_postgres::{
@@ -75,14 +75,16 @@ impl PostgresConnectionPool {
     /// # Errors
     ///
     /// Returns an error if there is a problem creating the connection pool.
-    pub async fn new(params: Arc<HashMap<String, SecretString>>) -> Result<Self> {
+    pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
+        // Remove the "pg_" prefix from the keys to keep backward compatibility
+        let params = util::remove_prefix_from_hashmap_keys(params, "pg_");
+
         let mut connection_string = String::new();
         let mut ssl_mode = "verify-full".to_string();
         let mut ssl_rootcert_path: Option<PathBuf> = None;
 
-        if let Some(pg_connection_string) = params
-            .get("pg_connection_string")
-            .map(Secret::expose_secret)
+        if let Some(pg_connection_string) =
+            params.get("connection_string").map(Secret::expose_secret)
         {
             let (str, mode, cert_path) = parse_connection_string(pg_connection_string.as_str());
             connection_string = str;
@@ -96,37 +98,37 @@ impl PostgresConnectionPool {
                 ssl_rootcert_path = Some(PathBuf::from(sslrootcert));
             }
         } else {
-            if let Some(pg_host) = params.get("pg_host").map(Secret::expose_secret) {
+            if let Some(pg_host) = params.get("host").map(Secret::expose_secret) {
                 connection_string.push_str(format!("host={pg_host} ").as_str());
             }
-            if let Some(pg_user) = params.get("pg_user").map(Secret::expose_secret) {
+            if let Some(pg_user) = params.get("user").map(Secret::expose_secret) {
                 connection_string.push_str(format!("user={pg_user} ").as_str());
             }
-            if let Some(pg_db) = params.get("pg_db").map(Secret::expose_secret) {
+            if let Some(pg_db) = params.get("db").map(Secret::expose_secret) {
                 connection_string.push_str(format!("dbname={pg_db} ").as_str());
             }
-            if let Some(pg_pass) = params.get("pg_pass").map(Secret::expose_secret) {
+            if let Some(pg_pass) = params.get("pass").map(Secret::expose_secret) {
                 connection_string.push_str(format!("password={pg_pass} ").as_str());
             }
-            if let Some(pg_port) = params.get("pg_port").map(Secret::expose_secret) {
+            if let Some(pg_port) = params.get("port").map(Secret::expose_secret) {
                 connection_string.push_str(format!("port={pg_port} ").as_str());
             }
         }
 
-        if let Some(pg_sslmode) = params.get("pg_sslmode").map(Secret::expose_secret) {
+        if let Some(pg_sslmode) = params.get("sslmode").map(Secret::expose_secret) {
             match pg_sslmode.to_lowercase().as_str() {
                 "disable" | "require" | "prefer" | "verify-ca" | "verify-full" => {
                     ssl_mode = pg_sslmode.to_string();
                 }
                 _ => {
                     InvalidParameterSnafu {
-                        parameter_name: "pg_sslmode".to_string(),
+                        parameter_name: "sslmode".to_string(),
                     }
                     .fail()?;
                 }
             }
         }
-        if let Some(pg_sslrootcert) = params.get("pg_sslrootcert").map(Secret::expose_secret) {
+        if let Some(pg_sslrootcert) = params.get("sslrootcert").map(Secret::expose_secret) {
             ensure!(
                 std::path::Path::new(pg_sslrootcert).exists(),
                 InvalidRootCertPathSnafu {
