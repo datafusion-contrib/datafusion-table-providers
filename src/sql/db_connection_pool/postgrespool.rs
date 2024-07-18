@@ -83,9 +83,8 @@ impl PostgresConnectionPool {
         let mut ssl_mode = "verify-full".to_string();
         let mut ssl_rootcert_path: Option<PathBuf> = None;
 
-        if let Some(pg_connection_string) = params
-            .get("pg_connection_string")
-            .map(Secret::expose_secret)
+        if let Some(pg_connection_string) =
+            params.get("connection_string").map(Secret::expose_secret)
         {
             let (str, mode, cert_path) = parse_connection_string(pg_connection_string.as_str());
             connection_string = str;
@@ -123,7 +122,7 @@ impl PostgresConnectionPool {
                 }
                 _ => {
                     InvalidParameterSnafu {
-                        parameter_name: "pg_sslmode".to_string(),
+                        parameter_name: "sslmode".to_string(),
                     }
                     .fail()?;
                 }
