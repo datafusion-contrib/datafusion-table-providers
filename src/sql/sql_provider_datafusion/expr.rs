@@ -103,6 +103,16 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                 expr: format!("{expr}"),
             }),
         },
+        Expr::Like(like_expr) => {
+            let expr = to_sql_with_engine(&like_expr.expr, engine)?;
+            let pattern = to_sql_with_engine(&like_expr.pattern, engine)?;
+            let op_name = if like_expr.negated {
+                "NOT LIKE"
+            } else {
+                "LIKE"
+            };
+            Ok(format!("{expr} {op_name} {pattern}"))
+        },
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
