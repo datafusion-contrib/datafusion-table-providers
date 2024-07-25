@@ -1,3 +1,4 @@
+use bigdecimal::{num_bigint::BigInt, BigDecimal};
 use datafusion::{
     logical_expr::{Cast, Expr},
     scalar::ScalarValue,
@@ -98,6 +99,10 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             ScalarValue::TimestampSecond(Some(value), None | Some(_)) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({value}, 'unixepoch')")),
                 _ => Ok(format!("TO_TIMESTAMP({value})")),
+            },
+            ScalarValue::Decimal128(Some(v), _, s) => {
+                let decimal = BigDecimal::new(BigInt::from(*v), *s as i64);
+                Ok(decimal.to_string())
             },
             _ => Err(Error::UnsupportedFilterExpr {
                 expr: format!("{expr}"),
@@ -208,6 +213,20 @@ mod tests {
             let sql = to_sql_with_engine(&expr, Some(engine))?;
             assert_eq!(sql, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal128_literal_to_sql() -> Result<()> {
+        let expr = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 2));
+        assert_eq!(to_sql_with_engine(&expr, None)?, "12345678.90");
+
+        let expr_negative = Expr::Literal(ScalarValue::Decimal128(Some(-1234567890), 38, 4));
+        assert_eq!(to_sql_with_engine(&expr_negative, None)?, "-123456.7890");
+
+        let expr_int = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 0));
+        assert_eq!(to_sql_with_engine(&expr_int, None)?, "1234567890");
+
         Ok(())
     }
 }
