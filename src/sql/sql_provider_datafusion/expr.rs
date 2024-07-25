@@ -104,6 +104,12 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             }),
         },
         Expr::Like(like_expr) => {
+            if like_expr.escape_char.is_some() {
+                // Escape char is not supported
+                return Err(Error::UnsupportedFilterExpr {
+                    expr: format!("{expr}"),
+                });
+            }
             let expr = to_sql_with_engine(&like_expr.expr, engine)?;
             let pattern = to_sql_with_engine(&like_expr.pattern, engine)?;
 
@@ -164,5 +170,44 @@ fn handle_cast(cast: &Cast, engine: Option<Engine>, expr: &Expr) -> Result<Strin
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::{
+        logical_expr::{Expr, Like},
+        prelude::col,
+        scalar::ScalarValue,
+    };
+
+    #[test]
+    fn test_like_expr_to_sql() -> Result<()> {
+        for (engine, case_insensitive, negated, expected) in [
+            (Engine::Postgres, false, false, "\"name\" LIKE '%John%'"),
+            (Engine::Postgres, true, true, "\"name\" NOT ILIKE '%John%'"),
+            (Engine::DuckDB, false, false, "\"name\" LIKE '%John%'"),
+            (Engine::DuckDB, true, true, "\"name\" NOT ILIKE '%John%'"),
+            (
+                Engine::SQLite,
+                false,
+                false,
+                "\"name\" LIKE '%John%' COLLATE BINARY",
+            ),
+            (Engine::SQLite, true, true, "\"name\" NOT LIKE '%John%'"),
+        ] {
+            let expr = Expr::Like(Like {
+                expr: Box::new(col("name")),
+                pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some("%John%".to_string())))),
+                case_insensitive: case_insensitive,
+                negated: negated,
+                escape_char: None,
+            });
+
+            let sql = to_sql_with_engine(&expr, Some(engine))?;
+            assert_eq!(sql, expected);
+        }
+        Ok(())
     }
 }
