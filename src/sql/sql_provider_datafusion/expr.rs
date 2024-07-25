@@ -114,7 +114,7 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                 (Some(Engine::SQLite), false) => format!("LIKE {pattern} COLLATE BINARY"),
                 _ => {
                     return Err(Error::UnsupportedFilterExpr {
-                        expr: format!("{expr}"),
+                        expr: expr.to_string(),
                     });
                 }
             };
