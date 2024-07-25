@@ -52,13 +52,13 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
         Expr::Literal(value) => match value {
             ScalarValue::Date32(Some(value)) => match engine {
                 Some(Engine::SQLite) => {
-                    Ok(format!("datetime({}, 'unixepoch')", value * SECONDS_IN_DAY))
+                    Ok(format!("date({}, 'unixepoch')", value * SECONDS_IN_DAY))
                 }
                 _ => Ok(format!("TO_TIMESTAMP({})", value * SECONDS_IN_DAY)),
             },
             ScalarValue::Date64(Some(value)) => match engine {
                 Some(Engine::SQLite) => Ok(format!(
-                    "datetime({}, 'unixepoch')",
+                    "date({}, 'unixepoch')",
                     value * i64::from(SECONDS_IN_DAY)
                 )),
                 _ => Ok(format!(
