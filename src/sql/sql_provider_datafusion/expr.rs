@@ -106,13 +106,25 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
         Expr::Like(like_expr) => {
             let expr = to_sql_with_engine(&like_expr.expr, engine)?;
             let pattern = to_sql_with_engine(&like_expr.pattern, engine)?;
-            let op_name = if like_expr.negated {
-                "NOT LIKE"
-            } else {
-                "LIKE"
+
+            let mut op_and_pattern = match (engine, like_expr.case_insensitive) {
+                (Some(Engine::Postgres | Engine::DuckDB), true) => format!("ILIKE {pattern}"),
+                (Some(Engine::Postgres | Engine::DuckDB), false) => format!("LIKE {pattern}"),
+                (Some(Engine::SQLite), true) => format!("LIKE {pattern}"),
+                (Some(Engine::SQLite), false) => format!("LIKE {pattern} COLLATE BINARY"),
+                _ => {
+                    return Err(Error::UnsupportedFilterExpr {
+                        expr: format!("{expr}"),
+                    });
+                }
             };
-            Ok(format!("{expr} {op_name} {pattern}"))
-        },
+
+            if like_expr.negated {
+                op_and_pattern = format!("NOT {}", op_and_pattern)
+            };
+
+            Ok(format!("{expr} {op_and_pattern}"))
+        }
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
