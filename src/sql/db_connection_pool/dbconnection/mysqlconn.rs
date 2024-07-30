@@ -71,75 +71,20 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     ) -> Result<SchemaRef, super::Error> {
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
-        let rows: Vec<Row> = conn
-            .exec(
-                &format!(
-                    "SELECT * FROM {} LIMIT 1",
-                    table_reference.to_quoted_string()
-                ),
-                Params::Empty,
-            )
-            .await
-            .boxed()
-            .context(super::UnableToGetSchemaSnafu)?;
-
-        if !rows.is_empty() {
-            let rec = rows_to_arrow(&rows)
-                .boxed()
-                .context(super::UnableToGetSchemaSnafu)?;
-            return Ok(rec.schema());
-        }
 
         // we don't use SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}' AND TABLE_SCHEMA = '{}'
         // as table_reference don't always have schema specified so we need to extract schema/db name from connection properties
         // to ensure we are querying information for correct table
-        let metadata_query = format!("SHOW COLUMNS FROM {}", table_reference.to_quoted_string());
+        let columns_meta_query =
+            format!("SHOW COLUMNS FROM {}", table_reference.to_quoted_string());
 
-        let metadata_rows: Vec<Row> = conn
-            .exec(&metadata_query, Params::Empty)
+        let columns_meta: Vec<Row> = conn
+            .exec(&columns_meta_query, Params::Empty)
             .await
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        let mut fields = Vec::new();
-
-        for row in metadata_rows.iter() {
-            let column_name: String = row
-                .get("Field")
-                .ok_or(Error::MissingField {
-                    field: "Field".to_string(),
-                })
-                .boxed()
-                .context(super::UnableToGetSchemaSnafu)?;
-
-            let data_type: String = row
-                .get("Type")
-                .ok_or(Error::MissingField {
-                    field: "Type".to_string(),
-                })
-                .boxed()
-                .context(super::UnableToGetSchemaSnafu)?;
-
-            let column_type =
-                map_str_type_to_column_type(&data_type).context(super::UnableToGetSchemaSnafu)?;
-
-            let arrow_data_type = match column_type {
-                // map_column_to_data_type does not support decimal mapping and uses special logic to handle conversion based on actual value
-                // so we handle it separately
-                ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                    let (_precision, scale) = extract_decimal_precision_and_scale(&data_type)
-                        .context(super::UnableToGetSchemaSnafu)?;
-                    // rows_to_arrow uses hardcoded precision 38 for decimal so we use it here as well
-                    DataType::Decimal128(38, scale)
-                }
-                _ => map_column_to_data_type(column_type)
-                    .context(UnsupportedDataTypeSnafu { data_type })
-                    .boxed()
-                    .context(super::UnableToGetSchemaSnafu)?,
-            };
-            fields.push(Field::new(&column_name, arrow_data_type, true));
-        }
-        Ok(Arc::new(Schema::new(fields)))
+        Ok(columns_meta_to_schema(columns_meta).context(super::UnableToGetSchemaSnafu)?)
     }
 
     async fn query_arrow(
@@ -207,6 +152,37 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
             .context(QuerySnafu)?;
         return Ok(conn.affected_rows());
     }
+}
+
+fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
+    let mut fields = Vec::new();
+
+    for row in columns_meta.iter() {
+        let column_name: String = row.get("Field").ok_or(Error::MissingField {
+            field: "Field".to_string(),
+        })?;
+
+        let data_type: String = row.get("Type").ok_or(Error::MissingField {
+            field: "Type".to_string(),
+        })?;
+
+        let column_type = map_str_type_to_column_type(&data_type)?;
+
+        let arrow_data_type = match column_type {
+            // map_column_to_data_type does not support decimal mapping and uses special logic to handle conversion based on actual value
+            // so we handle it separately
+            ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                let (_precision, scale) = extract_decimal_precision_and_scale(&data_type)
+                    .context(super::UnableToGetSchemaSnafu)?;
+                // rows_to_arrow uses hardcoded precision 38 for decimal so we use it here as well
+                DataType::Decimal128(38, scale)
+            }
+            _ => map_column_to_data_type(column_type)
+                .context(UnsupportedDataTypeSnafu { data_type })?,
+        };
+        fields.push(Field::new(&column_name, arrow_data_type, true));
+    }
+    Ok(Arc::new(Schema::new(fields)))
 }
 
 fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
