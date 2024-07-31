@@ -136,6 +136,27 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
 
             Ok(format!("{expr} {op_and_pattern}"))
         }
+        Expr::InList(in_list) => {
+            let expr = to_sql_with_engine(&in_list.expr, engine)?;
+            let list = in_list
+                .list
+                .iter()
+                .map(|expr| to_sql_with_engine(expr, engine))
+                .collect::<Result<Vec<String>>>()?;
+
+            let op = if in_list.negated { "NOT IN" } else { "IN" };
+
+            Ok(format!("{expr} {op} ({list})", list = list.join(", ")))
+        }
+        Expr::ScalarFunction(scalar_function) => {
+            let args = scalar_function
+                .args
+                .iter()
+                .map(|expr| to_sql_with_engine(expr, engine))
+                .collect::<Result<Vec<String>>>()?;
+
+            Ok(format!("{}({})", scalar_function.name(), args.join(", ")))
+        }
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
@@ -180,9 +201,15 @@ fn handle_cast(cast: &Cast, engine: Option<Engine>, expr: &Expr) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
+    use std::{any::Any, sync::Arc};
+
     use super::*;
+    use arrow::datatypes::DataType;
     use datafusion::{
-        logical_expr::{Expr, Like},
+        logical_expr::{
+            expr::{InList, ScalarFunction},
+            ColumnarValue, Expr, Like, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        },
         prelude::col,
         scalar::ScalarValue,
     };
@@ -226,6 +253,87 @@ mod tests {
 
         let expr_int = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 0));
         assert_eq!(to_sql_with_engine(&expr_int, None)?, "1234567890");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_inlist_to_sql() -> Result<()> {
+        let expr = Expr::InList(InList {
+            expr: Box::new(col("a")),
+            list: vec![
+                Expr::Literal(ScalarValue::Int32(Some(1))),
+                Expr::Literal(ScalarValue::Int32(Some(2))),
+                Expr::Literal(ScalarValue::Int32(Some(3))),
+            ],
+            negated: false,
+        });
+        assert_eq!(to_sql_with_engine(&expr, None)?, "\"a\" IN (1, 2, 3)");
+
+        let expr_negated = Expr::InList(InList {
+            expr: Box::new(col("a")),
+            list: vec![
+                Expr::Literal(ScalarValue::Int32(Some(4))),
+                Expr::Literal(ScalarValue::Int32(Some(5))),
+                Expr::Literal(ScalarValue::Int32(Some(6))),
+            ],
+            negated: true,
+        });
+
+        assert_eq!(
+            to_sql_with_engine(&expr_negated, None)?,
+            "\"a\" NOT IN (4, 5, 6)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_scalar_function_to_sql() -> Result<()> {
+        #[derive(Debug)]
+        struct TestScalarUDF {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for TestScalarUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "substring"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> datafusion::error::Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke(&self, _args: &[ColumnarValue]) -> datafusion::error::Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+            }
+        }
+        let substring_udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(
+                3,
+                vec![DataType::Utf8, DataType::Int32, DataType::Int32],
+                Volatility::Stable,
+            ),
+        }));
+
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: substring_udf,
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(Some("hello world".to_string()))),
+                Expr::Literal(ScalarValue::Int32(Some(1))),
+                Expr::Literal(ScalarValue::Int32(Some(5))),
+            ],
+        });
+        assert_eq!(
+            to_sql_with_engine(&expr, None)?,
+            "substring('hello world', 1, 5)"
+        );
 
         Ok(())
     }
