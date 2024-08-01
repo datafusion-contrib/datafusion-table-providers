@@ -32,7 +32,7 @@ pub trait DbConnectionPool<T, P: 'static> {
     fn join_push_down(&self) -> JoinPushDown;
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub enum Mode {
     #[default]
     Memory,
