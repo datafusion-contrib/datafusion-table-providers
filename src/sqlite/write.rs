@@ -120,8 +120,6 @@ impl DataSink for SqliteDataSink {
         data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let mut num_rows: u64 = 0;
-
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(1);
         let mut db_conn = self.sqlite.connect().await.map_err(to_datafusion_error)?;
         let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
@@ -129,6 +127,7 @@ impl DataSink for SqliteDataSink {
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
         let task = tokio::spawn(async move {
+            let mut num_rows: u64 = 0;
             while let Some(data_batch) = data.next().await {
                 let data_batch = data_batch.map_err(check_and_mark_retriable_error)?;
                 num_rows += u64::try_from(data_batch.num_rows()).map_err(|e| {
@@ -145,7 +144,7 @@ impl DataSink for SqliteDataSink {
                 })?;
             }
 
-            Ok::<_, DataFusionError>(())
+            Ok::<_, DataFusionError>(num_rows)
         });
 
         let overwrite = self.overwrite;
@@ -174,7 +173,7 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(to_datafusion_error)?;
 
-        task.await.map_err(|err| {
+        let num_rows = task.await.map_err(|err| {
             DataFusionError::Execution(format!("Error sending data batch: {err}"))
         })??;
 
