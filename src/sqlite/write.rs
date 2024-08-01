@@ -174,52 +174,6 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(to_datafusion_error)?;
 
-        // let data_batches_result = data
-        //     .collect::<Vec<datafusion::common::Result<RecordBatch>>>()
-        //     .await;
-
-        // let data_batches: Vec<RecordBatch> = data_batches_result
-        //     .into_iter()
-        //     .collect::<Result<Vec<_>, _>>()
-        //     .map_err(check_and_mark_retriable_error)?;
-
-        // constraints::validate_batch_with_constraints(&data_batches, self.sqlite.constraints())
-        //     .await
-        //     .context(super::ConstraintViolationSnafu)
-        //     .map_err(to_datafusion_error)?;
-
-        // for data_batch in &data_batches {
-        //     num_rows += u64::try_from(data_batch.num_rows()).map_err(|e| {
-        //         DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        //     })?;
-        // }
-
-        // let overwrite = self.overwrite;
-        // let sqlite = Arc::clone(&self.sqlite);
-        // let on_conflict = self.on_conflict.clone();
-        // sqlite_conn
-        //     .conn
-        //     .call(move |conn| {
-        //         let transaction = conn.transaction()?;
-
-        //         if overwrite {
-        //             sqlite.delete_all_table_data(&transaction)?;
-        //         }
-
-        //         for batch in data_batches {
-        //             if batch.num_rows() > 0 {
-        //                 sqlite.insert_batch(&transaction, batch, on_conflict.as_ref())?;
-        //             }
-        //         }
-
-        //         transaction.commit()?;
-
-        //         Ok(())
-        //     })
-        //     .await
-        //     .context(super::UnableToInsertIntoTableAsyncSnafu)
-        //     .map_err(to_datafusion_error)?;
-
         Ok(num_rows)
     }
 }
