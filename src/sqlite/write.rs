@@ -16,7 +16,6 @@ use datafusion::{
 };
 use futures::StreamExt;
 use snafu::prelude::*;
-use tokio::runtime::Handle;
 
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
