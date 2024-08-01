@@ -174,6 +174,10 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(to_datafusion_error)?;
 
+        task.await.map_err(|err| {
+            DataFusionError::Execution(format!("Error sending data batch: {err}"))
+        })??;
+
         Ok(num_rows)
     }
 }
