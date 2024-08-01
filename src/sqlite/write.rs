@@ -119,30 +119,32 @@ impl DataSink for SqliteDataSink {
         data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let mut num_rows: u64 = 0;
-
+        let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(1);
         let mut db_conn = self.sqlite.connect().await.map_err(to_datafusion_error)?;
         let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
 
-        let data_batches_result = data
-            .collect::<Vec<datafusion::common::Result<RecordBatch>>>()
-            .await;
+        let constraints = self.sqlite.constraints().clone();
+        let mut data = data;
+        let task = tokio::spawn(async move {
+            let mut num_rows: u64 = 0;
+            while let Some(data_batch) = data.next().await {
+                let data_batch = data_batch.map_err(check_and_mark_retriable_error)?;
+                num_rows += u64::try_from(data_batch.num_rows()).map_err(|e| {
+                    DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
+                })?;
 
-        let data_batches: Vec<RecordBatch> = data_batches_result
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(check_and_mark_retriable_error)?;
+                constraints::validate_batch_with_constraints(&[data_batch.clone()], &constraints)
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
 
-        constraints::validate_batch_with_constraints(&data_batches, self.sqlite.constraints())
-            .await
-            .context(super::ConstraintViolationSnafu)
-            .map_err(to_datafusion_error)?;
+                batch_tx.send(data_batch).await.map_err(|err| {
+                    DataFusionError::Execution(format!("Error sending data batch: {err}"))
+                })?;
+            }
 
-        for data_batch in &data_batches {
-            num_rows += u64::try_from(data_batch.num_rows()).map_err(|e| {
-                DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-            })?;
-        }
+            Ok::<_, DataFusionError>(num_rows)
+        });
 
         let overwrite = self.overwrite;
         let sqlite = Arc::clone(&self.sqlite);
@@ -156,9 +158,9 @@ impl DataSink for SqliteDataSink {
                     sqlite.delete_all_table_data(&transaction)?;
                 }
 
-                for batch in data_batches {
-                    if batch.num_rows() > 0 {
-                        sqlite.insert_batch(&transaction, batch, on_conflict.as_ref())?;
+                while let Some(data_batch) = batch_rx.blocking_recv() {
+                    if data_batch.num_rows() > 0 {
+                        sqlite.insert_batch(&transaction, data_batch, on_conflict.as_ref())?;
                     }
                 }
 
@@ -169,6 +171,10 @@ impl DataSink for SqliteDataSink {
             .await
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(to_datafusion_error)?;
+
+        let num_rows = task.await.map_err(|err| {
+            DataFusionError::Execution(format!("Error sending data batch: {err}"))
+        })??;
 
         Ok(num_rows)
     }
