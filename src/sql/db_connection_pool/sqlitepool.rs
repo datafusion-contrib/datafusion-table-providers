@@ -65,7 +65,17 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
     async fn connect(
         &self,
     ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
-        Ok(Box::new(SqliteConnection::new(self.conn.clone())))
+        let conn = self.conn.clone();
+
+        // change transaction mode to Write-Ahead log instead of default atomic rollback journal: https://www.sqlite.org/wal.html
+        conn.call(|conn| {
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+            Ok(())
+        })
+        .await
+        .context(ConnectionPoolSnafu)?;
+
+        Ok(Box::new(SqliteConnection::new(conn)))
     }
 
     fn join_push_down(&self) -> JoinPushDown {
