@@ -61,11 +61,6 @@ pub enum Error {
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error },
 
-    #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
-    UnableToInsertIntoTableGenericSource {
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
     #[snafu(display("Unable to deleta all table data in Sqlite: {source}"))]
     UnableToDeleteAllTableData { source: rusqlite::Error },
 
