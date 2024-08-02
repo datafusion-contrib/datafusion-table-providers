@@ -133,7 +133,7 @@ impl MySQLConnectionPool {
                 // We override it with a more user-friendly error message.
                 mysql_async::Error::Driver(DriverError::UnknownAuthPlugin { .. }) => {
                     mysql_async::Error::Other(
-                        "Unable to authenticate. Are the user name and password correct?".into(),
+                        "Unable to authenticate. Is the user name and password correct?".into(),
                     )
                 }
                 _ => err,
