@@ -461,7 +461,7 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_LONG_BLOB => Some(DataType::LargeUtf8),
         ColumnType::MYSQL_TYPE_STRING
         | ColumnType::MYSQL_TYPE_VAR_STRING => {
-            if column_flag {
+            if column_is_binary {
                 Some(DataType::Binary)
             } else {
                 Some(DataType::LargeUtf8)
