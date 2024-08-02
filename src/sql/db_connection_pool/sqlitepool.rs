@@ -20,6 +20,7 @@ pub enum Error {
 pub struct SqliteConnectionPool {
     conn: Connection,
     join_push_down: JoinPushDown,
+    mode: Mode,
 }
 
 impl SqliteConnectionPool {
@@ -51,6 +52,7 @@ impl SqliteConnectionPool {
         Ok(SqliteConnectionPool {
             conn,
             join_push_down,
+            mode,
         })
     }
 
@@ -67,13 +69,23 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
     ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
         let conn = self.conn.clone();
 
-        // change transaction mode to Write-Ahead log instead of default atomic rollback journal: https://www.sqlite.org/wal.html
-        conn.call(|conn| {
-            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-            Ok(())
-        })
-        .await
-        .context(ConnectionPoolSnafu)?;
+        // these configuration options are only applicable for file-mode databases
+        if self.mode == Mode::File {
+            // change transaction mode to Write-Ahead log instead of default atomic rollback journal: https://www.sqlite.org/wal.html
+            // NOTE: This is a no-op if the database is in-memory, as only MEMORY or OFF are supported: https://www.sqlite.org/pragma.html#pragma_journal_mode
+            conn.call(|conn| {
+                conn.pragma_update(None, "journal_mode", "WAL")?;
+                conn.pragma_update(None, "busy_timeout", "5000")?;
+                conn.pragma_update(None, "synchronous", "NORMAL")?;
+                conn.pragma_update(None, "cache_size", "-20000")?;
+                conn.pragma_update(None, "foreign_keys", "true")?;
+                conn.pragma_update(None, "temp_store", "memory")?;
+                // conn.set_transaction_behavior(TransactionBehavior::Immediate); introduced in rustqlite 0.32.1, but tokio-rusqlite is still on 0.31.0
+                Ok(())
+            })
+            .await
+            .context(ConnectionPoolSnafu)?;
+        }
 
         Ok(Box::new(SqliteConnection::new(conn)))
     }

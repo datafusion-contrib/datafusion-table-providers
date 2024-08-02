@@ -157,22 +157,26 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let db_path = self.sqlite_file_path(&name, &cmd.options);
 
-        // use a separate pool instance from writing to allow for concurrent reads+writes
-        // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
-        // and we can't have concurrent writes when sharing the same connection
-        let read_pool: Arc<SqliteConnectionPool> = Arc::new(
-            SqliteConnectionPool::new(&db_path, mode.clone())
-                .await
-                .context(DbConnectionPoolSnafu)
-                .map_err(to_datafusion_error)?,
-        );
-
         let pool: Arc<SqliteConnectionPool> = Arc::new(
             SqliteConnectionPool::new(&db_path, mode)
                 .await
                 .context(DbConnectionPoolSnafu)
                 .map_err(to_datafusion_error)?,
         );
+
+        let read_pool = if mode == Mode::Memory {
+            Arc::clone(&pool)
+        } else {
+            // use a separate pool instance from writing to allow for concurrent reads+writes
+            // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
+            // and we can't have concurrent writes when sharing the same connection
+            Arc::new(
+                SqliteConnectionPool::new(&db_path, mode)
+                    .await
+                    .context(DbConnectionPoolSnafu)
+                    .map_err(to_datafusion_error)?,
+            )
+        };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let sqlite = Arc::new(Sqlite::new(
