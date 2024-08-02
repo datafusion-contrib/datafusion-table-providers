@@ -276,7 +276,14 @@ impl<T, P> SqlExec<T, P> {
             let filter_expr = self
                 .filters
                 .iter()
-                .map(|f| expr::to_sql_with_engine(f, self.engine))
+                .map(|f| match f {
+                    // DataFusion optimization uses aliases to preserve original expression names during optimizations and type coercions:
+                    // https://github.com/apache/datafusion/issues/3794
+                    // If there is a filter with additional alias information, we must use the expression only
+                    // as original expression name is unnecessary and the alias can't be part of the WHERE clause
+                    Expr::Alias(alias) => expr::to_sql_with_engine(&alias.expr, self.engine),
+                    _ => expr::to_sql_with_engine(f, self.engine),
+                })
                 .collect::<expr::Result<Vec<_>>>()
                 .context(UnableToGenerateSQLSnafu)?;
             format!("WHERE {}", filter_expr.join(" AND "))
