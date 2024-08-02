@@ -1,10 +1,10 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, Date32Builder, Decimal128Builder, Float32Builder, Float64Builder,
-        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
-        RecordBatch, RecordBatchOptions, Time64NanosecondBuilder, TimestampMillisecondBuilder,
-        UInt64Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
+        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
+        NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
+        TimestampMillisecondBuilder, UInt64Builder,
     },
     datatypes::{DataType, Date32Type, Field, Schema, TimeUnit},
 };
@@ -258,7 +258,6 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     dec_builder.append_value(val);
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
-                | ColumnType::MYSQL_TYPE_STRING
                 | ColumnType::MYSQL_TYPE_VAR_STRING
                 | ColumnType::MYSQL_TYPE_JSON
                 | ColumnType::MYSQL_TYPE_TINY_BLOB
@@ -274,6 +273,28 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         row,
                         i
                     );
+                }
+                ColumnType::MYSQL_TYPE_STRING => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<BinaryBuilder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            mysql_type: format!("{mysql_type:?}"),
+                        }
+                        .fail();
+                    };
+                    let v = handle_null_error(row.get_opt::<Vec<u8>, usize>(i).transpose())
+                        .context(FailedToGetRowValueSnafu {
+                            mysql_type: ColumnType::MYSQL_TYPE_DATE,
+                        })?;
+
+                    match v {
+                        Some(v) => {
+                            builder.append_value(&v);
+                        }
+                        None => builder.append_null(),
+                    }
                 }
                 ColumnType::MYSQL_TYPE_DATE => {
                     let Some(builder) = builder else {
@@ -426,7 +447,6 @@ pub fn map_column_to_data_type(column_type: ColumnType) -> Option<DataType> {
             Some(DataType::Time64(TimeUnit::Nanosecond))
         }
         ColumnType::MYSQL_TYPE_VARCHAR
-        | ColumnType::MYSQL_TYPE_STRING
         | ColumnType::MYSQL_TYPE_VAR_STRING
         | ColumnType::MYSQL_TYPE_JSON
         | ColumnType::MYSQL_TYPE_ENUM
@@ -435,6 +455,7 @@ pub fn map_column_to_data_type(column_type: ColumnType) -> Option<DataType> {
         | ColumnType::MYSQL_TYPE_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_LONG_BLOB => Some(DataType::LargeUtf8),
+        ColumnType::MYSQL_TYPE_STRING => Some(DataType::Binary),
 
         // replication only
         ColumnType::MYSQL_TYPE_TYPED_ARRAY
