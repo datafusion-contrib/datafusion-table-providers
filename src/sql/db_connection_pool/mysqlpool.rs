@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use mysql_async::{
     prelude::{Queryable, ToValue},
-    Params, Row, SslOpts,
+    DriverError, Params, Row, SslOpts,
 };
 use secrecy::{ExposeSecret, Secret, SecretString};
 use snafu::{ResultExt, Snafu};
@@ -125,7 +125,20 @@ impl MySQLConnectionPool {
         let pool = mysql_async::Pool::new(opts);
 
         // Test the connection
-        let mut conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
+        let mut conn = pool
+            .get_conn()
+            .await
+            .map_err(|err| match err {
+                // In case of an incorrect user name, the error `Unknown authentication plugin 'sha256_password'` is returned.
+                // We override it with a more user-friendly error message.
+                mysql_async::Error::Driver(DriverError::UnknownAuthPlugin { .. }) => {
+                    mysql_async::Error::Other(
+                        "Unable to authenticate. Are the user name and password correct?".into(),
+                    )
+                }
+                _ => err,
+            })
+            .context(ConnectionPoolRunSnafu)?;
         let _rows: Vec<Row> = conn
             .exec("SELECT 1", Params::Empty)
             .await
