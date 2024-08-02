@@ -267,7 +267,12 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            row_values.push(valid_array.value(row).into());
+                            insert_timestamp_into_row_values(
+                                OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                    valid_array.value(row),
+                                )),
+                                &mut row_values,
+                            )?;
                         }
                     }
                     DataType::Timestamp(TimeUnit::Second, _) => {
