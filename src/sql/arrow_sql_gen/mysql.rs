@@ -430,7 +430,10 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-pub fn map_column_to_data_type(column_type: ColumnType, column_flag: bool) -> Option<DataType> {
+pub fn map_column_to_data_type(
+    column_type: ColumnType,
+    column_is_binary: bool,
+) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
         ColumnType::MYSQL_TYPE_BIT => Some(DataType::UInt64),
