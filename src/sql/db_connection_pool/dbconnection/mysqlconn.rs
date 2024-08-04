@@ -167,6 +167,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
         })?;
 
         let column_type = map_str_type_to_column_type(&data_type)?;
+        let column_is_binary = map_str_type_to_is_binary(&data_type);
 
         let arrow_data_type = match column_type {
             // map_column_to_data_type does not support decimal mapping and uses special logic to handle conversion based on actual value
@@ -177,7 +178,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
                 // rows_to_arrow uses hardcoded precision 38 for decimal so we use it here as well
                 DataType::Decimal128(38, scale)
             }
-            _ => map_column_to_data_type(column_type)
+            _ => map_column_to_data_type(column_type, column_is_binary)
                 .context(UnsupportedDataTypeSnafu { data_type })?,
         };
         fields.push(Field::new(&column_name, arrow_data_type, true));
@@ -232,6 +233,13 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
     };
 
     Ok(column_type)
+}
+
+fn map_str_type_to_is_binary(data_type: &str) -> bool {
+    if data_type.starts_with("binary") | data_type.starts_with("varbinary") {
+        return true;
+    }
+    false
 }
 
 fn extract_decimal_precision_and_scale(data_type: &str) -> Result<(u8, i8)> {
