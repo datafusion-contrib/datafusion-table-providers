@@ -1,17 +1,17 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, Date32Builder, Decimal128Builder, Float32Builder, Float64Builder,
-        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
-        RecordBatch, RecordBatchOptions, Time64NanosecondBuilder, TimestampMillisecondBuilder,
-        UInt64Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
+        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
+        NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
+        TimestampMillisecondBuilder, UInt64Builder,
     },
     datatypes::{DataType, Date32Type, Field, Schema, TimeUnit},
 };
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
 use chrono::{NaiveDate, NaiveTime, Timelike};
-use mysql_async::{consts::ColumnType, FromValueError, Row, Value};
+use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
 
@@ -93,13 +93,15 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut mysql_types: Vec<ColumnType> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
+    let mut column_is_binary_stats: Vec<bool> = Vec::new();
 
     if !rows.is_empty() {
         let row = &rows[0];
         for column in row.columns().iter() {
             let column_name = column.name_str();
             let column_type = column.column_type();
-            let data_type = map_column_to_data_type(column_type);
+            let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
+            let data_type = map_column_to_data_type(column_type, column_is_binary);
             arrow_fields.push(
                 data_type
                     .clone()
@@ -109,6 +111,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 .push(map_data_type_to_array_builder_optional(data_type.as_ref()));
             mysql_types.push(column_type);
             column_names.push(column_name.to_string());
+            column_is_binary_stats.push(column_is_binary);
         }
     }
 
@@ -258,8 +261,6 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     dec_builder.append_value(val);
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
-                | ColumnType::MYSQL_TYPE_STRING
-                | ColumnType::MYSQL_TYPE_VAR_STRING
                 | ColumnType::MYSQL_TYPE_JSON
                 | ColumnType::MYSQL_TYPE_TINY_BLOB
                 | ColumnType::MYSQL_TYPE_BLOB
@@ -274,6 +275,28 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         row,
                         i
                     );
+                }
+                column_type @ (ColumnType::MYSQL_TYPE_STRING
+                | ColumnType::MYSQL_TYPE_VAR_STRING) => {
+                    if column_is_binary_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            BinaryBuilder,
+                            Vec<u8>,
+                            row,
+                            i
+                        );
+                    } else {
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            LargeStringBuilder,
+                            String,
+                            row,
+                            i
+                        );
+                    }
                 }
                 ColumnType::MYSQL_TYPE_DATE => {
                     let Some(builder) = builder else {
@@ -407,7 +430,10 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-pub fn map_column_to_data_type(column_type: ColumnType) -> Option<DataType> {
+pub fn map_column_to_data_type(
+    column_type: ColumnType,
+    column_is_binary: bool,
+) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
         ColumnType::MYSQL_TYPE_BIT => Some(DataType::UInt64),
@@ -426,8 +452,6 @@ pub fn map_column_to_data_type(column_type: ColumnType) -> Option<DataType> {
             Some(DataType::Time64(TimeUnit::Nanosecond))
         }
         ColumnType::MYSQL_TYPE_VARCHAR
-        | ColumnType::MYSQL_TYPE_STRING
-        | ColumnType::MYSQL_TYPE_VAR_STRING
         | ColumnType::MYSQL_TYPE_JSON
         | ColumnType::MYSQL_TYPE_ENUM
         | ColumnType::MYSQL_TYPE_SET
@@ -435,7 +459,14 @@ pub fn map_column_to_data_type(column_type: ColumnType) -> Option<DataType> {
         | ColumnType::MYSQL_TYPE_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_LONG_BLOB => Some(DataType::LargeUtf8),
-
+        ColumnType::MYSQL_TYPE_STRING
+        | ColumnType::MYSQL_TYPE_VAR_STRING => {
+            if column_is_binary {
+                Some(DataType::Binary)
+            } else {
+                Some(DataType::LargeUtf8)
+            }
+        },
         // replication only
         ColumnType::MYSQL_TYPE_TYPED_ARRAY
         // internal
