@@ -732,6 +732,8 @@ impl<'a> FromSql<'a> for BigDecimalFromSql {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
+    use chrono::NaiveTime;
     use std::str::FromStr;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -758,5 +760,28 @@ mod tests {
         let negative_result = BigDecimalFromSql::from_sql(&Type::NUMERIC, negative_raw.as_slice())
             .expect("Failed to run FromSql");
         assert_eq!(negative_result.inner, negative);
+    }
+
+    #[test]
+    fn test_chrono_naive_time_to_time64nanosecond() {
+        let chrono_naive_vec = vec![
+            NaiveTime::from_hms_opt(10, 30, 00).unwrap_or_default(),
+            NaiveTime::from_hms_opt(10, 45, 15).unwrap_or_default(),
+        ];
+
+        let time_array: Time64NanosecondArray = vec![
+            (10 * 3600 + 30 * 60) * 1_000_000_000,
+            (10 * 3600 + 45 * 60 + 15) * 1_000_000_000,
+        ]
+        .into();
+
+        let mut builder = Time64NanosecondBuilder::new();
+        for time in chrono_naive_vec {
+            let timestamp: i64 = i64::from(time.num_seconds_from_midnight()) * 1_000_000_000
+                + i64::from(time.nanosecond());
+            builder.append_value(timestamp);
+        }
+        let converted_result = builder.finish();
+        assert_eq!(converted_result, time_array);
     }
 }
