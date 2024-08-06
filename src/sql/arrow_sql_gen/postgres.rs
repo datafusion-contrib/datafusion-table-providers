@@ -7,13 +7,15 @@ use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
     LargeBinaryBuilder, LargeStringBuilder, ListBuilder, RecordBatch, RecordBatchOptions,
-    StringBuilder, StructBuilder, TimestampMillisecondBuilder, UInt32Builder,
+    StringBuilder, StructBuilder, Time64NanosecondBuilder, TimestampMillisecondBuilder,
+    UInt32Builder,
 };
 use arrow::datatypes::{DataType, Date32Type, Field, Schema, TimeUnit};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
+use chrono::Timelike;
 use composite::CompositeType;
 use sea_query::{Alias, ColumnType, SeaRc};
 use snafu::prelude::*;
@@ -252,6 +254,35 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 }
                 Type::BOOL => {
                     handle_primitive_type!(builder, Type::BOOL, BooleanBuilder, bool, row, i);
+                }
+                Type::TIME => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<Time64NanosecondBuilder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row
+                        .try_get::<usize, Option<chrono::NaiveTime>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu {
+                            pg_type: Type::TIME,
+                        })?;
+
+                    match v {
+                        Some(v) => {
+                            let timestamp: i64 = i64::from(v.num_seconds_from_midnight())
+                                * 1_000_000_000
+                                + i64::from(v.nanosecond());
+                            builder.append_value(timestamp);
+                        }
+                        None => builder.append_null(),
+                    }
                 }
                 Type::NUMERIC => {
                     let v: Option<BigDecimalFromSql> =
@@ -536,6 +567,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
             Some(DataType::Timestamp(TimeUnit::Millisecond, None))
         }
         Type::DATE => Some(DataType::Date32),
+        Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
         Type::INT2_ARRAY => Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
@@ -704,6 +736,8 @@ impl<'a> FromSql<'a> for BigDecimalFromSql {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
+    use chrono::NaiveTime;
     use std::str::FromStr;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -730,5 +764,28 @@ mod tests {
         let negative_result = BigDecimalFromSql::from_sql(&Type::NUMERIC, negative_raw.as_slice())
             .expect("Failed to run FromSql");
         assert_eq!(negative_result.inner, negative);
+    }
+
+    #[test]
+    fn test_chrono_naive_time_to_time64nanosecond() {
+        let chrono_naive_vec = vec![
+            NaiveTime::from_hms_opt(10, 30, 00).unwrap_or_default(),
+            NaiveTime::from_hms_opt(10, 45, 15).unwrap_or_default(),
+        ];
+
+        let time_array: Time64NanosecondArray = vec![
+            (10 * 3600 + 30 * 60) * 1_000_000_000,
+            (10 * 3600 + 45 * 60 + 15) * 1_000_000_000,
+        ]
+        .into();
+
+        let mut builder = Time64NanosecondBuilder::new();
+        for time in chrono_naive_vec {
+            let timestamp: i64 = i64::from(time.num_seconds_from_midnight()) * 1_000_000_000
+                + i64::from(time.nanosecond());
+            builder.append_value(timestamp);
+        }
+        let converted_result = builder.finish();
+        assert_eq!(converted_result, time_array);
     }
 }
