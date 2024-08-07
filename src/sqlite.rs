@@ -95,6 +95,12 @@ impl SqliteTableProviderFactory {
     }
 
     #[must_use]
+    pub fn db_path_param(mut self, db_path_param: &str) -> Self {
+        self.db_path_param = db_path_param.to_string();
+        self
+    }
+
+    #[must_use]
     pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
         options
             .get(&self.db_path_param)
