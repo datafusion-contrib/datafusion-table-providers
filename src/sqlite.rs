@@ -84,6 +84,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct SqliteTableProviderFactory {
     db_path_param: String,
+    db_base_folder_param: String,
 }
 
 impl SqliteTableProviderFactory {
@@ -91,7 +92,14 @@ impl SqliteTableProviderFactory {
     pub fn new() -> Self {
         Self {
             db_path_param: "sqlite_file".to_string(),
+            db_base_folder_param: "data_directory".to_string(),
         }
+    }
+
+    #[must_use]
+    pub fn db_base_folder_param(mut self, db_base_folder_param: &str) -> Self {
+        self.db_base_folder_param = db_base_folder_param.to_string();
+        self
     }
 
     #[must_use]
@@ -102,10 +110,16 @@ impl SqliteTableProviderFactory {
 
     #[must_use]
     pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
+        let db_base_folder = options
+            .get(&self.db_base_folder_param)
+            .cloned()
+            .unwrap_or(".".to_string()); // default to the current directory
+        let default_filepath = format!("{db_base_folder}/{name}_sqlite.db");
+
         options
             .get(&self.db_path_param)
             .cloned()
-            .unwrap_or_else(|| format!("{name}_sqlite.db"))
+            .unwrap_or(default_filepath)
     }
 }
 
