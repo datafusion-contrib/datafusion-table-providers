@@ -4,9 +4,9 @@ use arrow::{
 };
 use bigdecimal_0_3_0::BigDecimal;
 use sea_query::{
-    Alias, BlobSize, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
+    Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SimpleExpr, SqliteQueryBuilder, Table,
+    QueryBuilder, SimpleExpr, SqliteQueryBuilder, StringLen, Table,
 };
 use snafu::Snafu;
 use std::sync::Arc;
@@ -457,6 +457,32 @@ impl InsertBuilder {
                             row_values.push(valid_array.value(row).into());
                         }
                     }
+                    DataType::LargeBinary => {
+                        let array = column.as_any().downcast_ref::<array::LargeBinaryArray>();
+
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            row_values.push(valid_array.value(row).into());
+                        }
+                    }
+                    DataType::FixedSizeBinary(_) => {
+                        let array = column
+                            .as_any()
+                            .downcast_ref::<array::FixedSizeBinaryArray>();
+
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            row_values.push(valid_array.value(row).into());
+                        }
+                    }
                     DataType::Struct(_) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
@@ -790,6 +816,7 @@ fn insert_timestamp_into_row_values(
     }
 }
 
+#[allow(clippy::cast_sign_loss)]
 pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
     match data_type {
         DataType::Int8 => ColumnType::TinyInteger,
@@ -812,7 +839,8 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::List(list_type) => {
             ColumnType::Array(map_data_type_to_column_type(list_type.data_type()).into())
         }
-        DataType::Binary => ColumnType::Binary(BlobSize::Blob(None)),
+        DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
+        DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
         // Add more mappings here as needed
         _ => unimplemented!("Data type mapping not implemented for {:?}", data_type),
     }
