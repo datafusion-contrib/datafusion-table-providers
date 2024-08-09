@@ -246,7 +246,7 @@ impl InsertBuilder {
                             }
                             row_values.push(
                                 match OffsetDateTime::from_unix_timestamp(
-                                    valid_array.value(row) * 86_400,
+                                    valid_array.value(row) / 1000,
                                 ) {
                                     Ok(offset_time) => offset_time.date().into(),
                                     Err(e) => {
