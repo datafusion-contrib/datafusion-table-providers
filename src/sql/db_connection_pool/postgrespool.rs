@@ -34,6 +34,12 @@ pub enum Error {
     #[snafu(display("Invalid parameter: {parameter_name}"))]
     InvalidParameterError { parameter_name: String },
 
+    #[snafu(display("Could not parse {parameter_name} into a valid integer"))]
+    InvalidIntegerParameterError {
+        parameter_name: String,
+        source: std::num::ParseIntError,
+    },
+
     #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
     InvalidHostOrPortError {
         source: crate::util::ns_lookup::Error,
@@ -166,7 +172,18 @@ impl PostgresConnectionPool {
         let manager = PostgresConnectionManager::new(config, connector);
         let error_sink = PostgresErrorSink::new();
 
+        let mut connection_pool_size = 10; // The BB8 default is 10
+        if let Some(pg_pool_size) = params
+            .get("connection_pool_size")
+            .map(Secret::expose_secret)
+        {
+            connection_pool_size = pg_pool_size.parse().context(InvalidIntegerParameterSnafu {
+                parameter_name: "pool_size".to_string(),
+            })?;
+        }
+
         let pool = bb8::Pool::builder()
+            .max_size(connection_pool_size)
             .error_sink(Box::new(error_sink))
             .build(manager)
             .await
