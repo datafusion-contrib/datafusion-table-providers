@@ -47,6 +47,9 @@ datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-feder
 itertools = "0.13.0"
 
 [dev-dependencies]
+anyhow = "1.0.86"
+bollard = "0.16.1"
+rand = "0.8.5"
 reqwest = "0.12.5"
 secrecy = "0.8.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
