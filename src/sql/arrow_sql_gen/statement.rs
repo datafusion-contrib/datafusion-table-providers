@@ -1,6 +1,7 @@
 use arrow::{
     array::{array, Array, RecordBatch},
     datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
+    util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
 use sea_query::{
@@ -495,11 +496,14 @@ impl InsertBuilder {
                                     continue;
                                 }
 
-                                let days = valid_array.value(row).days;
-                                let milliseconds = valid_array.value(row).milliseconds;
-
                                 let interval_str =
-                                    format!("{days} days {milliseconds} milliseconds");
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let days = valid_array.value(row).days;
+                                        let milliseconds = valid_array.value(row).milliseconds;
+                                        format!("{days} days {milliseconds} milliseconds")
+                                    };
 
                                 row_values.push(interval_str.into());
                             }
@@ -515,9 +519,13 @@ impl InsertBuilder {
                                     continue;
                                 }
 
-                                let months = valid_array.value(row);
-
-                                let interval_str = format!("{months} months");
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row);
+                                        format!("{months} months")
+                                    };
 
                                 row_values.push(interval_str.into());
                             }
@@ -535,13 +543,16 @@ impl InsertBuilder {
                                     continue;
                                 }
 
-                                let months = valid_array.value(row).months;
-                                let days = valid_array.value(row).days;
-                                let nanoseconds = valid_array.value(row).nanoseconds;
-                                let micros = nanoseconds / 1_000;
-
                                 let interval_str =
-                                    format!("{months} months {days} days {micros} microseconds");
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row).months;
+                                        let days = valid_array.value(row).days;
+                                        let nanoseconds = valid_array.value(row).nanoseconds;
+                                        let micros = nanoseconds / 1_000;
+                                        format!("{months} months {days} days {micros} microseconds")
+                                    };
 
                                 row_values.push(interval_str.into());
                             }
