@@ -1,6 +1,6 @@
 use arrow::{
     array::{array, Array, RecordBatch},
-    datatypes::{DataType, Field, SchemaRef, TimeUnit},
+    datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
 };
 use bigdecimal_0_3_0::BigDecimal;
 use sea_query::{
@@ -483,6 +483,70 @@ impl InsertBuilder {
                             row_values.push(valid_array.value(row).into());
                         }
                     }
+                    DataType::Interval(interval_unit) => match interval_unit {
+                        IntervalUnit::DayTime => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalDayTimeArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let days = valid_array.value(row).days;
+                                let milliseconds = valid_array.value(row).milliseconds;
+
+                                let interval_str =
+                                    format!("{days} days {milliseconds} milliseconds");
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        IntervalUnit::YearMonth => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalYearMonthArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let months = valid_array.value(row);
+
+                                let interval_str = format!("{months} months");
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        // The smallest unit in Postgres of inetrval is microsecond
+                        // Cast with loss of precision in nano second
+                        IntervalUnit::MonthDayNano => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalMonthDayNanoArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let months = valid_array.value(row).months;
+                                let days = valid_array.value(row).days;
+                                let nanoseconds = valid_array.value(row).nanoseconds;
+                                let micros = nanoseconds / 1_000;
+
+                                let interval_str =
+                                    format!("{months} months {days} days {micros} microseconds");
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                    },
                     DataType::Struct(_) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
@@ -841,6 +905,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         }
         DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
+        DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
         _ => unimplemented!("Data type mapping not implemented for {:?}", data_type),
     }

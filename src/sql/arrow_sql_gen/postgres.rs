@@ -6,15 +6,18 @@ use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
-    LargeBinaryBuilder, LargeStringBuilder, ListBuilder, RecordBatch, RecordBatchOptions,
-    StringBuilder, StructBuilder, Time64NanosecondBuilder, TimestampMillisecondBuilder,
-    UInt32Builder,
+    IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder, RecordBatch,
+    RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
+    TimestampMillisecondBuilder, UInt32Builder,
 };
-use arrow::datatypes::{DataType, Date32Type, Field, Schema, TimeUnit};
+use arrow::datatypes::{
+    DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
+use byteorder::{BigEndian, ReadBytesExt};
 use chrono::Timelike;
 use composite::CompositeType;
 use sea_query::{Alias, ColumnType, SeaRc};
@@ -280,6 +283,36 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                                 * 1_000_000_000
                                 + i64::from(v.nanosecond());
                             builder.append_value(timestamp);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
+                Type::INTERVAL => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<IntervalMonthDayNanoBuilder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    let v: Option<IntervalFromSql> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: Type::INTERVAL,
+                        })?;
+                    match v {
+                        Some(v) => {
+                            let interval_month_day_nano = IntervalMonthDayNanoType::make_value(
+                                v.month,
+                                v.day,
+                                v.time * 1_000,
+                            );
+                            builder.append_value(interval_month_day_nano);
                         }
                         None => builder.append_null(),
                     }
@@ -568,6 +601,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         }
         Type::DATE => Some(DataType::Date32),
         Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
+        Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
         Type::INT2_ARRAY => Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
@@ -733,6 +767,33 @@ impl<'a> FromSql<'a> for BigDecimalFromSql {
     }
 }
 
+// interval_send - Postgres C (https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/timestamp.c#L1032)
+// interval values are internally stored as three integral fields: months, days, and microseconds
+struct IntervalFromSql {
+    time: i64,
+    day: i32,
+    month: i32,
+}
+
+impl<'a> FromSql<'a> for IntervalFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+
+        let time = cursor.read_i64::<BigEndian>()?;
+        let day = cursor.read_i32::<BigEndian>()?;
+        let month = cursor.read_i32::<BigEndian>()?;
+
+        Ok(IntervalFromSql { time, day, month })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::INTERVAL)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,6 +825,39 @@ mod tests {
         let negative_result = BigDecimalFromSql::from_sql(&Type::NUMERIC, negative_raw.as_slice())
             .expect("Failed to run FromSql");
         assert_eq!(negative_result.inner, negative);
+    }
+
+    #[test]
+    fn test_interval_from_sql() {
+        let positive_time: i64 = 123_123;
+        let positive_day: i32 = 10;
+        let positive_month: i32 = 2;
+
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_time.to_be_bytes());
+        positive_raw.extend_from_slice(&positive_day.to_be_bytes());
+        positive_raw.extend_from_slice(&positive_month.to_be_bytes());
+
+        let positive_result = IntervalFromSql::from_sql(&Type::INTERVAL, positive_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(positive_result.day, positive_day);
+        assert_eq!(positive_result.time, positive_time);
+        assert_eq!(positive_result.month, positive_month);
+
+        let negative_time: i64 = -123_123;
+        let negative_day: i32 = -10;
+        let negative_month: i32 = -2;
+
+        let mut negative_raw: Vec<u8> = Vec::new();
+        negative_raw.extend_from_slice(&negative_time.to_be_bytes());
+        negative_raw.extend_from_slice(&negative_day.to_be_bytes());
+        negative_raw.extend_from_slice(&negative_month.to_be_bytes());
+
+        let negative_result = IntervalFromSql::from_sql(&Type::INTERVAL, negative_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(negative_result.day, negative_day);
+        assert_eq!(negative_result.time, negative_time);
+        assert_eq!(negative_result.month, negative_month);
     }
 
     #[test]
