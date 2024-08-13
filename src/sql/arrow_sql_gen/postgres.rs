@@ -267,11 +267,11 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         }
                         .fail();
                     };
-                    let v = row
-                        .try_get::<usize, Option<serde_json::Value>>(i)
-                        .with_context(|_| FailedToGetRowValueSnafu {
+                    let v = row.try_get::<usize, Option<Value>>(i).with_context(|_| {
+                        FailedToGetRowValueSnafu {
                             pg_type: Type::TIME,
-                        })?;
+                        }
+                    })?;
 
                     match v {
                         Some(v) => {
