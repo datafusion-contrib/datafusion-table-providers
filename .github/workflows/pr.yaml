@@ -49,5 +49,14 @@ jobs:
       - name: Build with only mysql
         run: cargo check --no-default-features --features mysql
 
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Run integration test
         run: cargo test --test integration --no-default-features --features postgres -- --nocapture
