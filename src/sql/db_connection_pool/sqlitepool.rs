@@ -50,10 +50,20 @@ impl SqliteConnectionPoolFactory {
         self
     }
 
-    pub async fn build(self) -> Result<SqliteConnectionPool> {
+    pub async fn build(&self) -> Result<SqliteConnectionPool> {
         let join_push_down = match (self.mode, &self.attach_databases) {
             (Mode::File, Some(attach_databases)) => {
                 let mut attach_databases = attach_databases.clone();
+
+                for database in &attach_databases {
+                    // open and close the database to ensure it exists
+                    // if it doesn't, an empty SQLite file will be created until the first write
+                    let conn = Connection::open(database.to_string())
+                        .await
+                        .context(ConnectionPoolSnafu)?;
+
+                    conn.close().await.context(ConnectionPoolSnafu)?;
+                }
 
                 if !attach_databases.contains(&self.path) {
                     attach_databases.push(Arc::clone(&self.path));
@@ -69,7 +79,12 @@ impl SqliteConnectionPoolFactory {
             _ => JoinPushDown::Disallow,
         };
 
-        let attach_databases = self.attach_databases.unwrap_or_default();
+        let attach_databases = if let Some(attach_databases) = &self.attach_databases {
+            attach_databases.clone()
+        } else {
+            vec![]
+        };
+
         let pool =
             SqliteConnectionPool::new(&self.path, self.mode, join_push_down, attach_databases)
                 .await?;
@@ -185,5 +200,68 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
 
     fn join_push_down(&self) -> JoinPushDown {
         self.join_push_down.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::db_connection_pool::Mode;
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory() {
+        let factory = SqliteConnectionPoolFactory::new("./test1.sqlite", Mode::File);
+        let pool = factory.build().await.unwrap();
+
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor("./test1.sqlite".to_string()));
+        assert!(pool.mode == Mode::File);
+        assert_eq!(pool.path, "./test1.sqlite".into());
+
+        drop(pool);
+
+        // cleanup
+        std::fs::remove_file("./test1.sqlite").unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory_with_attachments() {
+        let factory = SqliteConnectionPoolFactory::new("./test2.sqlite", Mode::File)
+            .with_databases(Some(vec!["./test3.sqlite".into(), "./test4.sqlite".into()]));
+        let pool = factory.build().await.unwrap();
+
+        let push_down_hash = hash_string("./test2.sqlite;./test3.sqlite;./test4.sqlite");
+
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor(push_down_hash));
+        assert!(pool.mode == Mode::File);
+        assert_eq!(pool.path, "./test2.sqlite".into());
+
+        drop(pool);
+
+        // check the attachment database exist, because the pool should have created them during setup
+        assert!(std::fs::metadata("./test3.sqlite").is_ok());
+        assert!(std::fs::metadata("./test4.sqlite").is_ok());
+
+        // cleanup
+        std::fs::remove_file("./test2.sqlite").unwrap();
+        std::fs::remove_file("./test3.sqlite").unwrap();
+        std::fs::remove_file("./test4.sqlite").unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory_memory_with_attachments() {
+        let factory = SqliteConnectionPoolFactory::new("./test5.sqlite", Mode::Memory)
+            .with_databases(Some(vec!["./test6.sqlite".into(), "./test7.sqlite".into()]));
+        let pool = factory.build().await.unwrap();
+
+        assert!(pool.join_push_down == JoinPushDown::Disallow);
+        assert!(pool.mode == Mode::Memory);
+        assert_eq!(pool.path, "./test5.sqlite".into());
+
+        drop(pool);
+
+        // in memory mode, attachments are not created
+        assert!(std::fs::metadata("./test5.sqlite").is_err());
+        assert!(std::fs::metadata("./test6.sqlite").is_err());
+        assert!(std::fs::metadata("./test7.sqlite").is_err());
     }
 }

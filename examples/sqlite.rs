@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
-    sql::db_connection_pool::{sqlitepool::SqliteConnectionPool, Mode},
+    sql::db_connection_pool::{sqlitepool::SqliteConnectionPoolFactory, Mode},
     sqlite::SqliteTableFactory,
 };
 
@@ -11,7 +11,8 @@ use datafusion_table_providers::{
 #[tokio::main]
 async fn main() {
     let sqlite_pool = Arc::new(
-        SqliteConnectionPool::new("examples/sqlite_example.db", Mode::File)
+        SqliteConnectionPoolFactory::new("examples/sqlite_example.db", Mode::File)
+            .build()
             .await
             .expect("unable to create Sqlite connection pool"),
     );
