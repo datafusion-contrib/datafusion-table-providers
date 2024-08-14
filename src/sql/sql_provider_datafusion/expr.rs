@@ -103,7 +103,7 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             ScalarValue::Decimal128(Some(v), _, s) => {
                 let decimal = BigDecimal::new(BigInt::from(*v), *s as i64);
                 Ok(decimal.to_string())
-            },
+            }
             _ => Err(Error::UnsupportedFilterExpr {
                 expr: format!("{expr}"),
             }),
@@ -232,8 +232,8 @@ mod tests {
             let expr = Expr::Like(Like {
                 expr: Box::new(col("name")),
                 pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some("%John%".to_string())))),
-                case_insensitive: case_insensitive,
-                negated: negated,
+                case_insensitive,
+                negated,
                 escape_char: None,
             });
 

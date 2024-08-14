@@ -74,8 +74,8 @@ impl Hash for ColumnReference {
 ///
 /// # Examples
 ///
-/// ```
-/// use runtime::component::dataset::acceleration::constraints::ColumnReference;
+/// ```rust,ignore
+/// use datafusion_table_providers::util::column_reference::ColumnReference;
 ///
 /// let column_ref = ColumnReference::try_from("foo").expect("valid columns");
 /// assert_eq!(column_ref.iter().collect::<Vec<_>>(), vec!["foo"]);

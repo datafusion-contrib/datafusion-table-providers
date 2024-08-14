@@ -1,6 +1,7 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -13,7 +14,7 @@ use datafusion::{
     arrow::datatypes::SchemaRef,
     datasource::TableProvider,
     error::Result as DataFusionResult,
-    execution::{context::SessionState, TaskContext},
+    execution::TaskContext,
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
     physical_plan::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
@@ -88,7 +89,7 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,

@@ -12,6 +12,7 @@ pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
 pub mod secrets;
+pub mod test;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
