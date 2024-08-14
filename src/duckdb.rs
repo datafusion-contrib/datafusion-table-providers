@@ -27,7 +27,7 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::{AccessMode, DuckdbConnectionManager, ToSql, Transaction};
+use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::{cmp, collections::HashMap, sync::Arc};
