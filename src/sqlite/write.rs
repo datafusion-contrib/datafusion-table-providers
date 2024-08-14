@@ -3,10 +3,11 @@ use std::{any::Any, fmt, sync::Arc};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::{
+    catalog::Session,
     common::Constraints,
     datasource::{TableProvider, TableType},
     error::DataFusionError,
-    execution::{context::SessionState, SendableRecordBatchStream, TaskContext},
+    execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::Expr,
     physical_plan::{
         insert::{DataSink, DataSinkExec},
@@ -68,7 +69,7 @@ impl TableProvider for SqliteTableWriter {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -80,7 +81,7 @@ impl TableProvider for SqliteTableWriter {
 
     async fn insert_into(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
@@ -211,14 +212,15 @@ mod tests {
         datatypes::{DataType, Schema},
     };
     use datafusion::{
+        catalog::TableProviderFactory,
         common::{Constraints, TableReference, ToDFSchema},
-        datasource::provider::TableProviderFactory,
         execution::context::SessionContext,
         logical_expr::CreateExternalTable,
-        physical_plan::{collect, test::exec::MockExec},
+        physical_plan::collect,
     };
 
     use crate::sqlite::SqliteTableProviderFactory;
+    use crate::util::test::MockExec;
 
     #[tokio::test]
     #[allow(clippy::unreadable_literal)]
