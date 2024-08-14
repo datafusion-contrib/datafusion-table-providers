@@ -11,4 +11,4 @@ lint:
 
 .PHONY: test-integration
 test-integration:
-	cargo test --test integration --features postgres -- --nocapture
+	cargo test --test integration --no-default-features --features postgres -- --nocapture
