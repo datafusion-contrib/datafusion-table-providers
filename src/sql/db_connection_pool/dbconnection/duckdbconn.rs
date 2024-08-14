@@ -12,6 +12,7 @@ use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
 use duckdb::DuckdbConnectionManager;
 use duckdb::ToSql;
+use dyn_clone::DynClone;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
@@ -28,6 +29,18 @@ pub enum Error {
     ChannelError { message: String },
 }
 
+pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
+    fn as_input_parameter(&self) -> &dyn ToSql;
+}
+
+impl<T: ToSql + Sync + Send + DynClone> DuckDBSyncParameter for T {
+    fn as_input_parameter(&self) -> &dyn ToSql {
+        self
+    }
+}
+dyn_clone::clone_trait_object!(DuckDBSyncParameter);
+pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
+
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
 }
@@ -40,7 +53,7 @@ impl DuckDbConnection {
     }
 }
 
-impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn ToSql>
+impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
     fn as_any(&self) -> &dyn Any {
@@ -53,13 +66,14 @@ impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn T
 
     fn as_sync(
         &self,
-    ) -> Option<&dyn SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn ToSql>>
-    {
+    ) -> Option<
+        &dyn SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
+    > {
         Some(self)
     }
 }
 
-impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
+impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
     fn new(conn: r2d2::PooledConnection<DuckdbConnectionManager>) -> Self {
@@ -86,20 +100,45 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSq
         Ok(result.get_schema())
     }
 
-    fn query_arrow(&self, sql: &str, params: &[&dyn ToSql]) -> Result<SendableRecordBatchStream> {
+    fn query_arrow(
+        &self,
+        sql: &str,
+        params: &[DuckDBParameter],
+    ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
+        let fetch_schema_sql = format!(
+            "WITH fetch_schema_daith7owar AS ({sql}) SELECT * FROM fetch_schema_daith7owar LIMIT 0"
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&fetch_schema_sql)
+            .boxed()
+            .context(super::UnableToGetSchemaSnafu)?;
+
+        let result: duckdb::Arrow<'_> = stmt
+            .query_arrow([])
+            .boxed()
+            .context(super::UnableToGetSchemaSnafu)?;
+
+        let schema = result.get_schema();
+
+        let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
+
         let conn = self.conn.try_clone()?;
-        // let mut stmt = conn.prepare(sql).context(DuckDBSnafu)?;
-        // let result: duckdb::Arrow<'_> = stmt.query_arrow([]).context(DuckDBSnafu)?;
-        let schema = self.get_schema(&TableReference::from("lineitem"))?;
         let sql = sql.to_string();
 
         let cloned_schema = schema.clone();
 
         let join_handle = tokio::task::spawn_blocking(move || {
             let mut stmt = conn.prepare(&sql).context(DuckDBSnafu)?;
-            let result: duckdb::Arrow<'_> = stmt.stream_arrow([], cloned_schema).context(DuckDBSnafu)?;
+            let params: &[&dyn ToSql] = &params
+                .iter()
+                .map(|f| f.as_input_parameter())
+                .collect::<Vec<_>>();
+            let result: duckdb::Arrow<'_> = stmt
+                .stream_arrow(params, cloned_schema)
+                .context(DuckDBSnafu)?;
             for i in result {
                 blocking_channel_send(&batch_tx, i)?;
             }
@@ -125,7 +164,12 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSq
         )))
     }
 
-    fn execute(&self, sql: &str, params: &[&dyn ToSql]) -> Result<u64> {
+    fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {
+        let params: &[&dyn ToSql] = &params
+            .iter()
+            .map(|f| f.as_input_parameter())
+            .collect::<Vec<_>>();
+
         let rows_modified = self.conn.execute(sql, params).context(DuckDBSnafu)?;
         Ok(rows_modified as u64)
     }

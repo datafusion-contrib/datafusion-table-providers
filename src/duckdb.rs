@@ -1,7 +1,9 @@
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{
-        duckdbconn::{flatten_table_function_name, is_table_function, DuckDbConnection},
+        duckdbconn::{
+            flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+        },
         get_schema, DbConnection,
     },
     duckdbpool::DuckDbConnectionPool,
@@ -151,7 +153,7 @@ impl Default for DuckDBTableProviderFactory {
     }
 }
 
-type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>
+type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     + Send
     + Sync;
 
@@ -281,7 +283,7 @@ impl DuckDB {
     pub fn connect_sync(
         &self,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         Arc::clone(&self.pool)
             .connect_sync()
@@ -290,7 +292,7 @@ impl DuckDB {
 
     pub fn duckdb_conn<'a>(
         db_connection: &'a mut Box<
-            dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>,
+            dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
         >,
     ) -> Result<&'a mut DuckDbConnection> {
         db_connection

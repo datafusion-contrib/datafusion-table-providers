@@ -45,6 +45,7 @@ tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = "0.1"
 datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "eeb9b9c0ed41650db282ba27bc663feb64e62147" }
 itertools = "0.13.0"
+dyn-clone = { version = "1.0.17", optional = true }
 
 [dev-dependencies]
 reqwest = "0.12.5"
@@ -55,7 +56,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
-duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
+duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "eeb9b9c0ed41650db282ba27bc663feb64e62147" }
