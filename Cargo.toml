@@ -29,6 +29,7 @@ rusqlite = { version = "0.31.0", optional = true }
 sea-query = { version = "0.31.0", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time"] }
 secrecy = "0.8.0"
 serde_json = "1.0.124"
+sha2 = { version = "0.10.8", optional = true }
 snafu = "0.8.3"
 time = "0.3.36"
 tokio = { version = "1.38.0", features = ["macros", "fs"] }
@@ -58,7 +59,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
-sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
+sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:sha2"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
 
 [patch.crates-io]
