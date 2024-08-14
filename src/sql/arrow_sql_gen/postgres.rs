@@ -269,7 +269,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     };
                     let v = row.try_get::<usize, Option<Value>>(i).with_context(|_| {
                         FailedToGetRowValueSnafu {
-                            pg_type: Type::TIME,
+                            pg_type: Type::JSON,
                         }
                     })?;
 
