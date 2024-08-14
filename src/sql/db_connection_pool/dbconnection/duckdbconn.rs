@@ -136,7 +136,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 .iter()
                 .map(|f| f.as_input_parameter())
                 .collect::<Vec<_>>();
-            let result: duckdb::Arrow<'_> = stmt
+            let result: duckdb::ArrowStream<'_> = stmt
                 .stream_arrow(params, cloned_schema)
                 .context(DuckDBSnafu)?;
             for i in result {
