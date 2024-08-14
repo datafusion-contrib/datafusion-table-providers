@@ -18,10 +18,10 @@ use crate::util::{
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::{
+    catalog::{Session, TableProviderFactory},
     common::Constraints,
-    datasource::{provider::TableProviderFactory, TableProvider},
+    datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    execution::context::SessionState,
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
@@ -159,7 +159,7 @@ type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<Duckd
 impl TableProviderFactory for DuckDBTableProviderFactory {
     async fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();
@@ -427,17 +427,17 @@ impl DuckDBTableFactory {
 }
 
 /// For a [`TableReference`] that is a table function, create a name for a view on the original [`TableReference`]
+///
 /// ### Example
 ///
-/// ```rust
-/// use data_components::duckdb::create_table_function_view_name;
-/// use datafusion::datasource::TableReference;
+/// ```rust,ignore
+/// use datafusion_table_providers::duckdb::create_table_function_view_name;
+/// use datafusion::common::TableReference;
 ///
 /// let table_reference = TableReference::from("catalog.schema.read_parquet('cleaned_sales_data.parquet')");
 /// let view_name = create_table_function_view_name(&table_reference);
 /// assert_eq!(view_name.to_string(), "catalog.schema.read_parquet_cleaned_sales_dataparquet__view");
-/// ```  read_parquetcleaned_sales_dataparquet_view
-///
+/// ```
 fn create_table_function_view_name(table_reference: &TableReference) -> TableReference {
     let tbl_ref_view = [
         table_reference.catalog(),

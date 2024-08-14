@@ -10,7 +10,7 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use async_trait::async_trait;
-use datafusion::sql::unparser::dialect::Dialect;
+use datafusion::{catalog::Session, sql::unparser::dialect::Dialect};
 use expr::Engine;
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -21,7 +21,7 @@ use datafusion::{
     arrow::datatypes::SchemaRef,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    execution::{context::SessionState, TaskContext},
+    execution::TaskContext,
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -176,7 +176,7 @@ impl<T, P> TableProvider for SqlTable<T, P> {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
