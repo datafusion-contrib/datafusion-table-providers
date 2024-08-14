@@ -13,7 +13,7 @@ bigdecimal = "0.4.5"
 bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
 chrono = "0.4.38"
-datafusion = "40.0.0"
+datafusion = "41.0.0"
 duckdb = { version = "1", features = [
   "bundled",
   "r2d2",
@@ -45,7 +45,7 @@ url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "eeb9b9c0ed41650db282ba27bc663feb64e62147" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "9b4392f45546dd3a1232c18ad36189bcc3cd408d" }
 itertools = "0.13.0"
 
 [dev-dependencies]
@@ -63,4 +63,4 @@ sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:sha2"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "eeb9b9c0ed41650db282ba27bc663feb64e62147" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "9b4392f45546dd3a1232c18ad36189bcc3cd408d" }
