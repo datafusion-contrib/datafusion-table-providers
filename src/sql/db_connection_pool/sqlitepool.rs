@@ -148,7 +148,7 @@ impl SqliteConnectionPool {
                 .attach_databases
                 .iter()
                 .enumerate()
-                .map(|(i, db)| format!("ATTACH DATABASE '{db}' AS accelerator_{i}"));
+                .map(|(i, db)| format!("ATTACH DATABASE '{db}' AS attachment_{i}"));
 
             for attachment in attach_databases {
                 if attachment == *self.path {
