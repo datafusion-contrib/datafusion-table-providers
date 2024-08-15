@@ -128,9 +128,9 @@ async fn test_arrow_postgres_types_conversion() -> Result<(), String> {
     //     .await
     //     .unwrap();
 
-    // arrow_postgres_round_trip(port, get_arrow_interval_record_batch(), "interval_types")
-    //     .await
-    //     .unwrap();
+    arrow_postgres_round_trip(port, get_arrow_interval_record_batch(), "interval_types")
+        .await
+        .unwrap();
 
     // arrow_postgres_round_trip(port, get_arrow_duration_record_batch(), "duration_types")
     //     .await
