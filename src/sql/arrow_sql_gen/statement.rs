@@ -530,7 +530,7 @@ impl InsertBuilder {
                                 row_values.push(interval_str.into());
                             }
                         }
-                        // The smallest unit in Postgres of inetrval is microsecond
+                        // The smallest unit in Postgres for interval is microsecond
                         // Cast with loss of precision in nano second
                         IntervalUnit::MonthDayNano => {
                             let array = column
