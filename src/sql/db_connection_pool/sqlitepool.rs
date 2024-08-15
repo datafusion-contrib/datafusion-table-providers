@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use snafu::{prelude::*, ResultExt};
 use tokio_rusqlite::{Connection, ToSql};
 
@@ -27,15 +26,6 @@ pub struct SqliteConnectionPoolFactory {
     path: Arc<str>,
     mode: Mode,
     attach_databases: Option<Vec<Arc<str>>>,
-}
-
-fn hash_string(val: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(val);
-    hasher.finalize().iter().fold(String::new(), |mut hash, b| {
-        hash.push_str(&format!("{b:02x}"));
-        hash
-    })
 }
 
 impl SqliteConnectionPoolFactory {
