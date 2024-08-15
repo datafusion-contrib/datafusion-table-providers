@@ -2,10 +2,11 @@ use arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
         Decimal128Builder, FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int16Builder,
-        Int32Builder, Int64Builder, Int8Builder, LargeBinaryBuilder, LargeStringBuilder,
-        ListBuilder, NullBuilder, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
-        TimestampSecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
+        Int32Builder, Int64Builder, Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder,
+        LargeStringBuilder, ListBuilder, NullBuilder, StringBuilder, StructBuilder,
+        Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
+        TimestampNanosecondBuilder, TimestampSecondBuilder, UInt16Builder, UInt32Builder,
+        UInt64Builder, UInt8Builder,
     },
     datatypes::{DataType, TimeUnit},
 };
@@ -36,6 +37,7 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
         DataType::Boolean => Box::new(BooleanBuilder::new()),
         DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::LargeBinary => Box::new(LargeBinaryBuilder::new()),
+        DataType::Interval(_) => Box::new(IntervalMonthDayNanoBuilder::new()),
         DataType::Decimal128(precision, scale) => Box::new(
             Decimal128Builder::new()
                 .with_precision_and_scale(*precision, *scale)

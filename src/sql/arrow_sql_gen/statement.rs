@@ -1,6 +1,7 @@
 use arrow::{
     array::{array, Array, RecordBatch},
-    datatypes::{DataType, Field, SchemaRef, TimeUnit},
+    datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
+    util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
 use sea_query::{
@@ -258,23 +259,78 @@ impl InsertBuilder {
                             );
                         }
                     }
-                    DataType::Time64(TimeUnit::Nanosecond) => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<array::Time64NanosecondArray>();
-                        if let Some(valid_array) = array {
-                            if valid_array.is_null(row) {
-                                row_values.push(Keyword::Null.into());
-                                continue;
+                    DataType::Time32(time_unit) => match time_unit {
+                        TimeUnit::Millisecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time32MillisecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(i128::from(
-                                    valid_array.value(row),
-                                )),
-                                &mut row_values,
-                            )?;
                         }
-                    }
+                        TimeUnit::Second => {
+                            let array = column.as_any().downcast_ref::<array::Time32SecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp(i64::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
+                    DataType::Time64(time_unit) => match time_unit {
+                        TimeUnit::Nanosecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time64NanosecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        TimeUnit::Microsecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time64MicrosecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
                     DataType::Timestamp(TimeUnit::Second, _) => {
                         let array = column
                             .as_any()
@@ -483,6 +539,80 @@ impl InsertBuilder {
                             row_values.push(valid_array.value(row).into());
                         }
                     }
+                    DataType::Interval(interval_unit) => match interval_unit {
+                        IntervalUnit::DayTime => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalDayTimeArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let days = valid_array.value(row).days;
+                                        let milliseconds = valid_array.value(row).milliseconds;
+                                        format!("{days} days {milliseconds} milliseconds")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        IntervalUnit::YearMonth => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalYearMonthArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row);
+                                        format!("{months} months")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        // The smallest unit in Postgres for interval is microsecond
+                        // Cast with loss of precision in nano second
+                        IntervalUnit::MonthDayNano => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalMonthDayNanoArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row).months;
+                                        let days = valid_array.value(row).days;
+                                        let nanoseconds = valid_array.value(row).nanoseconds;
+                                        let micros = nanoseconds / 1_000;
+                                        format!("{months} months {days} days {micros} microseconds")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                    },
                     DataType::Struct(_) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
@@ -841,6 +971,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         }
         DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
+        DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
         _ => unimplemented!("Data type mapping not implemented for {:?}", data_type),
     }
