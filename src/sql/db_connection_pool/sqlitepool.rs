@@ -74,9 +74,8 @@ impl SqliteConnectionPoolFactory {
 
                 attach_databases.sort();
 
-                let attach_hash = hash_string(&attach_databases.join(";"));
-                JoinPushDown::AllowedFor(attach_hash) // push down is allowed cross-database when they're attached together
-                                                      // hash the list of databases to generate the comparison for push down
+                JoinPushDown::AllowedFor(attach_databases.join(";")) // push down is allowed cross-database when they're attached together
+                                                                     // hash the list of databases to generate the comparison for push down
             }
             (Mode::File, None) => JoinPushDown::AllowedFor(self.path.to_string()),
             _ => JoinPushDown::Disallow,
