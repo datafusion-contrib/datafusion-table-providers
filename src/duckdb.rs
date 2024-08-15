@@ -115,6 +115,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     db_path_param: String,
+    federated_reader_in_writer: bool,
 }
 
 impl DuckDBTableProviderFactory {
@@ -123,6 +124,7 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode: AccessMode::ReadOnly,
             db_path_param: "open".to_string(),
+            federated_reader_in_writer: false,
         }
     }
 
@@ -135,6 +137,12 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn db_path_param(mut self, db_path_param: &str) -> Self {
         self.db_path_param = db_path_param.to_string();
+        self
+    }
+
+    #[must_use]
+    pub fn federated_reader_in_writer(mut self, federated_reader_in_writer: bool) -> Self {
+        self.federated_reader_in_writer = federated_reader_in_writer;
         self
     }
 
@@ -231,6 +239,15 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
         ));
 
+        if !self.federated_reader_in_writer {
+            return Ok(DuckDBTableWriter::create(
+                read_provider,
+                duckdb,
+                on_conflict,
+            ));
+        }
+
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(DuckDBTableWriter::create(
             read_provider,
             duckdb,

@@ -88,6 +88,7 @@ pub struct SqliteTableProviderFactory {
     db_path_param: String,
     db_base_folder_param: String,
     attach_databases_param: String,
+    federated_reader_in_writer: bool,
 }
 
 impl SqliteTableProviderFactory {
@@ -97,6 +98,7 @@ impl SqliteTableProviderFactory {
             db_path_param: "sqlite_file".to_string(),
             db_base_folder_param: "data_directory".to_string(),
             attach_databases_param: "attach_databases".to_string(),
+            federated_reader_in_writer: false,
         }
     }
 
@@ -108,6 +110,12 @@ impl SqliteTableProviderFactory {
                 .map(Arc::from)
                 .collect::<Vec<Arc<str>>>()
         })
+    }
+
+    #[must_use]
+    pub fn federated_reader_in_writer(mut self, federated_reader_in_writer: bool) -> Self {
+        self.federated_reader_in_writer = federated_reader_in_writer;
+        self
     }
 
     #[must_use]
@@ -254,7 +262,15 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
             .map_err(to_datafusion_error)?;
+        if !self.federated_reader_in_writer {
+            return Ok(SqliteTableWriter::create(
+                read_provider,
+                sqlite,
+                on_conflict,
+            ));
+        }
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(SqliteTableWriter::create(
             read_provider,
             sqlite,

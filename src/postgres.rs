@@ -184,12 +184,22 @@ impl PostgresTableFactory {
     }
 }
 
-pub struct PostgresTableProviderFactory {}
+pub struct PostgresTableProviderFactory {
+    federated_reader_in_writer: bool,
+}
 
 impl PostgresTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            federated_reader_in_writer: false,
+        }
+    }
+
+    #[must_use]
+    pub fn federated_reader_in_writer(mut self, federated_reader_in_writer: bool) -> Self {
+        self.federated_reader_in_writer = federated_reader_in_writer;
+        self
     }
 }
 
@@ -301,6 +311,15 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             Some(Engine::Postgres),
         ));
 
+        if !self.federated_reader_in_writer {
+            return Ok(PostgresTableWriter::create(
+                read_provider,
+                postgres,
+                on_conflict,
+            ));
+        }
+
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(PostgresTableWriter::create(
             read_provider,
             postgres,
