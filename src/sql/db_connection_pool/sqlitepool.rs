@@ -18,6 +18,9 @@ pub enum Error {
 
     #[snafu(display("No path provided for SQLite connection"))]
     NoPathError {},
+
+    #[snafu(display("Database to attach does not exist: {path}"))]
+    DatabaseDoesNotExist { path: String },
 }
 
 pub struct SqliteConnectionPoolFactory {
@@ -56,13 +59,13 @@ impl SqliteConnectionPoolFactory {
                 let mut attach_databases = attach_databases.clone();
 
                 for database in &attach_databases {
-                    // open and close the database to ensure it exists
-                    // if it doesn't, an empty SQLite file will be created until the first write
-                    let conn = Connection::open(database.to_string())
-                        .await
-                        .context(ConnectionPoolSnafu)?;
-
-                    conn.close().await.context(ConnectionPoolSnafu)?;
+                    // check if the database file exists
+                    if std::fs::metadata(database.as_ref()).is_err() {
+                        return Err(Error::DatabaseDoesNotExist {
+                            path: database.to_string(),
+                        }
+                        .into());
+                    }
                 }
 
                 if !attach_databases.contains(&self.path) {
@@ -136,6 +139,18 @@ impl SqliteConnectionPool {
             attach_databases,
             path: path.into(),
         })
+    }
+
+    /// Initializes an SQLite database on-disk without creating a connection pool.
+    /// No-op if the database is in-memory.
+    pub async fn init(path: &str, mode: Mode) -> Result<()> {
+        if mode == Mode::File {
+            Connection::open(path.to_string())
+                .await
+                .context(ConnectionPoolSnafu)?;
+        }
+
+        Ok(())
     }
 
     pub async fn setup(&self) -> Result<()> {
@@ -227,6 +242,14 @@ mod tests {
     async fn test_sqlite_connection_pool_factory_with_attachments() {
         let factory = SqliteConnectionPoolFactory::new("./test2.sqlite", Mode::File)
             .with_databases(Some(vec!["./test3.sqlite".into(), "./test4.sqlite".into()]));
+
+        SqliteConnectionPool::init("./test3.sqlite", Mode::File)
+            .await
+            .unwrap();
+        SqliteConnectionPool::init("./test4.sqlite", Mode::File)
+            .await
+            .unwrap();
+
         let pool = factory.build().await.unwrap();
 
         let push_down_hash = hash_string("./test2.sqlite;./test3.sqlite;./test4.sqlite");
@@ -236,10 +259,6 @@ mod tests {
         assert_eq!(pool.path, "./test2.sqlite".into());
 
         drop(pool);
-
-        // check the attachment database exist, because the pool should have created them during setup
-        assert!(std::fs::metadata("./test3.sqlite").is_ok());
-        assert!(std::fs::metadata("./test4.sqlite").is_ok());
 
         // cleanup
         std::fs::remove_file("./test2.sqlite").unwrap();
@@ -259,9 +278,25 @@ mod tests {
 
         drop(pool);
 
-        // in memory mode, attachments are not created
+        // in memory mode, attachments are not created and nothing happens
         assert!(std::fs::metadata("./test5.sqlite").is_err());
         assert!(std::fs::metadata("./test6.sqlite").is_err());
         assert!(std::fs::metadata("./test7.sqlite").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory_errors_with_missing_attachments() {
+        let factory =
+            SqliteConnectionPoolFactory::new("./test8.sqlite", Mode::File).with_databases(Some(
+                vec!["./test9.sqlite".into(), "./test10.sqlite".into()],
+            ));
+        let pool = factory.build().await;
+
+        assert!(pool.is_err());
+
+        let err = pool.err().unwrap();
+        assert!(err
+            .to_string()
+            .contains("Database to attach does not exist: ./test9.sqlite"));
     }
 }
