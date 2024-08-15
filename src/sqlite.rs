@@ -9,11 +9,12 @@ use crate::sql::db_connection_pool::{
 use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::{
+    catalog::TableProviderFactory,
     common::Constraints,
-    datasource::{provider::TableProviderFactory, TableProvider},
+    datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    execution::context::SessionState,
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
@@ -136,7 +137,7 @@ type DynSqliteConnectionPool =
 impl TableProviderFactory for SqliteTableProviderFactory {
     async fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();

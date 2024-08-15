@@ -21,11 +21,12 @@ use bb8_postgres::{
     tokio_postgres::{types::ToSql, Transaction},
     PostgresConnectionManager,
 };
+use datafusion::catalog::Session;
 use datafusion::{
+    catalog::TableProviderFactory,
     common::Constraints,
-    datasource::{provider::TableProviderFactory, TableProvider},
+    datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    execution::context::SessionState,
     logical_expr::CreateExternalTable,
     sql::{unparser::dialect::PostgreSqlDialect, TableReference},
 };
@@ -202,7 +203,7 @@ impl Default for PostgresTableProviderFactory {
 impl TableProviderFactory for PostgresTableProviderFactory {
     async fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();

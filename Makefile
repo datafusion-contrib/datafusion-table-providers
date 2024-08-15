@@ -8,3 +8,7 @@ test:
 .PHONY: lint
 lint:
 	cargo clippy --all-features
+
+.PHONY: test-integration
+test-integration:
+	cargo test --test integration --no-default-features --features postgres -- --nocapture
