@@ -21,6 +21,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use chrono::Timelike;
 use composite::CompositeType;
 use sea_query::{Alias, ColumnType, SeaRc};
+use serde_json::Value;
 use snafu::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::types::FromSql;
@@ -257,6 +258,30 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 }
                 Type::BOOL => {
                     handle_primitive_type!(builder, Type::BOOL, BooleanBuilder, bool, row, i);
+                }
+                Type::JSON => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<LargeStringBuilder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row.try_get::<usize, Option<Value>>(i).with_context(|_| {
+                        FailedToGetRowValueSnafu {
+                            pg_type: Type::JSON,
+                        }
+                    })?;
+
+                    match v {
+                        Some(v) => {
+                            builder.append_value(v.to_string());
+                        }
+                        None => builder.append_null(),
+                    }
                 }
                 Type::TIME => {
                     let Some(builder) = builder else {
@@ -593,6 +618,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Some(DataType::Utf8),
         Type::BYTEA => Some(DataType::Binary),
         Type::BOOL => Some(DataType::Boolean),
+        Type::JSON => Some(DataType::LargeUtf8),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
         Type::NUMERIC => None,
         // We get a SystemTime that we can always convert into milliseconds

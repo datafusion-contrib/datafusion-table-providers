@@ -259,23 +259,78 @@ impl InsertBuilder {
                             );
                         }
                     }
-                    DataType::Time64(TimeUnit::Nanosecond) => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<array::Time64NanosecondArray>();
-                        if let Some(valid_array) = array {
-                            if valid_array.is_null(row) {
-                                row_values.push(Keyword::Null.into());
-                                continue;
+                    DataType::Time32(time_unit) => match time_unit {
+                        TimeUnit::Millisecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time32MillisecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(i128::from(
-                                    valid_array.value(row),
-                                )),
-                                &mut row_values,
-                            )?;
                         }
-                    }
+                        TimeUnit::Second => {
+                            let array = column.as_any().downcast_ref::<array::Time32SecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp(i64::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
+                    DataType::Time64(time_unit) => match time_unit {
+                        TimeUnit::Nanosecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time64NanosecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        TimeUnit::Microsecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time64MicrosecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
                     DataType::Timestamp(TimeUnit::Second, _) => {
                         let array = column
                             .as_any()
