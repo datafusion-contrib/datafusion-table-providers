@@ -1,5 +1,6 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
+use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
@@ -86,6 +87,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct SqliteTableProviderFactory {
     db_path_param: String,
     db_base_folder_param: String,
+    attach_databases_param: String,
 }
 
 impl SqliteTableProviderFactory {
@@ -94,19 +96,18 @@ impl SqliteTableProviderFactory {
         Self {
             db_path_param: "sqlite_file".to_string(),
             db_base_folder_param: "data_directory".to_string(),
+            attach_databases_param: "attach_databases".to_string(),
         }
     }
 
     #[must_use]
-    pub fn db_base_folder_param(mut self, db_base_folder_param: &str) -> Self {
-        self.db_base_folder_param = db_base_folder_param.to_string();
-        self
-    }
-
-    #[must_use]
-    pub fn db_path_param(mut self, db_path_param: &str) -> Self {
-        self.db_path_param = db_path_param.to_string();
-        self
+    pub fn attach_databases(&self, options: &HashMap<String, String>) -> Option<Vec<Arc<str>>> {
+        options.get(&self.attach_databases_param).map(|databases| {
+            databases
+                .split(';')
+                .map(Arc::from)
+                .collect::<Vec<Arc<str>>>()
+        })
     }
 
     #[must_use]
@@ -132,6 +133,10 @@ impl Default for SqliteTableProviderFactory {
 
 type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
+
+fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
+    to_datafusion_error(Error::DbConnectionPoolError { source: err })
+}
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
@@ -179,10 +184,10 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let db_path = self.sqlite_file_path(&name, &cmd.options);
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
-            SqliteConnectionPool::new(&db_path, mode)
+            SqliteConnectionPoolFactory::new(&db_path, mode)
+                .build()
                 .await
-                .context(DbConnectionPoolSnafu)
-                .map_err(to_datafusion_error)?,
+                .map_err(handle_db_error)?,
         );
 
         let read_pool = if mode == Mode::Memory {
@@ -192,10 +197,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
             // and we can't have concurrent writes when sharing the same connection
             Arc::new(
-                SqliteConnectionPool::new(&db_path, mode)
+                SqliteConnectionPoolFactory::new(&db_path, mode)
+                    .with_databases(self.attach_databases(&options))
+                    .build()
                     .await
-                    .context(DbConnectionPoolSnafu)
-                    .map_err(to_datafusion_error)?,
+                    .map_err(handle_db_error)?,
             )
         };
 
