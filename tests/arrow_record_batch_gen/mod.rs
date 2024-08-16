@@ -39,7 +39,7 @@ pub(crate) fn get_arrow_binary_record_batch() -> RecordBatch {
 }
 
 // All Int types
-pub(crate) fn get_arrow_int_recordbatch() -> RecordBatch {
+pub(crate) fn get_arrow_int_record_batch() -> RecordBatch {
     // Arrow Integer Types
     let int8_arr = Int8Array::from(vec![1, 2, 3]);
     let int16_arr = Int16Array::from(vec![1, 2, 3]);
