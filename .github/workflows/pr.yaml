@@ -59,4 +59,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Run integration test
-        run: cargo test --test integration --no-default-features --features postgres -- --nocapture
+        run: make test-integration

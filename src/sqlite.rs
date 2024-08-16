@@ -131,7 +131,7 @@ impl Default for SqliteTableProviderFactory {
     }
 }
 
-type DynSqliteConnectionPool =
+pub type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
 
 fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
@@ -255,6 +255,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .context(DanglingReferenceToSqliteSnafu)
             .map_err(to_datafusion_error)?;
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(SqliteTableWriter::create(
             read_provider,
             sqlite,

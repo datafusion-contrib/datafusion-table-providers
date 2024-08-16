@@ -231,6 +231,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
         ));
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(DuckDBTableWriter::create(
             read_provider,
             duckdb,

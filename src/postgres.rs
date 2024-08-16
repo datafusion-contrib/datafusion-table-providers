@@ -301,6 +301,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             Some(Engine::Postgres),
         ));
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(PostgresTableWriter::create(
             read_provider,
             postgres,
