@@ -4,6 +4,7 @@ use arrow::{
     util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
+use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
@@ -215,6 +216,21 @@ impl InsertBuilder {
                                 BigDecimal::new(valid_array.value(row).into(), i64::from(*scale))
                                     .into(),
                             );
+                        }
+                    }
+                    DataType::Decimal256(_, scale) => {
+                        let array = column.as_any().downcast_ref::<array::Decimal256Array>();
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            let bigint =
+                                BigInt::from_signed_bytes_le(&valid_array.value(row).to_le_bytes());
+
+                            println!("{:?}", BigDecimal::new(bigint.clone(), i64::from(*scale)));
+                            row_values.push(BigDecimal::new(bigint, i64::from(*scale)).into());
                         }
                     }
                     DataType::Date32 => {
@@ -962,7 +978,9 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text,
         DataType::Boolean => ColumnType::Boolean,
         #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
-        DataType::Decimal128(p, s) => ColumnType::Decimal(Some((u32::from(*p), *s as u32))),
+        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
+            ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
+        }
         DataType::Timestamp(_unit, _time_zone) => ColumnType::Timestamp,
         DataType::Date32 | DataType::Date64 => ColumnType::Date,
         DataType::Time64(_unit) | DataType::Time32(_unit) => ColumnType::Time,
