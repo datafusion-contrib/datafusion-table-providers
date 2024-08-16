@@ -136,9 +136,9 @@ async fn test_arrow_postgres_types_conversion() -> Result<(), String> {
     //     .await
     //     .unwrap();
 
-    // arrow_postgres_round_trip(port, get_arrow_list_record_batch(), "list_types")
-    //     .await
-    //     .unwrap();
+    arrow_postgres_round_trip(port, get_arrow_list_record_batch(), "list_types")
+        .await
+        .unwrap();
 
     arrow_postgres_round_trip(port, get_arrow_null_record_batch(), "null_types")
         .await
