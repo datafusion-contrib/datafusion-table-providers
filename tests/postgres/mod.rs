@@ -1,11 +1,9 @@
 use super::*;
 use crate::arrow_record_batch_gen::*;
 use datafusion::execution::context::SessionContext;
-#[cfg(feature = "postgres")]
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
-#[cfg(feature = "postgres")]
 use datafusion_table_providers::{
     postgres::DynPostgresConnectionPool, sql::sql_provider_datafusion::SqlTable,
 };
@@ -96,7 +94,7 @@ async fn test_arrow_postgres_types_conversion() -> Result<(), String> {
         .await
         .unwrap();
 
-    arrow_postgres_round_trip(port, get_arrow_int_recordbatch(), "int_types")
+    arrow_postgres_round_trip(port, get_arrow_int_record_batch(), "int_types")
         .await
         .unwrap();
 
