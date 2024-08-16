@@ -69,7 +69,9 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
         DataType::FixedSizeBinary(s) => Box::new(FixedSizeBinaryBuilder::new(*s)),
         // We can't recursively call map_data_type_to_array_builder here because downcasting will not work if the
         // values_builder is boxed.
-        DataType::List(values_field) => match values_field.data_type() {
+        DataType::List(values_field)
+        | DataType::LargeList(values_field)
+        | DataType::FixedSizeList(values_field, _) => match values_field.data_type() {
             DataType::Int8 => Box::new(ListBuilder::new(Int8Builder::new())),
             DataType::Int16 => Box::new(ListBuilder::new(Int16Builder::new())),
             DataType::Int32 => Box::new(ListBuilder::new(Int32Builder::new())),
