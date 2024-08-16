@@ -139,7 +139,7 @@ impl Default for SqliteTableProviderFactory {
     }
 }
 
-type DynSqliteConnectionPool =
+pub type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
 
 fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
