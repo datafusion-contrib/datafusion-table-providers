@@ -15,6 +15,7 @@ mod test {
     };
     use rstest::{fixture, rstest};
     use std::sync::Arc;
+    use tokio::sync::{Mutex, MutexGuard};
 
     async fn arrow_postgres_round_trip(port: usize, arrow_record: RecordBatch, table_name: &str) {
         tracing::debug!("Running tests on {table_name}");
@@ -79,24 +80,27 @@ mod test {
         assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
     }
 
+    #[derive(Debug)]
+    struct ContainerManager {
+        port: usize,
+        claimed: bool,
+    }
+
     #[fixture]
     #[once]
-    fn setup_container_port() -> usize {
-        let port = tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async {
-                let port = common::get_random_port();
-                let _ = common::start_postgres_docker_container(port)
-                    .await
-                    .expect("Postgres container to start");
+    fn container_manager() -> Mutex<ContainerManager> {
+        Mutex::new(ContainerManager {
+            port: common::get_random_port(),
+            claimed: false,
+        })
+    }
 
-                tracing::debug!("Container started");
+    async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
+        let _ = common::start_postgres_docker_container(manager.port)
+            .await
+            .expect("Postgres container to start");
 
-                port
-            })
-        });
-
-        port
+        tracing::debug!("Container started");
     }
 
     #[rstest]
@@ -118,14 +122,20 @@ mod test {
     #[ignore] // TODO: list types are broken in Postgres
     #[case::list(get_arrow_list_record_batch(), "list")]
     #[case::null(get_arrow_null_record_batch(), "null")]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_arrow_sqlite_roundtrip(
-        setup_container_port: &usize,
+    #[test_log::test(tokio::test)]
+    async fn test_arrow_postgres_roundtrip(
+        container_manager: &Mutex<ContainerManager>,
         #[case] arrow_record: RecordBatch,
         #[case] table_name: &str,
     ) {
+        let mut container_manager = container_manager.lock().await;
+        if !container_manager.claimed {
+            container_manager.claimed = true;
+            start_container(&container_manager).await;
+        }
+
         arrow_postgres_round_trip(
-            *setup_container_port,
+            container_manager.port,
             arrow_record,
             &format!("{table_name}_types"),
         )
