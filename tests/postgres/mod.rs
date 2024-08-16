@@ -119,7 +119,6 @@ mod test {
     #[case::interval(get_arrow_interval_record_batch(), "interval")]
     #[ignore] // TODO: duration types are broken in Postgres
     #[case::duration(get_arrow_duration_record_batch(), "duration")]
-    #[ignore] // TODO: list types are broken in Postgres
     #[case::list(get_arrow_list_record_batch(), "list")]
     #[case::null(get_arrow_null_record_batch(), "null")]
     #[test_log::test(tokio::test)]
