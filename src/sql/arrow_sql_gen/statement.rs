@@ -229,7 +229,6 @@ impl InsertBuilder {
                             let bigint =
                                 BigInt::from_signed_bytes_le(&valid_array.value(row).to_le_bytes());
 
-                            println!("{:?}", BigDecimal::new(bigint.clone(), i64::from(*scale)));
                             row_values.push(BigDecimal::new(bigint, i64::from(*scale)).into());
                         }
                     }
