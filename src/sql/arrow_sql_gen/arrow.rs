@@ -1,12 +1,12 @@
 use arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
-        Decimal128Builder, FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int16Builder,
-        Int32Builder, Int64Builder, Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder,
-        LargeStringBuilder, ListBuilder, NullBuilder, StringBuilder, StructBuilder,
-        Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
-        TimestampNanosecondBuilder, TimestampSecondBuilder, UInt16Builder, UInt32Builder,
-        UInt64Builder, UInt8Builder,
+        Decimal128Builder, FixedSizeBinaryBuilder, FixedSizeListBuilder, Float32Builder,
+        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
+        IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
+        NullBuilder, StringBuilder, StructBuilder, Time64NanosecondBuilder,
+        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+        TimestampSecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
     },
     datatypes::{DataType, TimeUnit},
 };
@@ -64,17 +64,52 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
         DataType::FixedSizeBinary(s) => Box::new(FixedSizeBinaryBuilder::new(*s)),
         // We can't recursively call map_data_type_to_array_builder here because downcasting will not work if the
         // values_builder is boxed.
-        DataType::List(values_field)
-        | DataType::LargeList(values_field)
-        | DataType::FixedSizeList(values_field, _) => match values_field.data_type() {
-            DataType::Int8 => Box::new(ListBuilder::new(Int8Builder::new())),
-            DataType::Int16 => Box::new(ListBuilder::new(Int16Builder::new())),
-            DataType::Int32 => Box::new(ListBuilder::new(Int32Builder::new())),
-            DataType::Int64 => Box::new(ListBuilder::new(Int64Builder::new())),
-            DataType::Float32 => Box::new(ListBuilder::new(Float32Builder::new())),
-            DataType::Float64 => Box::new(ListBuilder::new(Float64Builder::new())),
-            DataType::Utf8 => Box::new(ListBuilder::new(StringBuilder::new())),
-            DataType::Boolean => Box::new(ListBuilder::new(BooleanBuilder::new())),
+        DataType::List(values_field) | DataType::LargeList(values_field) => {
+            match values_field.data_type() {
+                DataType::Int8 => Box::new(ListBuilder::new(Int8Builder::new())),
+                DataType::Int16 => Box::new(ListBuilder::new(Int16Builder::new())),
+                DataType::Int32 => Box::new(ListBuilder::new(Int32Builder::new())),
+                DataType::Int64 => Box::new(ListBuilder::new(Int64Builder::new())),
+                DataType::Float32 => Box::new(ListBuilder::new(Float32Builder::new())),
+                DataType::Float64 => Box::new(ListBuilder::new(Float64Builder::new())),
+                DataType::Utf8 => Box::new(ListBuilder::new(StringBuilder::new())),
+                DataType::Boolean => Box::new(ListBuilder::new(BooleanBuilder::new())),
+                _ => unimplemented!("Unsupported list value data type {:?}", data_type),
+            }
+        }
+        DataType::FixedSizeList(values_field, size) => match values_field.data_type() {
+            DataType::Int8 => Box::new(FixedSizeListBuilder::new(
+                Int8Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Int16 => Box::new(FixedSizeListBuilder::new(
+                Int16Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Int32 => Box::new(FixedSizeListBuilder::new(
+                Int32Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Int64 => Box::new(FixedSizeListBuilder::new(
+                Int64Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Float32 => Box::new(FixedSizeListBuilder::new(
+                Float32Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Float64 => Box::new(FixedSizeListBuilder::new(
+                Float64Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::Utf8 => Box::new(FixedSizeListBuilder::new(
+                StringBuilder::new(),
+                size.to_owned(),
+            )),
+            DataType::Boolean => Box::new(FixedSizeListBuilder::new(
+                BooleanBuilder::new(),
+                size.to_owned(),
+            )),
             _ => unimplemented!("Unsupported list value data type {:?}", data_type),
         },
         DataType::Null => Box::new(NullBuilder::new()),
