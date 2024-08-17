@@ -111,10 +111,8 @@ mod test {
     #[ignore] // TODO: time types are broken in Postgres
     #[case::time(get_arrow_time_record_batch(), "time")]
     #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
-    #[ignore] // TODO: date types are broken in Postgres
     #[case::date(get_arrow_date_record_batch(), "date")]
     #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-    #[ignore] // TODO: decimal types are broken in Postgres
     #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
     #[case::interval(get_arrow_interval_record_batch(), "interval")]
     #[ignore] // TODO: duration types are broken in Postgres
