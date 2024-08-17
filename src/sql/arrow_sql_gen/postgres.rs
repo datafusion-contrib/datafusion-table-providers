@@ -260,6 +260,29 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 Type::BOOL => {
                     handle_primitive_type!(builder, Type::BOOL, BooleanBuilder, bool, row, i);
                 }
+                Type::MONEY => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<Int64Builder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row
+                        .try_get::<usize, Option<MoneyFromSql>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu {
+                            pg_type: Type::MONEY,
+                        })?;
+
+                    match v {
+                        Some(v) => {
+                            builder.append_value(v.cash_value);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 Type::JSON => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
@@ -643,7 +666,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
     match *column_type {
         Type::INT2 => Some(DataType::Int16),
         Type::INT4 => Some(DataType::Int32),
-        Type::INT8 => Some(DataType::Int64),
+        Type::INT8 | Type::MONEY => Some(DataType::Int64),
         Type::FLOAT4 => Some(DataType::Float32),
         Type::FLOAT8 => Some(DataType::Float64),
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Some(DataType::Utf8),
@@ -855,6 +878,26 @@ impl<'a> FromSql<'a> for IntervalFromSql {
     }
 }
 
+// cash_send - Postgres C (https://github.com/postgres/postgres/blob/bd8fe12ef3f727ed3658daf9b26beaf2b891e9bc/src/backend/utils/adt/cash.c#L603)
+struct MoneyFromSql {
+    cash_value: i64,
+}
+
+impl<'a> FromSql<'a> for MoneyFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+        let cash_value = cursor.read_i64::<BigEndian>()?;
+        Ok(MoneyFromSql { cash_value })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::MONEY)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,6 +962,25 @@ mod tests {
         assert_eq!(negative_result.day, negative_day);
         assert_eq!(negative_result.time, negative_time);
         assert_eq!(negative_result.month, negative_month);
+    }
+
+    #[test]
+    fn test_money_from_sql() {
+        let positive_cash_value: i64 = 123;
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_cash_value.to_be_bytes());
+
+        let positive_result = MoneyFromSql::from_sql(&Type::MONEY, positive_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(positive_result.cash_value, positive_cash_value);
+
+        let negative_cash_value: i64 = -123;
+        let mut negative_raw: Vec<u8> = Vec::new();
+        negative_raw.extend_from_slice(&negative_cash_value.to_be_bytes());
+
+        let negative_result = MoneyFromSql::from_sql(&Type::MONEY, negative_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(negative_result.cash_value, negative_cash_value);
     }
 
     #[test]
