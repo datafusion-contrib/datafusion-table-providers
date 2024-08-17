@@ -294,7 +294,7 @@ pub(crate) fn get_arrow_decimal_record_batch() -> RecordBatch {
     let decimal128_array =
         Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)]);
     let decimal256_array =
-        Decimal256Array::from(vec![i256::from(123), i256::from(222), i256::from(321)]);
+        Decimal256Array::from(vec![i256::from(-123), i256::from(222), i256::from(0)]);
 
     let schema = Schema::new(vec![
         Field::new("decimal128", DataType::Decimal128(38, 10), false),

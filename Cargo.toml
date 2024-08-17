@@ -9,6 +9,7 @@ repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 arrow = "52.0.0"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
+num-bigint = "0.4.4"
 bigdecimal = "0.4.5"
 bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
