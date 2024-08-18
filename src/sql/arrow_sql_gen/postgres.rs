@@ -5,9 +5,9 @@ use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
-    IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder, RecordBatch,
-    RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
+    FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+    Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
+    RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
     TimestampMillisecondBuilder, UInt32Builder,
 };
 use arrow::datatypes::{
@@ -20,6 +20,7 @@ use bigdecimal::ToPrimitive;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::Timelike;
 use composite::CompositeType;
+use geo_types::geometry::Point;
 use sea_query::{Alias, ColumnType, SeaRc};
 use serde_json::Value;
 use snafu::prelude::*;
@@ -333,6 +334,36 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                             builder.append_value(timestamp);
                         }
                         None => builder.append_null(),
+                    }
+                }
+                Type::POINT => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<FixedSizeListBuilder<Float64Builder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    let v = row.try_get::<usize, Option<Point>>(i).with_context(|_| {
+                        FailedToGetRowValueSnafu {
+                            pg_type: Type::POINT,
+                        }
+                    })?;
+
+                    if let Some(v) = v {
+                        builder.values().append_value(v.x());
+                        builder.values().append_value(v.y());
+                        builder.append(true);
+                    } else {
+                        builder.values().append_null();
+                        builder.values().append_null();
+                        builder.append(false);
                     }
                 }
                 Type::INTERVAL => {
@@ -651,6 +682,10 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         Type::DATE => Some(DataType::Date32),
         Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
         Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
+        Type::POINT => Some(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            2,
+        )),
         Type::INT2_ARRAY => Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
