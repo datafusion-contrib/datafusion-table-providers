@@ -215,81 +215,125 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
 mod tests {
     use super::*;
     use crate::sql::db_connection_pool::Mode;
+    use rand::Rng;
+    use rstest::{fixture, rstest};
 
+    fn random_db_name() -> String {
+        let mut rng = rand::thread_rng();
+        let mut name = String::new();
+
+        for _ in 0..10 {
+            name.push(rng.gen_range(b'a'..=b'z') as char);
+        }
+
+        format!("./{name}.sqlite")
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory() {
-        let factory = SqliteConnectionPoolFactory::new("./test1.sqlite", Mode::File);
+        let db_name = random_db_name();
+        let factory = SqliteConnectionPoolFactory::new(&db_name, Mode::File);
         let pool = factory.build().await.unwrap();
 
-        assert!(pool.join_push_down == JoinPushDown::AllowedFor("./test1.sqlite".to_string()));
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor(db_name.clone()));
         assert!(pool.mode == Mode::File);
-        assert_eq!(pool.path, "./test1.sqlite".into());
+        assert_eq!(pool.path, db_name.clone().into());
 
         drop(pool);
 
         // cleanup
-        std::fs::remove_file("./test1.sqlite").unwrap();
+        std::fs::remove_file(&db_name).unwrap();
     }
 
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory_with_attachments() {
-        let factory = SqliteConnectionPoolFactory::new("./test2.sqlite", Mode::File)
-            .with_databases(Some(vec!["./test3.sqlite".into(), "./test4.sqlite".into()]));
+        let mut db_names = [random_db_name(), random_db_name(), random_db_name()];
+        db_names.sort();
 
-        SqliteConnectionPool::init("./test3.sqlite", Mode::File)
+        let factory =
+            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File).with_databases(Some(vec![
+                db_names[1].clone().into(),
+                db_names[2].clone().into(),
+            ]));
+
+        SqliteConnectionPool::init(&db_names[1], Mode::File)
             .await
             .unwrap();
-        SqliteConnectionPool::init("./test4.sqlite", Mode::File)
+        SqliteConnectionPool::init(&db_names[2], Mode::File)
             .await
             .unwrap();
 
         let pool = factory.build().await.unwrap();
 
-        let push_down = "./test2.sqlite;./test3.sqlite;./test4.sqlite";
+        let push_down = db_names.join(";");
 
-        assert!(pool.join_push_down == JoinPushDown::AllowedFor(push_down.to_string()));
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor(push_down));
         assert!(pool.mode == Mode::File);
-        assert_eq!(pool.path, "./test2.sqlite".into());
+        assert_eq!(pool.path, db_names[0].clone().into());
 
         drop(pool);
 
         // cleanup
-        std::fs::remove_file("./test2.sqlite").unwrap();
-        std::fs::remove_file("./test3.sqlite").unwrap();
-        std::fs::remove_file("./test4.sqlite").unwrap();
+        for db in &db_names {
+            std::fs::remove_file(db).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory_with_empty_attachments() {
+        let db_name = random_db_name();
+        let factory =
+            SqliteConnectionPoolFactory::new(&db_name, Mode::File).with_databases(Some(vec![]));
+
+        let pool = factory.build().await.unwrap();
+
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor(db_name.clone()));
+        assert!(pool.mode == Mode::File);
+        assert_eq!(pool.path, db_name.clone().into());
+
+        drop(pool);
+
+        // cleanup
+        std::fs::remove_file(&db_name).unwrap();
     }
 
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory_memory_with_attachments() {
-        let factory = SqliteConnectionPoolFactory::new("./test5.sqlite", Mode::Memory)
-            .with_databases(Some(vec!["./test6.sqlite".into(), "./test7.sqlite".into()]));
+        let factory = SqliteConnectionPoolFactory::new("./test.sqlite", Mode::Memory)
+            .with_databases(Some(vec!["./test1.sqlite".into(), "./test2.sqlite".into()]));
         let pool = factory.build().await.unwrap();
 
         assert!(pool.join_push_down == JoinPushDown::Disallow);
         assert!(pool.mode == Mode::Memory);
-        assert_eq!(pool.path, "./test5.sqlite".into());
+        assert_eq!(pool.path, "./test.sqlite".into());
 
         drop(pool);
 
         // in memory mode, attachments are not created and nothing happens
-        assert!(std::fs::metadata("./test5.sqlite").is_err());
-        assert!(std::fs::metadata("./test6.sqlite").is_err());
-        assert!(std::fs::metadata("./test7.sqlite").is_err());
+        assert!(std::fs::metadata("./test.sqlite").is_err());
+        assert!(std::fs::metadata("./test1.sqlite").is_err());
+        assert!(std::fs::metadata("./test2.sqlite").is_err());
     }
 
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory_errors_with_missing_attachments() {
+        let mut db_names = [random_db_name(), random_db_name(), random_db_name()];
+        db_names.sort();
+
         let factory =
-            SqliteConnectionPoolFactory::new("./test8.sqlite", Mode::File).with_databases(Some(
-                vec!["./test9.sqlite".into(), "./test10.sqlite".into()],
-            ));
+            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File).with_databases(Some(vec![
+                db_names[1].clone().into(),
+                db_names[2].clone().into(),
+            ]));
         let pool = factory.build().await;
 
         assert!(pool.is_err());
 
         let err = pool.err().unwrap();
-        assert!(err
-            .to_string()
-            .contains("Database to attach does not exist: ./test9.sqlite"));
+        assert!(err.to_string().contains(&format!(
+            "Database to attach does not exist: {}",
+            db_names[1]
+        )));
     }
 }
