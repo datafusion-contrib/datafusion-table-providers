@@ -94,7 +94,7 @@ impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            db_path_param: "sqlite_file".to_string(),
+            db_path_param: "file".to_string(),
             db_base_folder_param: "data_directory".to_string(),
             attach_databases_param: "attach_databases".to_string(),
         }
