@@ -94,7 +94,7 @@ impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            db_path_param: "sqlite_file".to_string(),
+            db_path_param: "file".to_string(),
             db_base_folder_param: "data_directory".to_string(),
             attach_databases_param: "attach_databases".to_string(),
         }
@@ -112,6 +112,8 @@ impl SqliteTableProviderFactory {
 
     #[must_use]
     pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
+        let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
+
         let db_base_folder = options
             .get(&self.db_base_folder_param)
             .cloned()
