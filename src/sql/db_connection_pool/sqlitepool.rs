@@ -46,26 +46,30 @@ impl SqliteConnectionPoolFactory {
     pub async fn build(&self) -> Result<SqliteConnectionPool> {
         let join_push_down = match (self.mode, &self.attach_databases) {
             (Mode::File, Some(attach_databases)) => {
-                let mut attach_databases = attach_databases.clone();
+                if attach_databases.is_empty() {
+                    JoinPushDown::AllowedFor(self.path.to_string())
+                } else {
+                    let mut attach_databases = attach_databases.clone();
 
-                for database in &attach_databases {
-                    // check if the database file exists
-                    if std::fs::metadata(database.as_ref()).is_err() {
-                        return Err(Error::DatabaseDoesNotExist {
-                            path: database.to_string(),
+                    for database in &attach_databases {
+                        // check if the database file exists
+                        if std::fs::metadata(database.as_ref()).is_err() {
+                            return Err(Error::DatabaseDoesNotExist {
+                                path: database.to_string(),
+                            }
+                            .into());
                         }
-                        .into());
                     }
+
+                    if !attach_databases.contains(&self.path) {
+                        attach_databases.push(Arc::clone(&self.path));
+                    }
+
+                    attach_databases.sort();
+
+                    JoinPushDown::AllowedFor(attach_databases.join(";")) // push down is allowed cross-database when they're attached together
+                                                                         // hash the list of databases to generate the comparison for push down
                 }
-
-                if !attach_databases.contains(&self.path) {
-                    attach_databases.push(Arc::clone(&self.path));
-                }
-
-                attach_databases.sort();
-
-                JoinPushDown::AllowedFor(attach_databases.join(";")) // push down is allowed cross-database when they're attached together
-                                                                     // hash the list of databases to generate the comparison for push down
             }
             (Mode::File, None) => JoinPushDown::AllowedFor(self.path.to_string()),
             _ => JoinPushDown::Disallow,
@@ -241,9 +245,9 @@ mod tests {
 
         let pool = factory.build().await.unwrap();
 
-        let push_down_hash = hash_string("./test2.sqlite;./test3.sqlite;./test4.sqlite");
+        let push_down = "./test2.sqlite;./test3.sqlite;./test4.sqlite";
 
-        assert!(pool.join_push_down == JoinPushDown::AllowedFor(push_down_hash));
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor(push_down.to_string()));
         assert!(pool.mode == Mode::File);
         assert_eq!(pool.path, "./test2.sqlite".into());
 
