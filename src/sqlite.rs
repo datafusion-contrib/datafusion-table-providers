@@ -112,6 +112,8 @@ impl SqliteTableProviderFactory {
 
     #[must_use]
     pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
+        let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
+
         let db_base_folder = options
             .get(&self.db_base_folder_param)
             .cloned()
