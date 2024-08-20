@@ -47,7 +47,6 @@ pub async fn start_mysql_docker_container(
     port: usize,
 ) -> Result<RunningContainer<'static>, anyhow::Error> {
     let container_name = format!("{MYSQL_DOCKER_CONTAINER}-{port}");
-    let container_name: &'static str = Box::leak(container_name.into_boxed_str());
 
     let port = if let Ok(port) = port.try_into() {
         port
