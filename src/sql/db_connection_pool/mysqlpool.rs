@@ -149,6 +149,17 @@ impl MySQLConnectionPool {
             join_push_down,
         })
     }
+
+    /// Returns a direct connection to the underlying database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a problem creating the connection pool.
+    pub async fn connect_direct(&self) -> super::Result<MySQLConnection> {
+        let pool = Arc::clone(&self.pool);
+        let conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
+        Ok(MySQLConnection::new(conn))
+    }
 }
 
 fn get_join_context(opts: &mysql_async::Opts) -> JoinPushDown {

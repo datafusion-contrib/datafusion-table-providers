@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::{
-    execution::{context::SessionState, runtime_env::RuntimeEnv},
-    prelude::{SessionConfig, SessionContext},
+    catalog::TableProviderFactory,
+    execution::{runtime_env::RuntimeEnv, session_state::SessionStateBuilder},
+    prelude::SessionContext,
 };
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use duckdb::AccessMode;
@@ -14,11 +15,18 @@ async fn main() {
     let duckdb = Arc::new(DuckDBTableProviderFactory::new().access_mode(AccessMode::ReadWrite));
 
     let runtime = Arc::new(RuntimeEnv::default());
-    let mut state = SessionState::new_with_config_rt(SessionConfig::new(), runtime);
-
-    state
-        .table_factories_mut()
-        .insert("DUCKDB".to_string(), duckdb);
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_runtime_env(runtime)
+        .with_table_factories(
+            vec![(
+                "DUCKDB".to_string(),
+                duckdb as Arc<dyn TableProviderFactory>,
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .build();
 
     let ctx = SessionContext::new_with_state(state);
 

@@ -2,7 +2,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::sql::arrow_sql_gen::mysql::map_column_to_data_type;
 use crate::sql::arrow_sql_gen::{self, mysql::rows_to_arrow};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_stream::stream;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
@@ -169,18 +169,19 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
 
-        let arrow_data_type = match column_type {
-            // map_column_to_data_type does not support decimal mapping and uses special logic to handle conversion based on actual value
-            // so we handle it separately
+        let scale = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
                 let (_precision, scale) = extract_decimal_precision_and_scale(&data_type)
                     .context(super::UnableToGetSchemaSnafu)?;
-                // rows_to_arrow uses hardcoded precision 38 for decimal so we use it here as well
-                DataType::Decimal128(38, scale)
+                // rows_to_arrow uses hardcoded precision so we use scale only here
+                Some(scale)
             }
-            _ => map_column_to_data_type(column_type, column_is_binary)
-                .context(UnsupportedDataTypeSnafu { data_type })?,
+            _ => None,
         };
+
+        let arrow_data_type = map_column_to_data_type(column_type, column_is_binary, scale)
+            .context(UnsupportedDataTypeSnafu { data_type })?;
+
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }
     Ok(Arc::new(Schema::new(fields)))

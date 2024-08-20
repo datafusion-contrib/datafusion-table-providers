@@ -120,6 +120,8 @@ pub(crate) fn get_arrow_utf8_record_batch() -> RecordBatch {
 }
 
 // Time32, Time64
+#[allow(clippy::identity_op)]
+#[allow(clippy::erasing_op)]
 pub(crate) fn get_arrow_time_record_batch() -> RecordBatch {
     // Time32, Time64 Types
     let time32_milli_array: Time32MillisecondArray = vec![

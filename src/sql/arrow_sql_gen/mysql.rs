@@ -101,7 +101,14 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
             let column_name = column.name_str();
             let column_type = column.column_type();
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
-            let data_type = map_column_to_data_type(column_type, column_is_binary);
+            let column_decimal_precision: i8 = column.decimals().try_into().unwrap_or_default();
+
+            let data_type = map_column_to_data_type(
+                column_type,
+                column_is_binary,
+                Some(column_decimal_precision),
+            );
+
             arrow_fields.push(
                 data_type
                     .clone()
@@ -119,10 +126,6 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
         for (i, mysql_type) in mysql_types.iter().enumerate() {
             let Some(builder) = arrow_columns_builders.get_mut(i) else {
                 return NoBuilderForIndexSnafu { index: i }.fail();
-            };
-
-            let Some(arrow_field) = arrow_fields.get_mut(i) else {
-                return NoArrowFieldForIndexSnafu { index: i }.fail();
             };
 
             match *mysql_type {
@@ -212,6 +215,18 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     );
                 }
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal128Builder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            mysql_type: format!("{mysql_type:?}"),
+                        }
+                        .fail();
+                    };
+
                     let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
                         .context(FailedToGetRowValueSnafu {
                             mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
@@ -222,43 +237,16 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         None => 0,
                     };
 
-                    let dec_builder = builder.get_or_insert_with(|| {
-                        Box::new(
-                            Decimal128Builder::new()
-                                .with_precision_and_scale(38, scale.try_into().unwrap_or_default())
-                                .unwrap_or_default(),
-                        )
-                    });
-                    let Some(dec_builder) =
-                        dec_builder.as_any_mut().downcast_mut::<Decimal128Builder>()
-                    else {
-                        return FailedToDowncastBuilderSnafu {
-                            mysql_type: format!("{mysql_type:?}"),
-                        }
-                        .fail();
-                    };
                     let Some(val) = val else {
-                        dec_builder.append_null();
+                        builder.append_null();
                         continue;
                     };
-
-                    if arrow_field.is_none() {
-                        let Some(field_name) = column_names.get(i) else {
-                            return NoColumnNameForIndexSnafu { index: i }.fail();
-                        };
-                        let new_arrow_field = Field::new(
-                            field_name,
-                            DataType::Decimal128(38, scale.try_into().unwrap_or_default()),
-                            true,
-                        );
-
-                        *arrow_field = Some(new_arrow_field);
-                    }
 
                     let Some(val) = to_decimal_128(&val, scale) else {
                         return FailedToConvertBigDecimalToI128Snafu { big_decimal: val }.fail();
                     };
-                    dec_builder.append_value(val);
+
+                    builder.append_value(val);
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
                 | ColumnType::MYSQL_TYPE_JSON
@@ -433,6 +421,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
+    column_decimal_precision: Option<i8>,
 ) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
@@ -443,7 +432,8 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_LONGLONG => Some(DataType::Int64),
         ColumnType::MYSQL_TYPE_FLOAT => Some(DataType::Float32),
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
-        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => None,
+        // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(38, column_decimal_precision.unwrap_or_default())),
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_DATETIME2  => {
             Some(DataType::Timestamp(TimeUnit::Millisecond, None))
         }
