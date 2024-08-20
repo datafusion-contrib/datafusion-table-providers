@@ -109,6 +109,5 @@ async fn test_mysql_arrow_oneway() {
     let mysql_container = start_mysql_container(port).await;
 
     arrow_mysql_one_way(port).await;
-
     mysql_container.remove().await.expect("container to stop");
 }
