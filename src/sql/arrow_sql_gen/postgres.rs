@@ -983,6 +983,8 @@ mod tests {
     use super::*;
     use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use chrono::NaiveTime;
+    use geo_types::{point, polygon, Geometry};
+    use geozero::{CoordDimensions, ToWkb};
     use std::str::FromStr;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1084,5 +1086,49 @@ mod tests {
         }
         let converted_result = builder.finish();
         assert_eq!(converted_result, time_array);
+    }
+
+    #[test]
+    fn test_geometry_from_sql() {
+        let positive_geometry = Geometry::from(point! { x: 181.2, y: 51.79 })
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
+
+        let positive_geometry = Geometry::from(polygon![
+            (x: -111., y: 45.),
+            (x: -111., y: 41.),
+            (x: -104., y: 41.),
+            (x: -104., y: 45.),
+        ])
+        .to_wkb(CoordDimensions::xy())
+        .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
     }
 }

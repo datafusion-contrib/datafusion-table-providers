@@ -119,6 +119,7 @@ mod test {
     #[case::duration(get_arrow_duration_record_batch(), "duration")]
     #[case::list(get_arrow_list_record_batch(), "list")]
     #[case::null(get_arrow_null_record_batch(), "null")]
+    #[case::bytea_array(get_arrow_bytea_array_record_batch(), "bytea_array")]
     #[test_log::test(tokio::test)]
     async fn test_arrow_postgres_roundtrip(
         container_manager: &Mutex<ContainerManager>,
