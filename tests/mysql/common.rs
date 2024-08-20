@@ -1,6 +1,5 @@
 use bollard::secret::HealthConfig;
 use datafusion_table_providers::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
-use rand::Rng;
 use secrecy::SecretString;
 use std::collections::HashMap;
 use tracing::instrument;
@@ -43,9 +42,7 @@ fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
 }
 
 #[instrument]
-pub async fn start_mysql_docker_container(
-    port: usize,
-) -> Result<RunningContainer<'static>, anyhow::Error> {
+pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{MYSQL_DOCKER_CONTAINER}-{port}");
 
     let port = if let Ok(port) = port.try_into() {
@@ -87,8 +84,4 @@ pub(super) async fn get_mysql_connection_pool(
         .expect("Failed to create MySQL Connection Pool");
 
     Ok(mysql_pool)
-}
-
-pub(super) fn get_random_port() -> usize {
-    rand::thread_rng().gen_range(15432..65535)
 }

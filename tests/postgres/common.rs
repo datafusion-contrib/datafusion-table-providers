@@ -1,7 +1,6 @@
 use bollard::secret::HealthConfig;
 #[cfg(feature = "postgres")]
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
-use rand::Rng;
 use secrecy::SecretString;
 use std::collections::HashMap;
 use tracing::instrument;
@@ -40,14 +39,10 @@ fn get_pg_params(port: usize) -> HashMap<String, SecretString> {
     params
 }
 
-pub(super) fn get_random_port() -> usize {
-    rand::thread_rng().gen_range(15432..65535)
-}
-
 #[instrument]
 pub(super) async fn start_postgres_docker_container(
     port: usize,
-) -> Result<RunningContainer<'static>, anyhow::Error> {
+) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{PG_DOCKER_CONTAINER}-{port}");
     let port = if let Ok(port) = port.try_into() {
         port

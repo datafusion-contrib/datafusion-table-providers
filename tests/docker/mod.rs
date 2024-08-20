@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bollard::{
     container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions},
@@ -10,12 +10,13 @@ use bollard::{
     Docker,
 };
 use futures::StreamExt;
-pub struct RunningContainer<'a> {
-    name: Cow<'a, str>,
+
+pub struct RunningContainer {
+    name: Arc<str>,
     docker: Docker,
 }
 
-impl<'a> RunningContainer<'a> {
+impl RunningContainer {
     pub async fn remove(&self) -> Result<(), anyhow::Error> {
         remove(&self.docker, &self.name).await
     }
@@ -115,7 +116,7 @@ pub struct ContainerRunner<'a> {
 }
 
 impl<'a> ContainerRunner<'a> {
-    pub async fn run(self) -> Result<RunningContainer<'a>, anyhow::Error> {
+    pub async fn run(self) -> Result<RunningContainer, anyhow::Error> {
         if self.is_container_running().await? {
             remove(&self.docker, &self.name).await?;
         }
@@ -197,8 +198,8 @@ impl<'a> ContainerRunner<'a> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
-        Ok(RunningContainer::<'a> {
-            name: self.name,
+        Ok(RunningContainer {
+            name: self.name.into(),
             docker: self.docker,
         })
     }

@@ -2,13 +2,14 @@ use datafusion::execution::context::SessionContext;
 use datafusion_table_providers::{
     mysql::MySQLConnectionPool, sql::sql_provider_datafusion::SqlTable,
 };
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard};
 
 use arrow::array::*;
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
+
+use crate::docker::RunningContainer;
 
 mod common;
 
@@ -91,37 +92,23 @@ async fn arrow_mysql_one_way(port: usize) {
     );
 }
 
-#[derive(Debug)]
-struct ContainerManager {
-    port: usize,
-    claimed: bool,
-}
-
-#[fixture]
-#[once]
-fn container_manager() -> Mutex<ContainerManager> {
-    Mutex::new(ContainerManager {
-        port: common::get_random_port(),
-        claimed: false,
-    })
-}
-
-async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
-    let _ = common::start_mysql_docker_container(manager.port)
+async fn start_mysql_container(port: usize) -> RunningContainer {
+    let running_container = common::start_mysql_docker_container(port)
         .await
         .expect("MySQL container to start");
 
     tracing::debug!("Container started");
+
+    running_container
 }
 
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_mysql_arrow_oneway(container_manager: &Mutex<ContainerManager>) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_container(&container_manager).await;
-    }
+async fn test_mysql_arrow_oneway() {
+    let port = crate::get_random_port();
+    let mysql_container = start_mysql_container(port).await;
 
-    arrow_mysql_one_way(container_manager.port).await;
+    arrow_mysql_one_way(port).await;
+
+    mysql_container.remove().await.expect("container to stop");
 }

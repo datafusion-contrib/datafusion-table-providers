@@ -90,7 +90,7 @@ mod test {
     #[once]
     fn container_manager() -> Mutex<ContainerManager> {
         Mutex::new(ContainerManager {
-            port: common::get_random_port(),
+            port: crate::get_random_port(),
             claimed: false,
         })
     }
