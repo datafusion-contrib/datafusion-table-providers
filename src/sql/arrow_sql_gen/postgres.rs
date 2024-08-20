@@ -582,6 +582,60 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     ListBuilder<BooleanBuilder>,
                     bool
                 ),
+                Type::BYTEA_ARRAY => handle_primitive_array_type!(
+                    Type::BYTEA_ARRAY,
+                    builder,
+                    row,
+                    i,
+                    ListBuilder<BinaryBuilder>,
+                    Vec<u8>
+                ),
+                _ if matches!(postgres_type.name(), "geometry" | "geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<BinaryBuilder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row.try_get::<usize, Option<GeometryFromSql>>(i).context(
+                        FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        },
+                    )?;
+
+                    match v {
+                        Some(v) => builder.append_value(v.wkb),
+                        None => builder.append_null(),
+                    }
+                }
+                _ if matches!(postgres_type.name(), "_geometry" | "_geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<BinaryBuilder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v: Option<Vec<GeometryFromSql>> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        })?;
+                    match v {
+                        Some(v) => {
+                            let v = v.into_iter().map(|item| Some(item.wkb));
+                            builder.append_value(v);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 _ => match *postgres_type.kind() {
                     Kind::Composite(_) => {
                         let Some(builder) = builder else {
@@ -721,6 +775,15 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
             DataType::Boolean,
             true,
         )))),
+        Type::BYTEA_ARRAY => Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Binary,
+            true,
+        )))),
+        _ if matches!(column_type.name(), "geometry" | "geography") => Some(DataType::Binary),
+        _ if matches!(column_type.name(), "_geometry" | "_geography") => Some(DataType::List(
+            Arc::new(Field::new("item", DataType::Binary, true)),
+        )),
         _ => match *column_type.kind() {
             Kind::Composite(ref fields) => {
                 let mut arrow_fields = Vec::new();
@@ -895,6 +958,23 @@ impl<'a> FromSql<'a> for MoneyFromSql {
 
     fn accepts(ty: &Type) -> bool {
         matches!(*ty, Type::MONEY)
+    }
+}
+
+pub struct GeometryFromSql<'a> {
+    wkb: &'a [u8],
+}
+
+impl<'a> FromSql<'a> for GeometryFromSql<'a> {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(GeometryFromSql { wkb: raw })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "geometry" | "geography")
     }
 }
 
