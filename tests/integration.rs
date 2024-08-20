@@ -1,5 +1,7 @@
 mod arrow_record_batch_gen;
 mod docker;
+#[cfg(feature = "mysql")]
+mod mysql;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "sqlite")]
