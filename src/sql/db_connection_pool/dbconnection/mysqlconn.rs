@@ -173,7 +173,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
                 let (_precision, scale) = extract_decimal_precision_and_scale(&data_type)
                     .context(super::UnableToGetSchemaSnafu)?;
-                // rows_to_arrow uses hardcoded precision 38 for decimal so we use it here as well
+                // rows_to_arrow uses hardcoded precision so we use scale only here
                 Some(scale)
             }
             _ => None,
