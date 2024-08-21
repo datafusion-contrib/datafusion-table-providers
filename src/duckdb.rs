@@ -220,12 +220,26 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
                     .context(DbConnectionPoolSnafu)
                     .map_err(to_datafusion_error)?
-                    .set_attached_databases(&self.attach_databases(&options))
             }
             Mode::Memory => DuckDbConnectionPool::new_memory()
                 .context(DbConnectionPoolSnafu)
                 .map_err(to_datafusion_error)?,
         });
+
+        let read_pool = match &mode {
+            Mode::File => {
+                // open duckdb at given path or create a new one
+                let db_path = self.duckdb_file_path(&name, &mut options);
+
+                Arc::new(
+                    DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
+                        .context(DbConnectionPoolSnafu)
+                        .map_err(to_datafusion_error)?
+                        .set_attached_databases(&self.attach_databases(&options)),
+                )
+            }
+            Mode::Memory => Arc::clone(&pool),
+        };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
@@ -235,7 +249,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .create()
             .map_err(to_datafusion_error)?;
 
-        let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
+        let dyn_pool: Arc<DynDuckDbConnectionPool> = read_pool;
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             "duckdb",
