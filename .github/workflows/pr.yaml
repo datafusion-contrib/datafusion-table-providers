@@ -53,6 +53,10 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
 
+    env:
+      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+      MYSQL_DOCKER_IMAGE: ghcr.io/mirrorshub/docker/mysql:8-debian
+
     steps:
       - uses: actions/checkout@v4
 
