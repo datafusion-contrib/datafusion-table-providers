@@ -79,6 +79,7 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
                 DataType::Float64 => Box::new(ListBuilder::new(Float64Builder::new())),
                 DataType::Utf8 => Box::new(ListBuilder::new(StringBuilder::new())),
                 DataType::Boolean => Box::new(ListBuilder::new(BooleanBuilder::new())),
+                DataType::Binary => Box::new(ListBuilder::new(BinaryBuilder::new())),
                 _ => unimplemented!("Unsupported list value data type {:?}", data_type),
             }
         }
