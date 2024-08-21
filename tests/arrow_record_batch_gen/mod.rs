@@ -186,7 +186,7 @@ pub(crate) fn get_arrow_timestamp_record_batch() -> RecordBatch {
         1_680_040_000_000,
         1_680_080_000_000,
     ])
-    .with_timezone("+10:00".to_string());
+    .with_timezone("+10".to_string());
     let timestamp_micro_array = TimestampMicrosecondArray::from(vec![
         1_680_000_000_000_000,
         1_680_040_000_000_000,
@@ -208,7 +208,7 @@ pub(crate) fn get_arrow_timestamp_record_batch() -> RecordBatch {
         ),
         Field::new(
             "timestamp_milli",
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+10:00".to_string()))),
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+10".to_string()))),
             false,
         ),
         Field::new(
