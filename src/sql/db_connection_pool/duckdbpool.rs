@@ -21,6 +21,12 @@ pub enum Error {
 
     #[snafu(display("Unable to connect to DuckDB: {source}"))]
     UnableToConnect { source: duckdb::Error },
+
+    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    UnableToAttachDatabase {
+        path: Arc<str>,
+        source: std::io::Error,
+    },
 }
 
 pub struct DuckDbConnectionPool {
@@ -140,6 +146,11 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
 
         if !self.attached_databases.is_empty() {
             for (i, db) in self.attached_databases.iter().enumerate() {
+                // check the db file exists
+                std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
+                    path: Arc::clone(db),
+                })?;
+
                 let db_id = format!("attachment_{i}");
                 conn.execute(
                     &format!("ATTACH IF NOT EXISTS '{db}' AS {db_id} (READ_ONLY)"),
