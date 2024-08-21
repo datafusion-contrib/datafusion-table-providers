@@ -115,6 +115,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     db_path_param: String,
+    attach_databases_param: String,
 }
 
 impl DuckDBTableProviderFactory {
@@ -123,6 +124,19 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode: AccessMode::ReadOnly,
             db_path_param: "open".to_string(),
+            attach_databases_param: "attach_databases".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn attach_databases(&self, options: &HashMap<String, String>) -> Vec<Arc<str>> {
+        if let Some(attach_databases) = options.get(&self.attach_databases_param) {
+            attach_databases
+                .split(';')
+                .map(Arc::from)
+                .collect::<Vec<Arc<str>>>()
+        } else {
+            Vec::new()
         }
     }
 
@@ -206,6 +220,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
                     .context(DbConnectionPoolSnafu)
                     .map_err(to_datafusion_error)?
+                    .set_attached_databases(&self.attach_databases(&options))
             }
             Mode::Memory => DuckDbConnectionPool::new_memory()
                 .context(DbConnectionPoolSnafu)
