@@ -142,8 +142,6 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
-        println!("connect attached_databases: {:?}", self.attached_databases);
-
         if !self.attached_databases.is_empty() {
             for (i, db) in self.attached_databases.iter().enumerate() {
                 // check the db file exists
@@ -235,16 +233,23 @@ mod test {
 
     #[tokio::test]
     async fn test_duckdb_connection_pool() {
-        let pool = DuckDbConnectionPool::new_memory().unwrap();
-        let conn = pool.connect().await.unwrap();
-        let conn = conn.as_sync().unwrap();
+        let pool =
+            DuckDbConnectionPool::new_memory().expect("DuckDB connection pool to be created");
+        let conn = pool
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn = conn
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
 
         conn.execute("CREATE TABLE test (a INTEGER, b VARCHAR)", &[])
-            .unwrap();
+            .expect("Table should be created");
         conn.execute("INSERT INTO test VALUES (1, 'a')", &[])
-            .unwrap();
+            .expect("Data should be inserted");
 
-        conn.query_arrow("SELECT * FROM test", &[]).unwrap();
+        conn.query_arrow("SELECT * FROM test", &[])
+            .expect("Query should be successful");
     }
 
     #[tokio::test]
@@ -252,49 +257,67 @@ mod test {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();
         let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
-            .unwrap()
+            .expect("DuckDB connection pool to be created")
             .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
 
         let pool_attached =
             DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
-                .unwrap()
+                .expect("DuckDB connection pool to be created")
                 .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
 
-        let conn = pool.pool.get().unwrap();
+        let conn = pool
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
 
         conn.execute("CREATE TABLE test_one (a INTEGER, b VARCHAR)", [])
-            .unwrap();
+            .expect("Table should be created");
         conn.execute("INSERT INTO test_one VALUES (1, 'a')", [])
-            .unwrap();
+            .expect("Data should be inserted");
 
-        let conn_attached = pool_attached.pool.get().unwrap();
+        let conn_attached = pool_attached
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
 
         conn_attached
             .execute("CREATE TABLE test_two (a INTEGER, b VARCHAR)", [])
-            .unwrap();
+            .expect("Table should be created");
         conn_attached
             .execute("INSERT INTO test_two VALUES (1, 'a')", [])
-            .unwrap();
+            .expect("Data should be inserted");
 
-        let conn = pool.connect().await.unwrap();
-        let conn = conn.as_sync().unwrap();
+        let conn = pool
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn = conn
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
 
-        let conn_attached = pool_attached.connect().await.unwrap();
-        let conn_attached = conn_attached.as_sync().unwrap();
+        let conn_attached = pool_attached
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn_attached = conn_attached
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
 
-        conn.query_arrow("SELECT * FROM test_one", &[]).unwrap();
+        conn.query_arrow("SELECT * FROM test_one", &[])
+            .expect("Query should be successful");
 
         conn_attached
             .query_arrow("SELECT * FROM test_two", &[])
-            .unwrap();
+            .expect("Query should be successful");
 
         conn_attached
             .query_arrow("SELECT * FROM test_one", &[])
-            .unwrap();
+            .expect("Query should be successful");
 
-        conn.query_arrow("SELECT * FROM test_two", &[]).unwrap();
+        conn.query_arrow("SELECT * FROM test_two", &[])
+            .expect("Query should be successful");
 
-        std::fs::remove_file(&db_base_name).unwrap();
-        std::fs::remove_file(&db_attached_name).unwrap();
+        std::fs::remove_file(&db_base_name).expect("File should be removed");
+        std::fs::remove_file(&db_attached_name).expect("File should be removed");
     }
 }
