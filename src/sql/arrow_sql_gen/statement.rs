@@ -1092,7 +1092,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
             ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
         }
         DataType::Timestamp(_unit, time_zone) => {
-            if let Some(_time_zone) = time_zone {
+            if time_zone.is_some() {
                 return ColumnType::TimestampWithTimeZone;
             }
             ColumnType::Timestamp
