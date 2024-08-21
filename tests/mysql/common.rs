@@ -51,8 +51,11 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
         15432
     };
 
+    let mysql_docker_image = std::env::var("MYSQL_DOCKER_IMAGE")
+        .unwrap_or_else(|_| format!("{}mysql:latest", container_registry()));
+
     let running_container = ContainerRunnerBuilder::new(container_name)
-        .image(format!("{}mysql:latest", container_registry()))
+        .image(mysql_docker_image)
         .add_port_binding(3306, port)
         .add_env_var("MYSQL_ROOT_PASSWORD", MYSQL_ROOT_PASSWORD)
         .add_env_var("MYSQL_DATABASE", "mysqldb")

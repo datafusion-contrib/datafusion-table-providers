@@ -50,8 +50,11 @@ pub(super) async fn start_postgres_docker_container(
         15432
     };
 
+    let pg_docker_image = std::env::var("PG_DOCKER_IMAGE")
+        .unwrap_or_else(|_| format!("{}postgres:latest", container_registry()));
+
     let running_container = ContainerRunnerBuilder::new(container_name)
-        .image(format!("{}postgres:latest", container_registry()))
+        .image(pg_docker_image)
         .add_port_binding(5432, port)
         .add_env_var("POSTGRES_PASSWORD", PG_PASSWORD)
         .healthcheck(HealthConfig {

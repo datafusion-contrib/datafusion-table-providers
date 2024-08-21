@@ -58,6 +58,7 @@ secrecy = "0.8.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 test-log = { version = "0.2.16", features = ["trace"] }
 rstest = "0.22.0"
+geozero = { version = "0.13.0", features = ["with-wkb"] }
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]

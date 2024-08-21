@@ -1065,6 +1065,18 @@ fn insert_list_into_row_values(
             bool,
             "boolean[]"
         ),
+        DataType::Binary => {
+            let mut list_values: Vec<Vec<u8>> = Vec::new();
+            for i in 0..list_array.len() {
+                let temp_array = list_array.as_any().downcast_ref::<array::BinaryArray>();
+                if let Some(valid_array) = temp_array {
+                    list_values.push(valid_array.value(i).to_vec());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            // We must cast here in case the array is empty which SeaQuery does not handle.
+            row_values.push(expr.cast_as(Alias::new("bytea[]")));
+        }
         _ => unimplemented!(
             "Data type mapping not implemented for {}",
             list_type.data_type()

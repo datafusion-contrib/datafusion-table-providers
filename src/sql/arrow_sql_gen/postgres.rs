@@ -631,6 +631,60 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     ListBuilder<BooleanBuilder>,
                     bool
                 ),
+                Type::BYTEA_ARRAY => handle_primitive_array_type!(
+                    Type::BYTEA_ARRAY,
+                    builder,
+                    row,
+                    i,
+                    ListBuilder<BinaryBuilder>,
+                    Vec<u8>
+                ),
+                _ if matches!(postgres_type.name(), "geometry" | "geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<BinaryBuilder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row.try_get::<usize, Option<GeometryFromSql>>(i).context(
+                        FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        },
+                    )?;
+
+                    match v {
+                        Some(v) => builder.append_value(v.wkb),
+                        None => builder.append_null(),
+                    }
+                }
+                _ if matches!(postgres_type.name(), "_geometry" | "_geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<BinaryBuilder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v: Option<Vec<GeometryFromSql>> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        })?;
+                    match v {
+                        Some(v) => {
+                            let v = v.into_iter().map(|item| Some(item.wkb));
+                            builder.append_value(v);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 _ => match *postgres_type.kind() {
                     Kind::Composite(_) => {
                         let Some(builder) = builder else {
@@ -768,6 +822,15 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
             DataType::Boolean,
             true,
         )))),
+        Type::BYTEA_ARRAY => Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Binary,
+            true,
+        )))),
+        _ if matches!(column_type.name(), "geometry" | "geography") => Some(DataType::Binary),
+        _ if matches!(column_type.name(), "_geometry" | "_geography") => Some(DataType::List(
+            Arc::new(Field::new("item", DataType::Binary, true)),
+        )),
         _ => match *column_type.kind() {
             Kind::Composite(ref fields) => {
                 let mut arrow_fields = Vec::new();
@@ -945,11 +1008,30 @@ impl<'a> FromSql<'a> for MoneyFromSql {
     }
 }
 
+pub struct GeometryFromSql<'a> {
+    wkb: &'a [u8],
+}
+
+impl<'a> FromSql<'a> for GeometryFromSql<'a> {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(GeometryFromSql { wkb: raw })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "geometry" | "geography")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use chrono::NaiveTime;
+    use geo_types::{point, polygon, Geometry};
+    use geozero::{CoordDimensions, ToWkb};
     use std::str::FromStr;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1051,5 +1133,49 @@ mod tests {
         }
         let converted_result = builder.finish();
         assert_eq!(converted_result, time_array);
+    }
+
+    #[test]
+    fn test_geometry_from_sql() {
+        let positive_geometry = Geometry::from(point! { x: 181.2, y: 51.79 })
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
+
+        let positive_geometry = Geometry::from(polygon![
+            (x: -111., y: 45.),
+            (x: -111., y: 41.),
+            (x: -104., y: 41.),
+            (x: -104., y: 45.),
+        ])
+        .to_wkb(CoordDimensions::xy())
+        .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
     }
 }

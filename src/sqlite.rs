@@ -84,25 +84,21 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct SqliteTableProviderFactory {
-    db_path_param: String,
-    db_base_folder_param: String,
-    attach_databases_param: String,
-}
+pub struct SqliteTableProviderFactory {}
+
+const SQLITE_DB_PATH_PARAM: &str = "file";
+const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
+const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 
 impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            db_path_param: "file".to_string(),
-            db_base_folder_param: "data_directory".to_string(),
-            attach_databases_param: "attach_databases".to_string(),
-        }
+        Self {}
     }
 
     #[must_use]
     pub fn attach_databases(&self, options: &HashMap<String, String>) -> Option<Vec<Arc<str>>> {
-        options.get(&self.attach_databases_param).map(|databases| {
+        options.get(SQLITE_ATTACH_DATABASES_PARAM).map(|databases| {
             databases
                 .split(';')
                 .map(Arc::from)
@@ -115,13 +111,13 @@ impl SqliteTableProviderFactory {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
 
         let db_base_folder = options
-            .get(&self.db_base_folder_param)
+            .get(SQLITE_DB_BASE_FOLDER_PARAM)
             .cloned()
             .unwrap_or(".".to_string()); // default to the current directory
         let default_filepath = format!("{db_base_folder}/{name}_sqlite.db");
 
         options
-            .get(&self.db_path_param)
+            .get(SQLITE_DB_PATH_PARAM)
             .cloned()
             .unwrap_or(default_filepath)
     }
