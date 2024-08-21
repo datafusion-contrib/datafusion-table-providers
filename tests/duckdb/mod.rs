@@ -56,11 +56,9 @@ async fn arrow_duckdb_round_trip(arrow_record: RecordBatch, table_name: &str) {
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    // Print original arrow record batch and record batch converted from sqlite row in terminal
-    // Check if the values are the same
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
-        "Sqlite returned Record Batch: {:?}",
+        "Duckdb returned Record Batch: {:?}",
         record_batch[0].columns()
     );
 
