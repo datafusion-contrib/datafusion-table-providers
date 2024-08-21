@@ -30,6 +30,7 @@ pub enum Error {
 }
 
 pub struct DuckDbConnectionPool {
+    path: Arc<str>,
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
@@ -63,6 +64,7 @@ impl DuckDbConnectionPool {
         test_connection(&conn)?;
 
         Ok(DuckDbConnectionPool {
+            path: ":memory:".into(),
             pool,
             // There can't be any other tables that share the same context for an in-memory DuckDB.
             join_push_down: JoinPushDown::Disallow,
@@ -99,6 +101,7 @@ impl DuckDbConnectionPool {
         test_connection(&conn)?;
 
         Ok(DuckDbConnectionPool {
+            path: path.into(),
             pool,
             // Allow join-push down for any other instances that connect to the same underlying file.
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
@@ -109,6 +112,15 @@ impl DuckDbConnectionPool {
     #[must_use]
     pub fn set_attached_databases(mut self, databases: &[Arc<str>]) -> Self {
         self.attached_databases = databases.to_vec();
+
+        if !databases.is_empty() {
+            let mut paths = self.attached_databases.clone();
+            paths.push(Arc::clone(&self.path));
+            paths.sort();
+            let push_down_context = paths.join(";");
+            self.join_push_down = JoinPushDown::AllowedFor(push_down_context);
+        }
+
         self
     }
 
