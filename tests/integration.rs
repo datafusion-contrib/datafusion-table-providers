@@ -2,6 +2,8 @@ use rand::Rng;
 
 mod arrow_record_batch_gen;
 mod docker;
+#[cfg(feature = "duckdb")]
+mod duckdb;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]
