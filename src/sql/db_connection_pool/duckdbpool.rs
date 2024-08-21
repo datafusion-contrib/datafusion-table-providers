@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow::array::AsArray;
 use async_trait::async_trait;
 use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager, ToSql};
 use snafu::{prelude::*, ResultExt};
@@ -20,11 +21,18 @@ pub enum Error {
 
     #[snafu(display("Unable to connect to DuckDB: {source}"))]
     UnableToConnect { source: duckdb::Error },
+
+    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    UnableToAttachDatabase {
+        path: Arc<str>,
+        source: std::io::Error,
+    },
 }
 
 pub struct DuckDbConnectionPool {
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
     join_push_down: JoinPushDown,
+    attached_databases: Vec<Arc<str>>,
 }
 
 impl DuckDbConnectionPool {
@@ -58,6 +66,7 @@ impl DuckDbConnectionPool {
             pool,
             // There can't be any other tables that share the same context for an in-memory DuckDB.
             join_push_down: JoinPushDown::Disallow,
+            attached_databases: Vec::new(),
         })
     }
 
@@ -93,7 +102,14 @@ impl DuckDbConnectionPool {
             pool,
             // Allow join-push down for any other instances that connect to the same underlying file.
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
+            attached_databases: Vec::new(),
         })
+    }
+
+    #[must_use]
+    pub fn set_attached_databases(mut self, databases: &[Arc<str>]) -> Self {
+        self.attached_databases = databases.to_vec();
+        self
     }
 
     /// Create a new `DuckDbConnectionPool` from a database URL.
@@ -125,6 +141,51 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
+
+        if !self.attached_databases.is_empty() {
+            for (i, db) in self.attached_databases.iter().enumerate() {
+                // check the db file exists
+                std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
+                    path: Arc::clone(db),
+                })?;
+
+                let db_id = format!("attachment_{i}");
+                conn.execute(
+                    &format!("ATTACH IF NOT EXISTS '{db}' AS {db_id} (READ_ONLY)"),
+                    [],
+                )
+                .context(DuckDBSnafu)?;
+            }
+
+            let mut stmt = conn.prepare("SHOW DATABASES").context(DuckDBSnafu)?;
+            let results = stmt.query_arrow([]).context(DuckDBSnafu)?;
+            let results = results.collect::<Vec<_>>();
+
+            let db_ids = results
+                .iter()
+                .flat_map(|r| match r.column(0).data_type() {
+                    arrow::datatypes::DataType::Utf8 => r
+                        .column(0)
+                        .as_string::<i32>()
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                    arrow::datatypes::DataType::LargeUtf8 => r
+                        .column(0)
+                        .as_string::<i64>()
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                    _ => {
+                        unreachable!("Unexpected data type from SHOW DATABASES");
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            conn.execute(&format!("SET search_path = \"{}\"", db_ids.join(",")), [])
+                .context(DuckDBSnafu)?;
+        }
+
         Ok(Box::new(DuckDbConnection::new(conn)))
     }
 
@@ -148,4 +209,115 @@ fn get_config(access_mode: &AccessMode) -> Result<duckdb::Config> {
         .context(DuckDBSnafu)?;
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod test {
+
+    use rand::Rng;
+
+    use super::*;
+    use crate::sql::db_connection_pool::DbConnectionPool;
+    use std::sync::Arc;
+
+    fn random_db_name() -> String {
+        let mut rng = rand::thread_rng();
+        let mut name = String::new();
+
+        for _ in 0..10 {
+            name.push(rng.gen_range(b'a'..=b'z') as char);
+        }
+
+        format!("./{name}.sqlite")
+    }
+
+    #[tokio::test]
+    async fn test_duckdb_connection_pool() {
+        let pool =
+            DuckDbConnectionPool::new_memory().expect("DuckDB connection pool to be created");
+        let conn = pool
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn = conn
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
+
+        conn.execute("CREATE TABLE test (a INTEGER, b VARCHAR)", &[])
+            .expect("Table should be created");
+        conn.execute("INSERT INTO test VALUES (1, 'a')", &[])
+            .expect("Data should be inserted");
+
+        conn.query_arrow("SELECT * FROM test", &[])
+            .expect("Query should be successful");
+    }
+
+    #[tokio::test]
+    async fn test_duckdb_connection_pool_with_attached_databases() {
+        let db_base_name = random_db_name();
+        let db_attached_name = random_db_name();
+        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
+            .expect("DuckDB connection pool to be created")
+            .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
+
+        let pool_attached =
+            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
+                .expect("DuckDB connection pool to be created")
+                .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
+
+        let conn = pool
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
+
+        conn.execute("CREATE TABLE test_one (a INTEGER, b VARCHAR)", [])
+            .expect("Table should be created");
+        conn.execute("INSERT INTO test_one VALUES (1, 'a')", [])
+            .expect("Data should be inserted");
+
+        let conn_attached = pool_attached
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
+
+        conn_attached
+            .execute("CREATE TABLE test_two (a INTEGER, b VARCHAR)", [])
+            .expect("Table should be created");
+        conn_attached
+            .execute("INSERT INTO test_two VALUES (1, 'a')", [])
+            .expect("Data should be inserted");
+
+        let conn = pool
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn = conn
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
+
+        let conn_attached = pool_attached
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn_attached = conn_attached
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
+
+        conn.query_arrow("SELECT * FROM test_one", &[])
+            .expect("Query should be successful");
+
+        conn_attached
+            .query_arrow("SELECT * FROM test_two", &[])
+            .expect("Query should be successful");
+
+        conn_attached
+            .query_arrow("SELECT * FROM test_one", &[])
+            .expect("Query should be successful");
+
+        conn.query_arrow("SELECT * FROM test_two", &[])
+            .expect("Query should be successful");
+
+        std::fs::remove_file(&db_base_name).expect("File should be removed");
+        std::fs::remove_file(&db_attached_name).expect("File should be removed");
+    }
 }

@@ -115,6 +115,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     db_path_param: String,
+    attach_databases_param: String,
 }
 
 impl DuckDBTableProviderFactory {
@@ -123,7 +124,21 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode: AccessMode::ReadOnly,
             db_path_param: "open".to_string(),
+            attach_databases_param: "attach_databases".to_string(),
         }
+    }
+
+    #[must_use]
+    pub fn attach_databases(&self, options: &HashMap<String, String>) -> Vec<Arc<str>> {
+        options
+            .get(&self.attach_databases_param)
+            .map(|attach_databases| {
+                attach_databases
+                    .split(';')
+                    .map(Arc::from)
+                    .collect::<Vec<Arc<str>>>()
+            })
+            .unwrap_or_default()
     }
 
     #[must_use]
@@ -212,6 +227,21 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 .map_err(to_datafusion_error)?,
         });
 
+        let read_pool = match &mode {
+            Mode::File => {
+                // open duckdb at given path or create a new one
+                let db_path = self.duckdb_file_path(&name, &mut options);
+
+                Arc::new(
+                    DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
+                        .context(DbConnectionPoolSnafu)
+                        .map_err(to_datafusion_error)?
+                        .set_attached_databases(&self.attach_databases(&options)),
+                )
+            }
+            Mode::Memory => Arc::clone(&pool),
+        };
+
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::clone(&pool))
@@ -220,7 +250,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .create()
             .map_err(to_datafusion_error)?;
 
-        let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
+        let dyn_pool: Arc<DynDuckDbConnectionPool> = read_pool;
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             "duckdb",
