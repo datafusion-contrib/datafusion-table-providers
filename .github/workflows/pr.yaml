@@ -62,5 +62,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Pull the Postgres/MySQL images
+        run: |
+          docker pull ${{ env.PG_DOCKER_IMAGE }}
+          docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+
       - name: Run integration test
         run: make test-integration
