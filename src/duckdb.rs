@@ -114,24 +114,24 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
-    db_path_param: String,
-    attach_databases_param: String,
 }
+
+const DUCKDB_DB_PATH_PARAM: &str = "open";
+const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
+const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
         Self {
             access_mode: AccessMode::ReadOnly,
-            db_path_param: "open".to_string(),
-            attach_databases_param: "attach_databases".to_string(),
         }
     }
 
     #[must_use]
     pub fn attach_databases(&self, options: &HashMap<String, String>) -> Vec<Arc<str>> {
         options
-            .get(&self.attach_databases_param)
+            .get(DUCKDB_ATTACH_DATABASES_PARAM)
             .map(|attach_databases| {
                 attach_databases
                     .split(';')
@@ -148,15 +148,19 @@ impl DuckDBTableProviderFactory {
     }
 
     #[must_use]
-    pub fn db_path_param(mut self, db_path_param: &str) -> Self {
-        self.db_path_param = db_path_param.to_string();
-        self
-    }
-
-    #[must_use]
     pub fn duckdb_file_path(&self, name: &str, options: &mut HashMap<String, String>) -> String {
-        let db_path = remove_option(options, &self.db_path_param);
-        db_path.unwrap_or_else(|| format!("{name}.db"))
+        let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
+
+        let db_base_folder = options
+            .get(DUCKDB_DB_BASE_FOLDER_PARAM)
+            .cloned()
+            .unwrap_or(".".to_string()); // default to the current directory
+        let default_filepath = format!("{db_base_folder}/{name}.db");
+
+        options
+            .get(DUCKDB_DB_PATH_PARAM)
+            .cloned()
+            .unwrap_or(default_filepath)
     }
 }
 
