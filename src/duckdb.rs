@@ -130,14 +130,15 @@ impl DuckDBTableProviderFactory {
 
     #[must_use]
     pub fn attach_databases(&self, options: &HashMap<String, String>) -> Vec<Arc<str>> {
-        if let Some(attach_databases) = options.get(&self.attach_databases_param) {
-            attach_databases
-                .split(';')
-                .map(Arc::from)
-                .collect::<Vec<Arc<str>>>()
-        } else {
-            Vec::new()
-        }
+        options
+            .get(&self.attach_databases_param)
+            .map(|attach_databases| {
+                attach_databases
+                    .split(';')
+                    .map(Arc::from)
+                    .collect::<Vec<Arc<str>>>()
+            })
+            .unwrap_or_default()
     }
 
     #[must_use]
