@@ -104,7 +104,6 @@ async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
 #[case::int(get_arrow_int_record_batch(), "int")]
 #[case::float(get_arrow_float_record_batch(), "float")]
 #[case::utf8(get_arrow_utf8_record_batch(), "utf8")]
-#[ignore] // TODO: time types are broken in Postgres
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
