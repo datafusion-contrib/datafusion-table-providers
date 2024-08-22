@@ -502,6 +502,8 @@ pub(crate) fn get_arrow_bytea_array_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
+// Reference: https://github.com/spiceai/datafusion-federation/blob/spiceai-41/datafusion-federation/src/schema_cast/record_convert.rs#L44
+// TODO: Switch to use the try_cast_to in datafusion-federation when the function becomes public
 pub(crate) fn try_cast_to(
     record_batch: RecordBatch,
     expected_schema: SchemaRef,
