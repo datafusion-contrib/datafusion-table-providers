@@ -275,41 +275,6 @@ impl InsertBuilder {
                             );
                         }
                     }
-                    DataType::Time32(time_unit) => match time_unit {
-                        TimeUnit::Millisecond => {
-                            let array = column
-                                .as_any()
-                                .downcast_ref::<array::Time32MillisecondArray>();
-                            if let Some(valid_array) = array {
-                                if valid_array.is_null(row) {
-                                    row_values.push(Keyword::Null.into());
-                                    continue;
-                                }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(
-                                        i128::from(valid_array.value(row)) * 1_000_000,
-                                    ),
-                                    &mut row_values,
-                                )?;
-                            }
-                        }
-                        TimeUnit::Second => {
-                            let array = column.as_any().downcast_ref::<array::Time32SecondArray>();
-                            if let Some(valid_array) = array {
-                                if valid_array.is_null(row) {
-                                    row_values.push(Keyword::Null.into());
-                                    continue;
-                                }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp(i64::from(
-                                        valid_array.value(row),
-                                    )),
-                                    &mut row_values,
-                                )?;
-                            }
-                        }
-                        _ => unreachable!(),
-                    },
                     DataType::Duration(time_unit) => match time_unit {
                         TimeUnit::Second => {
                             push_value!(row_values, column, row, DurationSecondArray);
@@ -324,6 +289,76 @@ impl InsertBuilder {
                             push_value!(row_values, column, row, DurationNanosecondArray);
                         }
                     },
+                    DataType::Time32(time_unit) => match time_unit {
+                        TimeUnit::Millisecond => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::Time32MillisecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let (h, m, s, micro) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000_000,
+                                    ) {
+                                        Ok(timestamp) => timestamp.to_hms_micro(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_micro(h, m, s, micro) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
+                            }
+                        }
+                        TimeUnit::Second => {
+                            let array = column.as_any().downcast_ref::<array::Time32SecondArray>();
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let (h, m, s) = match OffsetDateTime::from_unix_timestamp(
+                                    i64::from(valid_array.value(row)),
+                                ) {
+                                    Ok(timestamp) => timestamp.to_hms(),
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                let time = match time::Time::from_hms(h, m, s) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
+                            }
+                        }
+                        _ => unreachable!(),
+                    },
                     DataType::Time64(time_unit) => match time_unit {
                         TimeUnit::Nanosecond => {
                             let array = column
@@ -334,12 +369,30 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                let (h, m, s, nano) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(i128::from(
                                         valid_array.value(row),
-                                    )),
-                                    &mut row_values,
-                                )?;
+                                    )) {
+                                        Ok(timestamp) => timestamp.to_hms_nano(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_nano(h, m, s, nano) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         TimeUnit::Microsecond => {
@@ -351,12 +404,31 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(
+
+                                let (h, m, s, micro) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(
                                         i128::from(valid_array.value(row)) * 1_000,
-                                    ),
-                                    &mut row_values,
-                                )?;
+                                    ) {
+                                        Ok(timestamp) => timestamp.to_hms_micro(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_micro(h, m, s, micro) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         _ => unreachable!(),
