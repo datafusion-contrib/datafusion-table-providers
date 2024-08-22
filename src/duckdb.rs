@@ -116,16 +116,31 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
-    db_path_param: String,
 }
+
+const DUCKDB_DB_PATH_PARAM: &str = "open";
+const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
+const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
         Self {
             access_mode: AccessMode::ReadOnly,
-            db_path_param: "open".to_string(),
         }
+    }
+
+    #[must_use]
+    pub fn attach_databases(&self, options: &HashMap<String, String>) -> Vec<Arc<str>> {
+        options
+            .get(DUCKDB_ATTACH_DATABASES_PARAM)
+            .map(|attach_databases| {
+                attach_databases
+                    .split(';')
+                    .map(Arc::from)
+                    .collect::<Vec<Arc<str>>>()
+            })
+            .unwrap_or_default()
     }
 
     #[must_use]
@@ -135,15 +150,19 @@ impl DuckDBTableProviderFactory {
     }
 
     #[must_use]
-    pub fn db_path_param(mut self, db_path_param: &str) -> Self {
-        self.db_path_param = db_path_param.to_string();
-        self
-    }
-
-    #[must_use]
     pub fn duckdb_file_path(&self, name: &str, options: &mut HashMap<String, String>) -> String {
-        let db_path = remove_option(options, &self.db_path_param);
-        db_path.unwrap_or_else(|| format!("{name}.db"))
+        let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
+
+        let db_base_folder = options
+            .get(DUCKDB_DB_BASE_FOLDER_PARAM)
+            .cloned()
+            .unwrap_or(".".to_string()); // default to the current directory
+        let default_filepath = format!("{db_base_folder}/{name}.db");
+
+        options
+            .get(DUCKDB_DB_PATH_PARAM)
+            .cloned()
+            .unwrap_or(default_filepath)
     }
 }
 
@@ -214,6 +233,21 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 .map_err(to_datafusion_error)?,
         });
 
+        let read_pool = match &mode {
+            Mode::File => {
+                // open duckdb at given path or create a new one
+                let db_path = self.duckdb_file_path(&name, &mut options);
+
+                Arc::new(
+                    DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
+                        .context(DbConnectionPoolSnafu)
+                        .map_err(to_datafusion_error)?
+                        .set_attached_databases(&self.attach_databases(&options)),
+                )
+            }
+            Mode::Memory => Arc::clone(&pool),
+        };
+
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::clone(&pool))
@@ -222,7 +256,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .create()
             .map_err(to_datafusion_error)?;
 
-        let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
+        let dyn_pool: Arc<DynDuckDbConnectionPool> = read_pool;
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             "duckdb",
@@ -233,6 +267,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
         ));
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(DuckDBTableWriter::create(
             read_provider,
             duckdb,

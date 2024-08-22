@@ -293,14 +293,18 @@ impl TableProviderFactory for PostgresTableProviderFactory {
 
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "postgres",
-            &dyn_pool,
-            Arc::clone(&schema),
-            TableReference::bare(name.clone()),
-            Some(Engine::Postgres),
-        ));
+        let read_provider = Arc::new(
+            SqlTable::new_with_schema(
+                "postgres",
+                &dyn_pool,
+                Arc::clone(&schema),
+                TableReference::bare(name.clone()),
+                Some(Engine::Postgres),
+            )
+            .with_dialect(Arc::new(PostgreSqlDialect {})),
+        );
 
+        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(PostgresTableWriter::create(
             read_provider,
             postgres,

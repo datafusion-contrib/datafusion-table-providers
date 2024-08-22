@@ -39,7 +39,7 @@ pub(crate) fn get_arrow_binary_record_batch() -> RecordBatch {
 }
 
 // All Int types
-pub(crate) fn get_arrow_int_recordbatch() -> RecordBatch {
+pub(crate) fn get_arrow_int_record_batch() -> RecordBatch {
     // Arrow Integer Types
     let int8_arr = Int8Array::from(vec![1, 2, 3]);
     let int16_arr = Int16Array::from(vec![1, 2, 3]);
@@ -120,6 +120,8 @@ pub(crate) fn get_arrow_utf8_record_batch() -> RecordBatch {
 }
 
 // Time32, Time64
+#[allow(clippy::identity_op)]
+#[allow(clippy::erasing_op)]
 pub(crate) fn get_arrow_time_record_batch() -> RecordBatch {
     // Time32, Time64 Types
     let time32_milli_array: Time32MillisecondArray = vec![
@@ -294,7 +296,7 @@ pub(crate) fn get_arrow_decimal_record_batch() -> RecordBatch {
     let decimal128_array =
         Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)]);
     let decimal256_array =
-        Decimal256Array::from(vec![i256::from(123), i256::from(222), i256::from(321)]);
+        Decimal256Array::from(vec![i256::from(-123), i256::from(222), i256::from(0)]);
 
     let schema = Schema::new(vec![
         Field::new("decimal128", DataType::Decimal128(38, 10), false),
@@ -453,4 +455,22 @@ pub(crate) fn get_arrow_null_record_batch() -> RecordBatch {
     let schema = Schema::new(vec![Field::new("int8", DataType::Int8, true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(null_arr)])
         .expect("Failed to created arrow null record batch")
+}
+
+// BYTEA_ARRAY
+pub(crate) fn get_arrow_bytea_array_record_batch() -> RecordBatch {
+    let mut bytea_array_builder = ListBuilder::new(BinaryBuilder::new());
+    bytea_array_builder.append_value([Some(b"1"), Some(b"2"), Some(b"3")]);
+    bytea_array_builder.append_value([Some(b"4")]);
+    bytea_array_builder.append_value([Some(b"6")]);
+    let bytea_array_builder = bytea_array_builder.finish();
+
+    let schema = Schema::new(vec![Field::new(
+        "bytea_array",
+        DataType::List(Field::new("item", DataType::Binary, true).into()),
+        false,
+    )]);
+
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(bytea_array_builder)])
+        .expect("Failed to created arrow bytea array record batch")
 }

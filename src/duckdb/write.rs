@@ -29,7 +29,7 @@ use super::to_datafusion_error;
 
 #[derive(Clone)]
 pub struct DuckDBTableWriter {
-    read_provider: Arc<dyn TableProvider>,
+    pub read_provider: Arc<dyn TableProvider>,
     duckdb: Arc<DuckDB>,
     on_conflict: Option<OnConflict>,
 }

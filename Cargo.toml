@@ -9,6 +9,7 @@ repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 arrow = "52.0.0"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
+num-bigint = "0.4.4"
 bigdecimal = "0.4.5"
 bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
@@ -32,7 +33,7 @@ serde_json = "1.0.124"
 snafu = "0.8.3"
 time = "0.3.36"
 tokio = { version = "1.38.0", features = ["macros", "fs"] }
-tokio-postgres = { version = "0.7.10", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"], optional = true }
+tokio-postgres = { version = "0.7.10", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1", "with-geo-types-0_7"], optional = true }
 tracing = "0.1.40"
 uuid = { version = "1.9.1", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
@@ -44,9 +45,10 @@ url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "9b4392f45546dd3a1232c18ad36189bcc3cd408d" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "ae9da45f8b90451119f3ca032b75ad82a28d7547" }
 itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
+geo-types = "0.7.13"
 
 [dev-dependencies]
 anyhow = "1.0.86"
@@ -55,6 +57,9 @@ rand = "0.8.5"
 reqwest = "0.12.5"
 secrecy = "0.8.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+test-log = { version = "0.2.16", features = ["trace"] }
+rstest = "0.22.0"
+geozero = { version = "0.13.0", features = ["with-wkb"] }
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -63,4 +68,4 @@ sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "9b4392f45546dd3a1232c18ad36189bcc3cd408d" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "ae9da45f8b90451119f3ca032b75ad82a28d7547" }

@@ -25,7 +25,7 @@ use super::{to_datafusion_error, Postgres};
 
 #[derive(Clone)]
 pub struct PostgresTableWriter {
-    read_provider: Arc<dyn TableProvider>,
+    pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
 }

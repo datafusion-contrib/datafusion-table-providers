@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bollard::{
     container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions},
@@ -10,22 +10,23 @@ use bollard::{
     Docker,
 };
 use futures::StreamExt;
-pub struct RunningContainer<'a> {
-    name: &'a str,
+
+pub struct RunningContainer {
+    name: Arc<str>,
     docker: Docker,
 }
 
-impl<'a> RunningContainer<'a> {
+impl RunningContainer {
     pub async fn remove(&self) -> Result<(), anyhow::Error> {
-        remove(&self.docker, self.name).await
+        remove(&self.docker, &self.name).await
     }
 
     pub async fn stop(&self) -> Result<(), anyhow::Error> {
-        stop(&self.docker, self.name).await
+        stop(&self.docker, &self.name).await
     }
 
     pub async fn start(&self) -> Result<(), anyhow::Error> {
-        start(&self.docker, self.name).await
+        start(&self.docker, &self.name).await
     }
 }
 
@@ -52,7 +53,7 @@ pub async fn start(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
 }
 
 pub struct ContainerRunnerBuilder<'a> {
-    name: &'a str,
+    name: Cow<'a, str>,
     image: Option<String>,
     port_bindings: Vec<(u16, u16)>,
     env_vars: Vec<(String, String)>,
@@ -60,9 +61,9 @@ pub struct ContainerRunnerBuilder<'a> {
 }
 
 impl<'a> ContainerRunnerBuilder<'a> {
-    pub fn new(name: &'a str) -> Self {
+    pub fn new(name: impl Into<Cow<'a, str>>) -> Self {
         ContainerRunnerBuilder {
-            name,
+            name: name.into(),
             image: None,
             port_bindings: Vec::new(),
             env_vars: Vec::new(),
@@ -106,7 +107,7 @@ impl<'a> ContainerRunnerBuilder<'a> {
 }
 
 pub struct ContainerRunner<'a> {
-    name: &'a str,
+    name: Cow<'a, str>,
     docker: Docker,
     image: String,
     port_bindings: Vec<(u16, u16)>,
@@ -115,15 +116,15 @@ pub struct ContainerRunner<'a> {
 }
 
 impl<'a> ContainerRunner<'a> {
-    pub async fn run(self) -> Result<RunningContainer<'a>, anyhow::Error> {
+    pub async fn run(self) -> Result<RunningContainer, anyhow::Error> {
         if self.is_container_running().await? {
-            remove(&self.docker, self.name).await?;
+            remove(&self.docker, &self.name).await?;
         }
 
         self.pull_image().await?;
 
         let options = CreateContainerOptions {
-            name: self.name,
+            name: self.name.as_ref(),
             platform: None,
         };
 
@@ -168,12 +169,12 @@ impl<'a> ContainerRunner<'a> {
         let _ = self.docker.create_container(Some(options), config).await?;
 
         self.docker
-            .start_container(self.name, None::<StartContainerOptions<String>>)
+            .start_container(&self.name, None::<StartContainerOptions<String>>)
             .await?;
 
         let start_time = std::time::Instant::now();
         loop {
-            let inspect_container = self.docker.inspect_container(self.name, None).await?;
+            let inspect_container = self.docker.inspect_container(&self.name, None).await?;
             tracing::trace!("Container status: {:?}", inspect_container.state);
 
             if let Some(ContainerState {
@@ -197,8 +198,8 @@ impl<'a> ContainerRunner<'a> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
-        Ok(RunningContainer::<'a> {
-            name: self.name,
+        Ok(RunningContainer {
+            name: self.name.into(),
             docker: self.docker,
         })
     }
@@ -234,7 +235,7 @@ impl<'a> ContainerRunner<'a> {
             };
             if names.iter().any(|n| {
                 tracing::debug!("Docker container: {n}");
-                n == self.name || n == &format!("/{}", self.name)
+                n == &self.name || n == &format!("/{}", self.name)
             }) {
                 tracing::debug!("Docker container {} already running", self.name);
                 return Ok(true);

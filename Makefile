@@ -11,4 +11,4 @@ lint:
 
 .PHONY: test-integration
 test-integration:
-	cargo test --test integration --no-default-features --features postgres -- --nocapture
+	RUST_LOG=debug cargo test --test integration --no-default-features --features postgres,sqlite,mysql -- --nocapture

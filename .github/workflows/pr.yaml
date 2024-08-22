@@ -53,10 +53,19 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
 
+    env:
+      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+      MYSQL_DOCKER_IMAGE: ghcr.io/mirrorshub/docker/mysql:8-debian
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Pull the Postgres/MySQL images
+        run: |
+          docker pull ${{ env.PG_DOCKER_IMAGE }}
+          docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+
       - name: Run integration test
-        run: cargo test --test integration --no-default-features --features postgres -- --nocapture
+        run: make test-integration

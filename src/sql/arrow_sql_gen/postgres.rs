@@ -5,18 +5,22 @@ use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
-    LargeBinaryBuilder, LargeStringBuilder, ListBuilder, RecordBatch, RecordBatchOptions,
-    StringBuilder, StructBuilder, Time64NanosecondBuilder, TimestampMillisecondBuilder,
-    UInt32Builder,
+    FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+    Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
+    RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
+    TimestampMillisecondBuilder, UInt32Builder,
 };
-use arrow::datatypes::{DataType, Date32Type, Field, Schema, TimeUnit};
+use arrow::datatypes::{
+    DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
+use byteorder::{BigEndian, ReadBytesExt};
 use chrono::Timelike;
 use composite::CompositeType;
+use geo_types::geometry::Point;
 use sea_query::{Alias, ColumnType, SeaRc};
 use serde_json::Value;
 use snafu::prelude::*;
@@ -256,6 +260,29 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 Type::BOOL => {
                     handle_primitive_type!(builder, Type::BOOL, BooleanBuilder, bool, row, i);
                 }
+                Type::MONEY => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<Int64Builder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row
+                        .try_get::<usize, Option<MoneyFromSql>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu {
+                            pg_type: Type::MONEY,
+                        })?;
+
+                    match v {
+                        Some(v) => {
+                            builder.append_value(v.cash_value);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 Type::JSON => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
@@ -305,6 +332,66 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                                 * 1_000_000_000
                                 + i64::from(v.nanosecond());
                             builder.append_value(timestamp);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
+                Type::POINT => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<FixedSizeListBuilder<Float64Builder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    let v = row.try_get::<usize, Option<Point>>(i).with_context(|_| {
+                        FailedToGetRowValueSnafu {
+                            pg_type: Type::POINT,
+                        }
+                    })?;
+
+                    if let Some(v) = v {
+                        builder.values().append_value(v.x());
+                        builder.values().append_value(v.y());
+                        builder.append(true);
+                    } else {
+                        builder.values().append_null();
+                        builder.values().append_null();
+                        builder.append(false);
+                    }
+                }
+                Type::INTERVAL => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<IntervalMonthDayNanoBuilder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    let v: Option<IntervalFromSql> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: Type::INTERVAL,
+                        })?;
+                    match v {
+                        Some(v) => {
+                            let interval_month_day_nano = IntervalMonthDayNanoType::make_value(
+                                v.month,
+                                v.day,
+                                v.time * 1_000,
+                            );
+                            builder.append_value(interval_month_day_nano);
                         }
                         None => builder.append_null(),
                     }
@@ -495,6 +582,60 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     ListBuilder<BooleanBuilder>,
                     bool
                 ),
+                Type::BYTEA_ARRAY => handle_primitive_array_type!(
+                    Type::BYTEA_ARRAY,
+                    builder,
+                    row,
+                    i,
+                    ListBuilder<BinaryBuilder>,
+                    Vec<u8>
+                ),
+                _ if matches!(postgres_type.name(), "geometry" | "geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<BinaryBuilder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row.try_get::<usize, Option<GeometryFromSql>>(i).context(
+                        FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        },
+                    )?;
+
+                    match v {
+                        Some(v) => builder.append_value(v.wkb),
+                        None => builder.append_null(),
+                    }
+                }
+                _ if matches!(postgres_type.name(), "_geometry" | "_geography") => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<BinaryBuilder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v: Option<Vec<GeometryFromSql>> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: postgres_type.clone(),
+                        })?;
+                    match v {
+                        Some(v) => {
+                            let v = v.into_iter().map(|item| Some(item.wkb));
+                            builder.append_value(v);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 _ => match *postgres_type.kind() {
                     Kind::Composite(_) => {
                         let Some(builder) = builder else {
@@ -579,7 +720,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
     match *column_type {
         Type::INT2 => Some(DataType::Int16),
         Type::INT4 => Some(DataType::Int32),
-        Type::INT8 => Some(DataType::Int64),
+        Type::INT8 | Type::MONEY => Some(DataType::Int64),
         Type::FLOAT4 => Some(DataType::Float32),
         Type::FLOAT8 => Some(DataType::Float64),
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Some(DataType::Utf8),
@@ -594,6 +735,11 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         }
         Type::DATE => Some(DataType::Date32),
         Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
+        Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
+        Type::POINT => Some(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            2,
+        )),
         Type::INT2_ARRAY => Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
@@ -629,6 +775,15 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
             DataType::Boolean,
             true,
         )))),
+        Type::BYTEA_ARRAY => Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Binary,
+            true,
+        )))),
+        _ if matches!(column_type.name(), "geometry" | "geography") => Some(DataType::Binary),
+        _ if matches!(column_type.name(), "_geometry" | "_geography") => Some(DataType::List(
+            Arc::new(Field::new("item", DataType::Binary, true)),
+        )),
         _ => match *column_type.kind() {
             Kind::Composite(ref fields) => {
                 let mut arrow_fields = Vec::new();
@@ -759,11 +914,77 @@ impl<'a> FromSql<'a> for BigDecimalFromSql {
     }
 }
 
+// interval_send - Postgres C (https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/timestamp.c#L1032)
+// interval values are internally stored as three integral fields: months, days, and microseconds
+struct IntervalFromSql {
+    time: i64,
+    day: i32,
+    month: i32,
+}
+
+impl<'a> FromSql<'a> for IntervalFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+
+        let time = cursor.read_i64::<BigEndian>()?;
+        let day = cursor.read_i32::<BigEndian>()?;
+        let month = cursor.read_i32::<BigEndian>()?;
+
+        Ok(IntervalFromSql { time, day, month })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::INTERVAL)
+    }
+}
+
+// cash_send - Postgres C (https://github.com/postgres/postgres/blob/bd8fe12ef3f727ed3658daf9b26beaf2b891e9bc/src/backend/utils/adt/cash.c#L603)
+struct MoneyFromSql {
+    cash_value: i64,
+}
+
+impl<'a> FromSql<'a> for MoneyFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+        let cash_value = cursor.read_i64::<BigEndian>()?;
+        Ok(MoneyFromSql { cash_value })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::MONEY)
+    }
+}
+
+pub struct GeometryFromSql<'a> {
+    wkb: &'a [u8],
+}
+
+impl<'a> FromSql<'a> for GeometryFromSql<'a> {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(GeometryFromSql { wkb: raw })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "geometry" | "geography")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use chrono::NaiveTime;
+    use geo_types::{point, polygon, Geometry};
+    use geozero::{CoordDimensions, ToWkb};
     use std::str::FromStr;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -793,6 +1014,58 @@ mod tests {
     }
 
     #[test]
+    fn test_interval_from_sql() {
+        let positive_time: i64 = 123_123;
+        let positive_day: i32 = 10;
+        let positive_month: i32 = 2;
+
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_time.to_be_bytes());
+        positive_raw.extend_from_slice(&positive_day.to_be_bytes());
+        positive_raw.extend_from_slice(&positive_month.to_be_bytes());
+
+        let positive_result = IntervalFromSql::from_sql(&Type::INTERVAL, positive_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(positive_result.day, positive_day);
+        assert_eq!(positive_result.time, positive_time);
+        assert_eq!(positive_result.month, positive_month);
+
+        let negative_time: i64 = -123_123;
+        let negative_day: i32 = -10;
+        let negative_month: i32 = -2;
+
+        let mut negative_raw: Vec<u8> = Vec::new();
+        negative_raw.extend_from_slice(&negative_time.to_be_bytes());
+        negative_raw.extend_from_slice(&negative_day.to_be_bytes());
+        negative_raw.extend_from_slice(&negative_month.to_be_bytes());
+
+        let negative_result = IntervalFromSql::from_sql(&Type::INTERVAL, negative_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(negative_result.day, negative_day);
+        assert_eq!(negative_result.time, negative_time);
+        assert_eq!(negative_result.month, negative_month);
+    }
+
+    #[test]
+    fn test_money_from_sql() {
+        let positive_cash_value: i64 = 123;
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_cash_value.to_be_bytes());
+
+        let positive_result = MoneyFromSql::from_sql(&Type::MONEY, positive_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(positive_result.cash_value, positive_cash_value);
+
+        let negative_cash_value: i64 = -123;
+        let mut negative_raw: Vec<u8> = Vec::new();
+        negative_raw.extend_from_slice(&negative_cash_value.to_be_bytes());
+
+        let negative_result = MoneyFromSql::from_sql(&Type::MONEY, negative_raw.as_slice())
+            .expect("Failed to run FromSql");
+        assert_eq!(negative_result.cash_value, negative_cash_value);
+    }
+
+    #[test]
     fn test_chrono_naive_time_to_time64nanosecond() {
         let chrono_naive_vec = vec![
             NaiveTime::from_hms_opt(10, 30, 00).unwrap_or_default(),
@@ -813,5 +1086,49 @@ mod tests {
         }
         let converted_result = builder.finish();
         assert_eq!(converted_result, time_array);
+    }
+
+    #[test]
+    fn test_geometry_from_sql() {
+        let positive_geometry = Geometry::from(point! { x: 181.2, y: 51.79 })
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
+
+        let positive_geometry = Geometry::from(polygon![
+            (x: -111., y: 45.),
+            (x: -111., y: 41.),
+            (x: -104., y: 41.),
+            (x: -104., y: 45.),
+        ])
+        .to_wkb(CoordDimensions::xy())
+        .unwrap();
+        let mut positive_raw: Vec<u8> = Vec::new();
+        positive_raw.extend_from_slice(&positive_geometry);
+
+        let positive_result = GeometryFromSql::from_sql(
+            &Type::new(
+                "geometry".to_owned(),
+                16462,
+                Kind::Simple,
+                "public".to_owned(),
+            ),
+            positive_raw.as_slice(),
+        )
+        .expect("Failed to run FromSql");
+        assert_eq!(positive_result.wkb, positive_geometry);
     }
 }

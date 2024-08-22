@@ -1,8 +1,10 @@
 use arrow::{
     array::{array, Array, RecordBatch},
-    datatypes::{DataType, Field, SchemaRef, TimeUnit},
+    datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
+    util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
+use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
@@ -216,6 +218,20 @@ impl InsertBuilder {
                             );
                         }
                     }
+                    DataType::Decimal256(_, scale) => {
+                        let array = column.as_any().downcast_ref::<array::Decimal256Array>();
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            let bigint =
+                                BigInt::from_signed_bytes_le(&valid_array.value(row).to_le_bytes());
+
+                            row_values.push(BigDecimal::new(bigint, i64::from(*scale)).into());
+                        }
+                    }
                     DataType::Date32 => {
                         let array = column.as_any().downcast_ref::<array::Date32Array>();
                         if let Some(valid_array) = array {
@@ -408,96 +424,29 @@ impl InsertBuilder {
                                 continue;
                             }
                             let list_array = valid_array.value(row);
-                            match list_type.data_type() {
-                                DataType::Int8 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Int8Array,
-                                    i8,
-                                    "int2[]"
-                                ),
-                                DataType::Int16 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Int16Array,
-                                    i16,
-                                    "int2[]"
-                                ),
-                                DataType::Int32 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Int32Array,
-                                    i32,
-                                    "int4[]"
-                                ),
-                                DataType::Int64 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Int64Array,
-                                    i64,
-                                    "int8[]"
-                                ),
-                                DataType::Float32 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Float32Array,
-                                    f32,
-                                    "float4[]"
-                                ),
-                                DataType::Float64 => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::Float64Array,
-                                    f64,
-                                    "float8[]"
-                                ),
-                                DataType::Utf8 => {
-                                    let mut list_values: Vec<String> = vec![];
-                                    for i in 0..list_array.len() {
-                                        let int_array = list_array
-                                            .as_any()
-                                            .downcast_ref::<array::StringArray>();
-                                        if let Some(valid_int_array) = int_array {
-                                            list_values.push(valid_int_array.value(i).to_string());
-                                        }
-                                    }
-                                    let expr: SimpleExpr = list_values.into();
-                                    // We must cast here in case the array is empty which SeaQuery does not handle.
-                                    row_values.push(expr.cast_as(Alias::new("text[]")));
-                                }
-                                DataType::LargeUtf8 => {
-                                    let mut list_values: Vec<String> = vec![];
-                                    for i in 0..list_array.len() {
-                                        let int_array = list_array
-                                            .as_any()
-                                            .downcast_ref::<array::LargeStringArray>();
-                                        if let Some(valid_int_array) = int_array {
-                                            list_values.push(valid_int_array.value(i).to_string());
-                                        }
-                                    }
-                                    let expr: SimpleExpr = list_values.into();
-                                    // We must cast here in case the array is empty which SeaQuery does not handle.
-                                    row_values.push(expr.cast_as(Alias::new("text[]")));
-                                }
-                                DataType::Boolean => push_list_values!(
-                                    list_type.data_type(),
-                                    list_array,
-                                    row_values,
-                                    array::BooleanArray,
-                                    bool,
-                                    "boolean[]"
-                                ),
-                                _ => unimplemented!(
-                                    "Data type mapping not implemented for {}",
-                                    list_type.data_type()
-                                ),
+                            insert_list_into_row_values(list_array, list_type, &mut row_values);
+                        }
+                    }
+                    DataType::LargeList(list_type) => {
+                        let array = column.as_any().downcast_ref::<array::LargeListArray>();
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
                             }
+                            let list_array = valid_array.value(row);
+                            insert_list_into_row_values(list_array, list_type, &mut row_values);
+                        }
+                    }
+                    DataType::FixedSizeList(list_type, _) => {
+                        let array = column.as_any().downcast_ref::<array::FixedSizeListArray>();
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+                            let list_array = valid_array.value(row);
+                            insert_list_into_row_values(list_array, list_type, &mut row_values);
                         }
                     }
                     DataType::Binary => {
@@ -538,6 +487,80 @@ impl InsertBuilder {
                             row_values.push(valid_array.value(row).into());
                         }
                     }
+                    DataType::Interval(interval_unit) => match interval_unit {
+                        IntervalUnit::DayTime => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalDayTimeArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let days = valid_array.value(row).days;
+                                        let milliseconds = valid_array.value(row).milliseconds;
+                                        format!("{days} days {milliseconds} milliseconds")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        IntervalUnit::YearMonth => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalYearMonthArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row);
+                                        format!("{months} months")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                        // The smallest unit in Postgres for interval is microsecond
+                        // Cast with loss of precision in nano second
+                        IntervalUnit::MonthDayNano => {
+                            let array = column
+                                .as_any()
+                                .downcast_ref::<array::IntervalMonthDayNanoArray>();
+
+                            if let Some(valid_array) = array {
+                                if valid_array.is_null(row) {
+                                    row_values.push(Keyword::Null.into());
+                                    continue;
+                                }
+
+                                let interval_str =
+                                    if let Ok(str) = array_value_to_string(valid_array, row) {
+                                        str
+                                    } else {
+                                        let months = valid_array.value(row).months;
+                                        let days = valid_array.value(row).days;
+                                        let nanoseconds = valid_array.value(row).nanoseconds;
+                                        let micros = nanoseconds / 1_000;
+                                        format!("{months} months {days} days {micros} microseconds")
+                                    };
+
+                                row_values.push(interval_str.into());
+                            }
+                        }
+                    },
                     DataType::Struct(_) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
@@ -871,6 +894,114 @@ fn insert_timestamp_into_row_values(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
+fn insert_list_into_row_values(
+    list_array: Arc<dyn Array>,
+    list_type: &Arc<Field>,
+    row_values: &mut Vec<SimpleExpr>,
+) {
+    match list_type.data_type() {
+        DataType::Int8 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Int8Array,
+            i8,
+            "int2[]"
+        ),
+        DataType::Int16 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Int16Array,
+            i16,
+            "int2[]"
+        ),
+        DataType::Int32 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Int32Array,
+            i32,
+            "int4[]"
+        ),
+        DataType::Int64 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Int64Array,
+            i64,
+            "int8[]"
+        ),
+        DataType::Float32 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Float32Array,
+            f32,
+            "float4[]"
+        ),
+        DataType::Float64 => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::Float64Array,
+            f64,
+            "float8[]"
+        ),
+        DataType::Utf8 => {
+            let mut list_values: Vec<String> = vec![];
+            for i in 0..list_array.len() {
+                let int_array = list_array.as_any().downcast_ref::<array::StringArray>();
+                if let Some(valid_int_array) = int_array {
+                    list_values.push(valid_int_array.value(i).to_string());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            // We must cast here in case the array is empty which SeaQuery does not handle.
+            row_values.push(expr.cast_as(Alias::new("text[]")));
+        }
+        DataType::LargeUtf8 => {
+            let mut list_values: Vec<String> = vec![];
+            for i in 0..list_array.len() {
+                let int_array = list_array
+                    .as_any()
+                    .downcast_ref::<array::LargeStringArray>();
+                if let Some(valid_int_array) = int_array {
+                    list_values.push(valid_int_array.value(i).to_string());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            // We must cast here in case the array is empty which SeaQuery does not handle.
+            row_values.push(expr.cast_as(Alias::new("text[]")));
+        }
+        DataType::Boolean => push_list_values!(
+            list_type.data_type(),
+            list_array,
+            row_values,
+            array::BooleanArray,
+            bool,
+            "boolean[]"
+        ),
+        DataType::Binary => {
+            let mut list_values: Vec<Vec<u8>> = Vec::new();
+            for i in 0..list_array.len() {
+                let temp_array = list_array.as_any().downcast_ref::<array::BinaryArray>();
+                if let Some(valid_array) = temp_array {
+                    list_values.push(valid_array.value(i).to_vec());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            // We must cast here in case the array is empty which SeaQuery does not handle.
+            row_values.push(expr.cast_as(Alias::new("bytea[]")));
+        }
+        _ => unimplemented!(
+            "Data type mapping not implemented for {}",
+            list_type.data_type()
+        ),
+    }
+}
+
 #[allow(clippy::cast_sign_loss)]
 pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
     match data_type {
@@ -887,15 +1018,20 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text,
         DataType::Boolean => ColumnType::Boolean,
         #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
-        DataType::Decimal128(p, s) => ColumnType::Decimal(Some((u32::from(*p), *s as u32))),
+        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
+            ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
+        }
         DataType::Timestamp(_unit, _time_zone) => ColumnType::Timestamp,
         DataType::Date32 | DataType::Date64 => ColumnType::Date,
         DataType::Time64(_unit) | DataType::Time32(_unit) => ColumnType::Time,
-        DataType::List(list_type) => {
+        DataType::List(list_type)
+        | DataType::LargeList(list_type)
+        | DataType::FixedSizeList(list_type, _) => {
             ColumnType::Array(map_data_type_to_column_type(list_type.data_type()).into())
         }
         DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
+        DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
         _ => unimplemented!("Data type mapping not implemented for {:?}", data_type),
     }
