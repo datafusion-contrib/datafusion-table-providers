@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 // Helper functions to create arrow record batches of different types
 
-// Binary/LargeBinary/FixedSizeBinaryå
+// Binary/LargeBinary/FixedSizeBinary
 pub(crate) fn get_arrow_binary_record_batch() -> (RecordBatch, SchemaRef) {
     // Binary/LargeBinary/FixedSizeBinary Array
     let values: Vec<&[u8]> = vec![b"one", b"two", b""];
