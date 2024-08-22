@@ -87,15 +87,14 @@ async fn arrow_sqlite_round_trip(
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
-#[ignore] // TODO: struct types are broken in SQLite
+#[ignore] // TODO: struct types are broken in SQLite - Data type mapping not implemented for Struct
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-#[ignore] // TODO: decimal types are broken in SQLite
+#[ignore] // TODO: decimal types are broken in SQLite - precision cannot be larger than 16
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // TODO: interval types are broken in SQLite
+#[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
-#[ignore] // TODO: duration types are broken in SQLite
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
-#[ignore] // TODO: list types are broken in SQLite
+#[ignore] // TODO: list types are broken in SQLite - Array is not available in Sqlite.
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]

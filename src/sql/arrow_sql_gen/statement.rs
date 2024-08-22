@@ -310,6 +310,20 @@ impl InsertBuilder {
                         }
                         _ => unreachable!(),
                     },
+                    DataType::Duration(time_unit) => match time_unit {
+                        TimeUnit::Second => {
+                            push_value!(row_values, column, row, DurationSecondArray);
+                        }
+                        TimeUnit::Microsecond => {
+                            push_value!(row_values, column, row, DurationMicrosecondArray);
+                        }
+                        TimeUnit::Millisecond => {
+                            push_value!(row_values, column, row, DurationMillisecondArray);
+                        }
+                        TimeUnit::Nanosecond => {
+                            push_value!(row_values, column, row, DurationNanosecondArray);
+                        }
+                    },
                     DataType::Time64(time_unit) => match time_unit {
                         TimeUnit::Nanosecond => {
                             let array = column
@@ -1090,7 +1104,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Int8 => ColumnType::TinyInteger,
         DataType::Int16 => ColumnType::SmallInteger,
         DataType::Int32 => ColumnType::Integer,
-        DataType::Int64 => ColumnType::BigInteger,
+        DataType::Int64 | DataType::Duration(_) => ColumnType::BigInteger,
         DataType::UInt8 => ColumnType::TinyUnsigned,
         DataType::UInt16 => ColumnType::SmallUnsigned,
         DataType::UInt32 => ColumnType::Unsigned,
