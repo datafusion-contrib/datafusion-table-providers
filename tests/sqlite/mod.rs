@@ -83,7 +83,6 @@ async fn arrow_sqlite_round_trip(
 #[case::int(get_arrow_int_record_batch(), "int")]
 #[case::float(get_arrow_float_record_batch(), "float")]
 #[case::utf8(get_arrow_utf8_record_batch(), "utf8")]
-#[ignore] // TODO: Time types are broken in SQLite
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
