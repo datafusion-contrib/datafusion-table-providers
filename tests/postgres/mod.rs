@@ -76,13 +76,30 @@ async fn arrow_postgres_round_trip(
         record_batch[0].columns()
     );
 
-    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+    let mut result_ok = false;
+    let mut result_bacth: Option<RecordBatch> = None;
+
+    match try_cast_to(record_batch[0].clone(), source_schema) {
+        Ok(records) => {
+            result_bacth = Some(records);
+        }
+        Err(e) => {
+            // Known type loss for interval round trip conversion through postgres - Postgres exported value is always in precision of month day millisecond
+            if table_name == "interval_types" {
+                result_ok = record_batch[0] == get_pg_interval_expected_result();
+            }
+        }
+    };
+
+    if let Some(result) = result_bacth {
+        result_ok = result == arrow_record
+    }
 
     // Check results
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-    assert_eq!(casted_record, arrow_record);
+    assert_eq!(result_ok, true);
 }
 
 #[derive(Debug)]
@@ -118,7 +135,6 @@ async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // TODO: Custom verification logic - Interval cast has known type loss through postgres
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[ignore] // TODO: duration types are broken in Postgres
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
