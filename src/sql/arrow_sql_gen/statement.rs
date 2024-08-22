@@ -4,6 +4,7 @@ use arrow::{
     util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
+use chrono::{DateTime, FixedOffset};
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
@@ -360,7 +361,7 @@ impl InsertBuilder {
                         }
                         _ => unreachable!(),
                     },
-                    DataType::Timestamp(TimeUnit::Second, _) => {
+                    DataType::Timestamp(TimeUnit::Second, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampSecondArray>();
@@ -370,13 +371,27 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp(valid_array.value(row)),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time = DateTime::from_timestamp_nanos(
+                                    valid_array.value(row) * 1_000_000_000,
+                                )
+                                .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp(valid_array.value(row)),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampMillisecondArray>();
@@ -386,15 +401,29 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(
-                                    i128::from(valid_array.value(row)) * 1_000_000,
-                                ),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time = DateTime::from_timestamp_nanos(
+                                    valid_array.value(row) * 1_000_000,
+                                )
+                                .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampMicrosecondArray>();
@@ -404,15 +433,28 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(
-                                    i128::from(valid_array.value(row)) * 1_000,
-                                ),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time =
+                                    DateTime::from_timestamp_nanos(valid_array.value(row) * 1_000)
+                                        .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampNanosecondArray>();
@@ -422,12 +464,24 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(i128::from(
-                                    valid_array.value(row),
-                                )),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time =
+                                    DateTime::from_timestamp_nanos(valid_array.value(row)).to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
                     DataType::List(list_type) => {
@@ -908,6 +962,34 @@ fn insert_timestamp_into_row_values(
     }
 }
 
+// Reference: https://github.com/apache/arrow-rs/blob/6c59b7637592e4b67b18762b8313f91086c0d5d8/arrow-array/src/timezone.rs#L25
+#[allow(clippy::cast_lossless)]
+fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
+    let bytes = tz.as_bytes();
+
+    let mut values = match bytes.len() {
+        // [+-]XX:XX
+        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
+        // [+-]XXXX
+        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
+        // [+-]XX
+        3 => [bytes[1], bytes[2], b'0', b'0'],
+        _ => return None,
+    };
+    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if values.iter().any(|x| *x > 9) {
+        return None;
+    }
+    let secs =
+        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
+
+    match bytes[0] {
+        b'+' => FixedOffset::east_opt(secs),
+        b'-' => FixedOffset::west_opt(secs),
+        _ => None,
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn insert_list_into_row_values(
     list_array: Arc<dyn Array>,
@@ -1035,7 +1117,12 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
             ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
         }
-        DataType::Timestamp(_unit, _time_zone) => ColumnType::Timestamp,
+        DataType::Timestamp(_unit, time_zone) => {
+            if time_zone.is_some() {
+                return ColumnType::TimestampWithTimeZone;
+            }
+            ColumnType::Timestamp
+        }
         DataType::Date32 | DataType::Date64 => ColumnType::Date,
         DataType::Time64(_unit) | DataType::Time32(_unit) => ColumnType::Time,
         DataType::List(list_type)
