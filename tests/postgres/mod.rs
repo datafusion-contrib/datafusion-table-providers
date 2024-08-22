@@ -110,7 +110,6 @@ async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
-#[ignore] // TODO: duration types are broken in Postgres
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
