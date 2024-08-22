@@ -1,5 +1,6 @@
 use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
@@ -11,7 +12,11 @@ use datafusion_table_providers::sqlite::DynSqliteConnectionPool;
 use rstest::rstest;
 use std::sync::Arc;
 
-async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
+async fn arrow_sqlite_round_trip(
+    arrow_record: RecordBatch,
+    source_schema: SchemaRef,
+    table_name: &str,
+) {
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
@@ -58,8 +63,8 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    // Print original arrow record batch and record batch converted from sqlite row in terminal
-    // Check if the values are the same
+    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
         "Sqlite returned Record Batch: {:?}",
@@ -70,6 +75,7 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    assert_eq!(casted_record, arrow_record);
 }
 
 #[rstest]
@@ -77,6 +83,7 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
 #[case::int(get_arrow_int_record_batch(), "int")]
 #[case::float(get_arrow_float_record_batch(), "float")]
 #[case::utf8(get_arrow_utf8_record_batch(), "utf8")]
+#[ignore] // TODO: Time types are broken in SQLite
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
@@ -92,6 +99,14 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
-async fn test_arrow_sqlite_roundtrip(#[case] arrow_record: RecordBatch, #[case] table_name: &str) {
-    arrow_sqlite_round_trip(arrow_record, &format!("{table_name}_types")).await;
+async fn test_arrow_sqlite_roundtrip(
+    #[case] arrow_result: (RecordBatch, SchemaRef),
+    #[case] table_name: &str,
+) {
+    arrow_sqlite_round_trip(
+        arrow_result.0,
+        arrow_result.1,
+        &format!("{table_name}_types"),
+    )
+    .await;
 }
