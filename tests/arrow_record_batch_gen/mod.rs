@@ -4,11 +4,12 @@ use arrow::{
     compute::cast,
     datatypes::{
         i256, DataType, Date32Type, Date64Type, Field, Fields, IntervalDayTime,
-        IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
+        IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, TimeUnit,
     },
 };
 use chrono::NaiveDate;
 use std::sync::Arc;
+use types::IntervalDayTimeType;
 
 // Helper functions to create arrow record batches of different types
 
@@ -562,12 +563,96 @@ pub(crate) fn try_cast_to(
         .enumerate()
         .map(|(i, expected_field)| {
             let record_batch_col = record_batch.column(i);
-
-            return cast(&Arc::clone(record_batch_col), expected_field.data_type())
-                .map_err(|e| "Failed to cast".to_string());
+            match (record_batch_col.data_type(), expected_field.data_type()) {
+                (
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Interval(IntervalUnit::YearMonth),
+                ) => {
+                    return cast_interval_monthdaynano_to_yearmonth(&Arc::clone(record_batch_col))
+                        .map_err(|e| "Failed to cast to Interval YearMonth".to_string());
+                }
+                (
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Interval(IntervalUnit::DayTime),
+                ) => {
+                    return cast_interval_monthdaynano_to_daytime(&Arc::clone(record_batch_col))
+                        .map_err(|e| "Failed to cast to Interval DayTime".to_string());
+                }
+                _ => {
+                    return cast(&Arc::clone(record_batch_col), expected_field.data_type())
+                        .map_err(|e| "Failed to cast".to_string());
+                }
+            }
         })
         .collect::<Result<Vec<Arc<dyn Array>>, String>>()?;
 
     RecordBatch::try_new(expected_schema, cols)
-        .map_err(|e| "Fail to create casted record batch".to_string())
+        .map_err(|e| "Failed to cast record batch".to_string())
+}
+
+// This function is only safe to use given that original schema is Interval(YearMonth)
+fn cast_interval_monthdaynano_to_yearmonth(
+    interval_monthdaynano_array: &dyn Array,
+) -> Result<ArrayRef, String> {
+    let interval_monthdaynano_array = interval_monthdaynano_array
+        .as_any()
+        .downcast_ref::<IntervalMonthDayNanoArray>()
+        .ok_or_else(|| "Failed to downcast to IntervalMontheDayNano Array".to_string())?;
+
+    let mut interval_yearmonth_builder =
+        IntervalYearMonthBuilder::with_capacity(interval_monthdaynano_array.len());
+
+    for value in interval_monthdaynano_array {
+        match value {
+            None => interval_yearmonth_builder.append_null(),
+            Some(interval_monthdaynano_value) => {
+                if (interval_monthdaynano_value.days != 0
+                    || interval_monthdaynano_value.nanoseconds != 0)
+                {
+                    return Err(
+                        "Interval MonthDayNano can't be converted to Interval YearMonth"
+                            .to_string(),
+                    );
+                }
+                interval_yearmonth_builder.append_value(IntervalYearMonthType::make_value(
+                    0,
+                    interval_monthdaynano_value.months,
+                ));
+            }
+        }
+    }
+
+    Ok(Arc::new(interval_yearmonth_builder.finish()))
+}
+
+// This function is only safe to use given that original schema is Interval(YearMonth)
+fn cast_interval_monthdaynano_to_daytime(
+    interval_monthdaynano_array: &dyn Array,
+) -> Result<ArrayRef, String> {
+    let interval_monthdaynano_array = interval_monthdaynano_array
+        .as_any()
+        .downcast_ref::<IntervalMonthDayNanoArray>()
+        .ok_or_else(|| "Failed to downcast to IntervalMontheDayNano Array".to_string())?;
+
+    let mut interval_daytime_builder =
+        IntervalDayTimeBuilder::with_capacity(interval_monthdaynano_array.len());
+
+    for value in interval_monthdaynano_array {
+        match value {
+            None => interval_daytime_builder.append_null(),
+            Some(interval_monthdaynano_value) => {
+                if (interval_monthdaynano_value.months != 0) {
+                    return Err(
+                        "Interval MonthDayNano can't be converted to Interval DayTime".to_string(),
+                    );
+                }
+                interval_daytime_builder.append_value(IntervalDayTimeType::make_value(
+                    interval_monthdaynano_value.days,
+                    (interval_monthdaynano_value.nanoseconds / 1_000_000) as i32,
+                ));
+            }
+        }
+    }
+
+    Ok(Arc::new(interval_daytime_builder.finish()))
 }

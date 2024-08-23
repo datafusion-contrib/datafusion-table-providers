@@ -76,30 +76,14 @@ async fn arrow_postgres_round_trip(
         record_batch[0].columns()
     );
 
-    let mut result_ok = false;
-    let mut result_bacth: Option<RecordBatch> = None;
-
-    match try_cast_to(record_batch[0].clone(), source_schema) {
-        Ok(records) => {
-            result_bacth = Some(records);
-        }
-        Err(e) => {
-            // Known type loss for interval round trip conversion through postgres - Postgres exported value is always in precision of month day millisecond
-            if table_name == "interval_types" {
-                result_ok = record_batch[0] == get_pg_interval_expected_result();
-            }
-        }
-    };
-
-    if let Some(result) = result_bacth {
-        result_ok = result == arrow_record
-    }
+    let casted_result =
+        try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
     // Check results
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-    assert_eq!(result_ok, true);
+    assert_eq!(arrow_record, casted_result);
 }
 
 #[derive(Debug)]
