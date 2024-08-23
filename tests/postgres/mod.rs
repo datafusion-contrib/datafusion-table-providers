@@ -8,6 +8,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion_federation::schema_cast::record_convert;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
@@ -76,8 +77,8 @@ async fn arrow_postgres_round_trip(
         record_batch[0].columns()
     );
 
-    let casted_result =
-        try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
+    let casted_result = record_convert::try_cast_to(record_batch[0].clone(), source_schema)
+        .expect("Failed to cast record batch");
 
     // Check results
     assert_eq!(record_batch.len(), 1);

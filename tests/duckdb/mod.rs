@@ -7,6 +7,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion_federation::schema_cast::record_convert;
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use rstest::rstest;
 use std::collections::HashMap;
@@ -60,7 +61,8 @@ async fn arrow_duckdb_round_trip(
         .expect("DataFrame should be created from query");
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
-    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+    let casted_record =
+        record_convert::try_cast_to(record_batch[0].clone(), source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(

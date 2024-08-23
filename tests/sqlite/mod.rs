@@ -2,6 +2,7 @@ use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+use datafusion_federation::schema_cast::record_convert;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
@@ -63,7 +64,8 @@ async fn arrow_sqlite_round_trip(
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+    let casted_record =
+        record_convert::try_cast_to(record_batch[0].clone(), source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
