@@ -45,7 +45,7 @@ url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = "0.1"
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "07a7513757d3125f8db25eb377bc128ffa2ebabf" }
 itertools = "0.13.0"
 geo-types = "0.7.13"
 
@@ -67,5 +67,4 @@ sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
 
 [patch.crates-io]
-datafusion-federation = { path = "../datafusion-federation/datafusion-federation" }
-datafusion-federation-sql = { path = "../datafusion-federation/sources/sql" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "07a7513757d3125f8db25eb377bc128ffa2ebabf" }
