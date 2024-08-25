@@ -11,6 +11,7 @@ use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::SqliteDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,
@@ -138,6 +139,7 @@ fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
+    #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
         _state: &dyn Session,
@@ -241,13 +243,16 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "sqlite",
-            &dyn_pool,
-            Arc::clone(&schema),
-            TableReference::bare(name.clone()),
-            Some(Engine::SQLite),
-        ));
+        let read_provider = Arc::new(
+            SqlTable::new_with_schema(
+                "sqlite",
+                &dyn_pool,
+                Arc::clone(&schema),
+                TableReference::bare(name.clone()),
+                Some(Engine::SQLite),
+            )
+            .with_dialect(Arc::new(SqliteDialect {})),
+        );
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
