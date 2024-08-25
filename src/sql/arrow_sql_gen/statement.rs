@@ -1,10 +1,10 @@
 use arrow::{
     array::{
-        array, Array, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        array, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
-    datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
+    datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
@@ -753,12 +753,22 @@ impl InsertBuilder {
                             }
                         }
                     },
-                    DataType::Struct(_) => {
+                    DataType::Struct(fields) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
                         if let Some(valid_array) = array {
                             if valid_array.is_null(row) {
                                 row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            if use_json_insert_for_type(column_data_type, query_builder) {
+                                insert_struct_into_row_values_json(
+                                    fields,
+                                    valid_array,
+                                    row,
+                                    &mut row_values,
+                                )?;
                                 continue;
                             }
 
@@ -1307,6 +1317,41 @@ fn insert_list_into_row_values_json(
     };
 
     let expr: SimpleExpr = Expr::value(json_string);
+    row_values.push(expr);
+
+    Ok(())
+}
+
+fn insert_struct_into_row_values_json(
+    fields: &Fields,
+    array: &StructArray,
+    row_index: usize,
+    row_values: &mut Vec<SimpleExpr>,
+) -> Result<()> {
+    // The length of each column in a StructArray is the same as the length of the StructArray itself.
+    // The presence of null values does not change the length of the columns (affects the validity bitmap only).
+    // Similar to Recordbatch slice: https://github.com/apache/arrow-rs/blob/855666d9e9283c1ef11648762fe92c7c188b68f1/arrow-array/src/record_batch.rs#L375
+    let single_row_columns: Vec<ArrayRef> = (0..array.num_columns())
+        .map(|i| array.column(i).slice(row_index, 1))
+        .collect();
+
+    let batch =
+        RecordBatch::try_new(Arc::new(Schema::new(fields.clone())), single_row_columns).unwrap();
+
+    let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
+    writer.write(&batch).map_err(|e| Error::FailedToCreateInsertStatement {
+        source: Box::new(e),
+    })?;
+    writer.finish().map_err(|e| Error::FailedToCreateInsertStatement {
+        source: Box::new(e),
+    })?;
+    let json_bytes = writer.into_inner();
+
+    let json = String::from_utf8(json_bytes).map_err(|e| Error::FailedToCreateInsertStatement {
+        source: Box::new(e),
+    })?;
+
+    let expr: SimpleExpr = Expr::value(json);
     row_values.push(expr);
 
     Ok(())

@@ -2,6 +2,7 @@ use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
