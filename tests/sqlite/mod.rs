@@ -87,7 +87,6 @@ async fn arrow_sqlite_round_trip(
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
-#[ignore] // TODO: struct types are broken in SQLite - Data type mapping not implemented for Struct
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
 // SQLite only supports up to 16 precision for decimal through REAL type.
 #[case::decimal(get_sqlite_arrow_decimal_record_batch(), "decimal")]
