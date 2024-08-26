@@ -1335,8 +1335,10 @@ fn insert_struct_into_row_values_json(
         .map(|i| array.column(i).slice(row_index, 1))
         .collect();
 
-    let batch =
-        RecordBatch::try_new(Arc::new(Schema::new(fields.clone())), single_row_columns).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields.clone())), single_row_columns)
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
 
     let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
     writer.write(&batch).map_err(|e| Error::FailedToCreateInsertStatement {
