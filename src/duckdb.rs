@@ -32,8 +32,10 @@ use std::{cmp, collections::HashMap, sync::Arc};
 
 use self::{creator::TableCreator, sql_table::DuckDBTable, write::DuckDBTableWriter};
 
-mod creator;
+#[cfg(feature = "duckdb-federation")]
 mod federation;
+
+mod creator;
 mod sql_table;
 pub mod write;
 
@@ -270,7 +272,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
         ));
 
+        #[cfg(feature = "duckdb-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+
         Ok(DuckDBTableWriter::create(
             read_provider,
             duckdb,
@@ -443,7 +447,10 @@ impl DuckDBTableFactory {
         let table_provider = Arc::new(DuckDBTable::new_with_schema(
             "duckdb", &dyn_pool, schema, tbl_ref, None, cte,
         ));
+
+        #[cfg(feature = "duckdb-federation")]
         let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
+
         Ok(table_provider)
     }
 

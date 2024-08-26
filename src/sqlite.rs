@@ -258,7 +258,9 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .context(DanglingReferenceToSqliteSnafu)
             .map_err(to_datafusion_error)?;
 
+        #[cfg(feature = "sqlite-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+
         Ok(SqliteTableWriter::create(
             read_provider,
             sqlite,
