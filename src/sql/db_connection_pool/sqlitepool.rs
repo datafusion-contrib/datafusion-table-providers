@@ -166,24 +166,29 @@ impl SqliteConnectionPool {
             .context(ConnectionPoolSnafu)?;
 
             // database attachments are only supported for file-mode databases
-            let attach_databases = self
-                .attach_databases
-                .iter()
-                .enumerate()
-                .map(|(i, db)| format!("ATTACH DATABASE '{db}' AS attachment_{i}"));
+            #[cfg(feature = "sqlite-federation")]
+            {
+                let attach_databases = self
+                    .attach_databases
+                    .iter()
+                    .enumerate()
+                    .map(|(i, db)| format!("ATTACH DATABASE '{db}' AS attachment_{i}"));
 
-            for attachment in attach_databases {
-                if attachment == *self.path {
-                    continue;
+                for attachment in attach_databases {
+                    if attachment == *self.path {
+                        continue;
+                    }
+
+                    conn.call(move |conn| {
+                        conn.execute(&attachment, [])?;
+                        Ok(())
+                    })
+                    .await
+                    .context(ConnectionPoolSnafu)?;
                 }
 
-                conn.call(move |conn| {
-                    conn.execute(&attachment, [])?;
-                    Ok(())
-                })
-                .await
-                .context(ConnectionPoolSnafu)?;
-            }
+                Ok::<(), super::Error>(())
+            }?;
         }
 
         Ok(())
