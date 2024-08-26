@@ -2,12 +2,13 @@ use arrow::array::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{
-        i256, DataType, Date32Type, Date64Type, Field, IntervalDayTime,
-        IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
+        i256, DataType, Date32Type, Date64Type, Field, Fields, IntervalDayTime,
+        IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, TimeUnit,
     },
 };
 use chrono::NaiveDate;
 use std::sync::Arc;
+use types::IntervalDayTimeType;
 
 // Helper functions to create arrow record batches of different types
 
@@ -532,48 +533,6 @@ pub(crate) fn get_arrow_bytea_array_record_batch() -> (RecordBatch, SchemaRef) {
             .expect("Failed to created arrow bytea array record batch");
 
     (record_batch, schema)
-}
-
-pub(crate) fn get_pg_interval_expected_result() -> RecordBatch {
-    let col1 = IntervalMonthDayNanoArray::from(vec![
-        IntervalMonthDayNano::new(0, 1, 1000000000),
-        IntervalMonthDayNano::new(0, 33, 0),
-        IntervalMonthDayNano::new(0, 0, 43200000000000),
-    ]);
-    let col2 = IntervalMonthDayNanoArray::from(vec![
-        IntervalMonthDayNano::new(1, 2, 1000),
-        IntervalMonthDayNano::new(12, 1, 0),
-        IntervalMonthDayNano::new(0, 0, 12 * 1000 * 1000),
-    ]);
-    let col3 = IntervalMonthDayNanoArray::from(vec![
-        IntervalMonthDayNano::new(2, 0, 0),
-        IntervalMonthDayNano::new(25, 0, 0),
-        IntervalMonthDayNano::new(-1, 0, 0),
-    ]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "interval_daytime",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        ),
-        Field::new(
-            "interval_monthday_nano",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        ),
-        Field::new(
-            "interval_yearmonth",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        ),
-    ]));
-
-    RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(col1), Arc::new(col2), Arc::new(col3)],
-    )
-    .expect("Failed to created arrow interval record batch")
 }
 
 // Custom Test Case for Sqlite <-> Arrow Decimal Roundtrip
