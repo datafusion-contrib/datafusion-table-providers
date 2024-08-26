@@ -4,6 +4,8 @@ mod arrow_record_batch_gen;
 mod docker;
 #[cfg(feature = "duckdb")]
 mod duckdb;
+#[cfg(feature = "flight")]
+mod flight;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]
