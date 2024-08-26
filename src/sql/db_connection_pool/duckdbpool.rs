@@ -154,6 +154,7 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
+        #[cfg(feature = "duckdb-federation")]
         if !self.attached_databases.is_empty() {
             for (i, db) in self.attached_databases.iter().enumerate() {
                 // check the db file exists
