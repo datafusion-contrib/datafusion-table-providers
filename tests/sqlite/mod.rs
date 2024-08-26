@@ -94,7 +94,6 @@ async fn arrow_sqlite_round_trip(
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
-#[ignore] // TODO: list types are broken in SQLite - Array is not available in Sqlite.
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
