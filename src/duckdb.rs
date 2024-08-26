@@ -85,6 +85,11 @@ pub enum Error {
     #[snafu(display("Unable to commit transaction: {source}"))]
     UnableToCommitTransaction { source: duckdb::Error },
 
+    #[snafu(display("Unable to checkpoint duckdb: {source}"))]
+    UnableToCheckpoint {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     #[snafu(display("Unable to begin duckdb transaction: {source}"))]
     UnableToBeginTransaction { source: duckdb::Error },
 
