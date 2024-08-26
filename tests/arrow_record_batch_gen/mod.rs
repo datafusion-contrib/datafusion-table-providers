@@ -1,9 +1,8 @@
 use arrow::array::RecordBatch;
 use arrow::{
     array::*,
-    compute::cast,
     datatypes::{
-        i256, DataType, Date32Type, Date64Type, Field, Fields, IntervalDayTime,
+        i256, DataType, Date32Type, Date64Type, Field, IntervalDayTime,
         IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
     },
 };
@@ -277,30 +276,63 @@ pub(crate) fn get_arrow_date_record_batch() -> (RecordBatch, SchemaRef) {
 
 // struct
 pub(crate) fn get_arrow_struct_record_batch() -> (RecordBatch, SchemaRef) {
-    let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-    let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
-
-    let struct_array = StructArray::from(vec![
-        (
-            Arc::new(Field::new("b", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new("c", DataType::Int32, false)),
-            int.clone() as ArrayRef,
-        ),
-    ]);
-
     let schema = Arc::new(Schema::new(vec![Field::new(
         "struct",
-        DataType::Struct(Fields::from(vec![
-            Field::new("b", DataType::Boolean, false),
-            Field::new("c", DataType::Int32, false),
-        ])),
-        false,
+        DataType::Struct(
+            vec![
+                Field::new("b", DataType::Boolean, true),
+                Field::new("c", DataType::Int32, true),
+            ]
+            .into(),
+        ),
+        true,
     )]));
 
-    let record_batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(struct_array)])
+    let mut struct_builder = StructBuilder::new(
+        vec![
+            Field::new("b", DataType::Boolean, true),
+            Field::new("c", DataType::Int32, true),
+        ],
+        vec![
+            Box::new(BooleanBuilder::new()),
+            Box::new(Int32Builder::new()),
+        ],
+    );
+
+    struct_builder
+        .field_builder::<BooleanBuilder>(0)
+        .expect("should return field builder")
+        .append_value(false);
+    struct_builder
+        .field_builder::<Int32Builder>(1)
+        .expect("should return field builder")
+        .append_value(30);
+    struct_builder.append(true);
+
+    // NULL struct item is temporary disabled as not properly supported by duckdb and postgres
+    // struct_builder
+    //     .field_builder::<BooleanBuilder>(0)
+    //     .expect("should return field builder")
+    //     .append_null();
+    // struct_builder
+    //     .field_builder::<Int32Builder>(1)
+    //     .expect("should return field builder")
+    //     .append_null();
+    // struct_builder.append(false);
+
+    struct_builder
+        .field_builder::<BooleanBuilder>(0)
+        .expect("should return field builder")
+        .append_value(true);
+    struct_builder
+        .field_builder::<Int32Builder>(1)
+        .expect("should return field builder")
+        .append_value(25);
+    struct_builder.append(true);
+
+    let struct_array = struct_builder.finish();
+
+    let record_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(struct_array)])
         .expect("Failed to created arrow struct record batch");
 
     (record_batch, schema)
@@ -542,34 +574,6 @@ pub(crate) fn get_pg_interval_expected_result() -> RecordBatch {
         vec![Arc::new(col1), Arc::new(col2), Arc::new(col3)],
     )
     .expect("Failed to created arrow interval record batch")
-}
-
-// Reference: https://github.com/spiceai/datafusion-federation/blob/spiceai-41/datafusion-federation/src/schema_cast/record_convert.rs#L44
-// TODO: Switch to use the try_cast_to in datafusion-federation when the function becomes public
-pub(crate) fn try_cast_to(
-    record_batch: RecordBatch,
-    expected_schema: SchemaRef,
-) -> Result<RecordBatch, String> {
-    let actual_schema = record_batch.schema();
-
-    if actual_schema.fields().len() != expected_schema.fields().len() {
-        return Err("Length mismatch".to_string());
-    }
-
-    let cols = expected_schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(i, expected_field)| {
-            let record_batch_col = record_batch.column(i);
-
-            return cast(&Arc::clone(record_batch_col), expected_field.data_type())
-                .map_err(|e| "Failed to cast".to_string());
-        })
-        .collect::<Result<Vec<Arc<dyn Array>>, String>>()?;
-
-    RecordBatch::try_new(expected_schema, cols)
-        .map_err(|e| "Fail to create casted record batch".to_string())
 }
 
 // Custom Test Case for Sqlite <-> Arrow Decimal Roundtrip

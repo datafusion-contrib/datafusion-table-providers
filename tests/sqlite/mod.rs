@@ -2,6 +2,7 @@ use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
@@ -93,7 +94,6 @@ async fn arrow_sqlite_round_trip(
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
-#[ignore] // TODO: list types are broken in SQLite - Array is not available in Sqlite.
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
