@@ -7,6 +7,7 @@ repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 
 [dependencies]
 arrow = "52.0.0"
+arrow-json = "52.2.0"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
 num-bigint = "0.4.4"
