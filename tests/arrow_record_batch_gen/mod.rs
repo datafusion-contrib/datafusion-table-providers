@@ -1,7 +1,6 @@
 use arrow::array::RecordBatch;
 use arrow::{
     array::*,
-    compute::cast,
     datatypes::{
         i256, DataType, Date32Type, Date64Type, Field, Fields, IntervalDayTime,
         IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, TimeUnit,
@@ -278,30 +277,63 @@ pub(crate) fn get_arrow_date_record_batch() -> (RecordBatch, SchemaRef) {
 
 // struct
 pub(crate) fn get_arrow_struct_record_batch() -> (RecordBatch, SchemaRef) {
-    let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
-    let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
-
-    let struct_array = StructArray::from(vec![
-        (
-            Arc::new(Field::new("b", DataType::Boolean, false)),
-            boolean.clone() as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new("c", DataType::Int32, false)),
-            int.clone() as ArrayRef,
-        ),
-    ]);
-
     let schema = Arc::new(Schema::new(vec![Field::new(
         "struct",
-        DataType::Struct(Fields::from(vec![
-            Field::new("b", DataType::Boolean, false),
-            Field::new("c", DataType::Int32, false),
-        ])),
-        false,
+        DataType::Struct(
+            vec![
+                Field::new("b", DataType::Boolean, true),
+                Field::new("c", DataType::Int32, true),
+            ]
+            .into(),
+        ),
+        true,
     )]));
 
-    let record_batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(struct_array)])
+    let mut struct_builder = StructBuilder::new(
+        vec![
+            Field::new("b", DataType::Boolean, true),
+            Field::new("c", DataType::Int32, true),
+        ],
+        vec![
+            Box::new(BooleanBuilder::new()),
+            Box::new(Int32Builder::new()),
+        ],
+    );
+
+    struct_builder
+        .field_builder::<BooleanBuilder>(0)
+        .expect("should return field builder")
+        .append_value(false);
+    struct_builder
+        .field_builder::<Int32Builder>(1)
+        .expect("should return field builder")
+        .append_value(30);
+    struct_builder.append(true);
+
+    // NULL struct item is temporary disabled as not properly supported by duckdb and postgres
+    // struct_builder
+    //     .field_builder::<BooleanBuilder>(0)
+    //     .expect("should return field builder")
+    //     .append_null();
+    // struct_builder
+    //     .field_builder::<Int32Builder>(1)
+    //     .expect("should return field builder")
+    //     .append_null();
+    // struct_builder.append(false);
+
+    struct_builder
+        .field_builder::<BooleanBuilder>(0)
+        .expect("should return field builder")
+        .append_value(true);
+    struct_builder
+        .field_builder::<Int32Builder>(1)
+        .expect("should return field builder")
+        .append_value(25);
+    struct_builder.append(true);
+
+    let struct_array = struct_builder.finish();
+
+    let record_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(struct_array)])
         .expect("Failed to created arrow struct record batch");
 
     (record_batch, schema)

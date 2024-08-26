@@ -7,6 +7,7 @@ repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 
 [dependencies]
 arrow = "52.0.0"
+arrow-json = "52.2.0"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
 num-bigint = "0.4.4"
@@ -45,7 +46,7 @@ url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "07a7513757d3125f8db25eb377bc128ffa2ebabf" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "21f07bec7284bcbff2bf4e570008290b66e3dc6f" }
 itertools = "0.13.0"
 geo-types = "0.7.13"
 
@@ -65,6 +66,8 @@ mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
+duckdb-federation = ["duckdb"]
+sqlite-federation = ["sqlite"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "07a7513757d3125f8db25eb377bc128ffa2ebabf" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "21f07bec7284bcbff2bf4e570008290b66e3dc6f" }
