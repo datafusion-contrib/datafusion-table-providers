@@ -67,6 +67,7 @@ postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
 duckdb-federation = ["duckdb"]
+sqlite-federation = ["sqlite"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "e0a4eaef873949c4f4bb3edf64e411821e62dcb2" }
