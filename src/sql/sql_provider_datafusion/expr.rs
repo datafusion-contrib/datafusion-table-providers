@@ -26,6 +26,7 @@ pub enum Engine {
     Postgres,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String> {
     match expr {
         Expr::BinaryExpr(binary_expr) => {
@@ -82,22 +83,56 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             ScalarValue::UInt16(Some(value)) => Ok(value.to_string()),
             ScalarValue::UInt32(Some(value)) => Ok(value.to_string()),
             ScalarValue::UInt64(Some(value)) => Ok(value.to_string()),
-            ScalarValue::TimestampNanosecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampNanosecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => {
                     Ok(format!("datetime({}, 'unixepoch')", value / 1_000_000_000))
                 }
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            value / 1_000_000_000
+                        ))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", value / 1_000_000_000))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000_000)),
             },
-            ScalarValue::TimestampMicrosecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampMicrosecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({}, 'unixepoch')", value / 1_000_000)),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            value / 1_000_000
+                        ))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", value / 1_000_000))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000)),
             },
-            ScalarValue::TimestampMillisecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampMillisecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({}, 'unixepoch')", value / 1000)),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!("TO_TIMESTAMP({}) AT TIME ZONE 'UTC'", value / 1000))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", value / 1000))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1000)),
             },
-            ScalarValue::TimestampSecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampSecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({value}, 'unixepoch')")),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!("TO_TIMESTAMP({value}) AT TIME ZONE 'UTC'"))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({value})"))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({value})")),
             },
             ScalarValue::Decimal128(Some(v), _, s) => {

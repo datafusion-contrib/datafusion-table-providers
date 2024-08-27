@@ -1341,12 +1341,16 @@ fn insert_struct_into_row_values_json(
         })?;
 
     let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
-    writer.write(&batch).map_err(|e| Error::FailedToCreateInsertStatement {
-        source: Box::new(e),
-    })?;
-    writer.finish().map_err(|e| Error::FailedToCreateInsertStatement {
-        source: Box::new(e),
-    })?;
+    writer
+        .write(&batch)
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
+    writer
+        .finish()
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
     let json_bytes = writer.into_inner();
 
     let json = String::from_utf8(json_bytes).map_err(|e| Error::FailedToCreateInsertStatement {
