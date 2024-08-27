@@ -29,6 +29,7 @@ pub enum Error {
     },
 }
 
+#[derive(Clone)]
 pub struct DuckDbConnectionPool {
     path: Arc<str>,
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
