@@ -12,6 +12,7 @@ Many of the table providers in this repo are for querying data from other databa
 - MySQL
 - SQLite
 - DuckDB
+- Flight SQL
 
 ## Examples
 
@@ -78,4 +79,14 @@ EOF
 
 ```bash
 cargo run --example mysql --features mysql
+```
+
+### Flight SQL
+```bash
+brew install roapi
+# or
+#cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
+roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet &
+
+cargo run --example flight-sql --features flight
 ```

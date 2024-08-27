@@ -3,6 +3,8 @@ pub mod util;
 
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
+#[cfg(feature = "flight")]
+pub mod flight;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "postgres")]
