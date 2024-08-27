@@ -27,6 +27,7 @@ pub enum Engine {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_precision_loss)]
 pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String> {
     match expr {
         Expr::BinaryExpr(binary_expr) => {
@@ -91,10 +92,10 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                     if timezone.is_none() {
                         Ok(format!(
                             "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
-                            value / 1_000_000_000
+                            *value as f64 / 1_000_000_000.0
                         ))
                     } else {
-                        Ok(format!("TO_TIMESTAMP({})", value / 1_000_000_000))
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1_000_000_000.0))
                     }
                 }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000_000)),
@@ -105,10 +106,10 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                     if timezone.is_none() {
                         Ok(format!(
                             "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
-                            value / 1_000_000
+                            *value as f64 / 1_000_000.0
                         ))
                     } else {
-                        Ok(format!("TO_TIMESTAMP({})", value / 1_000_000))
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1_000_000.0))
                     }
                 }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000)),
@@ -117,9 +118,12 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                 Some(Engine::SQLite) => Ok(format!("datetime({}, 'unixepoch')", value / 1000)),
                 Some(Engine::Postgres) => {
                     if timezone.is_none() {
-                        Ok(format!("TO_TIMESTAMP({}) AT TIME ZONE 'UTC'", value / 1000))
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            *value as f64 / 1000.0
+                        ))
                     } else {
-                        Ok(format!("TO_TIMESTAMP({})", value / 1000))
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1000.0))
                     }
                 }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1000)),
