@@ -224,7 +224,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             );
         }
 
-        let pool: Arc<DuckDbConnectionPool> = Arc::new(match &mode {
+        let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
                 let db_path = self.duckdb_file_path(&name, &mut options);
@@ -236,32 +236,26 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::Memory => DuckDbConnectionPool::new_memory()
                 .context(DbConnectionPoolSnafu)
                 .map_err(to_datafusion_error)?,
-        });
+        };
 
         let read_pool = match &mode {
             Mode::File => {
-                // open duckdb at given path or create a new one
-                let db_path = self.duckdb_file_path(&name, &mut options);
+                let read_pool = pool.clone();
 
-                Arc::new(
-                    DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-                        .context(DbConnectionPoolSnafu)
-                        .map_err(to_datafusion_error)?
-                        .set_attached_databases(&self.attach_databases(&options)),
-                )
+                read_pool.set_attached_databases(&self.attach_databases(&options))
             }
-            Mode::Memory => Arc::clone(&pool),
+            Mode::Memory => pool.clone(),
         };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
-        let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::clone(&pool))
+        let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::new(pool))
             .constraints(cmd.constraints.clone())
             .indexes(indexes)
             .create()
             .map_err(to_datafusion_error)?;
 
-        let dyn_pool: Arc<DynDuckDbConnectionPool> = read_pool;
+        let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             "duckdb",
