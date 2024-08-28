@@ -46,21 +46,25 @@ pub mod sql;
 ///
 /// # Sample usage:
 /// ```
-/// use std::collections::HashMap;
-/// use arrow_flight::{FlightClient, FlightDescriptor};
-/// use tonic::transport::Channel;
-/// use datafusion::prelude::SessionContext;
-/// use std::sync::Arc;
-/// use datafusion_table_providers::flight::{FlightDriver, FlightMetadata};
+/// # use arrow_flight::{FlightClient, FlightDescriptor};
+/// # use datafusion::prelude::SessionContext;
+/// # use datafusion_table_providers::flight::{FlightDriver, FlightMetadata, FlightTableFactory};
+/// # use std::collections::HashMap;
+/// # use std::sync::Arc;
+/// # use tonic::transport::Channel;
 ///
 /// #[derive(Debug, Clone, Default)]
 /// struct CustomFlightDriver {}
+///
 /// #[async_trait::async_trait]
 /// impl FlightDriver for CustomFlightDriver {
-///     async fn metadata(&self, channel: Channel, opts: &HashMap<String, String>)
-///             -> arrow_flight::error::Result<FlightMetadata> {
-/// let mut client = FlightClient::new(channel);
-///         // the `flight.` prefix is an already registered namespace in datafusion-cli
+///     async fn metadata(
+///         &self,
+///         channel: Channel,
+///         opts: &HashMap<String, String>,
+///     ) -> arrow_flight::error::Result<FlightMetadata> {
+///         let mut client = FlightClient::new(channel);
+///         // for simplicity, we'll just assume the server expects a string command and no handshake
 ///         let descriptor = FlightDescriptor::new_cmd(opts["flight.command"].clone());
 ///         let flight_info = client.get_flight_info(descriptor).await?;
 ///         FlightMetadata::try_from(flight_info)
@@ -68,19 +72,21 @@ pub mod sql;
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> datafusion::common::Result<()> {
-///     use datafusion_table_providers::flight::FlightTableFactory;
-/// let ctx = SessionContext::new();
-///     ctx.state_ref().write().table_factories_mut()
-///         .insert("CUSTOM_FLIGHT".into(), Arc::new(FlightTableFactory::new(
-///             Arc::new(CustomFlightDriver::default())
-///         )));
-///     let _ = ctx.sql(r#"
+/// async fn main() {
+///     let ctx = SessionContext::new();
+///     ctx.state_ref().write().table_factories_mut().insert(
+///         "CUSTOM_FLIGHT".into(),
+///         Arc::new(FlightTableFactory::new(Arc::new(
+///             CustomFlightDriver::default(),
+///         ))),
+///     );
+///     _ = ctx.sql(
+///         r#"
 ///         CREATE EXTERNAL TABLE custom_flight_table STORED AS CUSTOM_FLIGHT
 ///         LOCATION 'https://custom.flight.rpc'
-///         OPTIONS ('flight.command' 'select * from everywhere')
-///     "#).await; // will fail as it can't connect to the bogus URL, but we ignore the error
-///     Ok(())
+///         OPTIONS ('flight.command' 'AI, show me the data!')
+///     "#,
+///     ); // no .await here, so we don't actually try to connect to the bogus URL
 /// }
 /// ```
 #[derive(Clone, Debug)]
