@@ -376,4 +376,74 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_expr_timestamp_scalar_value_to_sql() -> Result<()> {
+        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
+            Some(1_693_219_803_001_000_000),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
+            Some(1_693_219_803_001_000_000),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
+            Some(1_693_219_803_001_000),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
+            Some(1_693_219_803_001_000),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
+            Some(1_693_219_803_001),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
+            Some(1_693_219_803_001),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampSecond(Some(1_693_219_803), None));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampSecond(
+            Some(1_693_219_803),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803)"
+        );
+
+        Ok(())
+    }
 }
