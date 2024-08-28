@@ -26,6 +26,8 @@ pub enum Engine {
     Postgres,
 }
 
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::cast_precision_loss)]
 pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String> {
     match expr {
         Expr::BinaryExpr(binary_expr) => {
@@ -82,22 +84,59 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             ScalarValue::UInt16(Some(value)) => Ok(value.to_string()),
             ScalarValue::UInt32(Some(value)) => Ok(value.to_string()),
             ScalarValue::UInt64(Some(value)) => Ok(value.to_string()),
-            ScalarValue::TimestampNanosecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampNanosecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => {
                     Ok(format!("datetime({}, 'unixepoch')", value / 1_000_000_000))
                 }
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            *value as f64 / 1_000_000_000.0
+                        ))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1_000_000_000.0))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000_000)),
             },
-            ScalarValue::TimestampMicrosecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampMicrosecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({}, 'unixepoch')", value / 1_000_000)),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            *value as f64 / 1_000_000.0
+                        ))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1_000_000.0))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000)),
             },
-            ScalarValue::TimestampMillisecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampMillisecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({}, 'unixepoch')", value / 1000)),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!(
+                            "TO_TIMESTAMP({}) AT TIME ZONE 'UTC'",
+                            *value as f64 / 1000.0
+                        ))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1000.0))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1000)),
             },
-            ScalarValue::TimestampSecond(Some(value), None | Some(_)) => match engine {
+            ScalarValue::TimestampSecond(Some(value), timezone) => match engine {
                 Some(Engine::SQLite) => Ok(format!("datetime({value}, 'unixepoch')")),
+                Some(Engine::Postgres) => {
+                    if timezone.is_none() {
+                        Ok(format!("TO_TIMESTAMP({value}) AT TIME ZONE 'UTC'"))
+                    } else {
+                        Ok(format!("TO_TIMESTAMP({value})"))
+                    }
+                }
                 _ => Ok(format!("TO_TIMESTAMP({value})")),
             },
             ScalarValue::Decimal128(Some(v), _, s) => {
@@ -333,6 +372,76 @@ mod tests {
         assert_eq!(
             to_sql_with_engine(&expr, None)?,
             "substring('hello world', 1, 5)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_timestamp_scalar_value_to_sql() -> Result<()> {
+        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
+            Some(1_693_219_803_001_000_000),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
+            Some(1_693_219_803_001_000_000),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
+            Some(1_693_219_803_001_000),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
+            Some(1_693_219_803_001_000),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
+            Some(1_693_219_803_001),
+            None,
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
+            Some(1_693_219_803_001),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803.001)"
+        );
+
+        let expr = Expr::Literal(ScalarValue::TimestampSecond(Some(1_693_219_803), None));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803) AT TIME ZONE 'UTC'"
+        );
+        let expr = Expr::Literal(ScalarValue::TimestampSecond(
+            Some(1_693_219_803),
+            Some(Arc::from("+10:00")),
+        ));
+        assert_eq!(
+            to_sql_with_engine(&expr, Some(Engine::Postgres))?,
+            "TO_TIMESTAMP(1693219803)"
         );
 
         Ok(())

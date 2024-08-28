@@ -151,10 +151,15 @@ impl PostgresTableFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let table_provider = Arc::new(
-            SqlTable::new("postgres", &dyn_pool, table_reference, None)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                .with_dialect(Arc::new(PostgreSqlDialect {})),
+            SqlTable::new(
+                "postgres",
+                &dyn_pool,
+                table_reference,
+                Some(Engine::Postgres),
+            )
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+            .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
         let table_provider = Arc::new(
             table_provider

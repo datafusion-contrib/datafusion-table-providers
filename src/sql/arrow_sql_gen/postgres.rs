@@ -8,7 +8,7 @@ use arrow::array::{
     FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
     Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
     RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-    TimestampMillisecondBuilder, UInt32Builder,
+    TimestampNanosecondBuilder, UInt32Builder,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -458,7 +458,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     };
                     let Some(builder) = builder
                         .as_any_mut()
-                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .downcast_mut::<TimestampNanosecondBuilder>()
                     else {
                         return FailedToDowncastBuilderSnafu {
                             postgres_type: format!("{postgres_type}"),
@@ -475,7 +475,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         Some(v) => {
                             if let Ok(v) = v.duration_since(UNIX_EPOCH) {
                                 let timestamp: i64 = v
-                                    .as_millis()
+                                    .as_nanos()
                                     .try_into()
                                     .context(FailedToConvertU128toI64Snafu)?;
                                 builder.append_value(timestamp);
@@ -494,13 +494,13 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     let time_zone = v.unwrap_or_default().offset().fix();
                     let timestampz_builder = builder.get_or_insert_with(|| {
                         Box::new(
-                            TimestampMillisecondBuilder::new().with_timezone(time_zone.to_string()),
+                            TimestampNanosecondBuilder::new().with_timezone(time_zone.to_string()),
                         )
                     });
 
                     let Some(timestampz_builder) = timestampz_builder
                         .as_any_mut()
-                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .downcast_mut::<TimestampNanosecondBuilder>()
                     else {
                         return FailedToDowncastBuilderSnafu {
                             postgres_type: format!("{postgres_type}"),
@@ -515,7 +515,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         let new_arrow_field = Field::new(
                             field_name,
                             DataType::Timestamp(
-                                TimeUnit::Millisecond,
+                                TimeUnit::Nanosecond,
                                 Some(Arc::from(time_zone.to_string())),
                             ),
                             true,
@@ -526,7 +526,8 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 
                     match v {
                         Some(v) => {
-                            let utc_timestamp = v.to_utc().timestamp_millis();
+                            let utc_timestamp =
+                                v.to_utc().timestamp_nanos_opt().unwrap_or_default();
                             timestampz_builder.append_value(utc_timestamp);
                         }
                         None => timestampz_builder.append_null(),
@@ -779,7 +780,7 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
         Type::NUMERIC | Type::TIMESTAMPTZ => None,
         // We get a SystemTime that we can always convert into milliseconds
-        Type::TIMESTAMP => Some(DataType::Timestamp(TimeUnit::Millisecond, None)),
+        Type::TIMESTAMP => Some(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         Type::DATE => Some(DataType::Date32),
         Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
         Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
