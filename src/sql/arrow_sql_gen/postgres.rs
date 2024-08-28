@@ -8,7 +8,7 @@ use arrow::array::{
     FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
     Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
     RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-    TimestampMillisecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
+    TimestampNanosecondBuilder, UInt32Builder,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
