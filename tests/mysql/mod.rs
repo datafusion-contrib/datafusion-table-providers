@@ -1,4 +1,5 @@
 use datafusion::execution::context::SessionContext;
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::{
     mysql::MySQLConnectionPool, sql::sql_provider_datafusion::SqlTable,
 };
@@ -6,8 +7,6 @@ use rstest::rstest;
 use std::sync::Arc;
 
 use arrow::array::*;
-
-use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 use crate::docker::RunningContainer;
 
@@ -61,10 +60,22 @@ async fn arrow_mysql_one_way(port: usize) {
         .await
         .expect("DataFrame should be created from query");
 
+
+    let expected_schema = Arc::clone(df.schema().inner());
+
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+
     tracing::debug!(
         "MySQL returned Record Batch: {:?}",
         record_batch[0].columns()
+    );
+
+    let casted_record_batch = try_cast_to(record_batch[0].clone(), expected_schema).expect("Shoud cast record batch");
+
+    tracing::debug!(
+        "MySQL casted Record Batch: {:?}",
+        casted_record_batch.columns()
     );
 
     let int32_array = Int32Array::from(vec![1, 2]);
@@ -72,10 +83,8 @@ async fn arrow_mysql_one_way(port: usize) {
         .with_precision_and_scale(10, 2)
         .unwrap();
 
-    // Check results
-    assert_eq!(record_batch.len(), 1);
     assert_eq!(
-        record_batch[0]
+        casted_record_batch
             .column(0)
             .as_any()
             .downcast_ref::<Int32Array>()
@@ -83,7 +92,7 @@ async fn arrow_mysql_one_way(port: usize) {
         &int32_array
     );
     assert_eq!(
-        record_batch[0]
+        casted_record_batch
             .column(1)
             .as_any()
             .downcast_ref::<Decimal128Array>()

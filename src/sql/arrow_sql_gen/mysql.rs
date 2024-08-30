@@ -103,10 +103,10 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
 
             let (decimal_precision, decimal_scale) = match column_type {
-                ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => (
-                    column.column_length().try_into().ok(),
-                    column.decimals().try_into().ok(),
-                ),
+                ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                    // use 38 as default precision for decimal types as there is no way to get the precision from the column
+                    (Some(38), Some(column.decimals() as i8))
+                },
                 _ => (None, None),
             };
 
