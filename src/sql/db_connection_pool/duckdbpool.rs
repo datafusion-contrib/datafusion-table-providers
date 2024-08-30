@@ -157,9 +157,10 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
             pool.get().context(ConnectionPoolSnafu)?;
 
         #[cfg(feature = "duckdb-federation")]
-        let mut db_ids = Vec::new();
-        db_ids.push(extract_db_name(Arc::clone(&self.path))?);
         if !self.attached_databases.is_empty() {
+            let mut db_ids = Vec::new();
+            db_ids.push(extract_db_name(Arc::clone(&self.path))?);
+
             for (i, db) in self.attached_databases.iter().enumerate() {
                 // check the db file exists
                 std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
