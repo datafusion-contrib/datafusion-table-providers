@@ -107,7 +107,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     // use 38 as default precision for decimal types if there is no way to get the precision from the column
                     match projected_schema {
                         Some(schema) => {
-                            (get_decimal_column_precision(&column_name, schema), Some(column.decimals() as i8))
+                            let precision = get_decimal_column_precision(&column_name, schema).unwrap_or(38);
+                            (Some(precision), Some(column.decimals() as i8))
                         },
                         None => (Some(38), Some(column.decimals() as i8)),
                     }
