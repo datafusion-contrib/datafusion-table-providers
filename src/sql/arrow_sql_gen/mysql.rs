@@ -101,12 +101,20 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
             let column_name = column.name_str();
             let column_type = column.column_type();
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
-            let column_decimal_precision: i8 = column.decimals().try_into().unwrap_or_default();
+
+            let (decimal_precision, decimal_scale) = match column_type {
+                ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => (
+                    column.column_length().try_into().ok(),
+                    column.decimals().try_into().ok(),
+                ),
+                _ => (None, None),
+            };
 
             let data_type = map_column_to_data_type(
                 column_type,
                 column_is_binary,
-                Some(column_decimal_precision),
+                decimal_precision,
+                decimal_scale,
             );
 
             arrow_fields.push(
@@ -421,7 +429,8 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
-    column_decimal_precision: Option<i8>,
+    column_decimal_precision: Option<u8>,
+    column_decimal_scale: Option<i8>,
 ) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
@@ -433,7 +442,7 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_FLOAT => Some(DataType::Float32),
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
         // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
-        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(38, column_decimal_precision.unwrap_or_default())),
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default())),
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_DATETIME2  => {
             Some(DataType::Timestamp(TimeUnit::Millisecond, None))
         }
