@@ -6,7 +6,7 @@ use arrow::{
         NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
         TimestampMillisecondBuilder, UInt64Builder,
     },
-    datatypes::{DataType, Date32Type, Field, Schema, TimeUnit},
+    datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
 };
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
@@ -88,7 +88,7 @@ macro_rules! handle_primitive_type {
 ///
 /// Returns an error if there is a failure in converting the rows to a `RecordBatch`.
 #[allow(clippy::too_many_lines)]
-pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
+pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut mysql_types: Vec<ColumnType> = Vec::new();
@@ -104,8 +104,13 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 
             let (decimal_precision, decimal_scale) = match column_type {
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                    // use 38 as default precision for decimal types as there is no way to get the precision from the column
-                    (Some(38), Some(column.decimals() as i8))
+                    // use 38 as default precision for decimal types if there is no way to get the precision from the column
+                    match projected_schema {
+                        Some(schema) => {
+                            (get_decimal_column_precision(&column_name, schema), Some(column.decimals() as i8))
+                        },
+                        None => (Some(38), Some(column.decimals() as i8)),
+                    }
                 },
                 _ => (None, None),
             };
@@ -482,6 +487,16 @@ pub fn map_column_to_data_type(
 
 fn to_decimal_128(decimal: &BigDecimal, scale: i64) -> Option<i128> {
     (decimal * 10i128.pow(scale.try_into().unwrap_or_default())).to_i128()
+}
+
+fn get_decimal_column_precision(column_name: &str, projected_schema: &SchemaRef) -> Option<u8> {
+
+    let field = projected_schema.field_with_name(column_name).ok()?;
+    match field.data_type() {
+        DataType::Decimal128(precision, _) => Some(*precision),
+        _ => None,
+       
+    }
 }
 
 fn handle_null_error<T>(

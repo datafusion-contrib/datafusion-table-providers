@@ -80,6 +80,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         &self,
         sql: &str,
         params: &[&'static (dyn ToSql + Sync)],
+        _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let sql = sql.to_string();
         let params = params.to_vec();

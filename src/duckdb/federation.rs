@@ -66,6 +66,7 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
         let fut = get_stream(
             self.base_table.clone_pool(),
             format!("{cte} {query}", cte = get_cte(&self.table_functions)),
+            Arc::clone(&schema),
         );
 
         let stream = futures::stream::once(fut).try_flatten();
