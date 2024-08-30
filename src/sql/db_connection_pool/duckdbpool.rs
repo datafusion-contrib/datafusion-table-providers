@@ -159,7 +159,6 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static 
         #[cfg(feature = "duckdb-federation")]
         let mut db_ids = Vec::new();
         db_ids.push(extract_db_name(Arc::clone(&self.path))?);
-
         if !self.attached_databases.is_empty() {
             for (i, db) in self.attached_databases.iter().enumerate() {
                 // check the db file exists
