@@ -69,7 +69,7 @@ async fn arrow_mysql_one_way(port: usize) {
 
     let int32_array = Int32Array::from(vec![1, 2]);
     let decimal128_array = Decimal128Array::from(vec![None, Some(i128::from(1200))])
-        .with_precision_and_scale(38, 2)
+        .with_precision_and_scale(10, 2)
         .unwrap();
 
     // Check results
