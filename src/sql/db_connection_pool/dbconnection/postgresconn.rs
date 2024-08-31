@@ -128,6 +128,7 @@ impl<'a>
         &self,
         sql: &str,
         params: &[&'a (dyn ToSql + Sync)],
+        _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         // TODO: We should have a way to detect if params have been passed
         // if they haven't we should use .copy_out instead, because it should be much faster

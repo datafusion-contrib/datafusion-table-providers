@@ -260,7 +260,7 @@ mod test {
         conn.execute("INSERT INTO test VALUES (1, 'a')", &[])
             .expect("Data should be inserted");
 
-        conn.query_arrow("SELECT * FROM test", &[])
+        conn.query_arrow("SELECT * FROM test", &[], None)
             .expect("Query should be successful");
     }
 
@@ -315,18 +315,18 @@ mod test {
             .as_sync()
             .expect("DuckDB connection should be synchronous");
 
-        conn.query_arrow("SELECT * FROM test_one", &[])
+        conn.query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
 
         conn_attached
-            .query_arrow("SELECT * FROM test_two", &[])
+            .query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
 
         conn_attached
-            .query_arrow("SELECT * FROM test_one", &[])
+            .query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
 
-        conn.query_arrow("SELECT * FROM test_two", &[])
+        conn.query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
 
         std::fs::remove_file(&db_base_name).expect("File should be removed");

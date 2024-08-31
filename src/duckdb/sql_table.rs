@@ -195,10 +195,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
         let sql = self.sql().map_err(to_execution_error)?;
         tracing::debug!("DuckSqlExec sql: {sql}");
 
-        let fut = get_stream(self.base_exec.clone_pool(), sql);
+        let schema = self.schema();
+
+        let fut = get_stream(self.base_exec.clone_pool(), sql, Arc::clone(&schema));
 
         let stream = futures::stream::once(fut).try_flatten();
-        let schema = Arc::clone(&self.schema());
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
