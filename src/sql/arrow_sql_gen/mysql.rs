@@ -491,12 +491,10 @@ fn to_decimal_128(decimal: &BigDecimal, scale: i64) -> Option<i128> {
 }
 
 fn get_decimal_column_precision(column_name: &str, projected_schema: &SchemaRef) -> Option<u8> {
-
     let field = projected_schema.field_with_name(column_name).ok()?;
     match field.data_type() {
         DataType::Decimal128(precision, _) => Some(*precision),
         _ => None,
-       
     }
 }
 
