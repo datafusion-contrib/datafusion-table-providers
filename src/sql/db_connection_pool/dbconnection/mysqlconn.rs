@@ -91,6 +91,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         &self,
         sql: &str,
         params: &[&'a (dyn ToValue + Sync)],
+        projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let params_vec: Vec<_> = params.iter().map(|&p| p.to_value()).collect();
         let sql = sql.replace('"', "");
@@ -116,7 +117,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
                     .collect::<Result<Vec<_>, _>>()
                     .context(QuerySnafu)?;
 
-                let rec = rows_to_arrow(&rows).context(ConversionSnafu)?;
+                let rec = rows_to_arrow(&rows, &projected_schema).context(ConversionSnafu)?;
                 yield Ok::<_, Error>(rec)
             }
         });
@@ -169,18 +170,18 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
 
-        let scale = match column_type {
+        let (precision, scale) = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                let (_precision, scale) = extract_decimal_precision_and_scale(&data_type)
+                let (precision, scale) = extract_decimal_precision_and_scale(&data_type)
                     .context(super::UnableToGetSchemaSnafu)?;
-                // rows_to_arrow uses hardcoded precision so we use scale only here
-                Some(scale)
+                (Some(precision), Some(scale))
             }
-            _ => None,
+            _ => (None, None),
         };
 
-        let arrow_data_type = map_column_to_data_type(column_type, column_is_binary, scale)
-            .context(UnsupportedDataTypeSnafu { data_type })?;
+        let arrow_data_type =
+            map_column_to_data_type(column_type, column_is_binary, precision, scale)
+                .context(UnsupportedDataTypeSnafu { data_type })?;
 
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }

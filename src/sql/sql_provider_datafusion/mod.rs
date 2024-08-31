@@ -346,10 +346,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         let sql = self.sql().map_err(to_execution_error)?;
         tracing::debug!("SqlExec sql: {sql}");
 
-        let fut = get_stream(Arc::clone(&self.pool), sql);
+        let schema = self.schema();
+
+        let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&schema));
 
         let stream = futures::stream::once(fut).try_flatten();
-        let schema = Arc::clone(&self.schema());
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
@@ -357,10 +358,13 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 pub async fn get_stream<T: 'static, P: 'static>(
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
+    projected_schema: SchemaRef,
 ) -> DataFusionResult<SendableRecordBatchStream> {
     let conn = pool.connect().await.map_err(to_execution_error)?;
 
-    query_arrow(conn, sql).await.map_err(to_execution_error)
+    query_arrow(conn, sql, Some(projected_schema))
+        .await
+        .map_err(to_execution_error)
 }
 
 #[allow(clippy::needless_pass_by_value)]

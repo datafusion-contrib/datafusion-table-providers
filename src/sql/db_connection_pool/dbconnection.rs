@@ -57,11 +57,17 @@ pub trait SyncDbConnection<T, P>: DbConnection<T, P> {
     ///
     /// * `sql` - The SQL statement.
     /// * `params` - The parameters for the SQL statement.
+    /// * `projected_schema` - The Projected schema for the query.
     ///
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    fn query_arrow(&self, sql: &str, params: &[P]) -> Result<SendableRecordBatchStream>;
+    fn query_arrow(
+        &self,
+        sql: &str,
+        params: &[P],
+        projected_schema: Option<SchemaRef>,
+    ) -> Result<SendableRecordBatchStream>;
 
     /// Execute the given SQL statement with parameters, returning the number of affected rows.
     ///
@@ -82,7 +88,12 @@ pub trait AsyncDbConnection<T, P>: DbConnection<T, P> + Sync {
     where
         Self: Sized;
     async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error>;
-    async fn query_arrow(&self, sql: &str, params: &[P]) -> Result<SendableRecordBatchStream>;
+    async fn query_arrow(
+        &self,
+        sql: &str,
+        params: &[P],
+        projected_schema: Option<SchemaRef>,
+    ) -> Result<SendableRecordBatchStream>;
     async fn execute(&self, sql: &str, params: &[P]) -> Result<u64>;
 }
 
@@ -135,12 +146,13 @@ pub async fn get_schema<T, P>(
 pub async fn query_arrow<T, P>(
     conn: Box<dyn DbConnection<T, P>>,
     sql: String,
+    projected_schema: Option<SchemaRef>,
 ) -> Result<SendableRecordBatchStream, Error> {
     if let Some(conn) = conn.as_sync() {
-        conn.query_arrow(&sql, &[])
+        conn.query_arrow(&sql, &[], projected_schema)
             .context(UnableToQueryArrowSnafu {})
     } else if let Some(conn) = conn.as_async() {
-        conn.query_arrow(&sql, &[])
+        conn.query_arrow(&sql, &[], projected_schema)
             .await
             .context(UnableToQueryArrowSnafu {})
     } else {

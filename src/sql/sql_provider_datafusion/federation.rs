@@ -71,7 +71,11 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         query: &str,
         schema: SchemaRef,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let fut = get_stream(Arc::clone(&self.pool), query.to_string());
+        let fut = get_stream(
+            Arc::clone(&self.pool),
+            query.to_string(),
+            Arc::clone(&schema),
+        );
 
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
