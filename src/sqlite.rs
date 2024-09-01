@@ -7,11 +7,10 @@ use crate::sql::db_connection_pool::{
     sqlitepool::SqliteConnectionPool,
     DbConnectionPool, Mode,
 };
-use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
+use crate::sql::sql_provider_datafusion::{self, expr::Engine};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::sql::unparser::dialect::SqliteDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,
@@ -22,6 +21,7 @@ use datafusion::{
 };
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
+use sql_table::SQLiteTable;
 use std::{collections::HashMap, sync::Arc};
 use tokio_rusqlite::Connection;
 
@@ -35,6 +35,9 @@ use crate::util::{
 
 use self::write::SqliteTableWriter;
 
+#[cfg(feature = "sqlite-federation")]
+pub mod federation;
+pub mod sql_table;
 pub mod write;
 
 #[derive(Debug, Snafu)]
@@ -243,16 +246,13 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(
-            SqlTable::new_with_schema(
-                "sqlite",
-                &dyn_pool,
-                Arc::clone(&schema),
-                TableReference::bare(name.clone()),
-                Some(Engine::SQLite),
-            )
-            .with_dialect(Arc::new(SqliteDialect {})),
-        );
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
+            "sqlite",
+            &dyn_pool,
+            Arc::clone(&schema),
+            TableReference::bare(name.clone()),
+            Some(Engine::SQLite),
+        ));
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
@@ -292,7 +292,7 @@ impl SqliteTableFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
             "sqlite",
             &dyn_pool,
             Arc::clone(&schema),
