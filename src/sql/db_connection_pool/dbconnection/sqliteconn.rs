@@ -80,6 +80,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         &self,
         sql: &str,
         params: &[&'static (dyn ToSql + Sync)],
+        _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let sql = sql.to_string();
         let params = params.to_vec();
@@ -102,7 +103,11 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .context(ConnectionSnafu)?;
 
         let schema = rec.schema();
-        let recs = vec![rec];
+        let recs = if rec.num_rows() > 0 {
+            vec![rec]
+        } else {
+            vec![]
+        };
         Ok(Box::pin(MemoryStream::try_new(recs, schema, None)?))
     }
 
