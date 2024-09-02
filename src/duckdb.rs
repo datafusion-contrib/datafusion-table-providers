@@ -7,7 +7,7 @@ use crate::sql::db_connection_pool::{
     duckdbpool::DuckDbConnectionPool,
     DbConnectionPool, Mode,
 };
-use crate::sql::sql_provider_datafusion::{self, expr::Engine};
+use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -258,11 +258,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
-            "duckdb",
             &dyn_pool,
             Arc::clone(&schema),
             TableReference::bare(name.clone()),
-            Some(Engine::DuckDB),
             None,
         ));
 
@@ -439,7 +437,7 @@ impl DuckDBTableFactory {
         };
 
         let table_provider = Arc::new(DuckDBTable::new_with_schema(
-            "duckdb", &dyn_pool, schema, tbl_ref, None, cte,
+            &dyn_pool, schema, tbl_ref, cte,
         ));
 
         #[cfg(feature = "duckdb-federation")]
