@@ -29,14 +29,18 @@ pub struct SQLiteTable<T: 'static, P: 'static> {
 
 impl<T, P> SQLiteTable<T, P> {
     pub fn new_with_schema(
-        name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
-        engine: Option<expr::Engine>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(name, pool, schema, table_reference, engine)
-            .with_dialect(Arc::new(SqliteDialect {}));
+        let base_table = SqlTable::new_with_schema(
+            "sqlite",
+            pool,
+            schema,
+            table_reference,
+            Some(Engine::SQLite),
+        )
+        .with_dialect(Arc::new(SqliteDialect {}));
 
         Self { base_table }
     }

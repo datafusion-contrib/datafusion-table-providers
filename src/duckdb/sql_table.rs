@@ -32,14 +32,18 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
 
 impl<T, P> DuckDBTable<T, P> {
     pub fn new_with_schema(
-        name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
-        engine: Option<expr::Engine>,
         table_functions: Option<HashMap<String, String>>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(name, pool, schema, table_reference, engine);
+        let base_table = SqlTable::new_with_schema(
+            "duckdb",
+            pool,
+            schema,
+            table_reference,
+            Some(Engine::DuckDB),
+        );
 
         Self {
             base_table,
