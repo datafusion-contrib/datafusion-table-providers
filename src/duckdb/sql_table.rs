@@ -8,7 +8,7 @@ use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::sql::sql_provider_datafusion::{
-    expr, get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
+    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 use datafusion::{
     arrow::datatypes::SchemaRef,

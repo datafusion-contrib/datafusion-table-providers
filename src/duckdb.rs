@@ -7,7 +7,7 @@ use crate::sql::db_connection_pool::{
     duckdbpool::DuckDbConnectionPool,
     DbConnectionPool, Mode,
 };
-use crate::sql::sql_provider_datafusion::{self, expr::Engine};
+use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
