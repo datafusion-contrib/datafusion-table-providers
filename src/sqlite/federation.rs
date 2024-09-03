@@ -55,48 +55,48 @@ struct SQLiteVisitor {}
 
 #[derive(Default, Debug)]
 struct IntervalParts {
-    years: u64,
-    months: u64,
-    days: u64,
-    hours: u64,
-    minutes: u64,
-    seconds: u64,
+    years: i64,
+    months: i64,
+    days: i64,
+    hours: i64,
+    minutes: i64,
+    seconds: i64,
     nanos: u32,
 }
 
-type IntervalSetter = fn(IntervalParts, u64) -> IntervalParts;
+type IntervalSetter = fn(IntervalParts, i64) -> IntervalParts;
 
 impl IntervalParts {
     fn new() -> Self {
         Self::default()
     }
 
-    fn with_years(mut self, years: u64) -> Self {
+    fn with_years(mut self, years: i64) -> Self {
         self.years = years;
         self
     }
 
-    fn with_months(mut self, months: u64) -> Self {
+    fn with_months(mut self, months: i64) -> Self {
         self.months = months;
         self
     }
 
-    fn with_days(mut self, days: u64) -> Self {
+    fn with_days(mut self, days: i64) -> Self {
         self.days = days;
         self
     }
 
-    fn with_hours(mut self, hours: u64) -> Self {
+    fn with_hours(mut self, hours: i64) -> Self {
         self.hours = hours;
         self
     }
 
-    fn with_minutes(mut self, minutes: u64) -> Self {
+    fn with_minutes(mut self, minutes: i64) -> Self {
         self.minutes = minutes;
         self
     }
 
-    fn with_seconds(mut self, seconds: u64) -> Self {
+    fn with_seconds(mut self, seconds: i64) -> Self {
         self.seconds = seconds;
         self
     }
@@ -178,7 +178,7 @@ impl SQLiteVisitor {
 
         for (unit, setter) in components.iter() {
             if let Some((value, rest)) = remaining.split_once(unit) {
-                let parsed_value: u64 = self.parse_value(value.trim())?;
+                let parsed_value: i64 = self.parse_value(value.trim())?;
                 parts = setter(parts, parsed_value);
                 remaining = rest;
             }
@@ -193,7 +193,7 @@ impl SQLiteVisitor {
         Ok(parts)
     }
 
-    fn parse_seconds_and_nanos(&self, value: &str) -> Result<(u64, u32), DataFusionError> {
+    fn parse_seconds_and_nanos(&self, value: &str) -> Result<(i64, u32), DataFusionError> {
         let parts: Vec<&str> = value.split('.').collect();
         let seconds = self.parse_value(parts[0])?;
         let nanos = if parts.len() > 1 {
@@ -216,16 +216,12 @@ impl SQLiteVisitor {
     fn create_datetime_function(&self, target: &Expr, interval: &IntervalParts) -> Expr {
         let function_args = vec![
             FunctionArg::Unnamed(FunctionArgExpr::Expr(target.clone())),
-            self.create_interval_arg("years", interval.years as i64),
-            self.create_interval_arg("months", interval.months as i64),
-            self.create_interval_arg("days", interval.days as i64),
-            self.create_interval_arg("hours", interval.hours as i64),
-            self.create_interval_arg("minutes", interval.minutes as i64),
-            self.create_interval_arg_with_fraction(
-                "seconds",
-                interval.seconds as i64,
-                interval.nanos,
-            ),
+            self.create_interval_arg("years", interval.years),
+            self.create_interval_arg("months", interval.months),
+            self.create_interval_arg("days", interval.days),
+            self.create_interval_arg("hours", interval.hours),
+            self.create_interval_arg("minutes", interval.minutes),
+            self.create_interval_arg_with_fraction("seconds", interval.seconds, interval.nanos),
         ];
 
         let datetime_function = Expr::Function(ast::Function {
