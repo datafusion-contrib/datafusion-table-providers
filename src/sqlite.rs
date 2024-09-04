@@ -7,7 +7,7 @@ use crate::sql::db_connection_pool::{
     sqlitepool::SqliteConnectionPool,
     DbConnectionPool, Mode,
 };
-use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
+use crate::sql::sql_provider_datafusion;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -21,6 +21,7 @@ use datafusion::{
 };
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
+use sql_table::SQLiteTable;
 use std::{collections::HashMap, sync::Arc};
 use tokio_rusqlite::Connection;
 
@@ -34,6 +35,13 @@ use crate::util::{
 
 use self::write::SqliteTableWriter;
 
+#[cfg(feature = "sqlite-federation")]
+pub mod federation;
+
+#[cfg(feature = "sqlite-federation")]
+pub mod sqlite_interval;
+
+pub mod sql_table;
 pub mod write;
 
 #[derive(Debug, Snafu)]
@@ -138,6 +146,7 @@ fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
+    #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
         _state: &dyn Session,
@@ -241,19 +250,19 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "sqlite",
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
             TableReference::bare(name.clone()),
-            Some(Engine::SQLite),
         ));
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
             .map_err(to_datafusion_error)?;
 
+        #[cfg(feature = "sqlite-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+
         Ok(SqliteTableWriter::create(
             read_provider,
             sqlite,
@@ -285,12 +294,10 @@ impl SqliteTableFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "sqlite",
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
             table_reference,
-            Some(Engine::SQLite),
         ));
 
         Ok(read_provider)

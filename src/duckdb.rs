@@ -9,7 +9,7 @@ use crate::sql::db_connection_pool::{
     duckdbpool::DuckDbConnectionPool,
     DbConnectionPool, Mode,
 };
-use crate::sql::sql_provider_datafusion::{self, expr::Engine};
+use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -34,8 +34,10 @@ use std::{cmp, collections::HashMap, sync::Arc};
 
 use self::{creator::TableCreator, sql_table::DuckDBTable, write::DuckDBTableWriter};
 
-mod creator;
+#[cfg(feature = "duckdb-federation")]
 mod federation;
+
+mod creator;
 mod sql_table;
 pub mod write;
 
@@ -86,6 +88,11 @@ pub enum Error {
 
     #[snafu(display("Unable to commit transaction: {source}"))]
     UnableToCommitTransaction { source: duckdb::Error },
+
+    #[snafu(display("Unable to checkpoint duckdb: {source}"))]
+    UnableToCheckpoint {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     #[snafu(display("Unable to begin duckdb transaction: {source}"))]
     UnableToBeginTransaction { source: duckdb::Error },
@@ -219,7 +226,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             );
         }
 
-        let pool: Arc<DuckDbConnectionPool> = Arc::new(match &mode {
+        let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
                 let db_path = self.duckdb_file_path(&name, &mut options);
@@ -231,43 +238,37 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::Memory => DuckDbConnectionPool::new_memory()
                 .context(DbConnectionPoolSnafu)
                 .map_err(to_datafusion_error)?,
-        });
+        };
 
         let read_pool = match &mode {
             Mode::File => {
-                // open duckdb at given path or create a new one
-                let db_path = self.duckdb_file_path(&name, &mut options);
+                let read_pool = pool.clone();
 
-                Arc::new(
-                    DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-                        .context(DbConnectionPoolSnafu)
-                        .map_err(to_datafusion_error)?
-                        .set_attached_databases(&self.attach_databases(&options)),
-                )
+                read_pool.set_attached_databases(&self.attach_databases(&options))
             }
-            Mode::Memory => Arc::clone(&pool),
+            Mode::Memory => pool.clone(),
         };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
-        let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::clone(&pool))
+        let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::new(pool))
             .constraints(cmd.constraints.clone())
             .indexes(indexes)
             .create()
             .map_err(to_datafusion_error)?;
 
-        let dyn_pool: Arc<DynDuckDbConnectionPool> = read_pool;
+        let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
-            "duckdb",
             &dyn_pool,
             Arc::clone(&schema),
             TableReference::bare(name.clone()),
-            Some(Engine::DuckDB),
             None,
         ));
 
+        #[cfg(feature = "duckdb-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+
         Ok(DuckDBTableWriter::create(
             read_provider,
             duckdb,
@@ -438,9 +439,12 @@ impl DuckDBTableFactory {
         };
 
         let table_provider = Arc::new(DuckDBTable::new_with_schema(
-            "duckdb", &dyn_pool, schema, tbl_ref, None, cte,
+            &dyn_pool, schema, tbl_ref, cte,
         ));
+
+        #[cfg(feature = "duckdb-federation")]
         let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
+
         Ok(table_provider)
     }
 

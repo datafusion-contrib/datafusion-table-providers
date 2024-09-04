@@ -1,16 +1,17 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
+use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
-use datafusion_federation_sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion_federation_sql::{AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource};
 use futures::TryStreamExt;
 use snafu::ResultExt;
-
-use async_trait::async_trait;
 use std::sync::Arc;
 
-use super::sql_table::{get_cte, DuckDBTable};
+use super::sql_table::SQLiteTable;
+use super::sqlite_interval::SQLiteIntervalVisitor;
 use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -19,7 +20,7 @@ use datafusion::{
     sql::TableReference,
 };
 
-impl<T, P> DuckDBTable<T, P> {
+impl<T, P> SQLiteTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
@@ -44,8 +45,25 @@ impl<T, P> DuckDBTable<T, P> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
+fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionError> {
+    match ast {
+        ast::Statement::Query(query) => {
+            let mut new_query = query.clone();
+
+            // iterate over the query and find any INTERVAL statements
+            // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
+            let mut interval_visitor = SQLiteIntervalVisitor::default();
+            new_query.visit(&mut interval_visitor);
+
+            Ok(ast::Statement::Query(new_query))
+        }
+        _ => Ok(ast),
+    }
+}
+
 #[async_trait]
-impl<T, P> SQLExecutor for DuckDBTable<T, P> {
+impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     fn name(&self) -> &str {
         self.base_table.name()
     }
@@ -58,6 +76,10 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
         self.base_table.dialect()
     }
 
+    fn ast_analyzer(&self) -> Option<AstAnalyzer> {
+        Some(Box::new(sqlite_ast_analyzer))
+    }
+
     fn execute(
         &self,
         query: &str,
@@ -65,7 +87,7 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
             self.base_table.clone_pool(),
-            format!("{cte} {query}", cte = get_cte(&self.table_functions)),
+            query.to_string(),
             Arc::clone(&schema),
         );
 

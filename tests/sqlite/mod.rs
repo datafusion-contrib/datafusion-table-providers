@@ -1,6 +1,8 @@
 use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
 };
@@ -11,7 +13,11 @@ use datafusion_table_providers::sqlite::DynSqliteConnectionPool;
 use rstest::rstest;
 use std::sync::Arc;
 
-async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
+async fn arrow_sqlite_round_trip(
+    arrow_record: RecordBatch,
+    source_schema: SchemaRef,
+    table_name: &str,
+) {
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
@@ -58,8 +64,8 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    // Print original arrow record batch and record batch converted from sqlite row in terminal
-    // Check if the values are the same
+    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
         "Sqlite returned Record Batch: {:?}",
@@ -70,6 +76,7 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    assert_eq!(casted_record, arrow_record);
 }
 
 #[rstest]
@@ -80,18 +87,23 @@ async fn arrow_sqlite_round_trip(arrow_record: RecordBatch, table_name: &str) {
 #[case::time(get_arrow_time_record_batch(), "time")]
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
-#[ignore] // TODO: struct types are broken in SQLite
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-#[ignore] // TODO: decimal types are broken in SQLite
-#[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // TODO: interval types are broken in SQLite
+// SQLite only supports up to 16 precision for decimal through REAL type.
+#[case::decimal(get_sqlite_arrow_decimal_record_batch(), "decimal")]
+#[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
-#[ignore] // TODO: duration types are broken in SQLite
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
-#[ignore] // TODO: list types are broken in SQLite
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
-async fn test_arrow_sqlite_roundtrip(#[case] arrow_record: RecordBatch, #[case] table_name: &str) {
-    arrow_sqlite_round_trip(arrow_record, &format!("{table_name}_types")).await;
+async fn test_arrow_sqlite_roundtrip(
+    #[case] arrow_result: (RecordBatch, SchemaRef),
+    #[case] table_name: &str,
+) {
+    arrow_sqlite_round_trip(
+        arrow_result.0,
+        arrow_result.1,
+        &format!("{table_name}_types"),
+    )
+    .await;
 }

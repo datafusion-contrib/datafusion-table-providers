@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
-use arrow::array::AsArray;
 use async_trait::async_trait;
 use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
+use std::sync::Arc;
 
 use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Result};
 use crate::sql::db_connection_pool::{
@@ -27,8 +25,12 @@ pub enum Error {
         path: Arc<str>,
         source: std::io::Error,
     },
+
+    #[snafu(display("Unable to extract database name from database file path"))]
+    UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
+#[derive(Clone)]
 pub struct DuckDbConnectionPool {
     path: Arc<str>,
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
@@ -154,7 +156,11 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
+        #[cfg(feature = "duckdb-federation")]
         if !self.attached_databases.is_empty() {
+            let mut db_ids = Vec::new();
+            db_ids.push(extract_db_name(Arc::clone(&self.path))?);
+
             for (i, db) in self.attached_databases.iter().enumerate() {
                 // check the db file exists
                 std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
@@ -163,37 +169,15 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
                 let db_id = format!("attachment_{i}");
                 conn.execute(
-                    &format!("ATTACH IF NOT EXISTS '{db}' AS {db_id} (READ_ONLY)"),
+                    &format!(
+                        "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
+                        db_id.clone()
+                    ),
                     [],
                 )
                 .context(DuckDBSnafu)?;
+                db_ids.push(db_id);
             }
-
-            let mut stmt = conn.prepare("SHOW DATABASES").context(DuckDBSnafu)?;
-            let results = stmt.query_arrow([]).context(DuckDBSnafu)?;
-            let results = results.collect::<Vec<_>>();
-
-            let db_ids = results
-                .iter()
-                .flat_map(|r| match r.column(0).data_type() {
-                    arrow::datatypes::DataType::Utf8 => r
-                        .column(0)
-                        .as_string::<i32>()
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>(),
-                    arrow::datatypes::DataType::LargeUtf8 => r
-                        .column(0)
-                        .as_string::<i64>()
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>(),
-                    _ => {
-                        unreachable!("Unexpected data type from SHOW DATABASES");
-                    }
-                })
-                .collect::<Vec<_>>();
-
             conn.execute(&format!("SET search_path = \"{}\"", db_ids.join(",")), [])
                 .context(DuckDBSnafu)?;
         }
@@ -221,6 +205,22 @@ fn get_config(access_mode: &AccessMode) -> Result<duckdb::Config> {
         .context(DuckDBSnafu)?;
 
     Ok(config)
+}
+
+// Helper function to extract the duckdb database name from the duckdb file path
+fn extract_db_name(file_path: Arc<str>) -> Result<String> {
+    let path = std::path::Path::new(file_path.as_ref());
+
+    let db_name = match path.file_stem().and_then(|name| name.to_str()) {
+        Some(name) => name,
+        None => {
+            return Err(Box::new(Error::UnableToExtractDatabaseNameFromPath {
+                path: file_path,
+            }))
+        }
+    };
+
+    Ok(db_name.to_string())
 }
 
 #[cfg(test)]
@@ -260,7 +260,7 @@ mod test {
         conn.execute("INSERT INTO test VALUES (1, 'a')", &[])
             .expect("Data should be inserted");
 
-        conn.query_arrow("SELECT * FROM test", &[])
+        conn.query_arrow("SELECT * FROM test", &[], None)
             .expect("Query should be successful");
     }
 
@@ -315,18 +315,18 @@ mod test {
             .as_sync()
             .expect("DuckDB connection should be synchronous");
 
-        conn.query_arrow("SELECT * FROM test_one", &[])
+        conn.query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
 
         conn_attached
-            .query_arrow("SELECT * FROM test_two", &[])
+            .query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
 
         conn_attached
-            .query_arrow("SELECT * FROM test_one", &[])
+            .query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
 
-        conn.query_arrow("SELECT * FROM test_two", &[])
+        conn.query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
 
         std::fs::remove_file(&db_base_name).expect("File should be removed");

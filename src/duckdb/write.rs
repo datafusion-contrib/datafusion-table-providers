@@ -1,6 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
+use crate::sql::db_connection_pool::dbconnection::SyncDbConnection;
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
@@ -200,7 +201,16 @@ impl DataSink for DuckDBDataSink {
         drop(batch_tx);
 
         match duckdb_write_handle.await {
-            Ok(result) => result,
+            Ok(result) => {
+                // before returning the result, CHECKPOINT to flush the WAL to disk
+                let mut conn = self.duckdb.connect_sync().map_err(to_datafusion_error)?;
+                let conn = DuckDB::duckdb_conn(&mut conn).map_err(to_datafusion_error)?;
+                conn.execute("CHECKPOINT", &[]).map_err(|err| {
+                    to_datafusion_error(super::Error::UnableToCheckpoint { source: err })
+                })?;
+
+                result
+            }
             Err(e) => Err(DataFusionError::Execution(format!(
                 "Error writing to DuckDB: {e}"
             ))),

@@ -2,8 +2,8 @@ use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::SqliteDialect;
 use futures::TryStreamExt;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
@@ -23,32 +23,26 @@ use datafusion::{
     sql::TableReference,
 };
 
-pub struct DuckDBTable<T: 'static, P: 'static> {
+pub struct SQLiteTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
-
-    /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
-    pub(crate) table_functions: Option<HashMap<String, String>>,
 }
 
-impl<T, P> DuckDBTable<T, P> {
+impl<T, P> SQLiteTable<T, P> {
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
-        table_functions: Option<HashMap<String, String>>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
-            "duckdb",
+            "sqlite",
             pool,
             schema,
             table_reference,
-            Some(Engine::DuckDB),
-        );
+            Some(Engine::SQLite),
+        )
+        .with_dialect(Arc::new(SqliteDialect {}));
 
-        Self {
-            base_table,
-            table_functions,
-        }
+        Self { base_table }
     }
 
     fn create_physical_plan(
@@ -58,20 +52,19 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DuckSqlExec::new(
+        Ok(Arc::new(SQLiteSqlExec::new(
             projections,
             schema,
             &self.base_table.table_reference,
             self.base_table.clone_pool(),
             filters,
             limit,
-            self.table_functions.clone(),
         )?))
     }
 }
 
 #[async_trait]
-impl<T, P> TableProvider for DuckDBTable<T, P> {
+impl<T, P> TableProvider for SQLiteTable<T, P> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -102,19 +95,18 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
     }
 }
 
-impl<T, P> Display for DuckDBTable<T, P> {
+impl<T, P> Display for SQLiteTable<T, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DuckDBTable {}", self.base_table.name())
+        write!(f, "SQLiteTable {}", self.base_table.name())
     }
 }
 
 #[derive(Clone)]
-struct DuckSqlExec<T, P> {
+struct SQLiteSqlExec<T, P> {
     base_exec: SqlExec<T, P>,
-    table_functions: Option<HashMap<String, String>>,
 }
 
-impl<T, P> DuckSqlExec<T, P> {
+impl<T, P> SQLiteSqlExec<T, P> {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
@@ -122,7 +114,6 @@ impl<T, P> DuckSqlExec<T, P> {
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         filters: &[Expr],
         limit: Option<usize>,
-        table_functions: Option<HashMap<String, String>>,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(
             projections,
@@ -131,41 +122,34 @@ impl<T, P> DuckSqlExec<T, P> {
             pool,
             filters,
             limit,
-            Some(Engine::DuckDB),
+            Some(Engine::SQLite),
         )?;
 
-        Ok(Self {
-            base_exec,
-            table_functions,
-        })
+        Ok(Self { base_exec })
     }
 
     fn sql(&self) -> SqlResult<String> {
-        let sql = self.base_exec.sql()?;
-        Ok(format!(
-            "{cte_expr} {sql}",
-            cte_expr = get_cte(&self.table_functions)
-        ))
+        self.base_exec.sql()
     }
 }
 
-impl<T, P> std::fmt::Debug for DuckSqlExec<T, P> {
+impl<T, P> std::fmt::Debug for SQLiteSqlExec<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
-        write!(f, "DuckSqlExec sql={sql}")
+        write!(f, "SQLiteSqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for DuckSqlExec<T, P> {
+impl<T, P> DisplayAs for SQLiteSqlExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
-        write!(f, "DuckSqlExec sql={sql}")
+        write!(f, "SQLiteSqlExec sql={sql}")
     }
 }
 
-impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
     fn name(&self) -> &'static str {
-        "DuckSqlExec"
+        "SQLiteSqlExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -197,27 +181,12 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
         _context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let sql = self.sql().map_err(to_execution_error)?;
-        tracing::debug!("DuckSqlExec sql: {sql}");
+        tracing::debug!("SQLiteSqlExec sql: {sql}");
 
-        let schema = self.schema();
-
-        let fut = get_stream(self.base_exec.clone_pool(), sql, Arc::clone(&schema));
+        let fut = get_stream(self.base_exec.clone_pool(), sql, Arc::clone(&self.schema()));
 
         let stream = futures::stream::once(fut).try_flatten();
+        let schema = Arc::clone(&self.schema());
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
-    }
-}
-
-/// Create CTE expressions for all the table functions.
-pub(crate) fn get_cte(table_functions: &Option<HashMap<String, String>>) -> String {
-    if let Some(table_fn) = table_functions {
-        let inner = table_fn
-            .iter()
-            .map(|(name, r#fn)| format!("{name} AS (SELECT * FROM {fn})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("WITH {inner} ")
-    } else {
-        String::new()
     }
 }

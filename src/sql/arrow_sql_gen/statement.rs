@@ -1,9 +1,14 @@
 use arrow::{
-    array::{array, Array, RecordBatch},
-    datatypes::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit},
+    array::{
+        array, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    },
+    datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
 use bigdecimal_0_3_0::BigDecimal;
+use chrono::{DateTime, FixedOffset};
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
@@ -11,7 +16,7 @@ use sea_query::{
     QueryBuilder, SimpleExpr, SqliteQueryBuilder, StringLen, Table,
 };
 use snafu::Snafu;
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]
@@ -87,6 +92,12 @@ impl CreateTableBuilder {
     #[must_use]
     pub fn build_sqlite(self) -> String {
         self.build(SqliteQueryBuilder, &|f: &Arc<Field>| -> ColumnType {
+            // Sqlite does not natively support Arrays, Structs, etc
+            // so we use JSON column type for List, FixedSizeList, LargeList, Struct, etc
+            if f.data_type().is_nested() {
+                return ColumnType::JsonBinary;
+            }
+
             map_data_type_to_column_type(f.data_type())
         })
     }
@@ -165,6 +176,20 @@ pub struct InsertBuilder {
     record_batches: Vec<RecordBatch>,
 }
 
+pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
+    data_type: &DataType,
+    query_builder: &T,
+) -> bool {
+    #[cfg(feature = "sqlite")]
+    if (query_builder as &dyn Any)
+        .downcast_ref::<SqliteQueryBuilder>()
+        .is_some()
+    {
+        return data_type.is_nested();
+    }
+    false
+}
+
 impl InsertBuilder {
     #[must_use]
     pub fn new(table_name: &str, record_batches: Vec<RecordBatch>) -> Self {
@@ -180,7 +205,7 @@ impl InsertBuilder {
     ///
     /// Returns an error if a column's data type is not supported, or its conversion failed.
     #[allow(clippy::too_many_lines)]
-    pub fn construct_insert_stmt<T: QueryBuilder>(
+    pub fn construct_insert_stmt<T: QueryBuilder + 'static>(
         &self,
         insert_stmt: &mut InsertStatement,
         record_batch: &RecordBatch,
@@ -190,8 +215,9 @@ impl InsertBuilder {
             let mut row_values: Vec<SimpleExpr> = vec![];
             for col in 0..record_batch.num_columns() {
                 let column = record_batch.column(col);
+                let column_data_type = column.data_type();
 
-                match column.data_type() {
+                match column_data_type {
                     DataType::Int8 => push_value!(row_values, column, row, Int8Array),
                     DataType::Int16 => push_value!(row_values, column, row, Int16Array),
                     DataType::Int32 => push_value!(row_values, column, row, Int32Array),
@@ -274,6 +300,20 @@ impl InsertBuilder {
                             );
                         }
                     }
+                    DataType::Duration(time_unit) => match time_unit {
+                        TimeUnit::Second => {
+                            push_value!(row_values, column, row, DurationSecondArray);
+                        }
+                        TimeUnit::Microsecond => {
+                            push_value!(row_values, column, row, DurationMicrosecondArray);
+                        }
+                        TimeUnit::Millisecond => {
+                            push_value!(row_values, column, row, DurationMillisecondArray);
+                        }
+                        TimeUnit::Nanosecond => {
+                            push_value!(row_values, column, row, DurationNanosecondArray);
+                        }
+                    },
                     DataType::Time32(time_unit) => match time_unit {
                         TimeUnit::Millisecond => {
                             let array = column
@@ -284,12 +324,31 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(
+
+                                let (h, m, s, micro) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(
                                         i128::from(valid_array.value(row)) * 1_000_000,
-                                    ),
-                                    &mut row_values,
-                                )?;
+                                    ) {
+                                        Ok(timestamp) => timestamp.to_hms_micro(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_micro(h, m, s, micro) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         TimeUnit::Second => {
@@ -299,12 +358,28 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp(i64::from(
-                                        valid_array.value(row),
-                                    )),
-                                    &mut row_values,
-                                )?;
+
+                                let (h, m, s) = match OffsetDateTime::from_unix_timestamp(
+                                    i64::from(valid_array.value(row)),
+                                ) {
+                                    Ok(timestamp) => timestamp.to_hms(),
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                let time = match time::Time::from_hms(h, m, s) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         _ => unreachable!(),
@@ -319,12 +394,30 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                let (h, m, s, nano) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(i128::from(
                                         valid_array.value(row),
-                                    )),
-                                    &mut row_values,
-                                )?;
+                                    )) {
+                                        Ok(timestamp) => timestamp.to_hms_nano(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_nano(h, m, s, nano) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         TimeUnit::Microsecond => {
@@ -336,17 +429,36 @@ impl InsertBuilder {
                                     row_values.push(Keyword::Null.into());
                                     continue;
                                 }
-                                insert_timestamp_into_row_values(
-                                    OffsetDateTime::from_unix_timestamp_nanos(
+
+                                let (h, m, s, micro) =
+                                    match OffsetDateTime::from_unix_timestamp_nanos(
                                         i128::from(valid_array.value(row)) * 1_000,
-                                    ),
-                                    &mut row_values,
-                                )?;
+                                    ) {
+                                        Ok(timestamp) => timestamp.to_hms_micro(),
+                                        Err(e) => {
+                                            return Result::Err(
+                                                Error::FailedToCreateInsertStatement {
+                                                    source: Box::new(e),
+                                                },
+                                            )
+                                        }
+                                    };
+
+                                let time = match time::Time::from_hms_micro(h, m, s, micro) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        return Result::Err(Error::FailedToCreateInsertStatement {
+                                            source: Box::new(e),
+                                        })
+                                    }
+                                };
+
+                                row_values.push(time.into());
                             }
                         }
                         _ => unreachable!(),
                     },
-                    DataType::Timestamp(TimeUnit::Second, _) => {
+                    DataType::Timestamp(TimeUnit::Second, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampSecondArray>();
@@ -356,13 +468,27 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp(valid_array.value(row)),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time = DateTime::from_timestamp_nanos(
+                                    valid_array.value(row) * 1_000_000_000,
+                                )
+                                .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp(valid_array.value(row)),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampMillisecondArray>();
@@ -372,15 +498,29 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(
-                                    i128::from(valid_array.value(row)) * 1_000_000,
-                                ),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time = DateTime::from_timestamp_nanos(
+                                    valid_array.value(row) * 1_000_000,
+                                )
+                                .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampMicrosecondArray>();
@@ -390,15 +530,28 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(
-                                    i128::from(valid_array.value(row)) * 1_000,
-                                ),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time =
+                                    DateTime::from_timestamp_nanos(valid_array.value(row) * 1_000)
+                                        .to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(
+                                        i128::from(valid_array.value(row)) * 1_000,
+                                    ),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
-                    DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::TimestampNanosecondArray>();
@@ -408,12 +561,24 @@ impl InsertBuilder {
                                 row_values.push(Keyword::Null.into());
                                 continue;
                             }
-                            insert_timestamp_into_row_values(
-                                OffsetDateTime::from_unix_timestamp_nanos(i128::from(
-                                    valid_array.value(row),
-                                )),
-                                &mut row_values,
-                            )?;
+                            if let Some(timezone) = timezone {
+                                let utc_time =
+                                    DateTime::from_timestamp_nanos(valid_array.value(row)).to_utc();
+                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                    Error::FailedToCreateInsertStatement {
+                                        source: "Unable to parse arrow timezone information".into(),
+                                    },
+                                )?;
+                                let time_with_offset = utc_time.with_timezone(&offset);
+                                row_values.push(time_with_offset.into());
+                            } else {
+                                insert_timestamp_into_row_values(
+                                    OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                                        valid_array.value(row),
+                                    )),
+                                    &mut row_values,
+                                )?;
+                            }
                         }
                     }
                     DataType::List(list_type) => {
@@ -424,7 +589,16 @@ impl InsertBuilder {
                                 continue;
                             }
                             let list_array = valid_array.value(row);
-                            insert_list_into_row_values(list_array, list_type, &mut row_values);
+
+                            if use_json_insert_for_type(column_data_type, query_builder) {
+                                insert_list_into_row_values_json(
+                                    list_array,
+                                    list_type,
+                                    &mut row_values,
+                                )?;
+                            } else {
+                                insert_list_into_row_values(list_array, list_type, &mut row_values);
+                            }
                         }
                     }
                     DataType::LargeList(list_type) => {
@@ -435,7 +609,16 @@ impl InsertBuilder {
                                 continue;
                             }
                             let list_array = valid_array.value(row);
-                            insert_list_into_row_values(list_array, list_type, &mut row_values);
+
+                            if use_json_insert_for_type(column_data_type, query_builder) {
+                                insert_list_into_row_values_json(
+                                    list_array,
+                                    list_type,
+                                    &mut row_values,
+                                )?;
+                            } else {
+                                insert_list_into_row_values(list_array, list_type, &mut row_values);
+                            }
                         }
                     }
                     DataType::FixedSizeList(list_type, _) => {
@@ -446,7 +629,16 @@ impl InsertBuilder {
                                 continue;
                             }
                             let list_array = valid_array.value(row);
-                            insert_list_into_row_values(list_array, list_type, &mut row_values);
+
+                            if use_json_insert_for_type(column_data_type, query_builder) {
+                                insert_list_into_row_values_json(
+                                    list_array,
+                                    list_type,
+                                    &mut row_values,
+                                )?;
+                            } else {
+                                insert_list_into_row_values(list_array, list_type, &mut row_values);
+                            }
                         }
                     }
                     DataType::Binary => {
@@ -561,12 +753,22 @@ impl InsertBuilder {
                             }
                         }
                     },
-                    DataType::Struct(_) => {
+                    DataType::Struct(fields) => {
                         let array = column.as_any().downcast_ref::<array::StructArray>();
 
                         if let Some(valid_array) = array {
                             if valid_array.is_null(row) {
                                 row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            if use_json_insert_for_type(column_data_type, query_builder) {
+                                insert_struct_into_row_values_json(
+                                    fields,
+                                    valid_array,
+                                    row,
+                                    &mut row_values,
+                                )?;
                                 continue;
                             }
 
@@ -794,7 +996,7 @@ impl InsertBuilder {
     ///
     /// Returns an error if any `RecordBatch` fails to convert into a valid insert statement. Upon
     /// error, no further `RecordBatch` is processed.
-    pub fn build<T: GenericBuilder>(
+    pub fn build<T: GenericBuilder + 'static>(
         &self,
         query_builder: T,
         on_conflict: Option<OnConflict>,
@@ -891,6 +1093,34 @@ fn insert_timestamp_into_row_values(
         Err(e) => Err(Error::FailedToCreateInsertStatement {
             source: Box::new(e),
         }),
+    }
+}
+
+// Reference: https://github.com/apache/arrow-rs/blob/6c59b7637592e4b67b18762b8313f91086c0d5d8/arrow-array/src/timezone.rs#L25
+#[allow(clippy::cast_lossless)]
+fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
+    let bytes = tz.as_bytes();
+
+    let mut values = match bytes.len() {
+        // [+-]XX:XX
+        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
+        // [+-]XXXX
+        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
+        // [+-]XX
+        3 => [bytes[1], bytes[2], b'0', b'0'],
+        _ => return None,
+    };
+    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
+    if values.iter().any(|x| *x > 9) {
+        return None;
+    }
+    let secs =
+        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
+
+    match bytes[0] {
+        b'+' => FixedOffset::east_opt(secs),
+        b'-' => FixedOffset::west_opt(secs),
+        _ => None,
     }
 }
 
@@ -1008,7 +1238,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Int8 => ColumnType::TinyInteger,
         DataType::Int16 => ColumnType::SmallInteger,
         DataType::Int32 => ColumnType::Integer,
-        DataType::Int64 => ColumnType::BigInteger,
+        DataType::Int64 | DataType::Duration(_) => ColumnType::BigInteger,
         DataType::UInt8 => ColumnType::TinyUnsigned,
         DataType::UInt16 => ColumnType::SmallUnsigned,
         DataType::UInt32 => ColumnType::Unsigned,
@@ -1021,7 +1251,12 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
             ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
         }
-        DataType::Timestamp(_unit, _time_zone) => ColumnType::Timestamp,
+        DataType::Timestamp(_unit, time_zone) => {
+            if time_zone.is_some() {
+                return ColumnType::TimestampWithTimeZone;
+            }
+            ColumnType::Timestamp
+        }
         DataType::Date32 | DataType::Date64 => ColumnType::Date,
         DataType::Time64(_unit) | DataType::Time32(_unit) => ColumnType::Time,
         DataType::List(list_type)
@@ -1035,6 +1270,97 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         // Add more mappings here as needed
         _ => unimplemented!("Data type mapping not implemented for {:?}", data_type),
     }
+}
+
+macro_rules! serialize_list_values {
+    ($data_type:expr, $list_array:expr, $array_type:ty, $vec_type:ty) => {{
+        let mut list_values: Vec<$vec_type> = vec![];
+        if let Some(array) = $list_array.as_any().downcast_ref::<$array_type>() {
+            for i in 0..array.len() {
+                list_values.push(array.value(i).into());
+            }
+        }
+
+        serde_json::to_string(&list_values).map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?
+    }};
+}
+
+fn insert_list_into_row_values_json(
+    list_array: Arc<dyn Array>,
+    list_type: &Arc<Field>,
+    row_values: &mut Vec<SimpleExpr>,
+) -> Result<()> {
+    let data_type = list_type.data_type();
+
+    let json_string: String = match data_type {
+        DataType::Int8 => serialize_list_values!(data_type, list_array, Int8Array, i8),
+        DataType::Int16 => serialize_list_values!(data_type, list_array, Int16Array, i16),
+        DataType::Int32 => serialize_list_values!(data_type, list_array, Int32Array, i32),
+        DataType::Int64 => serialize_list_values!(data_type, list_array, Int64Array, i64),
+        DataType::UInt8 => serialize_list_values!(data_type, list_array, UInt8Array, u8),
+        DataType::UInt16 => serialize_list_values!(data_type, list_array, UInt16Array, u16),
+        DataType::UInt32 => serialize_list_values!(data_type, list_array, UInt32Array, u32),
+        DataType::UInt64 => serialize_list_values!(data_type, list_array, UInt64Array, u64),
+        DataType::Float32 => serialize_list_values!(data_type, list_array, Float32Array, f32),
+        DataType::Float64 => serialize_list_values!(data_type, list_array, Float64Array, f64),
+        DataType::Utf8 => serialize_list_values!(data_type, list_array, StringArray, String),
+        DataType::LargeUtf8 => {
+            serialize_list_values!(data_type, list_array, LargeStringArray, String)
+        }
+        DataType::Boolean => serialize_list_values!(data_type, list_array, BooleanArray, bool),
+        _ => unimplemented!(
+            "List to json conversion is not implemented for {}",
+            list_type.data_type()
+        ),
+    };
+
+    let expr: SimpleExpr = Expr::value(json_string);
+    row_values.push(expr);
+
+    Ok(())
+}
+
+fn insert_struct_into_row_values_json(
+    fields: &Fields,
+    array: &StructArray,
+    row_index: usize,
+    row_values: &mut Vec<SimpleExpr>,
+) -> Result<()> {
+    // The length of each column in a StructArray is the same as the length of the StructArray itself.
+    // The presence of null values does not change the length of the columns (affects the validity bitmap only).
+    // Similar to Recordbatch slice: https://github.com/apache/arrow-rs/blob/855666d9e9283c1ef11648762fe92c7c188b68f1/arrow-array/src/record_batch.rs#L375
+    let single_row_columns: Vec<ArrayRef> = (0..array.num_columns())
+        .map(|i| array.column(i).slice(row_index, 1))
+        .collect();
+
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields.clone())), single_row_columns)
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
+
+    let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
+    writer
+        .write(&batch)
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
+    writer
+        .finish()
+        .map_err(|e| Error::FailedToCreateInsertStatement {
+            source: Box::new(e),
+        })?;
+    let json_bytes = writer.into_inner();
+
+    let json = String::from_utf8(json_bytes).map_err(|e| Error::FailedToCreateInsertStatement {
+        source: Box::new(e),
+    })?;
+
+    let expr: SimpleExpr = Expr::value(json);
+    row_values.push(expr);
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -104,6 +104,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         &self,
         sql: &str,
         params: &[DuckDBParameter],
+        _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 

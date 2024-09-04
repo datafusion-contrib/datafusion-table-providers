@@ -1,17 +1,23 @@
 use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use rstest::rstest;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-async fn arrow_duckdb_round_trip(arrow_record: RecordBatch, table_name: &str) {
+async fn arrow_duckdb_round_trip(
+    arrow_record: RecordBatch,
+    source_schema: SchemaRef,
+    table_name: &str,
+) {
     let factory = DuckDBTableProviderFactory::new().access_mode(duckdb::AccessMode::ReadWrite);
     let ctx = SessionContext::new();
     let cmd = CreateExternalTable {
@@ -55,6 +61,7 @@ async fn arrow_duckdb_round_trip(arrow_record: RecordBatch, table_name: &str) {
         .expect("DataFrame should be created from query");
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
@@ -66,6 +73,7 @@ async fn arrow_duckdb_round_trip(arrow_record: RecordBatch, table_name: &str) {
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    assert_eq!(casted_record, arrow_record);
 }
 
 #[rstest]
@@ -88,6 +96,14 @@ async fn arrow_duckdb_round_trip(arrow_record: RecordBatch, table_name: &str) {
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
-async fn test_arrow_duckdb_roundtrip(#[case] arrow_record: RecordBatch, #[case] table_name: &str) {
-    arrow_duckdb_round_trip(arrow_record, &format!("{table_name}_types")).await;
+async fn test_arrow_duckdb_roundtrip(
+    #[case] arrow_result: (RecordBatch, SchemaRef),
+    #[case] table_name: &str,
+) {
+    arrow_duckdb_round_trip(
+        arrow_result.0,
+        arrow_result.1,
+        &format!("{table_name}_types"),
+    )
+    .await;
 }

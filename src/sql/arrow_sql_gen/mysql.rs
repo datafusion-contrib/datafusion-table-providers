@@ -6,7 +6,7 @@ use arrow::{
         NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
         TimestampMillisecondBuilder, UInt64Builder,
     },
-    datatypes::{DataType, Date32Type, Field, Schema, TimeUnit},
+    datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
 };
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
@@ -88,7 +88,7 @@ macro_rules! handle_primitive_type {
 ///
 /// Returns an error if there is a failure in converting the rows to a `RecordBatch`.
 #[allow(clippy::too_many_lines)]
-pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
+pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut mysql_types: Vec<ColumnType> = Vec::new();
@@ -101,12 +101,26 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
             let column_name = column.name_str();
             let column_type = column.column_type();
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
-            let column_decimal_precision: i8 = column.decimals().try_into().unwrap_or_default();
+
+            let (decimal_precision, decimal_scale) = match column_type {
+                ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                    // use 38 as default precision for decimal types if there is no way to get the precision from the column
+                    match projected_schema {
+                        Some(schema) => {
+                            let precision = get_decimal_column_precision(&column_name, schema).unwrap_or(38);
+                            (Some(precision), Some(column.decimals() as i8))
+                        },
+                        None => (Some(38), Some(column.decimals() as i8)),
+                    }
+                },
+                _ => (None, None),
+            };
 
             let data_type = map_column_to_data_type(
                 column_type,
                 column_is_binary,
-                Some(column_decimal_precision),
+                decimal_precision,
+                decimal_scale,
             );
 
             arrow_fields.push(
@@ -421,7 +435,8 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
-    column_decimal_precision: Option<i8>,
+    column_decimal_precision: Option<u8>,
+    column_decimal_scale: Option<i8>,
 ) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
@@ -433,7 +448,7 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_FLOAT => Some(DataType::Float32),
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
         // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
-        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(38, column_decimal_precision.unwrap_or_default())),
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default())),
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_DATETIME2  => {
             Some(DataType::Timestamp(TimeUnit::Millisecond, None))
         }
@@ -473,6 +488,14 @@ pub fn map_column_to_data_type(
 
 fn to_decimal_128(decimal: &BigDecimal, scale: i64) -> Option<i128> {
     (decimal * 10i128.pow(scale.try_into().unwrap_or_default())).to_i128()
+}
+
+fn get_decimal_column_precision(column_name: &str, projected_schema: &SchemaRef) -> Option<u8> {
+    let field = projected_schema.field_with_name(column_name).ok()?;
+    match field.data_type() {
+        DataType::Decimal128(precision, _) => Some(*precision),
+        _ => None,
+    }
 }
 
 fn handle_null_error<T>(

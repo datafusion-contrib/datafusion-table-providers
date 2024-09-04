@@ -8,7 +8,7 @@ use arrow::array::{
     FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
     Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
     RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-    TimestampMillisecondBuilder, UInt32Builder,
+    TimestampNanosecondBuilder, UInt32Builder,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -18,7 +18,7 @@ use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
 use byteorder::{BigEndian, ReadBytesExt};
-use chrono::Timelike;
+use chrono::{DateTime, Offset, Timelike, Utc};
 use composite::CompositeType;
 use geo_types::geometry::Point;
 use sea_query::{Alias, ColumnType, SeaRc};
@@ -452,13 +452,13 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     };
                     dec_builder.append_value(v_i128);
                 }
-                ref pg_type @ (Type::TIMESTAMP | Type::TIMESTAMPTZ) => {
+                Type::TIMESTAMP => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
                     };
                     let Some(builder) = builder
                         .as_any_mut()
-                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .downcast_mut::<TimestampNanosecondBuilder>()
                     else {
                         return FailedToDowncastBuilderSnafu {
                             postgres_type: format!("{postgres_type}"),
@@ -468,14 +468,14 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                     let v = row
                         .try_get::<usize, Option<SystemTime>>(i)
                         .with_context(|_| FailedToGetRowValueSnafu {
-                            pg_type: pg_type.clone(),
+                            pg_type: Type::TIMESTAMP,
                         })?;
 
                     match v {
                         Some(v) => {
                             if let Ok(v) = v.duration_since(UNIX_EPOCH) {
                                 let timestamp: i64 = v
-                                    .as_millis()
+                                    .as_nanos()
                                     .try_into()
                                     .context(FailedToConvertU128toI64Snafu)?;
                                 builder.append_value(timestamp);
@@ -484,6 +484,56 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         None => builder.append_null(),
                     }
                 }
+                Type::TIMESTAMPTZ => {
+                    let v = row
+                        .try_get::<usize, Option<DateTime<Utc>>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu {
+                            pg_type: Type::TIMESTAMPTZ,
+                        })?;
+
+                    let time_zone = v.unwrap_or_default().offset().fix();
+                    let timestampz_builder = builder.get_or_insert_with(|| {
+                        Box::new(
+                            TimestampNanosecondBuilder::new().with_timezone(time_zone.to_string()),
+                        )
+                    });
+
+                    let Some(timestampz_builder) = timestampz_builder
+                        .as_any_mut()
+                        .downcast_mut::<TimestampNanosecondBuilder>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    if arrow_field.is_none() {
+                        let Some(field_name) = column_names.get(i) else {
+                            return NoColumnNameForIndexSnafu { index: i }.fail();
+                        };
+                        let new_arrow_field = Field::new(
+                            field_name,
+                            DataType::Timestamp(
+                                TimeUnit::Nanosecond,
+                                Some(Arc::from(time_zone.to_string())),
+                            ),
+                            true,
+                        );
+
+                        *arrow_field = Some(new_arrow_field);
+                    }
+
+                    match v {
+                        Some(v) => {
+                            let utc_timestamp =
+                                v.to_utc().timestamp_nanos_opt().unwrap_or_default();
+                            timestampz_builder.append_value(utc_timestamp);
+                        }
+                        None => timestampz_builder.append_null(),
+                    }
+                }
+
                 Type::DATE => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
@@ -728,11 +778,9 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         Type::BOOL => Some(DataType::Boolean),
         Type::JSON => Some(DataType::LargeUtf8),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
-        Type::NUMERIC => None,
+        Type::NUMERIC | Type::TIMESTAMPTZ => None,
         // We get a SystemTime that we can always convert into milliseconds
-        Type::TIMESTAMP | Type::TIMESTAMPTZ => {
-            Some(DataType::Timestamp(TimeUnit::Millisecond, None))
-        }
+        Type::TIMESTAMP => Some(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         Type::DATE => Some(DataType::Date32),
         Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
         Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
