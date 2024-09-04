@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 use std::str::FromStr;
 
 #[derive(Default)]
-pub struct SQLiteVisitor {}
+pub struct SQLiteIntervalVisitor {}
 
 #[derive(Default, Debug)]
 struct IntervalParts {
@@ -92,7 +92,7 @@ impl IntervalParts {
     }
 }
 
-impl VisitorMut for SQLiteVisitor {
+impl VisitorMut for SQLiteIntervalVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
@@ -108,12 +108,12 @@ impl VisitorMut for SQLiteVisitor {
                 return ControlFlow::Continue(());
             }
 
-            let (target, interval) = SQLiteVisitor::normalize_interval_expr(left, right);
+            let (target, interval) = SQLiteIntervalVisitor::normalize_interval_expr(left, right);
 
             if let Expr::Interval(_) = interval.as_ref() {
                 // parse the INTERVAL and get the bits out of it
                 // e.g. INTERVAL 0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINUTES 0.000000000 SECS -> IntervalParts { days: 1 }
-                if let Ok(interval_parts) = SQLiteVisitor::parse_interval(interval) {
+                if let Ok(interval_parts) = SQLiteIntervalVisitor::parse_interval(interval) {
                     // negate the interval parts if the operator is minus
                     let interval_parts = if *op == BinaryOperator::Minus {
                         interval_parts.negate()
@@ -121,7 +121,8 @@ impl VisitorMut for SQLiteVisitor {
                         interval_parts
                     };
 
-                    *expr = SQLiteVisitor::create_datetime_function(target, &interval_parts);
+                    *expr =
+                        SQLiteIntervalVisitor::create_datetime_function(target, &interval_parts);
                 }
             }
         }
@@ -129,7 +130,7 @@ impl VisitorMut for SQLiteVisitor {
     }
 }
 
-impl SQLiteVisitor {
+impl SQLiteIntervalVisitor {
     // normalize the sides of the operation to make sure the INTERVAL is always on the right
     fn normalize_interval_expr<'a>(
         left: &'a mut Box<Expr>,
@@ -146,7 +147,7 @@ impl SQLiteVisitor {
         if let Expr::Interval(interval_expr) = interval {
             if let Expr::Value(ast::Value::SingleQuotedString(value)) = interval_expr.value.as_ref()
             {
-                return SQLiteVisitor::parse_interval_string(value);
+                return SQLiteIntervalVisitor::parse_interval_string(value);
             }
         }
         Err(DataFusionError::Plan(
@@ -168,7 +169,7 @@ impl SQLiteVisitor {
 
         for (unit, setter) in &components {
             if let Some((value, rest)) = remaining.split_once(unit) {
-                let parsed_value: i64 = SQLiteVisitor::parse_value(value.trim())?;
+                let parsed_value: i64 = SQLiteIntervalVisitor::parse_value(value.trim())?;
                 parts = setter(parts, parsed_value);
                 remaining = rest;
             }
@@ -176,7 +177,7 @@ impl SQLiteVisitor {
 
         // Parse seconds and nanoseconds separately
         if let Some((secs, _)) = remaining.split_once("SECS") {
-            let (seconds, nanos) = SQLiteVisitor::parse_seconds_and_nanos(secs.trim())?;
+            let (seconds, nanos) = SQLiteIntervalVisitor::parse_seconds_and_nanos(secs.trim())?;
             parts = parts.with_seconds(seconds).with_nanos(nanos);
         }
 
@@ -185,7 +186,7 @@ impl SQLiteVisitor {
 
     fn parse_seconds_and_nanos(value: &str) -> Result<(i64, u32), DataFusionError> {
         let parts: Vec<&str> = value.split('.').collect();
-        let seconds = SQLiteVisitor::parse_value(parts[0])?;
+        let seconds = SQLiteIntervalVisitor::parse_value(parts[0])?;
         let nanos = if parts.len() > 1 {
             let nanos_str = format!("{:0<9}", parts[1]);
             nanos_str[..9].parse().map_err(|_| {
@@ -212,12 +213,12 @@ impl SQLiteVisitor {
 
         let function_args = vec![
             Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(target.clone()))),
-            SQLiteVisitor::create_interval_arg("years", interval.years),
-            SQLiteVisitor::create_interval_arg("months", interval.months),
-            SQLiteVisitor::create_interval_arg("days", interval.days),
-            SQLiteVisitor::create_interval_arg("hours", interval.hours),
-            SQLiteVisitor::create_interval_arg("minutes", interval.minutes),
-            SQLiteVisitor::create_interval_arg_with_fraction(
+            SQLiteIntervalVisitor::create_interval_arg("years", interval.years),
+            SQLiteIntervalVisitor::create_interval_arg("months", interval.months),
+            SQLiteIntervalVisitor::create_interval_arg("days", interval.days),
+            SQLiteIntervalVisitor::create_interval_arg("hours", interval.hours),
+            SQLiteIntervalVisitor::create_interval_arg("minutes", interval.minutes),
+            SQLiteIntervalVisitor::create_interval_arg_with_fraction(
                 "seconds",
                 interval.seconds,
                 interval.nanos,
