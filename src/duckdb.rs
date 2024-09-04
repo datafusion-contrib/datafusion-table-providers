@@ -326,11 +326,11 @@ impl DuckDB {
             .context(DbConnectionSnafu)
     }
 
-    pub fn duckdb_conn<'a>(
-        db_connection: &'a mut Box<
+    pub fn duckdb_conn(
+        db_connection: &mut Box<
             dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
         >,
-    ) -> Result<&'a mut DuckDbConnection> {
+    ) -> Result<&mut DuckDbConnection> {
         db_connection
             .as_any_mut()
             .downcast_mut::<DuckDbConnection>()
