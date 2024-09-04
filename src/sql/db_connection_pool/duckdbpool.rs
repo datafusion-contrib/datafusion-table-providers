@@ -264,6 +264,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(feature = "duckdb-federation")]
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();
