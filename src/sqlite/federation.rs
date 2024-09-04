@@ -4,7 +4,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource, AstAnalyzer};
+use datafusion_federation::sql::{AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
 use snafu::ResultExt;
