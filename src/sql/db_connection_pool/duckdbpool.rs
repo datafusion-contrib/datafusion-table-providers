@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager, ToSql};
+use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 
-use super::{DbConnectionPool, Result};
+use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Result};
 use crate::sql::db_connection_pool::{
     dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
     JoinPushDown,
@@ -134,7 +134,7 @@ impl DuckDbConnectionPool {
     pub fn connect_sync(
         self: Arc<Self>,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
@@ -144,13 +144,13 @@ impl DuckDbConnectionPool {
 }
 
 #[async_trait]
-impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>
+impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnectionPool
 {
     async fn connect(
         &self,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
@@ -225,7 +225,6 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-
     use rand::Rng;
 
     use super::*;
@@ -265,6 +264,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(feature = "duckdb-federation")]
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();

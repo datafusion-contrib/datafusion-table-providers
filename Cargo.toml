@@ -62,6 +62,7 @@ pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 tonic = { version = "0.11", optional = true } # pinned for arrow-flight compat
 itertools = "0.13.0"
+dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 
 [dev-dependencies]
@@ -81,7 +82,7 @@ arrow-schema = "52.2.0"
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
-duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
+duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream"]
 flight = [
   "dep:arrow-array",
   "dep:arrow-cast",
@@ -102,4 +103,4 @@ sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "b6682948d07cc3155edb3dfbf03f8b55570fc1d2" }
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "f2ca47d094a5636df8b9f3792b2f474a7b210dc1" }
