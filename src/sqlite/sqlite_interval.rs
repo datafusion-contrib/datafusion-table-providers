@@ -280,3 +280,190 @@ impl SQLiteIntervalVisitor {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_interval_parts_parse() {
+        let parts = SQLiteIntervalVisitor::parse_interval_string(
+            "0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS",
+        )
+        .expect("interval parts should be parsed");
+
+        assert_eq!(parts.years, 0);
+        assert_eq!(parts.months, 0);
+        assert_eq!(parts.days, 1);
+        assert_eq!(parts.hours, 0);
+        assert_eq!(parts.minutes, 0);
+        assert_eq!(parts.seconds, 0);
+        assert_eq!(parts.nanos, 0);
+    }
+
+    #[test]
+    fn test_interval_parts_parse_with_nanos() {
+        let parts = SQLiteIntervalVisitor::parse_interval_string(
+            "0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 0.000000001 SECS",
+        )
+        .expect("interval parts should be parsed");
+
+        assert_eq!(parts.years, 0);
+        assert_eq!(parts.months, 0);
+        assert_eq!(parts.days, 0);
+        assert_eq!(parts.hours, 0);
+        assert_eq!(parts.minutes, 0);
+        assert_eq!(parts.seconds, 0);
+        assert_eq!(parts.nanos, 1);
+    }
+
+    #[test]
+    fn test_interval_parts_parse_negative() {
+        let parts = SQLiteIntervalVisitor::parse_interval_string(
+            "0 YEARS 0 MONS -1 DAYS 0 HOURS 0 MINS 0.000000000 SECS",
+        )
+        .expect("interval parts should be parsed");
+
+        assert_eq!(parts.years, 0);
+        assert_eq!(parts.months, 0);
+        assert_eq!(parts.days, -1);
+        assert_eq!(parts.hours, 0);
+        assert_eq!(parts.minutes, 0);
+        assert_eq!(parts.seconds, 0);
+        assert_eq!(parts.nanos, 0);
+    }
+
+    #[test]
+    fn test_interval_parts_parse_intraday() {
+        let parts = SQLiteIntervalVisitor::parse_interval_string(
+            "0 YEARS 0 MONS 0 DAYS 1 HOURS 1 MINS 1.000000001 SECS",
+        )
+        .expect("interval parts should be parsed");
+
+        assert_eq!(parts.years, 0);
+        assert_eq!(parts.months, 0);
+        assert_eq!(parts.days, 0);
+        assert_eq!(parts.hours, 1);
+        assert_eq!(parts.minutes, 1);
+        assert_eq!(parts.seconds, 1);
+        assert_eq!(parts.nanos, 1);
+
+        assert!(parts.intraday());
+    }
+
+    #[test]
+    fn test_interval_parts_parse_interday() {
+        let parts = SQLiteIntervalVisitor::parse_interval_string(
+            "0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS",
+        )
+        .expect("interval parts should be parsed");
+
+        assert_eq!(parts.years, 0);
+        assert_eq!(parts.months, 0);
+        assert_eq!(parts.days, 1);
+        assert_eq!(parts.hours, 0);
+        assert_eq!(parts.minutes, 0);
+        assert_eq!(parts.seconds, 0);
+        assert_eq!(parts.nanos, 0);
+
+        assert!(!parts.intraday());
+    }
+
+    #[test]
+    fn test_create_date_function() {
+        let target = Expr::Value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
+        let interval = IntervalParts::new()
+            .with_years(1)
+            .with_months(2)
+            .with_days(3)
+            .with_hours(0)
+            .with_minutes(0)
+            .with_seconds(0)
+            .with_nanos(0);
+
+        let datetime_function = SQLiteIntervalVisitor::create_datetime_function(&target, &interval);
+
+        let expected = Expr::Cast {
+            expr: Box::new(Expr::Function(ast::Function {
+                name: ast::ObjectName(vec![Ident::new("date")]),
+                args: ast::FunctionArguments::List(FunctionArgumentList {
+                    duplicate_treatment: None,
+                    args: vec![
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("1995-01-01".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+1 years".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+2 months".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+3 days".to_string()),
+                        ))),
+                    ],
+                    clauses: Vec::new(),
+                }),
+                filter: None,
+                null_treatment: None,
+                over: None,
+                within_group: Vec::new(),
+                parameters: ast::FunctionArguments::None,
+            })),
+            data_type: ast::DataType::Text,
+            format: None,
+            kind: ast::CastKind::Cast,
+        };
+
+        assert_eq!(datetime_function, expected);
+    }
+
+    #[test]
+    fn test_create_datetime_function() {
+        let target = Expr::Value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
+        let interval = IntervalParts::new()
+            .with_years(0)
+            .with_months(0)
+            .with_days(0)
+            .with_hours(1)
+            .with_minutes(2)
+            .with_seconds(3)
+            .with_nanos(0);
+
+        let datetime_function = SQLiteIntervalVisitor::create_datetime_function(&target, &interval);
+
+        let expected = Expr::Cast {
+            expr: Box::new(Expr::Function(ast::Function {
+                name: ast::ObjectName(vec![Ident::new("datetime")]),
+                args: ast::FunctionArguments::List(FunctionArgumentList {
+                    duplicate_treatment: None,
+                    args: vec![
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("1995-01-01".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+1 hours".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+2 minutes".to_string()),
+                        ))),
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                            ast::Value::SingleQuotedString("+3 seconds".to_string()),
+                        ))),
+                    ],
+                    clauses: Vec::new(),
+                }),
+                filter: None,
+                null_treatment: None,
+                over: None,
+                within_group: Vec::new(),
+                parameters: ast::FunctionArguments::None,
+            })),
+            data_type: ast::DataType::Text,
+            format: None,
+            kind: ast::CastKind::Cast,
+        };
+
+        assert_eq!(datetime_function, expected);
+    }
+}
