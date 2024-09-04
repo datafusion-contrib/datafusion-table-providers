@@ -37,6 +37,10 @@ use self::write::SqliteTableWriter;
 
 #[cfg(feature = "sqlite-federation")]
 pub mod federation;
+
+#[cfg(feature = "sqlite-federation")]
+pub mod sqlite_interval;
+
 pub mod sql_table;
 pub mod write;
 
