@@ -1,16 +1,20 @@
 use std::any::Any;
 
 use arrow::array::RecordBatch;
+use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
 use duckdb::DuckdbConnectionManager;
 use duckdb::ToSql;
+use dyn_clone::DynClone;
 use snafu::{prelude::*, ResultExt};
+use tokio::sync::mpsc::Sender;
 
 use super::DbConnection;
 use super::Result;
@@ -20,7 +24,22 @@ use super::SyncDbConnection;
 pub enum Error {
     #[snafu(display("DuckDBError: {source}"))]
     DuckDBError { source: duckdb::Error },
+
+    #[snafu(display("ChannelError: {message}"))]
+    ChannelError { message: String },
 }
+
+pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
+    fn as_input_parameter(&self) -> &dyn ToSql;
+}
+
+impl<T: ToSql + Sync + Send + DynClone> DuckDBSyncParameter for T {
+    fn as_input_parameter(&self) -> &dyn ToSql {
+        self
+    }
+}
+dyn_clone::clone_trait_object!(DuckDBSyncParameter);
+pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
@@ -34,7 +53,7 @@ impl DuckDbConnection {
     }
 }
 
-impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn ToSql>
+impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
     fn as_any(&self) -> &dyn Any {
@@ -47,13 +66,14 @@ impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn T
 
     fn as_sync(
         &self,
-    ) -> Option<&dyn SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'a dyn ToSql>>
-    {
+    ) -> Option<
+        &dyn SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
+    > {
         Some(self)
     }
 }
 
-impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
+impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
     fn new(conn: r2d2::PooledConnection<DuckdbConnectionManager>) -> Self {
@@ -83,20 +103,85 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSq
     fn query_arrow(
         &self,
         sql: &str,
-        params: &[&dyn ToSql],
+        params: &[DuckDBParameter],
         _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
-        let mut stmt = self.conn.prepare(sql).context(DuckDBSnafu)?;
+        let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
-        let result: duckdb::Arrow<'_> = stmt.query_arrow(params).context(DuckDBSnafu)?;
+        let fetch_schema_sql =
+            format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
+        let mut stmt = self
+            .conn
+            .prepare(&fetch_schema_sql)
+            .boxed()
+            .context(super::UnableToGetSchemaSnafu)?;
+
+        let result: duckdb::Arrow<'_> = stmt
+            .query_arrow([])
+            .boxed()
+            .context(super::UnableToGetSchemaSnafu)?;
+
         let schema = result.get_schema();
-        let recs: Vec<RecordBatch> = result.collect();
-        Ok(Box::pin(MemoryStream::try_new(recs, schema, None)?))
+
+        let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
+
+        let conn = self.conn.try_clone()?;
+        let sql = sql.to_string();
+
+        let cloned_schema = schema.clone();
+
+        let join_handle = tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(&sql).context(DuckDBSnafu)?;
+            let params: &[&dyn ToSql] = &params
+                .iter()
+                .map(|f| f.as_input_parameter())
+                .collect::<Vec<_>>();
+            let result: duckdb::ArrowStream<'_> = stmt
+                .stream_arrow(params, cloned_schema)
+                .context(DuckDBSnafu)?;
+            for i in result {
+                blocking_channel_send(&batch_tx, i)?;
+            }
+
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        });
+
+        let output_stream = stream! {
+            while let Some(batch) = batch_rx.recv().await {
+                yield Ok(batch);
+            }
+
+            if let Err(e) = join_handle.await {
+                yield Err(DataFusionError::Execution(format!(
+                    "Failed to execute DuckDB query: {e}"
+                )))
+            }
+        };
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            output_stream,
+        )))
     }
 
-    fn execute(&self, sql: &str, params: &[&dyn ToSql]) -> Result<u64> {
+    fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {
+        let params: &[&dyn ToSql] = &params
+            .iter()
+            .map(|f| f.as_input_parameter())
+            .collect::<Vec<_>>();
+
         let rows_modified = self.conn.execute(sql, params).context(DuckDBSnafu)?;
         Ok(rows_modified as u64)
+    }
+}
+
+fn blocking_channel_send<T>(channel: &Sender<T>, item: T) -> Result<()> {
+    match channel.blocking_send(item) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(Error::ChannelError {
+            message: format!("{e}"),
+        }
+        .into()),
     }
 }
 
