@@ -99,3 +99,4 @@ sqlite-federation = ["sqlite"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "b6682948d07cc3155edb3dfbf03f8b55570fc1d2" }
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "f2ca47d094a5636df8b9f3792b2f474a7b210dc1" }

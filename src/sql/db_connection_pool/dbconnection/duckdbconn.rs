@@ -53,7 +53,7 @@ impl DuckDbConnection {
     }
 }
 
-impl<'a> DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
+impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
     fn as_any(&self) -> &dyn Any {
