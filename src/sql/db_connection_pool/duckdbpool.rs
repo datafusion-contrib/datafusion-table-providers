@@ -225,7 +225,6 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-
     use rand::Rng;
 
     use super::*;

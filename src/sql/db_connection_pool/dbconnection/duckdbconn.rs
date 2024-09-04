@@ -108,9 +108,8 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
-        let fetch_schema_sql = format!(
-            "WITH fetch_schema_daith7owar AS ({sql}) SELECT * FROM fetch_schema_daith7owar LIMIT 0"
-        );
+        let fetch_schema_sql =
+            format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
         let mut stmt = self
             .conn
             .prepare(&fetch_schema_sql)
