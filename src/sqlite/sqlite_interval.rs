@@ -224,7 +224,7 @@ impl SQLiteVisitor {
             ),
         ]
         .into_iter()
-        .flatten()
+        .flatten() // flatten the list of arguments to exclude 0 values
         .collect();
 
         let datetime_function = Expr::Function(ast::Function {
