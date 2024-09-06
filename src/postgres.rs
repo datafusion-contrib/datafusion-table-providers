@@ -162,7 +162,6 @@ impl PostgresTableFactory {
             .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
 
-        #[cfg(feature = "postgres-federation")]
         let table_provider = Arc::new(
             table_provider
                 .create_federated_table_provider()
