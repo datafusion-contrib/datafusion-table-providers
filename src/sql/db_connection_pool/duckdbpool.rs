@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager, ToSql};
+use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 
-use super::{DbConnectionPool, Result};
+use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Mode, Result};
 use crate::sql::db_connection_pool::{
     dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
     JoinPushDown,
@@ -36,6 +36,7 @@ pub struct DuckDbConnectionPool {
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
+    mode: Mode,
 }
 
 impl DuckDbConnectionPool {
@@ -71,6 +72,7 @@ impl DuckDbConnectionPool {
             // There can't be any other tables that share the same context for an in-memory DuckDB.
             join_push_down: JoinPushDown::Disallow,
             attached_databases: Vec::new(),
+            mode: Mode::Memory,
         })
     }
 
@@ -108,6 +110,7 @@ impl DuckDbConnectionPool {
             // Allow join-push down for any other instances that connect to the same underlying file.
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
+            mode: Mode::File,
         })
     }
 
@@ -134,23 +137,28 @@ impl DuckDbConnectionPool {
     pub fn connect_sync(
         self: Arc<Self>,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
         Ok(Box::new(DuckDbConnection::new(conn)))
     }
+
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
 }
 
 #[async_trait]
-impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>
+impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnectionPool
 {
     async fn connect(
         &self,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
@@ -225,7 +233,6 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-
     use rand::Rng;
 
     use super::*;
@@ -265,6 +272,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(feature = "duckdb-federation")]
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();

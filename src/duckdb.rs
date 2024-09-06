@@ -1,7 +1,9 @@
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{
-        duckdbconn::{flatten_table_function_name, is_table_function, DuckDbConnection},
+        duckdbconn::{
+            flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+        },
         get_schema, DbConnection,
     },
     duckdbpool::DuckDbConnectionPool,
@@ -25,7 +27,7 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::{AccessMode, DuckdbConnectionManager, ToSql, Transaction};
+use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::{cmp, collections::HashMap, sync::Arc};
@@ -177,7 +179,7 @@ impl Default for DuckDBTableProviderFactory {
     }
 }
 
-type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>
+type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     + Send
     + Sync;
 
@@ -265,7 +267,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
+            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
+            Arc::new(read_provider.create_federated_table_provider()?)
+        } else {
+            read_provider
+        };
 
         Ok(DuckDBTableWriter::create(
             read_provider,
@@ -317,18 +324,18 @@ impl DuckDB {
     pub fn connect_sync(
         &self,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         Arc::clone(&self.pool)
             .connect_sync()
             .context(DbConnectionSnafu)
     }
 
-    pub fn duckdb_conn<'a>(
-        db_connection: &'a mut Box<
-            dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>,
+    pub fn duckdb_conn(
+        db_connection: &mut Box<
+            dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
         >,
-    ) -> Result<&'a mut DuckDbConnection> {
+    ) -> Result<&mut DuckDbConnection> {
         db_connection
             .as_any_mut()
             .downcast_mut::<DuckDbConnection>()
@@ -441,7 +448,12 @@ impl DuckDBTableFactory {
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
+        let table_provider: Arc<dyn TableProvider> = if self.pool.mode() == Mode::File {
+            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
+            Arc::new(table_provider.create_federated_table_provider()?)
+        } else {
+            table_provider
+        };
 
         Ok(table_provider)
     }

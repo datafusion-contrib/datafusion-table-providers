@@ -402,19 +402,30 @@ mod tests {
     #[cfg(feature = "duckdb")]
     mod duckdb_tests {
         use super::*;
-        use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
+        use crate::sql::db_connection_pool::dbconnection::duckdbconn::{
+            DuckDBSyncParameter, DuckDbConnection,
+        };
         use crate::sql::db_connection_pool::{duckdbpool::DuckDbConnectionPool, DbConnectionPool};
-        use duckdb::{DuckdbConnectionManager, ToSql};
+        use duckdb::DuckdbConnectionManager;
 
         #[tokio::test]
         async fn test_duckdb_table() -> Result<(), Box<dyn Error + Send + Sync>> {
             let t = setup_tracing();
             let ctx = SessionContext::new();
             let pool: Arc<
-                dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
-                    + Send
+                dyn DbConnectionPool<
+                        r2d2::PooledConnection<DuckdbConnectionManager>,
+                        Box<dyn DuckDBSyncParameter>,
+                    > + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory()?);
+            > = Arc::new(DuckDbConnectionPool::new_memory()?)
+                as Arc<
+                    dyn DbConnectionPool<
+                            r2d2::PooledConnection<DuckdbConnectionManager>,
+                            Box<dyn DuckDBSyncParameter>,
+                        > + Send
+                        + Sync,
+                >;
             let conn = pool.connect().await?;
             let db_conn = conn
                 .as_any()
@@ -437,10 +448,19 @@ mod tests {
             let t = setup_tracing();
             let ctx = SessionContext::new();
             let pool: Arc<
-                dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &dyn ToSql>
-                    + Send
+                dyn DbConnectionPool<
+                        r2d2::PooledConnection<DuckdbConnectionManager>,
+                        Box<dyn DuckDBSyncParameter>,
+                    > + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory()?);
+            > = Arc::new(DuckDbConnectionPool::new_memory()?)
+                as Arc<
+                    dyn DbConnectionPool<
+                            r2d2::PooledConnection<DuckdbConnectionManager>,
+                            Box<dyn DuckDBSyncParameter>,
+                        > + Send
+                        + Sync,
+                >;
             let conn = pool.connect().await?;
             let db_conn = conn
                 .as_any()
