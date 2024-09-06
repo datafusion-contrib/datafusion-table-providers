@@ -1,5 +1,5 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
+use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
 use crate::sql::db_connection_pool::{
     self,
@@ -8,6 +8,7 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
+use arrow::array::StringArray;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -19,9 +20,11 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
+use futures::TryStreamExt;
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
 use sql_table::SQLiteTable;
+use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 use tokio_rusqlite::Connection;
 
@@ -246,6 +249,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 .await
                 .context(UnableToCreateTableSnafu)
                 .map_err(to_datafusion_error)?;
+        } else if !sqlite.verify_indexes_match(sqlite_conn, &indexes).await? {
+            tracing::warn!(
+                "The schema of the local copy of table '{name}' does not match the expected configuration. To correct this, you can drop the existing local copy at '{db_path}'. A new table will be automatically created with the correct schema upon the first access.",
+                name = name
+            );
         }
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
@@ -441,5 +449,78 @@ impl Sqlite {
         transaction.execute(&sql, [])?;
 
         Ok(())
+    }
+
+    async fn get_indexes(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+    ) -> DataFusionResult<HashSet<String>> {
+        let query_result = sqlite_conn
+            .query_arrow(
+                format!("PRAGMA index_list({name})", name = self.table_name).as_str(),
+                &[],
+                None,
+            )
+            .await?;
+
+        let mut indexes = HashSet::new();
+
+        query_result
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .into_iter()
+            .flatten()
+            .for_each(|batch| {
+                if let Some(name_array) = batch
+                    .column_by_name("name")
+                    .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+                {
+                    for index_name in name_array.iter().flatten() {
+                        // Filter out SQLite's auto-generated indexes
+                        if !index_name.starts_with("sqlite_autoindex_") {
+                            indexes.insert(index_name.to_string());
+                        }
+                    }
+                }
+            });
+
+        Ok(indexes)
+    }
+
+    async fn verify_indexes_match(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+        indexes: &[(ColumnReference, IndexType)],
+    ) -> DataFusionResult<bool> {
+        let expected_indexes_str_map: HashSet<String> = indexes
+            .iter()
+            .map(|(col, _)| IndexBuilder::new(&self.table_name, col.iter().collect()).index_name())
+            .collect();
+
+        let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;
+
+        let missing_in_actual = expected_indexes_str_map
+            .difference(&actual_indexes_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_indexes_str_map
+            .difference(&expected_indexes_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Schema mismatch detected for table '{name}'. The following expected indexes are missing: {:?}.",
+                missing_in_actual,
+                name = self.table_name
+            );
+        }
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "Schema mismatch detected for table '{name}'. The table contains unexpected indexes not defined in the configuration: {:?}.",
+                extra_in_actual,
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
     }
 }
