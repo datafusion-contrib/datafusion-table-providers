@@ -157,7 +157,6 @@ impl PostgresTableFactory {
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
 
-        #[cfg(feature = "postgres-federation")]
         let table_provider = Arc::new(
             table_provider
                 .create_federated_table_provider()
