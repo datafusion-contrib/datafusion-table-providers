@@ -3,7 +3,7 @@ use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 
-use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Result};
+use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Mode, Result};
 use crate::sql::db_connection_pool::{
     dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
     JoinPushDown,
@@ -36,6 +36,7 @@ pub struct DuckDbConnectionPool {
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
+    mode: Mode,
 }
 
 impl DuckDbConnectionPool {
@@ -71,6 +72,7 @@ impl DuckDbConnectionPool {
             // There can't be any other tables that share the same context for an in-memory DuckDB.
             join_push_down: JoinPushDown::Disallow,
             attached_databases: Vec::new(),
+            mode: Mode::Memory,
         })
     }
 
@@ -108,6 +110,7 @@ impl DuckDbConnectionPool {
             // Allow join-push down for any other instances that connect to the same underlying file.
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
+            mode: Mode::File,
         })
     }
 
@@ -140,6 +143,11 @@ impl DuckDbConnectionPool {
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
         Ok(Box::new(DuckDbConnection::new(conn)))
+    }
+
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 }
 
