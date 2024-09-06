@@ -267,7 +267,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
+            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
+            Arc::new(read_provider.create_federated_table_provider()?)
+        } else {
+            read_provider
+        };
 
         Ok(DuckDBTableWriter::create(
             read_provider,
@@ -443,7 +448,12 @@ impl DuckDBTableFactory {
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
+        let table_provider: Arc<dyn TableProvider> = if self.pool.mode() == Mode::File {
+            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
+            Arc::new(table_provider.create_federated_table_provider()?)
+        } else {
+            table_provider
+        };
 
         Ok(table_provider)
     }
