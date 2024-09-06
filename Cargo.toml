@@ -4,6 +4,8 @@ version = "0.1.0"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
+license = "Apache-2.0"
+description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [dependencies]
 arrow = "52.2.0"
