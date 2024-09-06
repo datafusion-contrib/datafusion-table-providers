@@ -96,6 +96,7 @@ flight = [
 ]
 duckdb-federation = ["duckdb"]
 sqlite-federation = ["sqlite"]
+postgres-federation = ["postgres"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "b6682948d07cc3155edb3dfbf03f8b55570fc1d2" }
