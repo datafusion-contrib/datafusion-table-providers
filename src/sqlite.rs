@@ -1,5 +1,5 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
+use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
 use crate::sql::db_connection_pool::{
     self,
@@ -8,6 +8,7 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
+use arrow::array::StringArray;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -19,9 +20,11 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
+use futures::TryStreamExt;
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
 use sql_table::SQLiteTable;
+use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 use tokio_rusqlite::Connection;
 
@@ -246,6 +249,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 .await
                 .context(UnableToCreateTableSnafu)
                 .map_err(to_datafusion_error)?;
+        } else if !sqlite.verify_indexes_match(sqlite_conn, &indexes).await? {
+            tracing::warn!(
+                "The local table definition at '{db_path}' for '{name}' does not match the expected configuration. To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon first access.",
+                name = name
+            );
         }
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
@@ -441,5 +449,151 @@ impl Sqlite {
         transaction.execute(&sql, [])?;
 
         Ok(())
+    }
+
+    async fn get_indexes(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+    ) -> DataFusionResult<HashSet<String>> {
+        let query_result = sqlite_conn
+            .query_arrow(
+                format!("PRAGMA index_list({name})", name = self.table_name).as_str(),
+                &[],
+                None,
+            )
+            .await?;
+
+        let mut indexes = HashSet::new();
+
+        query_result
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .into_iter()
+            .flatten()
+            .for_each(|batch| {
+                if let Some(name_array) = batch
+                    .column_by_name("name")
+                    .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+                {
+                    for index_name in name_array.iter().flatten() {
+                        // Filter out SQLite's auto-generated indexes
+                        if !index_name.starts_with("sqlite_autoindex_") {
+                            indexes.insert(index_name.to_string());
+                        }
+                    }
+                }
+            });
+
+        Ok(indexes)
+    }
+
+    async fn verify_indexes_match(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+        indexes: &[(ColumnReference, IndexType)],
+    ) -> DataFusionResult<bool> {
+        let expected_indexes_str_map: HashSet<String> = indexes
+            .iter()
+            .map(|(col, _)| IndexBuilder::new(&self.table_name, col.iter().collect()).index_name())
+            .collect();
+
+        let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;
+
+        let missing_in_actual = expected_indexes_str_map
+            .difference(&actual_indexes_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_indexes_str_map
+            .difference(&expected_indexes_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Missing indexes detected for the table '{name}': {:?}.",
+                missing_in_actual,
+                name = self.table_name
+            );
+        }
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "The table '{name}' contains unexpected indexes not presented in the configuration: {:?}.",
+                extra_in_actual,
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion::{common::ToDFSchema, prelude::SessionContext};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sqlite_table_creation_with_indexes() {
+        let schema = Arc::new(Schema::new(vec![
+            arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+        ]));
+
+        let options: HashMap<String, String> = [(
+            "indexes".to_string(),
+            "id:enabled;(first_name, last_name):unique".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect();
+
+        let expected_indexes: HashSet<String> = [
+            "i_test_table_id".to_string(),
+            "i_test_table_first_name_last_name".to_string(),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("test_table"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::default(),
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let sqlite = table
+            .as_any()
+            .downcast_ref::<SqliteTableWriter>()
+            .expect("downcast to SqliteTableWriter")
+            .sqlite();
+
+        let mut db_conn = sqlite.connect().await.expect("should connect to db");
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).expect("should create sqlite connection");
+
+        let retrieved_indexes = sqlite
+            .get_indexes(sqlite_conn)
+            .await
+            .expect("should get indexes");
+
+        assert_eq!(retrieved_indexes, expected_indexes);
     }
 }
