@@ -524,3 +524,76 @@ impl Sqlite {
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion::{common::ToDFSchema, prelude::SessionContext};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sqlite_table_creation_with_indexes() {
+        let schema = Arc::new(Schema::new(vec![
+            arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+        ]));
+
+        let options: HashMap<String, String> = [(
+            "indexes".to_string(),
+            "id:enabled;(first_name, last_name):unique".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect();
+
+        let expected_indexes: HashSet<String> = [
+            "i_test_table_id".to_string(),
+            "i_test_table_first_name_last_name".to_string(),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("test_table"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::default(),
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let sqlite = table
+            .as_any()
+            .downcast_ref::<SqliteTableWriter>()
+            .expect("downcast to SqliteTableWriter")
+            .sqlite();
+
+        let mut db_conn = sqlite.connect().await.expect("should connect to db");
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).expect("should create sqlite connection");
+
+        let retrieved_indexes = sqlite
+            .get_indexes(sqlite_conn)
+            .await
+            .expect("should get indexes");
+
+        assert_eq!(retrieved_indexes, expected_indexes);
+    }
+}
