@@ -251,7 +251,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 .map_err(to_datafusion_error)?;
         } else if !sqlite.verify_indexes_match(sqlite_conn, &indexes).await? {
             tracing::warn!(
-                "The schema of the local copy of table '{name}' does not match the expected configuration. To correct this, you can drop the existing local copy at '{db_path}'. A new table will be automatically created with the correct schema upon the first access.",
+                "The local table definition at '{db_path}' for '{name}' does not match the expected configuration. To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon first access.",
                 name = name
             );
         }
@@ -508,14 +508,14 @@ impl Sqlite {
 
         if !missing_in_actual.is_empty() {
             tracing::warn!(
-                "Schema mismatch detected for table '{name}'. The following expected indexes are missing: {:?}.",
+                "Missing indexes detected for the table '{name}': {:?}.",
                 missing_in_actual,
                 name = self.table_name
             );
         }
         if !extra_in_actual.is_empty() {
             tracing::warn!(
-                "Schema mismatch detected for table '{name}'. The table contains unexpected indexes not defined in the configuration: {:?}.",
+                "The table '{name}' contains unexpected indexes not presented in the configuration: {:?}.",
                 extra_in_actual,
                 name = self.table_name
             );
