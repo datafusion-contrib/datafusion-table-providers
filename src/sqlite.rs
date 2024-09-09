@@ -8,7 +8,7 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
-use arrow::array::StringArray;
+use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -249,11 +249,20 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 .await
                 .context(UnableToCreateTableSnafu)
                 .map_err(to_datafusion_error)?;
-        } else if !sqlite.verify_indexes_match(sqlite_conn, &indexes).await? {
-            tracing::warn!(
+        } else {
+            let mut table_definition_matches = true;
+
+            table_definition_matches &= sqlite.verify_indexes_match(sqlite_conn, &indexes).await?;
+            table_definition_matches &= sqlite
+                .verify_primary_keys_match(sqlite_conn, &primary_keys)
+                .await?;
+
+            if !table_definition_matches {
+                tracing::warn!(
                 "The local table definition at '{db_path}' for '{name}' does not match the expected configuration. To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon first access.",
                 name = name
             );
+            }
         }
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
@@ -487,6 +496,47 @@ impl Sqlite {
         Ok(indexes)
     }
 
+    async fn get_primary_keys(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+    ) -> DataFusionResult<HashSet<String>> {
+        let query_result = sqlite_conn
+            .query_arrow(
+                format!("PRAGMA table_info({name})", name = self.table_name).as_str(),
+                &[],
+                None,
+            )
+            .await?;
+
+        let mut primary_keys = HashSet::new();
+
+        query_result
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .into_iter()
+            .flatten()
+            .for_each(|batch| {
+                if let (Some(name_array), Some(pk_array)) = (
+                    batch
+                        .column_by_name("name")
+                        .and_then(|col| col.as_any().downcast_ref::<StringArray>()),
+                    batch
+                        .column_by_name("pk")
+                        .and_then(|col| col.as_any().downcast_ref::<Int64Array>()),
+                ) {
+                    // name and pk fields can't be None so it is safe to flatten both
+                    for (name, pk) in name_array.iter().flatten().zip(pk_array.iter().flatten()) {
+                        if pk > 0 {
+                            // pk > 0 indicates primary key
+                            primary_keys.insert(name.to_string());
+                        }
+                    }
+                }
+            });
+
+        Ok(primary_keys)
+    }
+
     async fn verify_indexes_match(
         &self,
         sqlite_conn: &mut SqliteConnection,
@@ -523,13 +573,49 @@ impl Sqlite {
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
     }
+
+    async fn verify_primary_keys_match(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+        primary_keys: &[String],
+    ) -> DataFusionResult<bool> {
+        let expected_pk_keys_str_map: HashSet<String> = primary_keys.iter().cloned().collect();
+
+        let actual_pk_keys_str_map = self.get_primary_keys(sqlite_conn).await?;
+
+        let missing_in_actual = expected_pk_keys_str_map
+            .difference(&actual_pk_keys_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_pk_keys_str_map
+            .difference(&expected_pk_keys_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Missing primary keys detected for the table '{name}': {:?}.",
+                missing_in_actual,
+                name = self.table_name
+            );
+        }
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "The table '{name}' contains unexpected primary keys not presented in the configuration: {:?}.",
+                extra_in_actual,
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
 
     use arrow::datatypes::{DataType, Schema};
-    use datafusion::{common::ToDFSchema, prelude::SessionContext};
+    use datafusion::{
+        common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
+    };
 
     use super::*;
 
@@ -559,6 +645,21 @@ pub(crate) mod tests {
 
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
 
+        let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
+
+        let primary_keys_constraints = Constraints::new_from_table_constraints(
+            &[TableConstraint::PrimaryKey {
+                columns: vec!["id"].into_iter().map(Into::into).collect(),
+                name: None,
+                index_name: None,
+                index_options: vec![],
+                characteristics: None,
+                index_type: None,
+            }],
+            &df_schema,
+        )
+        .expect("should create constraints");
+
         let external_table = CreateExternalTable {
             schema: df_schema,
             name: TableReference::bare("test_table"),
@@ -570,7 +671,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
         };
         let ctx = SessionContext::new();
@@ -595,5 +696,12 @@ pub(crate) mod tests {
             .expect("should get indexes");
 
         assert_eq!(retrieved_indexes, expected_indexes);
+
+        let retrieved_primary_keys = sqlite
+            .get_primary_keys(sqlite_conn)
+            .await
+            .expect("should get primary keys");
+
+        assert_eq!(retrieved_primary_keys, expected_primary_keys);
     }
 }
