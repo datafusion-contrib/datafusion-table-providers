@@ -184,16 +184,28 @@ impl DataSink for DuckDBDataSink {
             .context(super::ConstraintViolationSnafu)
             .map_err(to_datafusion_error)?;
 
-            batch_tx.send(batch).await.map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Unable to send RecordBatch to duckdb writer: {e}"
-                ))
-            })?;
+            if let Err(send_error) = batch_tx.send(batch).await {
+                match duckdb_write_handle.await {
+                    Err(join_error) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Error writing to DuckDB: {join_error}"
+                        )));
+                    }
+                    Ok(Err(datafusion_error)) => {
+                        return Err(datafusion_error);
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to send RecordBatch to DuckDB writer: {send_error}"
+                        )))
+                    }
+                };
+            }
         }
 
         if notify_commit_transaction.send(()).is_err() {
             return Err(DataFusionError::Execution(
-                "Unable to send message to commit transaction to duckdb writer.".to_string(),
+                "Unable to send message to commit transaction to DuckDB writer.".to_string(),
             ));
         };
 
