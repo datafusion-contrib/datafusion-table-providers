@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use async_stream::stream;
@@ -10,8 +11,8 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
-use duckdb::DuckdbConnectionManager;
 use duckdb::ToSql;
+use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
@@ -27,6 +28,15 @@ pub enum Error {
 
     #[snafu(display("ChannelError: {message}"))]
     ChannelError { message: String },
+
+    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    UnableToAttachDatabase {
+        path: Arc<str>,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Unable to extract database name from database file path"))]
+    UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
 pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
@@ -41,8 +51,105 @@ impl<T: ToSql + Sync + Send + DynClone> DuckDBSyncParameter for T {
 dyn_clone::clone_trait_object!(DuckDBSyncParameter);
 pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 
+#[derive(Debug)]
+pub struct DuckDBAttachments {
+    attachments: Vec<Arc<str>>,
+    search_path: Arc<str>,
+}
+
+impl DuckDBAttachments {
+    /// Creates a new instance of a `DuckDBAttachments`, which instructs DuckDB connections to attach other DuckDB databases for queries.
+    #[must_use]
+    pub fn new(id: &str, attachments: &[Arc<str>]) -> Self {
+        let search_path = Self::get_search_path(id, attachments);
+        Self {
+            attachments: attachments.to_owned(),
+            search_path,
+        }
+    }
+
+    /// Returns the search path for the given database and attachments.
+    /// The given database needs to be included separately, as search path by default do not include the main database.
+    #[must_use]
+    pub fn get_search_path(id: &str, attachments: &[Arc<str>]) -> Arc<str> {
+        // search path includes the main database and all attached databases
+        let mut search_path: Vec<Arc<str>> = vec![id.into()];
+
+        search_path.extend(
+            attachments
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("attachment_{i}").into()),
+        );
+
+        search_path.join(",").into()
+    }
+
+    /// Sets the search path for the given connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search path cannot be set or the connection fails.
+    pub fn set_search_path(&self, conn: &Connection) -> Result<()> {
+        conn.execute(&format!("SET search_path ='{}'", self.search_path), [])
+            .context(DuckDBSnafu)?;
+        Ok(())
+    }
+
+    /// Resets the search path for the given connection to default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search path cannot be set or the connection fails.
+    pub fn reset_search_path(&self, conn: &Connection) -> Result<()> {
+        conn.execute("RESET search_path", []).context(DuckDBSnafu)?;
+        Ok(())
+    }
+
+    /// Attaches the databases to the given connection and sets the search path for the newly attached databases.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a specific attachment is missing, cannot be attached, search path cannot be set or the connection fails.
+    pub fn attach(&self, conn: &Connection) -> Result<()> {
+        for (i, db) in self.attachments.iter().enumerate() {
+            // check the db file exists
+            std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
+                path: Arc::clone(db),
+            })?;
+
+            conn.execute(
+                &format!("ATTACH IF NOT EXISTS '{db}' AS attachment_{i} (READ_ONLY)"),
+                [],
+            )
+            .context(DuckDBSnafu)?;
+        }
+
+        self.set_search_path(conn)?;
+
+        Ok(())
+    }
+
+    /// Detaches the databases from the given connection and resets the search path to default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an attachment cannot be detached, search path cannot be set or the connection fails.
+    pub fn detach(&self, conn: &Connection) -> Result<()> {
+        for (i, _) in self.attachments.iter().enumerate() {
+            conn.execute(&format!("DETACH attachment_{i}"), [])
+                .context(DuckDBSnafu)?;
+        }
+
+        self.reset_search_path(conn)?;
+
+        Ok(())
+    }
+}
+
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
+    attachments: Option<Arc<DuckDBAttachments>>,
 }
 
 impl DuckDbConnection {
@@ -50,6 +157,36 @@ impl DuckDbConnection {
         &mut self,
     ) -> &mut r2d2::PooledConnection<DuckdbConnectionManager> {
         &mut self.conn
+    }
+
+    #[must_use]
+    pub fn with_attachments(mut self, attachments: Option<Arc<DuckDBAttachments>>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
+    /// Passthrough if Option is Some for `DuckDBAttachments::attach`
+    ///
+    /// # Errors
+    ///
+    /// See `DuckDBAttachments::attach` for more information.
+    pub fn attach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
+        if let Some(attachments) = attachments {
+            attachments.attach(conn)?;
+        }
+        Ok(())
+    }
+
+    /// Passthrough if Option is Some for `DuckDBAttachments::detach`
+    ///
+    /// # Errors
+    ///
+    /// See `DuckDBAttachments::detach` for more information.
+    pub fn detach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
+        if let Some(attachments) = attachments {
+            attachments.detach(conn)?;
+        }
+        Ok(())
     }
 }
 
@@ -77,7 +214,10 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
     for DuckDbConnection
 {
     fn new(conn: r2d2::PooledConnection<DuckdbConnectionManager>) -> Self {
-        DuckDbConnection { conn }
+        DuckDbConnection {
+            conn,
+            attachments: None,
+        }
     }
 
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
@@ -108,6 +248,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
+        Self::attach(&self.conn, &self.attachments)?;
         let fetch_schema_sql =
             format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
         let mut stmt = self
@@ -121,16 +262,21 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
+        Self::detach(&self.conn, &self.attachments)?;
+
         let schema = result.get_schema();
 
         let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
 
-        let conn = self.conn.try_clone()?;
+        let conn = self.conn.try_clone()?; // try_clone creates a new connection to the same database
+                                           // this creates a new connection session, requiring resetting the ATTACHments and search_path
         let sql = sql.to_string();
 
         let cloned_schema = schema.clone();
+        let attachments = self.attachments.clone();
 
         let join_handle = tokio::task::spawn_blocking(move || {
+            Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
             let mut stmt = conn.prepare(&sql).context(DuckDBSnafu)?;
             let params: &[&dyn ToSql] = &params
                 .iter()
@@ -143,6 +289,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 blocking_channel_send(&batch_tx, i)?;
             }
 
+            Self::detach(&conn, &attachments)?;
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         });
 

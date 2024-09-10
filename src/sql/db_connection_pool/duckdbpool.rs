@@ -3,7 +3,10 @@ use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 
-use super::{dbconnection::duckdbconn::DuckDBParameter, DbConnectionPool, Mode, Result};
+use super::{
+    dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
+    DbConnectionPool, Mode, Result,
+};
 use crate::sql::db_connection_pool::{
     dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
     JoinPushDown,
@@ -142,12 +145,32 @@ impl DuckDbConnectionPool {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
-        Ok(Box::new(DuckDbConnection::new(conn)))
+
+        let attachments = self.get_attachments()?;
+
+        Ok(Box::new(
+            DuckDbConnection::new(conn).with_attachments(attachments),
+        ))
     }
 
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    pub fn get_attachments(&self) -> Result<Option<Arc<DuckDBAttachments>>> {
+        if self.attached_databases.is_empty() {
+            Ok(None)
+        } else {
+            #[cfg(not(feature = "duckdb-federation"))]
+            return Ok(None);
+
+            #[cfg(feature = "duckdb-federation")]
+            Ok(Some(Arc::new(DuckDBAttachments::new(
+                &extract_db_name(Arc::clone(&self.path))?,
+                &self.attached_databases,
+            ))))
+        }
     }
 }
 
@@ -164,34 +187,11 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
-        #[cfg(feature = "duckdb-federation")]
-        if !self.attached_databases.is_empty() {
-            let mut db_ids = Vec::new();
-            db_ids.push(extract_db_name(Arc::clone(&self.path))?);
+        let attachments = self.get_attachments()?;
 
-            for (i, db) in self.attached_databases.iter().enumerate() {
-                // check the db file exists
-                std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
-                    path: Arc::clone(db),
-                })?;
-
-                let db_id = format!("attachment_{i}");
-                conn.execute(
-                    &format!(
-                        "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
-                        db_id.clone()
-                    ),
-                    [],
-                )
-                .context(DuckDBSnafu)?;
-                db_ids.push(db_id);
-            }
-
-            conn.execute(&format!("SET search_path = \"{}\"", db_ids.join(",")), [])
-                .context(DuckDBSnafu)?;
-        }
-
-        Ok(Box::new(DuckDbConnection::new(conn)))
+        Ok(Box::new(
+            DuckDbConnection::new(conn).with_attachments(attachments),
+        ))
     }
 
     fn join_push_down(&self) -> JoinPushDown {
