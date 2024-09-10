@@ -191,6 +191,11 @@ impl DataSink for DuckDBDataSink {
                             "Error writing to DuckDB: {e}"
                         )));
                     }
+                    Ok(Err(e)) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Error writing to DuckDB: {e}"
+                        )));
+                    }
                     _ => {
                         return Err(DataFusionError::Execution(format!(
                             "Unable to send RecordBatch to duckdb writer: {e}"
