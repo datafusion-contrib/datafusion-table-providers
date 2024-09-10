@@ -151,10 +151,18 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 yield Ok(batch);
             }
 
-            if let Err(e) = join_handle.await {
-                yield Err(DataFusionError::Execution(format!(
-                    "Failed to execute DuckDB query: {e}"
-                )))
+            match join_handle.await {
+                Ok(Err(e)) => {
+                    yield Err(DataFusionError::Execution(format!(
+                        "Failed to execute DuckDB query: {e}"
+                    )))
+                },
+                Err(e) => {
+                    yield Err(DataFusionError::Execution(format!(
+                        "Failed to execute DuckDB query: {e}"
+                    )))
+                },
+                _ => {}
             }
         };
 

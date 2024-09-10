@@ -186,6 +186,7 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 .context(DuckDBSnafu)?;
                 db_ids.push(db_id);
             }
+
             conn.execute(&format!("SET search_path = \"{}\"", db_ids.join(",")), [])
                 .context(DuckDBSnafu)?;
         }
@@ -247,7 +248,7 @@ mod test {
             name.push(rng.gen_range(b'a'..=b'z') as char);
         }
 
-        format!("./{name}.sqlite")
+        format!("./{name}.duckdb")
     }
 
     #[tokio::test]
