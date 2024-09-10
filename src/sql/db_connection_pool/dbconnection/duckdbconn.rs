@@ -69,7 +69,7 @@ impl DuckDBAttachments {
     }
 
     /// Returns the search path for the given database and attachments.
-    /// The given database needs to be included separately, as search path by default does not include the main database.
+    /// The given database needs to be included separately, as search path by default do not include the main database.
     #[must_use]
     pub fn get_search_path(id: &str, attachments: &[Arc<str>]) -> Arc<str> {
         // search path includes the main database and all attached databases
