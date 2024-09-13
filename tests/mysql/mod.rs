@@ -147,6 +147,94 @@ VALUES
     .await;
 }
 
+async fn test_mysql_datetime_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE datetime_table (
+    dt0 DATETIME(0),  
+    dt1 DATETIME(1), 
+    dt2 DATETIME(2), 
+    dt3 DATETIME(3), 
+    dt4 DATETIME(4), 
+    dt5 DATETIME(5), 
+    dt6 DATETIME(6)  
+);
+
+        ";
+    let insert_table_stmt = "
+INSERT INTO datetime_table (dt0, dt1, dt2, dt3, dt4, dt5, dt6)
+VALUES (
+    '2024-09-12 10:00:00',
+    '2024-09-12 10:00:00.1',
+    '2024-09-12 10:00:00.12',
+    '2024-09-12 10:00:00.123',
+    '2024-09-12 10:00:00.1234',
+    '2024-09-12 10:00:00.12345',
+    '2024-09-12 10:00:00.123456'
+);
+        ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "dt0",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt1",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt2",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt3",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt4",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt5",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "dt6",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_000_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_100_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_120_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_400])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_450])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_456])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "datetime_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn arrow_mysql_one_way(
     port: usize,
     table_name: &str,
@@ -222,6 +310,7 @@ async fn test_mysql_arrow_oneway() {
 
     test_mysql_decimal_types(port).await;
     test_mysql_timestamp_types(port).await;
+    test_mysql_datetime_types(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
