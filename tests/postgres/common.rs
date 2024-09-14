@@ -60,3 +60,38 @@ pub(super) async fn start_postgres_docker_container(
     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
     Ok(running_container)
 }
+
+fn get_pg_params_secrets(port: usize) -> HashMap<String, SecretString> {
+    let mut params = HashMap::new();
+    params.insert(
+        "pg_host".to_string(),
+        SecretString::from("localhost".to_string()),
+    );
+    params.insert("pg_port".to_string(), SecretString::from(port.to_string()));
+    params.insert(
+        "pg_user".to_string(),
+        SecretString::from("postgres".to_string()),
+    );
+    params.insert(
+        "pg_pass".to_string(),
+        SecretString::from(PG_PASSWORD.to_string()),
+    );
+    params.insert(
+        "pg_db".to_string(),
+        SecretString::from("postgres".to_string()),
+    );
+    params.insert(
+        "pg_sslmode".to_string(),
+        SecretString::from("disable".to_string()),
+    );
+    params
+}
+
+#[instrument]
+pub(super) async fn get_postgres_connection_pool(
+    port: usize,
+) -> Result<PostgresConnectionPool, anyhow::Error> {
+    let pool = PostgresConnectionPool::new(get_pg_params_secrets(port)).await?;
+
+    Ok(pool)
+}
