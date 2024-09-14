@@ -1,7 +1,7 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
-use datafusion::catalog::Session;
+use datafusion::{catalog::Session, sql::unparser::dialect::Dialect};
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -43,6 +43,7 @@ impl<T, P> DuckDBTable<T, P> {
             schema,
             table_reference,
             Some(Engine::DuckDB),
+            None,
         );
 
         Self {
@@ -66,6 +67,7 @@ impl<T, P> DuckDBTable<T, P> {
             filters,
             limit,
             self.table_functions.clone(),
+            self.base_table.dialect.clone(),
         )?))
     }
 }
@@ -115,6 +117,7 @@ struct DuckSqlExec<T, P> {
 }
 
 impl<T, P> DuckSqlExec<T, P> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
@@ -123,6 +126,7 @@ impl<T, P> DuckSqlExec<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
         table_functions: Option<HashMap<String, String>>,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(
             projections,
@@ -132,6 +136,7 @@ impl<T, P> DuckSqlExec<T, P> {
             filters,
             limit,
             Some(Engine::DuckDB),
+            dialect,
         )?;
 
         Ok(Self {

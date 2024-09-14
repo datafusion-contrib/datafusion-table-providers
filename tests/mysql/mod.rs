@@ -48,7 +48,7 @@ async fn arrow_mysql_one_way(port: usize) {
 
     // Register datafusion table, test mysql row -> arrow conversion
     let sqltable_pool: Arc<MySQLConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("mysql", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("mysql", &sqltable_pool, table_name, None, None)
         .await
         .expect("Table should be created");
 

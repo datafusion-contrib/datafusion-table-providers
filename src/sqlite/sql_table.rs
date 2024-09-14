@@ -1,5 +1,5 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::SqliteDialect;
@@ -39,8 +39,8 @@ impl<T, P> SQLiteTable<T, P> {
             schema,
             table_reference,
             Some(Engine::SQLite),
-        )
-        .with_dialect(Arc::new(SqliteDialect {}));
+            Some(Arc::new(SqliteDialect {})),
+        );
 
         Self { base_table }
     }
@@ -123,6 +123,7 @@ impl<T, P> SQLiteSqlExec<T, P> {
             filters,
             limit,
             Some(Engine::SQLite),
+            Arc::new(SqliteDialect {}),
         )?;
 
         Ok(Self { base_exec })

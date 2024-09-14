@@ -7,11 +7,7 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::{
-    self,
-    expr::{self, Engine},
-    SqlTable,
-};
+use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
 use arrow::{
     array::RecordBatch,
     datatypes::{Schema, SchemaRef},
@@ -98,7 +94,7 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
-    UnableToGenerateSQL { source: expr::Error },
+    UnableToGenerateSQL { source: DataFusionError },
 
     #[snafu(display("Unable to delete all data from the Postgres table: {source}"))]
     UnableToDeleteAllTableData {
@@ -156,10 +152,10 @@ impl PostgresTableFactory {
                 &dyn_pool,
                 table_reference,
                 Some(Engine::Postgres),
+                Some(Arc::new(PostgreSqlDialect {})),
             )
             .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-            .with_dialect(Arc::new(PostgreSqlDialect {})),
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
         let table_provider = Arc::new(
             table_provider
@@ -298,16 +294,14 @@ impl TableProviderFactory for PostgresTableProviderFactory {
 
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
-        let read_provider = Arc::new(
-            SqlTable::new_with_schema(
-                "postgres",
-                &dyn_pool,
-                Arc::clone(&schema),
-                TableReference::bare(name.clone()),
-                Some(Engine::Postgres),
-            )
-            .with_dialect(Arc::new(PostgreSqlDialect {})),
-        );
+        let read_provider = Arc::new(SqlTable::new_with_schema(
+            "postgres",
+            &dyn_pool,
+            Arc::clone(&schema),
+            TableReference::bare(name.clone()),
+            Some(Engine::Postgres),
+            Some(Arc::new(PostgreSqlDialect {})),
+        ));
 
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(PostgresTableWriter::create(
