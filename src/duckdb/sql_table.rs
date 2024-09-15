@@ -43,7 +43,6 @@ impl<T, P> DuckDBTable<T, P> {
             schema,
             table_reference,
             Some(Engine::DuckDB),
-            None,
         );
 
         Self {

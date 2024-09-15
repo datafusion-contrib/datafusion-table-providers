@@ -39,7 +39,6 @@ impl<T, P> SQLiteTable<T, P> {
             schema,
             table_reference,
             Some(Engine::SQLite),
-            Some(Arc::new(SqliteDialect {})),
         );
 
         Self { base_table }

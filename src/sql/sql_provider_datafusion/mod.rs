@@ -12,7 +12,9 @@ use crate::sql::db_connection_pool::{
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
-    sql::unparser::dialect::{DefaultDialect, Dialect, PostgreSqlDialect, SqliteDialect},
+    sql::unparser::dialect::{
+        DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
+    },
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -56,15 +58,17 @@ pub enum Engine {
     DuckDB,
     ODBC,
     Postgres,
+    MySQL,
 }
 
 impl Engine {
     /// Get the corresponding `Dialect` to use for unparsing
-    pub fn dialect(&self) -> Option<Arc<dyn Dialect + Send + Sync>> {
+    pub fn dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
         match self {
-            Engine::SQLite => Some(Arc::new(SqliteDialect {})),
-            Engine::Postgres => Some(Arc::new(PostgreSqlDialect {})),
-            Engine::Spark | Engine::DuckDB | Engine::ODBC => None,
+            Engine::SQLite => Arc::new(SqliteDialect {}),
+            Engine::Postgres => Arc::new(PostgreSqlDialect {}),
+            Engine::MySQL => Arc::new(MySqlDialect {}),
+            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
         }
     }
 }
@@ -86,7 +90,6 @@ impl<T, P> SqlTable<T, P> {
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         table_reference: impl Into<TableReference>,
         engine: Option<Engine>,
-        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Result<Self> {
         let table_reference = table_reference.into();
         let conn = pool
@@ -104,7 +107,6 @@ impl<T, P> SqlTable<T, P> {
             schema,
             table_reference,
             engine,
-            dialect,
         ))
     }
 
@@ -114,13 +116,10 @@ impl<T, P> SqlTable<T, P> {
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
         engine: Option<Engine>,
-        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Self {
-        let dialect = dialect.unwrap_or(
-            engine
-                .and_then(|e| e.dialect())
-                .unwrap_or(Arc::new(DefaultDialect {})),
-        );
+        let dialect = engine
+            .map(|e| e.dialect())
+            .unwrap_or(Arc::new(DefaultDialect {}));
 
         Self {
             name,
@@ -434,10 +433,7 @@ mod tests {
         use async_trait::async_trait;
         use datafusion::{
             logical_expr::{col, lit, Expr},
-            sql::{
-                unparser::dialect::{DefaultDialect, Dialect},
-                TableReference,
-            },
+            sql::{unparser::dialect::DefaultDialect, TableReference},
         };
 
         use crate::sql::db_connection_pool::{
@@ -483,7 +479,6 @@ mod tests {
             filters: &[Expr],
             limit: Option<usize>,
             engine: Option<Engine>,
-            dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         ) -> Result<SqlExec<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
             let fields = vec![
                 Field::new("name", DataType::Utf8, false),
@@ -501,11 +496,9 @@ mod tests {
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
             let table_ref = TableReference::parse_str(table_reference);
 
-            let dialect = dialect.unwrap_or(
-                engine
-                    .and_then(|e| e.dialect())
-                    .unwrap_or(Arc::new(DefaultDialect {})),
-            );
+            let dialect = engine
+                .map(|e| e.dialect())
+                .unwrap_or(Arc::new(DefaultDialect {}));
 
             Ok(SqlExec::new(
                 projections,
@@ -521,14 +514,14 @@ mod tests {
 
         #[tokio::test]
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &vec![], None, None, None)?;
+            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], None, None)?;
             assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  "#);
             Ok(())
         }
 
         #[tokio::test]
         async fn test_sql_to_string_with_limit() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &vec![], Some(3), None, None)?;
+            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], Some(3), None)?;
             assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  LIMIT 3"#);
             Ok(())
         }
@@ -536,7 +529,7 @@ mod tests {
         #[tokio::test]
         async fn test_sql_to_string_with_filters() -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(None, "users", &filters, None, None, None)?;
+            let sql_exec = new_sql_exec(None, "users", &filters, None, None)?;
             assert_eq!(
                 sql_exec.sql()?,
                 r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) "#
@@ -548,7 +541,7 @@ mod tests {
         async fn test_sql_to_string_with_filters_and_limit(
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), None, None)?;
+            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), None)?;
             assert_eq!(
                 sql_exec.sql()?,
                 r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
@@ -559,8 +552,7 @@ mod tests {
         #[tokio::test]
         async fn test_sql_to_string_with_engine() -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec =
-                new_sql_exec(None, "users", &filters, Some(3), Some(Engine::DuckDB), None)?;
+            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), Some(Engine::DuckDB))?;
             assert_eq!(
                 sql_exec.sql()?,
                 r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
@@ -602,7 +594,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None, None).await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion limit 1";
             let df = ctx.sql(sql).await?;
@@ -628,7 +620,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None, None).await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion where a > 1 and b = 'bar' limit 1";
             let df = ctx.sql(sql).await?;

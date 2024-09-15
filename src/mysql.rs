@@ -15,11 +15,8 @@ limitations under the License.
 */
 
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::{self, SqlTable};
-use datafusion::{
-    datasource::TableProvider,
-    sql::{unparser::dialect::MySqlDialect, TableReference},
-};
+use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
+use datafusion::{datasource::TableProvider, sql::TableReference};
 use mysql_async::prelude::ToValue;
 use snafu::prelude::*;
 use std::sync::Arc;
@@ -53,15 +50,9 @@ impl MySQLTableFactory {
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let table_provider = Arc::new(
-            SqlTable::new(
-                "mysql",
-                &pool,
-                table_reference,
-                None,
-                Some(Arc::new(MySqlDialect {})),
-            )
-            .await
-            .context(UnableToConstructSQLTableSnafu)?,
+            SqlTable::new("mysql", &pool, table_reference, Some(Engine::MySQL))
+                .await
+                .context(UnableToConstructSQLTableSnafu)?,
         );
 
         let table_provider = Arc::new(

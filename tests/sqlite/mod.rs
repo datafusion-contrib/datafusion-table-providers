@@ -51,7 +51,7 @@ async fn arrow_sqlite_round_trip(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynSqliteConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("sqlite", &sqltable_pool, table_name, None, None)
+    let table = SqlTable::new("sqlite", &sqltable_pool, table_name, None)
         .await
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))
