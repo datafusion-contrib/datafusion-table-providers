@@ -65,8 +65,8 @@ impl FlightDriver for FlightSqlDriver {
             key.strip_prefix(HEADER_PREFIX)
                 .map(|header_name| (header_name, value))
         });
-        for header in headers {
-            client.set_header(header.0, header.1)
+        for (name, value) in headers {
+            client.set_header(name, value)
         }
         if let Some(username) = options.get(USERNAME) {
             let default_password = "".to_string();
