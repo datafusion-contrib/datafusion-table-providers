@@ -1,7 +1,4 @@
 use bollard::secret::HealthConfig;
-#[cfg(feature = "postgres")]
-use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
-use secrecy::SecretString;
 use std::collections::HashMap;
 use tracing::instrument;
 

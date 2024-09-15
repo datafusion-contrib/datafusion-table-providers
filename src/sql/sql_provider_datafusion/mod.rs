@@ -10,8 +10,12 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use async_trait::async_trait;
-use datafusion::{catalog::Session, sql::unparser::dialect::Dialect};
-use expr::Engine;
+use datafusion::{
+    catalog::Session,
+    sql::unparser::dialect::{
+        DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
+    },
+};
 use futures::TryStreamExt;
 use snafu::prelude::*;
 use std::fmt::Display;
@@ -28,10 +32,9 @@ use datafusion::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionMode,
         ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream,
     },
-    sql::TableReference,
+    sql::{unparser::Unparser, TableReference},
 };
 
-pub mod expr;
 pub mod federation;
 
 #[derive(Debug, Snafu)]
@@ -45,7 +48,29 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
-    UnableToGenerateSQL { source: expr::Error },
+    UnableToGenerateSQL { source: DataFusionError },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Engine {
+    Spark,
+    SQLite,
+    DuckDB,
+    ODBC,
+    Postgres,
+    MySQL,
+}
+
+impl Engine {
+    /// Get the corresponding `Dialect` to use for unparsing
+    pub fn dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match self {
+            Engine::SQLite => Arc::new(SqliteDialect {}),
+            Engine::Postgres => Arc::new(PostgreSqlDialect {}),
+            Engine::MySQL => Arc::new(MySqlDialect {}),
+            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
+        }
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -56,7 +81,6 @@ pub struct SqlTable<T: 'static, P: 'static> {
     schema: SchemaRef,
     pub table_reference: TableReference,
     engine: Option<Engine>,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
 impl<T, P> SqlTable<T, P> {
@@ -64,7 +88,7 @@ impl<T, P> SqlTable<T, P> {
         name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         table_reference: impl Into<TableReference>,
-        engine: Option<expr::Engine>,
+        engine: Option<Engine>,
     ) -> Result<Self> {
         let table_reference = table_reference.into();
         let conn = pool
@@ -76,14 +100,13 @@ impl<T, P> SqlTable<T, P> {
             .await
             .context(UnableToGetSchemaSnafu)?;
 
-        Ok(Self {
+        Ok(Self::new_with_schema(
             name,
-            pool: Arc::clone(pool),
+            pool,
             schema,
             table_reference,
             engine,
-            dialect: None,
-        })
+        ))
     }
 
     pub fn new_with_schema(
@@ -91,7 +114,7 @@ impl<T, P> SqlTable<T, P> {
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
-        engine: Option<expr::Engine>,
+        engine: Option<Engine>,
     ) -> Self {
         Self {
             name,
@@ -99,15 +122,6 @@ impl<T, P> SqlTable<T, P> {
             schema: schema.into(),
             table_reference: table_reference.into(),
             engine,
-            dialect: None,
-        }
-    }
-
-    #[must_use]
-    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
-        Self {
-            dialect: Some(dialect),
-            ..self
         }
     }
 
@@ -163,9 +177,13 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        let dialect = self
+            .engine
+            .map(|e| e.dialect())
+            .unwrap_or_else(|| Arc::new(DefaultDialect {}));
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(|f| match expr::to_sql_with_engine(f, self.engine) {
+            .map(|f| match Unparser::new(dialect.as_ref()).expr_to_sql(f) {
                 Ok(_) => TableProviderFilterPushDown::Exact,
                 Err(_) => TableProviderFilterPushDown::Unsupported,
             })
@@ -245,6 +263,7 @@ impl<T, P> SqlExec<T, P> {
             engine,
         })
     }
+
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
@@ -255,13 +274,7 @@ impl<T, P> SqlExec<T, P> {
             .projected_schema
             .fields()
             .iter()
-            .map(|f| {
-                if let Some(Engine::ODBC) = self.engine {
-                    f.name().to_owned()
-                } else {
-                    format!("\"{}\"", f.name())
-                }
-            })
+            .map(|f| self.column_name_escaped(f.name()))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -273,26 +286,41 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
+            let dialect = self
+                .engine
+                .map(|e| e.dialect())
+                .unwrap_or_else(|| Arc::new(DefaultDialect {}));
             let filter_expr = self
                 .filters
                 .iter()
-                .map(|f| match f {
-                    // DataFusion optimization uses aliases to preserve original expression names during optimizations and type coercions:
-                    // https://github.com/apache/datafusion/issues/3794
-                    // If there is a filter with additional alias information, we must use the expression only
-                    // as original expression name is unnecessary and the alias can't be part of the WHERE clause
-                    Expr::Alias(alias) => expr::to_sql_with_engine(&alias.expr, self.engine),
-                    _ => expr::to_sql_with_engine(f, self.engine),
+                .map(|f| {
+                    Unparser::new(dialect.as_ref())
+                        .expr_to_sql(f)
+                        .map(|e| e.to_string())
                 })
-                .collect::<expr::Result<Vec<_>>>()
-                .context(UnableToGenerateSQLSnafu)?;
-            format!("WHERE {}", filter_expr.join(" AND "))
+                .collect::<DataFusionResult<Vec<String>>>()
+                .context(UnableToGenerateSQLSnafu)?
+                .join(" AND ");
+            format!("WHERE {}", filter_expr)
         };
 
         Ok(format!(
             "SELECT {columns} FROM {table_reference} {where_expr} {limit_expr}",
-            table_reference = self.table_reference.to_quoted_string()
+            table_reference = self.table_name_escaped(),
         ))
+    }
+
+    fn table_name_escaped(&self) -> String {
+        self.table_reference.to_quoted_string()
+    }
+
+    fn column_name_escaped(&self, column_name: &str) -> String {
+        match self.engine {
+            Some(Engine::ODBC) => column_name.to_string(),
+            _ => {
+                format!("\"{}\"", column_name)
+            }
+        }
     }
 }
 
@@ -393,12 +421,145 @@ mod tests {
         tracing::dispatcher::set_default(&dispatch)
     }
 
+    mod sql_exec_tests {
+        use std::any::Any;
+
+        use arrow_schema::{DataType, Field, Schema, TimeUnit};
+        use async_trait::async_trait;
+        use datafusion::{
+            logical_expr::{col, lit, Expr},
+            sql::TableReference,
+        };
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        use super::super::{Engine, SqlExec};
+        use super::*;
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn new_sql_exec(
+            projections: Option<&Vec<usize>>,
+            table_reference: &str,
+            filters: &[Expr],
+            limit: Option<usize>,
+            engine: Option<Engine>,
+        ) -> Result<SqlExec<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
+            let fields = vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+                Field::new(
+                    "createdDate",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+                Field::new("userId", DataType::LargeUtf8, false),
+                Field::new("active", DataType::Boolean, false),
+            ];
+            let schema = Arc::new(Schema::new(fields));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            let table_ref = TableReference::parse_str(table_reference);
+
+            Ok(SqlExec::new(
+                projections,
+                &schema,
+                &table_ref,
+                pool,
+                filters,
+                limit,
+                engine,
+            )?)
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
+            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], None, None)?;
+            assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  "#);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_limit() -> Result<(), Box<dyn Error + Send + Sync>> {
+            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], Some(3), None)?;
+            assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  LIMIT 3"#);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_filters() -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
+            let sql_exec = new_sql_exec(None, "users", &filters, None, None)?;
+            assert_eq!(
+                sql_exec.sql()?,
+                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) "#
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_filters_and_limit(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
+            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), None)?;
+            assert_eq!(
+                sql_exec.sql()?,
+                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_engine() -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
+            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), Some(Engine::DuckDB))?;
+            assert_eq!(
+                sql_exec.sql()?,
+                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+            );
+            Ok(())
+        }
+
+        // TODO cover more test cases with different Engines & Dialects
+    }
+
     #[test]
     fn test_references() {
         let table_ref = TableReference::bare("test");
         assert_eq!(format!("{table_ref}"), "test");
     }
 
+    // XXX move this to duckdb mod??
     #[cfg(feature = "duckdb")]
     mod duckdb_tests {
         use super::*;

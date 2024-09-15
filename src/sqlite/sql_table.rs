@@ -1,8 +1,7 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::sql::unparser::dialect::SqliteDialect;
 use futures::TryStreamExt;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
@@ -39,8 +38,7 @@ impl<T, P> SQLiteTable<T, P> {
             schema,
             table_reference,
             Some(Engine::SQLite),
-        )
-        .with_dialect(Arc::new(SqliteDialect {}));
+        );
 
         Self { base_table }
     }
