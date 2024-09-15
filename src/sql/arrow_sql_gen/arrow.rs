@@ -1,12 +1,13 @@
 use arrow::{
     array::{
-        ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
+        types::Int8Type, ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
         Decimal128Builder, Decimal256Builder, FixedSizeBinaryBuilder, FixedSizeListBuilder,
         Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
         IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
-        NullBuilder, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
-        TimestampSecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
+        NullBuilder, StringBuilder, StringDictionaryBuilder, StructBuilder,
+        Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
+        TimestampNanosecondBuilder, TimestampSecondBuilder, UInt16Builder, UInt32Builder,
+        UInt64Builder, UInt8Builder,
     },
     datatypes::{DataType, TimeUnit},
 };
@@ -61,6 +62,12 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
             TimeUnit::Nanosecond => {
                 Box::new(TimestampNanosecondBuilder::new().with_timezone_opt(time_zone.clone()))
             }
+        },
+        DataType::Dictionary(ref key_type, ref value_type) => match (&**key_type, &**value_type) {
+            (DataType::Int8, DataType::Utf8) => {
+                Box::new(StringDictionaryBuilder::<Int8Type>::new())
+            }
+            _ => unimplemented!("Unimplemented dictionary type"),
         },
         DataType::Date32 => Box::new(Date32Builder::new()),
         DataType::Date64 => Box::new(Date64Builder::new()),

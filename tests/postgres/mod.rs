@@ -145,3 +145,93 @@ async fn test_arrow_postgres_roundtrip(
     )
     .await;
 }
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>) {
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_container(&container_manager).await;
+    }
+
+    let extra_stmt = Some("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral');");
+    let create_table_stmt = "
+    CREATE TABLE person_mood (
+    mood_status mood NOT NULL
+    );";
+
+    let insert_table_stmt = "
+    INSERT INTO person_mood (mood_status) VALUES ('happy'), ('sad'), ('neutral');
+    ";
+
+    let (expected_record, _) = get_arrow_dictionary_array_record_batch();
+
+    arrow_postgres_one_way(
+        container_manager.port,
+        "person_mood",
+        create_table_stmt,
+        insert_table_stmt,
+        extra_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn arrow_postgres_one_way(
+    port: usize,
+    table_name: &str,
+    create_table_stmt: &str,
+    insert_table_stmt: &str,
+    extra_stmt: Option<&str>,
+    expected_record: RecordBatch,
+) {
+    tracing::debug!("Running tests on {table_name}");
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    if let Some(extra_stmt) = extra_stmt {
+        let _ = db_conn
+            .conn
+            .execute(extra_stmt, &[])
+            .await
+            .expect("Statement should be created");
+    }
+
+    let _ = db_conn
+        .conn
+        .execute(create_table_stmt, &[])
+        .await
+        .expect("Postgres table should be created");
+
+    let _ = db_conn
+        .conn
+        .execute(insert_table_stmt, &[])
+        .await
+        .expect("Postgres table data should be inserted");
+
+    // Register datafusion table, test row -> arrow conversion
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table(table_name, Arc::new(table))
+        .expect("Table should be registered");
+    let sql = format!("SELECT * FROM {table_name}");
+    let df = ctx
+        .sql(&sql)
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+
+    assert_eq!(record_batch[0], expected_record);
+}
