@@ -238,7 +238,6 @@ pub fn project_schema_safe(
 }
 
 impl<T, P> SqlExec<T, P> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
