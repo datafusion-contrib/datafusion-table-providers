@@ -1,7 +1,7 @@
 use bollard::secret::HealthConfig;
 #[cfg(feature = "postgres")]
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
-use secrecy::SecretString;
+use datafusion_table_providers::util::secrets::to_secret_map;
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -61,37 +61,11 @@ pub(super) async fn start_postgres_docker_container(
     Ok(running_container)
 }
 
-fn get_pg_params_secrets(port: usize) -> HashMap<String, SecretString> {
-    let mut params = HashMap::new();
-    params.insert(
-        "pg_host".to_string(),
-        SecretString::from("localhost".to_string()),
-    );
-    params.insert("pg_port".to_string(), SecretString::from(port.to_string()));
-    params.insert(
-        "pg_user".to_string(),
-        SecretString::from("postgres".to_string()),
-    );
-    params.insert(
-        "pg_pass".to_string(),
-        SecretString::from(PG_PASSWORD.to_string()),
-    );
-    params.insert(
-        "pg_db".to_string(),
-        SecretString::from("postgres".to_string()),
-    );
-    params.insert(
-        "pg_sslmode".to_string(),
-        SecretString::from("disable".to_string()),
-    );
-    params
-}
-
 #[instrument]
 pub(super) async fn get_postgres_connection_pool(
     port: usize,
 ) -> Result<PostgresConnectionPool, anyhow::Error> {
-    let pool = PostgresConnectionPool::new(get_pg_params_secrets(port)).await?;
+    let pool = PostgresConnectionPool::new(to_secret_map(get_pg_params(port))).await?;
 
     Ok(pool)
 }
