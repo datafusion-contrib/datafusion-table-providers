@@ -27,7 +27,7 @@ use crate::flight::{FlightMetadata, FlightProperties};
 use arrow_array::RecordBatch;
 use arrow_flight::error::FlightError;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
-use arrow_schema::SchemaRef;
+use arrow_schema::{ArrowError, SchemaRef};
 use datafusion::arrow::datatypes::ToByteSlice;
 use datafusion::common::Result;
 use datafusion::common::{project_schema, DataFusionError};
@@ -206,33 +206,38 @@ async fn try_fetch_stream(
         .map_err(|e| FlightError::ExternalError(Box::new(e)))?;
     let mut client = FlightClient::new(channel);
     client.metadata_mut().clone_from(grpc_headers.as_ref());
-    let stream = client.do_get(ticket).await?;
+    let stream = client
+        .do_get(ticket)
+        .await?
+        .map_err(|e| DataFusionError::External(Box::new(e)));
     Ok(Box::pin(RecordBatchStreamAdapter::new(
         schema.clone(),
-        stream.map(move |rb| {
-            let schema = schema.clone();
-            rb.map(move |rb| {
-                if schema.fields.is_empty() || rb.schema() == schema {
-                    rb
-                } else if schema.contains(rb.schema_ref()) {
-                    rb.with_schema(schema.clone()).unwrap()
-                } else {
-                    let columns = schema
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            rb.column_by_name(field.name())
-                                .expect("missing fields in record batch")
-                                .clone()
-                        })
-                        .collect();
-                    RecordBatch::try_new(schema.clone(), columns)
-                        .expect("cannot impose desired schema on record batch")
-                }
-            })
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-        }),
+        stream.map(move |item| item.and_then(|rb| enforce_schema(rb, &schema).map_err(Into::into))),
     )))
+}
+
+fn enforce_schema(rb: RecordBatch, target_schema: &SchemaRef) -> arrow::error::Result<RecordBatch> {
+    if target_schema.fields.is_empty() || rb.schema() == *target_schema {
+        Ok(rb)
+    } else if target_schema.contains(rb.schema_ref()) {
+        rb.with_schema(target_schema.clone())
+    } else {
+        let columns = target_schema
+            .fields
+            .iter()
+            .map(|field| {
+                rb.column_by_name(field.name())
+                    .ok_or(ArrowError::SchemaError(format!(
+                        "Required field `{}` is missing from the flight response",
+                        field.name()
+                    )))
+                    .and_then(|original_array| {
+                        arrow_cast::cast(original_array.as_ref(), field.data_type())
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        RecordBatch::try_new(target_schema.clone(), columns)
+    }
 }
 
 impl DisplayAs for FlightExec {
@@ -297,9 +302,12 @@ impl ExecutionPlan for FlightExec {
 
 #[cfg(test)]
 mod tests {
-    use crate::flight::exec::{FlightConfig, FlightPartition, FlightTicket};
+    use crate::flight::exec::{enforce_schema, FlightConfig, FlightPartition, FlightTicket};
     use crate::flight::FlightProperties;
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_array::{
+        BooleanArray, Float32Array, Int32Array, RecordBatch, StringArray, StructArray,
+    };
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -333,5 +341,85 @@ mod tests {
         let json = serde_json::to_vec(&config).expect("cannot encode config as json");
         let restored = serde_json::from_slice(json.as_slice()).expect("cannot decode json config");
         assert_eq!(config, restored);
+    }
+
+    #[test]
+    fn test_schema_enforcement() -> arrow::error::Result<()> {
+        let data = StructArray::new(
+            Fields::from(vec![
+                Arc::new(Field::new("f_int", DataType::Int32, true)),
+                Arc::new(Field::new("f_bool", DataType::Boolean, false)),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+            ],
+            None,
+        );
+        let input_rb = RecordBatch::from(data);
+
+        let empty_schema = Arc::new(Schema::empty());
+        let same_rb = enforce_schema(input_rb.clone(), &empty_schema)?;
+        assert_eq!(input_rb, same_rb);
+
+        let coerced_rb = enforce_schema(
+            input_rb.clone(),
+            &Arc::new(Schema::new(vec![
+                // compatible yet different types with flipped nullability
+                Arc::new(Field::new("f_int", DataType::Float32, false)),
+                Arc::new(Field::new("f_bool", DataType::Utf8, true)),
+            ])),
+        )?;
+        assert_ne!(input_rb, coerced_rb);
+        assert_eq!(coerced_rb.num_columns(), 2);
+        assert_eq!(coerced_rb.num_rows(), 2);
+        assert_eq!(
+            coerced_rb.column(0).as_ref(),
+            &Float32Array::from(vec![10.0, 20.0])
+        );
+        assert_eq!(
+            coerced_rb.column(1).as_ref(),
+            &StringArray::from(vec!["true", "false"])
+        );
+
+        let projection_rb = enforce_schema(
+            input_rb.clone(),
+            &Arc::new(Schema::new(vec![
+                // keep only the first column and make it non-nullable int16
+                Arc::new(Field::new("f_int", DataType::Int16, false)),
+            ])),
+        )?;
+        assert_eq!(projection_rb.num_columns(), 1);
+        assert_eq!(projection_rb.num_rows(), 2);
+        assert_eq!(projection_rb.schema().fields().len(), 1);
+        assert_eq!(projection_rb.schema().fields()[0].name(), "f_int");
+
+        let incompatible_schema_attempt = enforce_schema(
+            input_rb.clone(),
+            &Arc::new(Schema::new(vec![
+                Arc::new(Field::new("f_int", DataType::Float32, true)),
+                Arc::new(Field::new("f_bool", DataType::Date32, false)),
+            ])),
+        );
+        assert!(incompatible_schema_attempt.is_err());
+        assert_eq!(
+            incompatible_schema_attempt.unwrap_err().to_string(),
+            "Cast error: Casting from Boolean to Date32 not supported"
+        );
+
+        let broader_schema_attempt = enforce_schema(
+            input_rb.clone(),
+            &Arc::new(Schema::new(vec![
+                Arc::new(Field::new("f_int", DataType::Int32, true)),
+                Arc::new(Field::new("f_bool", DataType::Boolean, false)),
+                Arc::new(Field::new("f_extra", DataType::Utf8, true)),
+            ])),
+        );
+        assert!(broader_schema_attempt.is_err());
+        assert_eq!(
+            broader_schema_attempt.unwrap_err().to_string(),
+            "Schema error: Required field `f_extra` is missing from the flight response"
+        );
+        Ok(())
     }
 }

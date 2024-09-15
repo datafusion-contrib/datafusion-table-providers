@@ -10,6 +10,7 @@ description = "Extend the capabilities of DataFusion to support additional data 
 [dependencies]
 arrow = "52.2.0"
 arrow-array = { version = "52.2.0", optional = true }
+arrow-cast = { version = "52.2.0", optional = true }
 arrow-flight = { version = "52.2.0", optional = true, features = ["flight-sql-experimental", "tls"] }
 arrow-schema = { version = "52.2.0", optional = true, features = ["serde"] }
 arrow-json = "52.2.0"
@@ -83,6 +84,7 @@ sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid"]
 flight = [
   "dep:arrow-array",
+  "dep:arrow-cast",
   "dep:arrow-flight",
   "dep:arrow-schema",
   "dep:base64",

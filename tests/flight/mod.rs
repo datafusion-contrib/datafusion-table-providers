@@ -161,8 +161,7 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
             Arc::new(Float32Array::from(vec![0.0, 0.1, 0.2, 0.3])),
             Arc::new(Int8Array::from(vec![10, 20, 30, 40])),
         ],
-    )
-    .unwrap();
+    )?;
     let rows_per_partition = partition_data.num_rows();
 
     let query = "SELECT * FROM some_table";
@@ -174,9 +173,7 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
         endpoint_archetype,
     ];
     let num_partitions = endpoints.len();
-    let flight_info = FlightInfo::default()
-        .try_with_schema(partition_data.schema().as_ref())
-        .unwrap();
+    let flight_info = FlightInfo::default().try_with_schema(partition_data.schema().as_ref())?;
     let flight_info = endpoints
         .into_iter()
         .fold(flight_info, |fi, e| fi.with_endpoint(e));
