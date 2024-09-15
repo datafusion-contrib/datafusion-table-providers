@@ -32,7 +32,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionMode,
         ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream,
     },
-    sql::{unparser::Unparser, TableReference},
+    sql::{sqlparser::ast, unparser::Unparser, TableReference},
 };
 
 pub mod federation;
@@ -78,6 +78,7 @@ impl Engine {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Clone)]
 pub struct SqlTable<T: 'static, P: 'static> {
     name: &'static str,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
@@ -310,16 +311,20 @@ impl<T, P> SqlExec<T, P> {
     }
 
     fn table_name_escaped(&self) -> String {
-        self.table_reference.to_quoted_string()
+        self.ident_escaped(&self.table_reference.to_string())
     }
 
     fn column_name_escaped(&self, column_name: &str) -> String {
-        match self.engine {
-            Engine::ODBC => column_name.to_string(),
-            _ => {
-                format!("\"{}\"", column_name)
-            }
-        }
+        self.ident_escaped(column_name)
+    }
+
+    fn ident_escaped(&self, ident: &str) -> String {
+        let quote_style = self.engine.dialect().identifier_quote_style(ident);
+        ast::Expr::Identifier(ast::Ident {
+            value: ident.to_string(),
+            quote_style,
+        })
+        .to_string()
     }
 }
 
@@ -484,6 +489,7 @@ mod tests {
                 ),
                 Field::new("userId", DataType::LargeUtf8, false),
                 Field::new("active", DataType::Boolean, false),
+                Field::new("5e48", DataType::LargeUtf8, false),
             ];
             let schema = Arc::new(Schema::new(fields));
             let pool = Arc::new(MockDBPool {})
@@ -510,18 +516,18 @@ mod tests {
 
         #[tokio::test]
         async fn test_sql_to_string_with_limit() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], Some(3), None)?;
-            assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  LIMIT 3"#);
+            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &[], Some(3), None)?;
+            assert_eq!(sql_exec.sql()?, r#"SELECT "name", age FROM users  LIMIT 3"#);
             Ok(())
         }
 
         #[tokio::test]
         async fn test_sql_to_string_with_filters() -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(None, "users", &filters, None, None)?;
+            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &filters, None, None)?;
             assert_eq!(
                 sql_exec.sql()?,
-                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) "#
+                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) "#
             );
             Ok(())
         }
@@ -530,10 +536,10 @@ mod tests {
         async fn test_sql_to_string_with_filters_and_limit(
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), None)?;
+            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &filters, Some(3), None)?;
             assert_eq!(
                 sql_exec.sql()?,
-                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
             );
             Ok(())
         }
@@ -541,10 +547,46 @@ mod tests {
         #[tokio::test]
         async fn test_sql_to_string_with_engine() -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(None, "users", &filters, Some(3), Some(Engine::DuckDB))?;
+            let sql_exec = new_sql_exec(
+                Some(&vec![0, 1]),
+                "users",
+                &filters,
+                Some(3),
+                Some(Engine::DuckDB),
+            )?;
             assert_eq!(
                 sql_exec.sql()?,
-                r#"SELECT "name", "age", "createdDate", "userId", "active" FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_not_reasonable_name(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("5e48").eq(lit("test")).and(col("name").eq(lit("x")))];
+            let sql_exec = new_sql_exec(Some(&vec![0, 1, 5]), "users", &filters, Some(3), None)?;
+            assert_eq!(
+                sql_exec.sql()?,
+                r#"SELECT "name", age, "5e48" FROM users WHERE (("5e48" = 'test') AND ("name" = 'x')) LIMIT 3"#
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_not_reasonable_name_mysql(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("5e48").eq(lit("test")).and(col("name").eq(lit("x")))];
+            let sql_exec = new_sql_exec(
+                Some(&vec![0, 1, 5]),
+                "users",
+                &filters,
+                Some(3),
+                Some(Engine::MySQL),
+            )?;
+            assert_eq!(
+                sql_exec.sql()?,
+                r#"SELECT `name`, `age`, `5e48` FROM `users` WHERE ((`5e48` = 'test') AND (`name` = 'x')) LIMIT 3"#
             );
             Ok(())
         }
