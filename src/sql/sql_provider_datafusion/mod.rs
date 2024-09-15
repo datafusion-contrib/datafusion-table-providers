@@ -80,7 +80,6 @@ pub struct SqlTable<T: 'static, P: 'static> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     schema: SchemaRef,
     pub table_reference: TableReference,
-    pub dialect: Arc<dyn Dialect + Send + Sync>,
     engine: Option<Engine>,
 }
 
@@ -117,17 +116,12 @@ impl<T, P> SqlTable<T, P> {
         table_reference: impl Into<TableReference>,
         engine: Option<Engine>,
     ) -> Self {
-        let dialect = engine
-            .map(|e| e.dialect())
-            .unwrap_or(Arc::new(DefaultDialect {}));
-
         Self {
             name,
             pool: Arc::clone(pool),
             schema: schema.into(),
             table_reference: table_reference.into(),
             engine,
-            dialect,
         }
     }
 
@@ -146,7 +140,6 @@ impl<T, P> SqlTable<T, P> {
             filters,
             limit,
             self.engine,
-            self.dialect.clone(),
         )?))
     }
 
@@ -184,14 +177,16 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        let dialect = self
+            .engine
+            .map(|e| e.dialect())
+            .unwrap_or_else(|| Arc::new(DefaultDialect {}));
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(
-                |f| match Unparser::new(self.dialect.as_ref()).expr_to_sql(f) {
-                    Ok(_) => TableProviderFilterPushDown::Exact,
-                    Err(_) => TableProviderFilterPushDown::Unsupported,
-                },
-            )
+            .map(|f| match Unparser::new(dialect.as_ref()).expr_to_sql(f) {
+                Ok(_) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            })
             .collect();
 
         Ok(filter_push_down)
@@ -223,7 +218,6 @@ pub struct SqlExec<T, P> {
     limit: Option<usize>,
     properties: PlanProperties,
     engine: Option<Engine>,
-    dialect: Arc<dyn Dialect + Send + Sync>,
 }
 
 pub fn project_schema_safe(
@@ -253,7 +247,6 @@ impl<T, P> SqlExec<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
         engine: Option<Engine>,
-        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projections)?;
 
@@ -269,7 +262,6 @@ impl<T, P> SqlExec<T, P> {
                 ExecutionMode::Bounded,
             ),
             engine,
-            dialect,
         })
     }
 
@@ -295,11 +287,15 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
+            let dialect = self
+                .engine
+                .map(|e| e.dialect())
+                .unwrap_or_else(|| Arc::new(DefaultDialect {}));
             let filter_expr = self
                 .filters
                 .iter()
                 .map(|f| {
-                    Unparser::new(self.dialect.as_ref())
+                    Unparser::new(dialect.as_ref())
                         .expr_to_sql(f)
                         .map(|e| e.to_string())
                 })
@@ -433,7 +429,7 @@ mod tests {
         use async_trait::async_trait;
         use datafusion::{
             logical_expr::{col, lit, Expr},
-            sql::{unparser::dialect::DefaultDialect, TableReference},
+            sql::TableReference,
         };
 
         use crate::sql::db_connection_pool::{
@@ -496,10 +492,6 @@ mod tests {
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
             let table_ref = TableReference::parse_str(table_reference);
 
-            let dialect = engine
-                .map(|e| e.dialect())
-                .unwrap_or(Arc::new(DefaultDialect {}));
-
             Ok(SqlExec::new(
                 projections,
                 &schema,
@@ -508,7 +500,6 @@ mod tests {
                 filters,
                 limit,
                 engine,
-                dialect,
             )?)
         }
 

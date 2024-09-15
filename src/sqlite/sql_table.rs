@@ -2,7 +2,6 @@ use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::sql::unparser::dialect::SqliteDialect;
 use futures::TryStreamExt;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
@@ -122,7 +121,6 @@ impl<T, P> SQLiteSqlExec<T, P> {
             filters,
             limit,
             Some(Engine::SQLite),
-            Arc::new(SqliteDialect {}),
         )?;
 
         Ok(Self { base_exec })
