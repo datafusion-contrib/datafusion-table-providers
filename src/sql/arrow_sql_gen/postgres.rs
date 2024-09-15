@@ -1047,7 +1047,7 @@ impl<'a> FromSql<'a> for EnumValueFromSql {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
-    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let mut cursor = std::io::Cursor::new(raw);
         let mut enum_value = String::new();
         cursor.read_to_string(&mut enum_value)?;
