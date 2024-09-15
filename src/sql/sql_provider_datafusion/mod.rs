@@ -59,6 +59,7 @@ pub enum Engine {
     ODBC,
     Postgres,
     MySQL,
+    Default,
 }
 
 impl Engine {
@@ -68,7 +69,9 @@ impl Engine {
             Engine::SQLite => Arc::new(SqliteDialect {}),
             Engine::Postgres => Arc::new(PostgreSqlDialect {}),
             Engine::MySQL => Arc::new(MySqlDialect {}),
-            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
+            Engine::Spark | Engine::DuckDB | Engine::ODBC | Engine::Default => {
+                Arc::new(DefaultDialect {})
+            }
         }
     }
 }
@@ -80,7 +83,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     schema: SchemaRef,
     pub table_reference: TableReference,
-    engine: Option<Engine>,
+    engine: Engine,
 }
 
 impl<T, P> SqlTable<T, P> {
@@ -116,6 +119,7 @@ impl<T, P> SqlTable<T, P> {
         table_reference: impl Into<TableReference>,
         engine: Option<Engine>,
     ) -> Self {
+        let engine = engine.unwrap_or(Engine::Default);
         Self {
             name,
             pool: Arc::clone(pool),
@@ -139,7 +143,7 @@ impl<T, P> SqlTable<T, P> {
             Arc::clone(&self.pool),
             filters,
             limit,
-            self.engine,
+            Some(self.engine),
         )?))
     }
 
@@ -177,16 +181,14 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let dialect = self
-            .engine
-            .map(|e| e.dialect())
-            .unwrap_or_else(|| Arc::new(DefaultDialect {}));
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(|f| match Unparser::new(dialect.as_ref()).expr_to_sql(f) {
-                Ok(_) => TableProviderFilterPushDown::Exact,
-                Err(_) => TableProviderFilterPushDown::Unsupported,
-            })
+            .map(
+                |f| match Unparser::new(self.engine.dialect().as_ref()).expr_to_sql(f) {
+                    Ok(_) => TableProviderFilterPushDown::Exact,
+                    Err(_) => TableProviderFilterPushDown::Unsupported,
+                },
+            )
             .collect();
 
         Ok(filter_push_down)
@@ -217,7 +219,7 @@ pub struct SqlExec<T, P> {
     filters: Vec<Expr>,
     limit: Option<usize>,
     properties: PlanProperties,
-    engine: Option<Engine>,
+    engine: Engine,
 }
 
 pub fn project_schema_safe(
@@ -248,6 +250,7 @@ impl<T, P> SqlExec<T, P> {
         engine: Option<Engine>,
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projections)?;
+        let engine = engine.unwrap_or(Engine::Default);
 
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
@@ -286,15 +289,11 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
-            let dialect = self
-                .engine
-                .map(|e| e.dialect())
-                .unwrap_or_else(|| Arc::new(DefaultDialect {}));
             let filter_expr = self
                 .filters
                 .iter()
                 .map(|f| {
-                    Unparser::new(dialect.as_ref())
+                    Unparser::new(self.engine.dialect().as_ref())
                         .expr_to_sql(f)
                         .map(|e| e.to_string())
                 })
@@ -316,7 +315,7 @@ impl<T, P> SqlExec<T, P> {
 
     fn column_name_escaped(&self, column_name: &str) -> String {
         match self.engine {
-            Some(Engine::ODBC) => column_name.to_string(),
+            Engine::ODBC => column_name.to_string(),
             _ => {
                 format!("\"{}\"", column_name)
             }

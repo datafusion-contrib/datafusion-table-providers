@@ -1,6 +1,5 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
-use datafusion::sql::unparser::dialect::DefaultDialect;
 use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -58,9 +57,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.engine
-            .map(|e| e.dialect())
-            .unwrap_or_else(|| Arc::new(DefaultDialect {}))
+        self.engine.dialect()
     }
 
     fn execute(
