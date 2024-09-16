@@ -90,13 +90,24 @@ impl SqliteConnectionPoolFactory {
     }
 }
 
-#[derive(Clone)]
 pub struct SqliteConnectionPool {
     conn: Connection,
     join_push_down: JoinPushDown,
     mode: Mode,
     path: Arc<str>,
     attach_databases: Vec<Arc<str>>,
+}
+
+impl Clone for SqliteConnectionPool {
+    fn clone(&self) -> Self {
+        SqliteConnectionPool {
+            conn: self.conn.clone(),
+            join_push_down: self.join_push_down.clone(),
+            mode: self.mode.clone(),
+            path: Arc::clone(&self.path),
+            attach_databases: self.attach_databases.clone(),
+        }
+    }
 }
 
 impl SqliteConnectionPool {

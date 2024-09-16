@@ -157,8 +157,8 @@ impl SqliteTableProviderFactory {
 
         let pool = SqliteConnectionPoolFactory::new(&db_path, mode)
             .build()
-            .await?;
-        // TODO PICK UP FROM HERE
+            .await
+            .context(DbConnectionPoolSnafu)?;
 
         instances.insert(key, pool.clone());
 
@@ -223,13 +223,12 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             );
         }
 
-        let db_path = self.sqlite_file_path(&name, &cmd.options);
+        let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
-            SqliteConnectionPoolFactory::new(&db_path, mode)
-                .build()
+            self.get_or_init_instance(Arc::clone(&db_path), mode)
                 .await
-                .map_err(handle_db_error)?,
+                .map_err(to_datafusion_error)?,
         );
 
         let read_pool = if mode == Mode::Memory {
