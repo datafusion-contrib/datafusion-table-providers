@@ -4,7 +4,7 @@ use arrow::{
         ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
         Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
         NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
-        TimestampMillisecondBuilder, UInt64Builder,
+        TimestampMicrosecondBuilder, UInt64Builder,
     },
     datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
 };
@@ -14,6 +14,7 @@ use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
+use time::PrimitiveDateTime;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -107,12 +108,13 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     // use 38 as default precision for decimal types if there is no way to get the precision from the column
                     match projected_schema {
                         Some(schema) => {
-                            let precision = get_decimal_column_precision(&column_name, schema).unwrap_or(38);
+                            let precision =
+                                get_decimal_column_precision(&column_name, schema).unwrap_or(38);
                             (Some(precision), Some(column.decimals() as i8))
-                        },
+                        }
                         None => (Some(38), Some(column.decimals() as i8)),
                     }
-                },
+                }
                 _ => (None, None),
             };
 
@@ -357,61 +359,25 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
                     let Some(builder) = builder
                         .as_any_mut()
-                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .downcast_mut::<TimestampMicrosecondBuilder>()
                     else {
                         return FailedToDowncastBuilderSnafu {
                             mysql_type: format!("{mysql_type:?}"),
                         }
                         .fail();
                     };
-                    let v = handle_null_error(row.get_opt::<Value, usize>(i).transpose()).context(
-                        FailedToGetRowValueSnafu {
+                    let v =
+                        handle_null_error(row.get_opt::<PrimitiveDateTime, usize>(i).transpose())
+                            .context(FailedToGetRowValueSnafu {
                             mysql_type: column_type,
-                        },
-                    )?;
+                        })?;
 
                     match v {
                         Some(v) => {
-                            let timestamp = match v {
-                                Value::Date(year, month, day, hour, minute, second, micros) => {
-                                    let timestamp = chrono::NaiveDate::from_ymd_opt(
-                                        i32::from(year),
-                                        u32::from(month),
-                                        u32::from(day),
-                                    )
-                                    .unwrap_or_default()
-                                    .and_hms_micro_opt(
-                                        u32::from(hour),
-                                        u32::from(minute),
-                                        u32::from(second),
-                                        micros,
-                                    )
-                                    .unwrap_or_default()
-                                    .and_utc();
-                                    timestamp.timestamp() * 1000
-                                }
-                                Value::Time(is_neg, days, hours, minutes, seconds, micros) => {
-                                    let naive_time = chrono::NaiveTime::from_hms_micro_opt(
-                                        u32::from(hours),
-                                        u32::from(minutes),
-                                        u32::from(seconds),
-                                        micros,
-                                    )
-                                    .unwrap_or_default();
-
-                                    let time: i64 = naive_time.num_seconds_from_midnight().into();
-
-                                    let timestamp = i64::from(days) * 24 * 60 * 60 + time;
-
-                                    if is_neg {
-                                        -timestamp
-                                    } else {
-                                        timestamp
-                                    }
-                                }
-                                _ => 0,
-                            };
-                            builder.append_value(timestamp);
+                            #[allow(clippy::cast_possible_truncation)]
+                            let timestamp_micros =
+                                (v.assume_utc().unix_timestamp_nanos() / 1_000) as i64;
+                            builder.append_value(timestamp_micros);
                         }
                         None => builder.append_null(),
                     }
@@ -449,9 +415,9 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
         // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
         ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default())),
-        ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME | ColumnType::MYSQL_TYPE_DATETIME2  => {
-            Some(DataType::Timestamp(TimeUnit::Millisecond, None))
-        }
+        ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME => {
+            Some(DataType::Timestamp(TimeUnit::Microsecond, None))
+        },
         ColumnType::MYSQL_TYPE_DATE => Some(DataType::Date32),
         ColumnType::MYSQL_TYPE_TIME => {
             Some(DataType::Time64(TimeUnit::Nanosecond))
@@ -479,6 +445,7 @@ pub fn map_column_to_data_type(
         // Unsupported yet
         | ColumnType::MYSQL_TYPE_UNKNOWN
         | ColumnType::MYSQL_TYPE_TIMESTAMP2
+        | ColumnType::MYSQL_TYPE_DATETIME2
         | ColumnType::MYSQL_TYPE_TIME2
         | ColumnType::MYSQL_TYPE_GEOMETRY => {
             unimplemented!("Unsupported column type {:?}", column_type)

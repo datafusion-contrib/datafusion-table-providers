@@ -12,7 +12,7 @@ use duckdb::AccessMode;
 /// DuckDB-backed tables can be created at runtime.
 #[tokio::main]
 async fn main() {
-    let duckdb = Arc::new(DuckDBTableProviderFactory::new().access_mode(AccessMode::ReadWrite));
+    let duckdb = Arc::new(DuckDBTableProviderFactory::new(AccessMode::ReadWrite));
 
     let runtime = Arc::new(RuntimeEnv::default());
     let state = SessionStateBuilder::new()
