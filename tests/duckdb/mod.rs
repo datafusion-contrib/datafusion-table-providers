@@ -18,7 +18,7 @@ async fn arrow_duckdb_round_trip(
     source_schema: SchemaRef,
     table_name: &str,
 ) {
-    let factory = DuckDBTableProviderFactory::new().access_mode(duckdb::AccessMode::ReadWrite);
+    let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
     let ctx = SessionContext::new();
     let cmd = CreateExternalTable {
         schema: Arc::new(arrow_record.schema().to_dfschema().expect("to df schema")),

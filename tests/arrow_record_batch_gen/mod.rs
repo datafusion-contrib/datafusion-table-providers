@@ -2,13 +2,12 @@ use arrow::array::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{
-        i256, DataType, Date32Type, Date64Type, Field, Fields, Int8Type, IntervalDayTime,
-        IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, TimeUnit,
+        i256, DataType, Date32Type, Date64Type, Field, Int8Type, IntervalDayTime,
+        IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
     },
 };
 use chrono::NaiveDate;
 use std::sync::Arc;
-use types::IntervalDayTimeType;
 
 // Helper functions to create arrow record batches of different types
 
