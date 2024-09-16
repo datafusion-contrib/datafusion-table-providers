@@ -29,11 +29,7 @@ pub(super) async fn start_postgres_docker_container(
     port: usize,
 ) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{PG_DOCKER_CONTAINER}-{port}");
-    let port = if let Ok(port) = port.try_into() {
-        port
-    } else {
-        15432
-    };
+    let port = port.try_into().unwrap_or(15432);
 
     let pg_docker_image = std::env::var("PG_DOCKER_IMAGE")
         .unwrap_or_else(|_| format!("{}postgres:latest", container_registry()));

@@ -17,7 +17,6 @@ use crate::docker::RunningContainer;
 mod common;
 
 async fn test_mysql_decimal_types(port: usize) {
-    let table_name = "decimal_table";
     let create_table_stmt = "
         CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
         ";
@@ -41,7 +40,7 @@ async fn test_mysql_decimal_types(port: usize) {
     )
     .expect("Failed to created arrow record batch");
 
-    let decimal_record = arrow_mysql_one_way(
+    let _ = arrow_mysql_one_way(
         port,
         "decimal_table",
         create_table_stmt,
@@ -289,7 +288,7 @@ async fn arrow_mysql_one_way(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0], expected_record);
 
-    return record_batch;
+    record_batch
 }
 
 async fn start_mysql_container(port: usize) -> RunningContainer {
