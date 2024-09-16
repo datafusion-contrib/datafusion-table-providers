@@ -1,6 +1,7 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
+use crate::sql::db_connection_pool::DbInstanceKey;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
@@ -26,6 +27,7 @@ use snafu::prelude::*;
 use sql_table::SQLiteTable;
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 use tokio_rusqlite::Connection;
 
 use crate::util::{
@@ -95,7 +97,9 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct SqliteTableProviderFactory {}
+pub struct SqliteTableProviderFactory {
+    instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
+}
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
 const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
@@ -104,7 +108,9 @@ const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            instances: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     #[must_use]
@@ -131,6 +137,32 @@ impl SqliteTableProviderFactory {
             .get(SQLITE_DB_PATH_PARAM)
             .cloned()
             .unwrap_or(default_filepath)
+    }
+
+    pub async fn get_or_init_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+        mode: Mode,
+    ) -> Result<SqliteConnectionPool> {
+        let db_path = db_path.into();
+        let key = match mode {
+            Mode::Memory => DbInstanceKey::memory(),
+            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
+        };
+        let mut instances = self.instances.lock().await;
+
+        if let Some(instance) = instances.get(&key) {
+            return Ok(instance.clone());
+        }
+
+        let pool = SqliteConnectionPoolFactory::new(&db_path, mode)
+            .build()
+            .await?;
+        // TODO PICK UP FROM HERE
+
+        instances.insert(key, pool.clone());
+
+        Ok(pool)
     }
 }
 

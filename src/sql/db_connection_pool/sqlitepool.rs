@@ -90,6 +90,7 @@ impl SqliteConnectionPoolFactory {
     }
 }
 
+#[derive(Clone)]
 pub struct SqliteConnectionPool {
     conn: Connection,
     join_push_down: JoinPushDown,
