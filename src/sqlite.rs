@@ -152,7 +152,7 @@ impl SqliteTableProviderFactory {
         let mut instances = self.instances.lock().await;
 
         if let Some(instance) = instances.get(&key) {
-            return Ok(instance.clone());
+            return instance.try_clone().await.context(DbConnectionPoolSnafu);
         }
 
         let pool = SqliteConnectionPoolFactory::new(&db_path, mode)
@@ -160,7 +160,7 @@ impl SqliteTableProviderFactory {
             .await
             .context(DbConnectionPoolSnafu)?;
 
-        instances.insert(key, pool.clone());
+        instances.insert(key, pool.try_clone().await.context(DbConnectionPoolSnafu)?);
 
         Ok(pool)
     }
@@ -174,10 +174,6 @@ impl Default for SqliteTableProviderFactory {
 
 pub type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
-
-fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
-    to_datafusion_error(Error::DbConnectionPoolError { source: err })
-}
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
@@ -238,11 +234,9 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
             // and we can't have concurrent writes when sharing the same connection
             Arc::new(
-                SqliteConnectionPoolFactory::new(&db_path, mode)
-                    .with_databases(self.attach_databases(&options))
-                    .build()
+                self.get_or_init_instance(Arc::clone(&db_path), mode)
                     .await
-                    .map_err(handle_db_error)?,
+                    .map_err(to_datafusion_error)?,
             )
         };
 
