@@ -1,6 +1,7 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
+use crate::sql::db_connection_pool::DbInstanceKey;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
@@ -26,6 +27,7 @@ use snafu::prelude::*;
 use sql_table::SQLiteTable;
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 use tokio_rusqlite::Connection;
 
 use crate::util::{
@@ -95,7 +97,9 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct SqliteTableProviderFactory {}
+pub struct SqliteTableProviderFactory {
+    instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
+}
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
 const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
@@ -104,7 +108,9 @@ const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            instances: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     #[must_use]
@@ -132,6 +138,32 @@ impl SqliteTableProviderFactory {
             .cloned()
             .unwrap_or(default_filepath)
     }
+
+    pub async fn get_or_init_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+        mode: Mode,
+    ) -> Result<SqliteConnectionPool> {
+        let db_path = db_path.into();
+        let key = match mode {
+            Mode::Memory => DbInstanceKey::memory(),
+            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
+        };
+        let mut instances = self.instances.lock().await;
+
+        if let Some(instance) = instances.get(&key) {
+            return instance.try_clone().await.context(DbConnectionPoolSnafu);
+        }
+
+        let pool = SqliteConnectionPoolFactory::new(&db_path, mode)
+            .build()
+            .await
+            .context(DbConnectionPoolSnafu)?;
+
+        instances.insert(key, pool.try_clone().await.context(DbConnectionPoolSnafu)?);
+
+        Ok(pool)
+    }
 }
 
 impl Default for SqliteTableProviderFactory {
@@ -142,10 +174,6 @@ impl Default for SqliteTableProviderFactory {
 
 pub type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
-
-fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
-    to_datafusion_error(Error::DbConnectionPoolError { source: err })
-}
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
@@ -191,13 +219,12 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             );
         }
 
-        let db_path = self.sqlite_file_path(&name, &cmd.options);
+        let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
-            SqliteConnectionPoolFactory::new(&db_path, mode)
-                .build()
+            self.get_or_init_instance(Arc::clone(&db_path), mode)
                 .await
-                .map_err(handle_db_error)?,
+                .map_err(to_datafusion_error)?,
         );
 
         let read_pool = if mode == Mode::Memory {
@@ -207,11 +234,9 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
             // and we can't have concurrent writes when sharing the same connection
             Arc::new(
-                SqliteConnectionPoolFactory::new(&db_path, mode)
-                    .with_databases(self.attach_databases(&options))
-                    .build()
+                self.get_or_init_instance(Arc::clone(&db_path), mode)
                     .await
-                    .map_err(handle_db_error)?,
+                    .map_err(to_datafusion_error)?,
             )
         };
 
@@ -611,7 +636,6 @@ impl Sqlite {
 
 #[cfg(test)]
 pub(crate) mod tests {
-
     use arrow::datatypes::{DataType, Schema};
     use datafusion::{
         common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
