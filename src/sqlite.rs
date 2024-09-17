@@ -636,7 +636,6 @@ impl Sqlite {
 
 #[cfg(test)]
 pub(crate) mod tests {
-
     use arrow::datatypes::{DataType, Schema};
     use datafusion::{
         common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
