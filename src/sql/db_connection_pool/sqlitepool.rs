@@ -198,6 +198,35 @@ impl SqliteConnectionPool {
     pub fn connect_sync(&self) -> Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>> {
         Box::new(SqliteConnection::new(self.conn.clone()))
     }
+
+    /// Will attempt to clone the connection pool. This will always succeed for in-memory mode.
+    /// For file-mode, it will attempt to create a new connection pool with the same configuration.
+    ///
+    /// Due to the way the connection pool is implemented, it doesn't allow multiple concurrent reads/writes
+    /// using the same connection pool instance.
+    pub async fn try_clone(&self) -> Result<Self> {
+        match self.mode {
+            Mode::Memory => Ok(SqliteConnectionPool {
+                conn: self.conn.clone(),
+                join_push_down: self.join_push_down.clone(),
+                mode: self.mode,
+                path: Arc::clone(&self.path),
+                attach_databases: self.attach_databases.clone(),
+            }),
+            Mode::File => {
+                let attach_databases = if self.attach_databases.is_empty() {
+                    None
+                } else {
+                    Some(self.attach_databases.clone())
+                };
+
+                SqliteConnectionPoolFactory::new(&self.path, self.mode)
+                    .with_databases(attach_databases)
+                    .build()
+                    .await
+            }
+        }
+    }
 }
 
 #[async_trait]
