@@ -1,7 +1,6 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
-use crate::sql::db_connection_pool::dbconnection::SyncDbConnection;
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
@@ -213,19 +212,7 @@ impl DataSink for DuckDBDataSink {
         drop(batch_tx);
 
         match duckdb_write_handle.await {
-            Ok(result) => {
-                // before returning the result, attempt to CHECKPOINT to flush the WAL to disk
-                let mut conn = self.duckdb.connect_sync().map_err(to_datafusion_error)?;
-                let conn = DuckDB::duckdb_conn(&mut conn).map_err(to_datafusion_error)?;
-
-                // This may fail if multiple transactions are active (i.e. actively writing data)
-                // we can ignore the error since it will be written once the last transaction finishes.
-                if let Err(e) = conn.execute("CHECKPOINT", &[]) {
-                    tracing::trace!("DuckDB CHECKPOINT failed - this is expected if there are multiple active transactions: {e}");
-                };
-
-                result
-            }
+            Ok(result) => result,
             Err(e) => Err(DataFusionError::Execution(format!(
                 "Error writing to DuckDB: {e}"
             ))),
