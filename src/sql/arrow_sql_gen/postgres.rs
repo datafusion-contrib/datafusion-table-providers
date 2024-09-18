@@ -926,7 +926,7 @@ struct BigDecimalFromSql {
 
 impl BigDecimalFromSql {
     fn to_decimal_128_with_scale(&self, dest_scale: u16) -> Option<i128> {
-        // Resolve scale difference
+        // Resolve scale difference by upscaling / downscaling to the scale of arrow Decimal128 type
         if dest_scale != self.scale {
             return (&self.inner * 10i128.pow(u32::from(dest_scale))).to_i128();
         }
