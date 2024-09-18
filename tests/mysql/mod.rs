@@ -234,6 +234,78 @@ VALUES (
     .await;
 }
 
+async fn test_time_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE time_table (
+    t0 TIME(0),  
+    t1 TIME(1), 
+    t2 TIME(2), 
+    t3 TIME(3), 
+    t4 TIME(4), 
+    t5 TIME(5), 
+    t6 TIME(6)
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO time_table (t0, t1, t2, t3, t4, t5, t6)
+VALUES 
+    ('12:30:00', 
+     '12:30:00.1', 
+     '12:30:00.12', 
+     '12:30:00.123', 
+     '12:30:00.1234', 
+     '12:30:00.12345', 
+     '12:30:00.123456');
+        ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("t0", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t1", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t2", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t3", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t4", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t5", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new("t6", DataType::Time64(TimeUnit::Nanosecond), true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60 + 0) * 1_000_000_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 100_000_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 120_000_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 123_000_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 123_400_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 123_450_000,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                (12 * 3600 + 30 * 60) * 1_000_000_000 + 123_456_000,
+            ])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "time_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn arrow_mysql_one_way(
     port: usize,
     table_name: &str,
@@ -310,6 +382,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_decimal_types(port).await;
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
+    test_time_types(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
