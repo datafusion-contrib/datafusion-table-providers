@@ -1002,7 +1002,6 @@ impl<'a> FromSql<'a> for BigDecimalFromSql {
                 bytes: raw.to_vec(),
             }));
         };
-        let tmp = BigDecimal::new(digits.clone(), i64::from(scale));
         Ok(BigDecimalFromSql {
             inner: BigDecimal::new(digits, i64::from(scale)),
             scale,
