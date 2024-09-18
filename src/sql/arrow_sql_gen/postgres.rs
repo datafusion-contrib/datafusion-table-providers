@@ -78,7 +78,7 @@ pub enum Error {
     #[snafu(display("No Arrow field found for index {index}"))]
     NoArrowFieldForIndex { index: usize },
 
-    #[snafu(display("No Postgres scale information found for index {index}"))]
+    #[snafu(display("No PostgreSQL scale found for index {index}"))]
     NoPostgresScaleForIndex { index: usize },
 
     #[snafu(display("No column name for index: {index}"))]
