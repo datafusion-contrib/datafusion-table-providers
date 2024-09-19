@@ -61,7 +61,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// # Errors
 ///
 /// Returns an error if there is a failure in converting the rows to a `RecordBatch`.
-pub fn rows_to_arrow(mut rows: Rows, num_cols: usize, projected_schema: Option<SchemaRef>) -> Result<RecordBatch> {
+pub fn rows_to_arrow(
+    mut rows: Rows,
+    num_cols: usize,
+    projected_schema: Option<SchemaRef>,
+) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Field> = Vec::new();
     let mut arrow_columns_builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
     let mut sqlite_types: Vec<Type> = Vec::new();
@@ -80,9 +84,9 @@ pub fn rows_to_arrow(mut rows: Rows, num_cols: usize, projected_schema: Option<S
                 .to_string();
 
             // SQLite can store floating point values without a fractional component as integers.
-            // Therefore, we need to verify if the column is actually a floating point type 
-            // by examining the projected schema. 
-            // Note: The same column may contain both integer and floating point values. 
+            // Therefore, we need to verify if the column is actually a floating point type
+            // by examining the projected schema.
+            // Note: The same column may contain both integer and floating point values.
             // Reading values as Float is safe even if the value is stored as an integer.
             // Refer to the rusqlite type handling documentation for more details:
             // https://github.com/rusqlite/rusqlite/blob/95680270eca6f405fb51f5fbe6a214aac5fdce58/src/types/mod.rs#L21C1-L22C75
@@ -94,7 +98,10 @@ pub fn rows_to_arrow(mut rows: Rows, num_cols: usize, projected_schema: Option<S
             if column_type == Type::Integer {
                 if let Some(projected_schema) = projected_schema.as_ref() {
                     match projected_schema.fields[i].data_type() {
-                        DataType::Decimal128(..) | DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                        DataType::Decimal128(..)
+                        | DataType::Float16
+                        | DataType::Float32
+                        | DataType::Float64 => {
                             column_type = Type::Real;
                         }
                         _ => {}
