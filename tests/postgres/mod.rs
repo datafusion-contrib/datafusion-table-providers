@@ -1,5 +1,8 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{
+    array::{Decimal128Array, RecordBatch},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
@@ -151,6 +154,11 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
         start_container(&container_manager).await;
     }
 
+    test_postgres_enum_type(container_manager.port).await;
+    test_postgres_numeric_type(container_manager.port).await;
+}
+
+async fn test_postgres_enum_type(port: usize) {
     let extra_stmt = Some("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral');");
     let create_table_stmt = "
     CREATE TABLE person_mood (
@@ -164,8 +172,64 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     let (expected_record, _) = get_arrow_dictionary_array_record_batch();
 
     arrow_postgres_one_way(
-        container_manager.port,
+        port,
         "person_mood",
+        create_table_stmt,
+        insert_table_stmt,
+        extra_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_postgres_numeric_type(port: usize) {
+    let extra_stmt = None;
+    let create_table_stmt = "
+    CREATE TABLE numeric_values (
+    first_column NUMERIC,  -- No precision specified
+    second_column NUMERIC  -- No precision specified
+);";
+
+    let insert_table_stmt = "
+    INSERT INTO numeric_values (first_column, second_column) VALUES
+(1.0917217805754313, 0.00000000000000000000),
+(0.97824560830666753739, 1220.9175000000000000),
+(1.0917217805754313, 52.9533333333333333);
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("first_column", DataType::Decimal128(38, 16), true),
+        Field::new("second_column", DataType::Decimal128(38, 20), true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(
+                Decimal128Array::from(vec![
+                    10917217805754313i128,
+                    9782456083066675i128,
+                    10917217805754313i128,
+                ])
+                .with_precision_and_scale(38, 16)
+                .unwrap(),
+            ),
+            Arc::new(
+                Decimal128Array::from(vec![
+                    0i128,
+                    122091750000000000000000i128,
+                    5295333333333333330000i128,
+                ])
+                .with_precision_and_scale(38, 20)
+                .unwrap(),
+            ),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_postgres_one_way(
+        port,
+        "numeric_values",
         create_table_stmt,
         insert_table_stmt,
         extra_stmt,

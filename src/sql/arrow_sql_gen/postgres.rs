@@ -78,6 +78,9 @@ pub enum Error {
     #[snafu(display("No Arrow field found for index {index}"))]
     NoArrowFieldForIndex { index: usize },
 
+    #[snafu(display("No PostgreSQL scale found for index {index}"))]
+    NoPostgresScaleForIndex { index: usize },
+
     #[snafu(display("No column name for index: {index}"))]
     NoColumnNameForIndex { index: usize },
 }
@@ -183,6 +186,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut postgres_types: Vec<Type> = Vec::new();
+    let mut postgres_numeric_scales: Vec<Option<u16>> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
 
     if !rows.is_empty() {
@@ -197,6 +201,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 }
                 None => arrow_fields.push(None),
             }
+            postgres_numeric_scales.push(None);
             arrow_columns_builders
                 .push(map_data_type_to_array_builder_optional(data_type.as_ref()));
             postgres_types.push(column_type.clone());
@@ -212,6 +217,10 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 
             let Some(arrow_field) = arrow_fields.get_mut(i) else {
                 return NoArrowFieldForIndexSnafu { index: i }.fail();
+            };
+
+            let Some(postgres_numeric_scale) = postgres_numeric_scales.get_mut(i) else {
+                return NoPostgresScaleForIndexSnafu { index: i }.fail();
             };
 
             match *postgres_type {
@@ -440,12 +449,19 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         *arrow_field = Some(new_arrow_field);
                     }
 
+                    if postgres_numeric_scale.is_none() {
+                        *postgres_numeric_scale = Some(scale);
+                    };
+
                     let Some(v) = v else {
                         dec_builder.append_null();
                         continue;
                     };
 
-                    let Some(v_i128) = v.to_decimal_128() else {
+                    // Record Batch Scale is determined by first row, while Postgres Numeric Type doesn't have fixed scale
+                    // Resolve scale difference for incoming records
+                    let dest_scale = postgres_numeric_scale.unwrap_or_default();
+                    let Some(v_i128) = v.to_decimal_128_with_scale(dest_scale) else {
                         return FailedToConvertBigDecimalToI128Snafu {
                             big_decimal: v.inner,
                         }
@@ -909,7 +925,12 @@ struct BigDecimalFromSql {
 }
 
 impl BigDecimalFromSql {
-    fn to_decimal_128(&self) -> Option<i128> {
+    fn to_decimal_128_with_scale(&self, dest_scale: u16) -> Option<i128> {
+        // Resolve scale difference by upscaling / downscaling to the scale of arrow Decimal128 type
+        if dest_scale != self.scale {
+            return (&self.inner * 10i128.pow(u32::from(dest_scale))).to_i128();
+        }
+
         (&self.inner * 10i128.pow(u32::from(self.scale))).to_i128()
     }
 
