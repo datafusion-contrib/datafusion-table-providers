@@ -25,9 +25,6 @@ pub enum Error {
     #[snafu(display("MySQL connection error: {source}"))]
     MySQLConnectionError { source: mysql_async::Error },
 
-    #[snafu(display("ConnectionPoolRunError: {source}"))]
-    ConnectionPoolRunError { source: mysql_async::Error },
-
     #[snafu(display("Invalid MySQL connection string: {source} "))]
     InvalidConnectionString { source: mysql_async::UrlError },
 
@@ -247,7 +244,7 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
     ) -> super::Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>>
     {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
+        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
         Ok(Box::new(MySQLConnection::new(conn)))
     }
 
