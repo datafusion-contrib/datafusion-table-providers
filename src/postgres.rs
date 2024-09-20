@@ -8,7 +8,6 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use crate::sql::sql_provider_datafusion::{
-    self,
     expr::{self, Engine},
     SqlTable,
 };
@@ -88,13 +87,6 @@ pub enum Error {
     #[snafu(display("Unable to commit the Postgres transaction: {source}"))]
     UnableToCommitPostgresTransaction {
         source: tokio_postgres::error::Error,
-    },
-
-    #[snafu(display(
-        "Unable to construct the DataFusion SQL Table Provider for Postgres: {source}"
-    ))]
-    UnableToConstructSqlTable {
-        source: sql_provider_datafusion::Error,
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]

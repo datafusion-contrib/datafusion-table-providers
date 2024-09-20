@@ -78,11 +78,27 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         let columns_meta_query =
             format!("SHOW COLUMNS FROM {}", table_reference.to_quoted_string());
 
-        let columns_meta: Vec<Row> = conn
-            .exec(&columns_meta_query, Params::Empty)
-            .await
-            .boxed()
-            .context(super::UnableToGetSchemaSnafu)?;
+        let columns_meta: Vec<Row> = match conn.exec(&columns_meta_query, Params::Empty).await {
+            Ok(columns_meta) => columns_meta,
+            Err(e) => match e {
+                mysql_async::Error::Server(server_error) => {
+                    if server_error.code == 1146 {
+                        return Err(super::Error::UndefinedTable {
+                            source: Box::new(server_error.clone()),
+                            table_name: table_reference.to_string(),
+                        });
+                    }
+                    return Err(super::Error::UnableToGetSchema {
+                        source: Box::new(mysql_async::Error::Server(server_error)),
+                    });
+                }
+                _ => {
+                    return Err(super::Error::UnableToGetSchema {
+                        source: Box::new(e),
+                    })
+                }
+            },
+        };
 
         Ok(columns_meta_to_schema(columns_meta).context(super::UnableToGetSchemaSnafu)?)
     }
