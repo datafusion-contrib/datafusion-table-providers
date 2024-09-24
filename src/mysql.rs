@@ -55,7 +55,7 @@ impl MySQLTableFactory {
         let table_provider = Arc::new(
             SqlTable::new("mysql", &pool, table_reference, None)
                 .await
-                .context(UnableToConstructSQLTableSnafu)?
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
                 .with_dialect(Arc::new(MySqlDialect {})),
         );
 
