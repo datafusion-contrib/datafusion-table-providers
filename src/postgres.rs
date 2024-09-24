@@ -7,7 +7,9 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
+
+use crate::sql::sql_provider_datafusion::{Engine, SqlTable};
+
 use arrow::{
     array::RecordBatch,
     datatypes::{Schema, SchemaRef},
@@ -84,13 +86,6 @@ pub enum Error {
     #[snafu(display("Unable to commit the Postgres transaction: {source}"))]
     UnableToCommitPostgresTransaction {
         source: tokio_postgres::error::Error,
-    },
-
-    #[snafu(display(
-        "Unable to construct the DataFusion SQL Table Provider for Postgres: {source}"
-    ))]
-    UnableToConstructSqlTable {
-        source: sql_provider_datafusion::Error,
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
