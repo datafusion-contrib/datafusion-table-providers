@@ -1,4 +1,7 @@
 use bollard::secret::HealthConfig;
+#[cfg(feature = "postgres")]
+use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
+use datafusion_table_providers::util::secrets::to_secret_map;
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -26,11 +29,7 @@ pub(super) async fn start_postgres_docker_container(
     port: usize,
 ) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{PG_DOCKER_CONTAINER}-{port}");
-    let port = if let Ok(port) = port.try_into() {
-        port
-    } else {
-        15432
-    };
+    let port = port.try_into().unwrap_or(15432);
 
     let pg_docker_image = std::env::var("PG_DOCKER_IMAGE")
         .unwrap_or_else(|_| format!("{}postgres:latest", container_registry()));
@@ -56,4 +55,13 @@ pub(super) async fn start_postgres_docker_container(
 
     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
     Ok(running_container)
+}
+
+#[instrument]
+pub(super) async fn get_postgres_connection_pool(
+    port: usize,
+) -> Result<PostgresConnectionPool, anyhow::Error> {
+    let pool = PostgresConnectionPool::new(to_secret_map(get_pg_params(port))).await?;
+
+    Ok(pool)
 }

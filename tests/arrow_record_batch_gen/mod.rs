@@ -2,13 +2,12 @@ use arrow::array::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{
-        i256, DataType, Date32Type, Date64Type, Field, Fields, IntervalDayTime,
-        IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, TimeUnit,
+        i256, DataType, Date32Type, Date64Type, Field, Int8Type, IntervalDayTime,
+        IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
     },
 };
 use chrono::NaiveDate;
 use std::sync::Arc;
-use types::IntervalDayTimeType;
 
 // Helper functions to create arrow record batches of different types
 
@@ -531,6 +530,26 @@ pub(crate) fn get_arrow_bytea_array_record_batch() -> (RecordBatch, SchemaRef) {
     let record_batch =
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(bytea_array_builder)])
             .expect("Failed to created arrow bytea array record batch");
+
+    (record_batch, schema)
+}
+
+// DICTIONARY_ARRAY
+pub(crate) fn get_arrow_dictionary_array_record_batch() -> (RecordBatch, SchemaRef) {
+    let mut builder = StringDictionaryBuilder::<Int8Type>::new();
+    builder.append_value("happy");
+    builder.append_value("sad");
+    builder.append_value("neutral");
+    let array: DictionaryArray<Int8Type> = builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "mood_status",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let record_batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
+        .expect("Failed to created arrow dictionary array record batch");
 
     (record_batch, schema)
 }

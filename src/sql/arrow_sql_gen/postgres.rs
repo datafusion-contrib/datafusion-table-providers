@@ -1,4 +1,5 @@
 use std::convert;
+use std::io::Read;
 use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
@@ -7,11 +8,11 @@ use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
     Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
-    RecordBatch, RecordBatchOptions, StringBuilder, StructBuilder, Time64NanosecondBuilder,
-    TimestampNanosecondBuilder, UInt32Builder,
+    RecordBatch, RecordBatchOptions, StringBuilder, StringDictionaryBuilder, StructBuilder,
+    Time64NanosecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
 };
 use arrow::datatypes::{
-    DataType, Date32Type, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    DataType, Date32Type, Field, Int8Type, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
 };
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::num_bigint::Sign;
@@ -76,6 +77,9 @@ pub enum Error {
 
     #[snafu(display("No Arrow field found for index {index}"))]
     NoArrowFieldForIndex { index: usize },
+
+    #[snafu(display("No PostgreSQL scale found for index {index}"))]
+    NoPostgresScaleForIndex { index: usize },
 
     #[snafu(display("No column name for index: {index}"))]
     NoColumnNameForIndex { index: usize },
@@ -182,6 +186,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut postgres_types: Vec<Type> = Vec::new();
+    let mut postgres_numeric_scales: Vec<Option<u16>> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
 
     if !rows.is_empty() {
@@ -196,6 +201,7 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                 }
                 None => arrow_fields.push(None),
             }
+            postgres_numeric_scales.push(None);
             arrow_columns_builders
                 .push(map_data_type_to_array_builder_optional(data_type.as_ref()));
             postgres_types.push(column_type.clone());
@@ -211,6 +217,10 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
 
             let Some(arrow_field) = arrow_fields.get_mut(i) else {
                 return NoArrowFieldForIndexSnafu { index: i }.fail();
+            };
+
+            let Some(postgres_numeric_scale) = postgres_numeric_scales.get_mut(i) else {
+                return NoPostgresScaleForIndexSnafu { index: i }.fail();
             };
 
             match *postgres_type {
@@ -439,12 +449,19 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                         *arrow_field = Some(new_arrow_field);
                     }
 
+                    if postgres_numeric_scale.is_none() {
+                        *postgres_numeric_scale = Some(scale);
+                    };
+
                     let Some(v) = v else {
                         dec_builder.append_null();
                         continue;
                     };
 
-                    let Some(v_i128) = v.to_decimal_128() else {
+                    // Record Batch Scale is determined by first row, while Postgres Numeric Type doesn't have fixed scale
+                    // Resolve scale difference for incoming records
+                    let dest_scale = postgres_numeric_scale.unwrap_or_default();
+                    let Some(v_i128) = v.to_decimal_128_with_scale(dest_scale) else {
                         return FailedToConvertBigDecimalToI128Snafu {
                             big_decimal: v.inner,
                         }
@@ -745,6 +762,31 @@ pub fn rows_to_arrow(rows: &[Row]) -> Result<RecordBatch> {
                             );
                         }
                     }
+                    Kind::Enum(_) => {
+                        let Some(builder) = builder else {
+                            return NoBuilderForIndexSnafu { index: i }.fail();
+                        };
+                        let Some(builder) = builder
+                            .as_any_mut()
+                            .downcast_mut::<StringDictionaryBuilder<Int8Type>>()
+                        else {
+                            return FailedToDowncastBuilderSnafu {
+                                postgres_type: format!("{postgres_type}"),
+                            }
+                            .fail();
+                        };
+
+                        let v = row.try_get::<usize, Option<EnumValueFromSql>>(i).context(
+                            FailedToGetRowValueSnafu {
+                                pg_type: postgres_type.clone(),
+                            },
+                        )?;
+
+                        match v {
+                            Some(v) => builder.append_value(v.enum_value),
+                            None => builder.append_null(),
+                        }
+                    }
                     _ => {
                         unimplemented!("Unsupported type {:?} for column index {i}", postgres_type,)
                     }
@@ -850,6 +892,10 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
                 }
                 Some(DataType::Struct(arrow_fields.into()))
             }
+            Kind::Enum(_) => Some(DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8),
+            )),
             _ => unimplemented!("Unsupported column type {:?}", column_type),
         },
     }
@@ -879,7 +925,12 @@ struct BigDecimalFromSql {
 }
 
 impl BigDecimalFromSql {
-    fn to_decimal_128(&self) -> Option<i128> {
+    fn to_decimal_128_with_scale(&self, dest_scale: u16) -> Option<i128> {
+        // Resolve scale difference by upscaling / downscaling to the scale of arrow Decimal128 type
+        if dest_scale != self.scale {
+            return (&self.inner * 10i128.pow(u32::from(dest_scale))).to_i128();
+        }
+
         (&self.inner * 10i128.pow(u32::from(self.scale))).to_i128()
     }
 
@@ -1006,6 +1057,26 @@ impl<'a> FromSql<'a> for MoneyFromSql {
 
     fn accepts(ty: &Type) -> bool {
         matches!(*ty, Type::MONEY)
+    }
+}
+
+struct EnumValueFromSql {
+    enum_value: String,
+}
+
+impl<'a> FromSql<'a> for EnumValueFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+        let mut enum_value = String::new();
+        cursor.read_to_string(&mut enum_value)?;
+        Ok(EnumValueFromSql { enum_value })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty.kind(), Kind::Enum(_))
     }
 }
 

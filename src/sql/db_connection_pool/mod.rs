@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use dbconnection::DbConnection;
+use std::sync::Arc;
 
 pub mod dbconnection;
 #[cfg(feature = "duckdb")]
@@ -46,5 +47,24 @@ impl From<&str> for Mode {
             "memory" => Mode::Memory,
             _ => Mode::default(),
         }
+    }
+}
+
+/// A key that uniquely identifies a database instance.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DbInstanceKey {
+    /// The database is a file on disk, with the given path.
+    File(Arc<str>),
+    /// The database is in memory.
+    Memory,
+}
+
+impl DbInstanceKey {
+    pub fn memory() -> Self {
+        DbInstanceKey::Memory
+    }
+
+    pub fn file(path: Arc<str>) -> Self {
+        DbInstanceKey::File(path)
     }
 }

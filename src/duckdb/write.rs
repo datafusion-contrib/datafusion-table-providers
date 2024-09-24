@@ -1,7 +1,6 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
-use crate::sql::db_connection_pool::dbconnection::SyncDbConnection;
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
@@ -184,16 +183,28 @@ impl DataSink for DuckDBDataSink {
             .context(super::ConstraintViolationSnafu)
             .map_err(to_datafusion_error)?;
 
-            batch_tx.send(batch).await.map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Unable to send RecordBatch to duckdb writer: {e}"
-                ))
-            })?;
+            if let Err(send_error) = batch_tx.send(batch).await {
+                match duckdb_write_handle.await {
+                    Err(join_error) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Error writing to DuckDB: {join_error}"
+                        )));
+                    }
+                    Ok(Err(datafusion_error)) => {
+                        return Err(datafusion_error);
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to send RecordBatch to DuckDB writer: {send_error}"
+                        )))
+                    }
+                };
+            }
         }
 
         if notify_commit_transaction.send(()).is_err() {
             return Err(DataFusionError::Execution(
-                "Unable to send message to commit transaction to duckdb writer.".to_string(),
+                "Unable to send message to commit transaction to DuckDB writer.".to_string(),
             ));
         };
 
@@ -201,16 +212,7 @@ impl DataSink for DuckDBDataSink {
         drop(batch_tx);
 
         match duckdb_write_handle.await {
-            Ok(result) => {
-                // before returning the result, CHECKPOINT to flush the WAL to disk
-                let mut conn = self.duckdb.connect_sync().map_err(to_datafusion_error)?;
-                let conn = DuckDB::duckdb_conn(&mut conn).map_err(to_datafusion_error)?;
-                conn.execute("CHECKPOINT", &[]).map_err(|err| {
-                    to_datafusion_error(super::Error::UnableToCheckpoint { source: err })
-                })?;
-
-                result
-            }
+            Ok(result) => result,
             Err(e) => Err(DataFusionError::Execution(format!(
                 "Error writing to DuckDB: {e}"
             ))),
