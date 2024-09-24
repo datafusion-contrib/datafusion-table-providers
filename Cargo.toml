@@ -10,6 +10,7 @@ description = "Extend the capabilities of DataFusion to support additional data 
 [dependencies]
 arrow = "53"
 arrow-array = { version = "53", optional = true }
+arrow-cast = { version = "53", optional = true }
 arrow-flight = { version = "53", optional = true, features = ["flight-sql-experimental", "tls"] }
 arrow-schema = { version = "53", optional = true, features = ["serde"] }
 arrow-json = "53"
@@ -21,12 +22,12 @@ bytes = { version = "1.7.1", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
 chrono = "0.4.38"
-datafusion = "41.0.0"
-datafusion-expr = { version = "41.0.0", optional = true }
-datafusion-physical-expr = { version = "41.0.0", optional = true }
-datafusion-physical-plan = { version = "41.0.0", optional = true }
-datafusion-proto = { version = "41.0.0", optional = true }
-datafusion-federation = { version = "0.2.2", features = ["sql"] } 
+datafusion = "42.0.0"
+datafusion-expr = { version = "42.0.0", optional = true }
+datafusion-physical-expr = { version = "42.0.0", optional = true }
+datafusion-physical-plan = { version = "42.0.0", optional = true }
+datafusion-proto = { version = "42.0.0", optional = true }
+datafusion-federation = { version = "0.3.0", features = ["sql"] } 
 duckdb = { version = "1", features = [
   "bundled",
   "r2d2",
