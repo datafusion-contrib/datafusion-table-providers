@@ -195,9 +195,14 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             _ => (None, None),
         };
 
-        let arrow_data_type =
-            map_column_to_data_type(column_type, column_is_binary, precision, scale)
-                .context(UnsupportedDataTypeSnafu { data_type })?;
+        let arrow_data_type = map_column_to_data_type(
+            column_type,
+            column_is_binary,
+            precision,
+            scale,
+            &column_name,
+        )
+        .context(UnsupportedDataTypeSnafu { data_type })?;
 
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }
@@ -232,12 +237,12 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
         _ if data_type.starts_with("newdecimal") => ColumnType::MYSQL_TYPE_NEWDECIMAL,
         _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_ENUM,
         _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_SET,
-        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_LONG_BLOB,
-        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_LONG_BLOB,
+        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("blob") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("text") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("varbinary") => ColumnType::MYSQL_TYPE_VAR_STRING,
@@ -251,7 +256,13 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
 }
 
 fn map_str_type_to_is_binary(data_type: &str) -> bool {
-    if data_type.starts_with("binary") | data_type.starts_with("varbinary") {
+    if data_type.starts_with("binary")
+        | data_type.starts_with("varbinary")
+        | data_type.starts_with("tinyblob")
+        | data_type.starts_with("mediumblob")
+        | data_type.starts_with("blob")
+        | data_type.starts_with("longblob")
+    {
         return true;
     }
     false

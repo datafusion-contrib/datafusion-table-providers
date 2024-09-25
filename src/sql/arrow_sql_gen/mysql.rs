@@ -2,9 +2,9 @@ use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
-        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
-        NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, UInt64Builder,
+        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeBinaryBuilder,
+        LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions, StringBuilder,
+        Time64NanosecondBuilder, TimestampMicrosecondBuilder, UInt64Builder,
     },
     datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
 };
@@ -123,6 +123,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 column_is_binary,
                 decimal_precision,
                 decimal_scale,
+                column_name.as_ref(),
             );
 
             arrow_fields.push(
@@ -266,10 +267,6 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
                 | ColumnType::MYSQL_TYPE_JSON
-                | ColumnType::MYSQL_TYPE_TINY_BLOB
-                | ColumnType::MYSQL_TYPE_BLOB
-                | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                | ColumnType::MYSQL_TYPE_LONG_BLOB
                 | ColumnType::MYSQL_TYPE_ENUM) => {
                     handle_primitive_type!(
                         builder,
@@ -279,6 +276,45 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         row,
                         i
                     );
+                }
+                ColumnType::MYSQL_TYPE_BLOB => {
+                    match (
+                        column_names[i].starts_with("long"),
+                        column_is_binary_stats[i],
+                    ) {
+                        (true, true) => handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_BLOB,
+                            LargeBinaryBuilder,
+                            Vec<u8>,
+                            row,
+                            i
+                        ),
+                        (true, false) => handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_BLOB,
+                            LargeStringBuilder,
+                            String,
+                            row,
+                            i
+                        ),
+                        (false, true) => handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_BLOB,
+                            BinaryBuilder,
+                            Vec<u8>,
+                            row,
+                            i
+                        ),
+                        (false, false) => handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_BLOB,
+                            StringBuilder,
+                            String,
+                            row,
+                            i
+                        ),
+                    }
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_STRING
                 | ColumnType::MYSQL_TYPE_VAR_STRING) => {
@@ -403,6 +439,7 @@ pub fn map_column_to_data_type(
     column_is_binary: bool,
     column_decimal_precision: Option<u8>,
     column_decimal_scale: Option<i8>,
+    column_name: &str,
 ) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
@@ -425,11 +462,18 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_VARCHAR
         | ColumnType::MYSQL_TYPE_JSON
         | ColumnType::MYSQL_TYPE_ENUM
-        | ColumnType::MYSQL_TYPE_SET
-        | ColumnType::MYSQL_TYPE_TINY_BLOB
-        | ColumnType::MYSQL_TYPE_BLOB
-        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-        | ColumnType::MYSQL_TYPE_LONG_BLOB => Some(DataType::LargeUtf8),
+        | ColumnType::MYSQL_TYPE_SET => Some(DataType::LargeUtf8),
+        // MYSQL_TYPE_BLOB includes TINYBLOB, BLOB, MEDIUMBLOB, LONGBLOB, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT https://dev.mysql.com/doc/c-api/8.0/en/c-api-data-structures.html
+        // MySQL String Type Storage requirement: https://dev.mysql.com/doc/refman/8.4/en/storage-requirements.html
+        // Binary / Utf8 stores up to 2^31 - 1 length binary / non-binary string        
+        ColumnType::MYSQL_TYPE_BLOB => {
+            match (column_name.starts_with("long"), column_is_binary) {
+                (true, true) => Some(DataType::LargeBinary),
+                (true, false) => Some(DataType::LargeUtf8),
+                (false, true) => Some(DataType::Binary),
+                (false, false) => Some(DataType::Utf8),
+            }
+        }
         ColumnType::MYSQL_TYPE_STRING
         | ColumnType::MYSQL_TYPE_VAR_STRING => {
             if column_is_binary {
@@ -447,6 +491,9 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_TIMESTAMP2
         | ColumnType::MYSQL_TYPE_DATETIME2
         | ColumnType::MYSQL_TYPE_TIME2
+        | ColumnType::MYSQL_TYPE_LONG_BLOB 
+        | ColumnType::MYSQL_TYPE_TINY_BLOB
+        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_GEOMETRY => {
             unimplemented!("Unsupported column type {:?}", column_type)
         }
