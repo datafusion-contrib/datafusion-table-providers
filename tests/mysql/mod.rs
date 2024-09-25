@@ -272,7 +272,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_decimal_types(port: usize) {
+async fn test_mysql_decimal_types_to_decimal256(port: usize) {
     let create_table_stmt = "
 CREATE TABLE high_precision_decimal (
     decimal_values DECIMAL(50, 10)
@@ -320,6 +320,40 @@ INSERT INTO high_precision_decimal (decimal_values) VALUES
     arrow_mysql_one_way(
         port,
         "high_precision_decimal",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_mysql_decimal_types_to_decimal128(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
+        ";
+    let insert_table_stmt = "
+        INSERT INTO decimal_table (decimal_col) VALUES (NULL), (12);
+        ";
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal_col",
+        DataType::Decimal128(10, 2),
+        true,
+    )]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(
+            Decimal128Array::from(vec![None, Some(i128::from(1200))])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        )],
+    )
+    .expect("Failed to created arrow record batch");
+
+    let _ = arrow_mysql_one_way(
+        port,
+        "decimal_table",
         create_table_stmt,
         insert_table_stmt,
         expected_record,
@@ -403,7 +437,8 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
     test_mysql_time_types(port).await;
-    test_mysql_decimal_types(port).await;
+    test_mysql_decimal_types_to_decimal128(port).await;
+    test_mysql_decimal_types_to_decimal256(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
