@@ -95,6 +95,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     let mut mysql_types: Vec<ColumnType> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
     let mut column_is_binary_stats: Vec<bool> = Vec::new();
+    let mut column_use_large_str_or_blob_stats: Vec<bool> = Vec::new();
 
     if !rows.is_empty() {
         let row = &rows[0];
@@ -102,6 +103,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name_str();
             let column_type = column.column_type();
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
+            let column_use_large_str_or_blob = column.column_length() > 2_u32.pow(31) - 1;
 
             let (decimal_precision, decimal_scale) = match column_type {
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -118,12 +120,14 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 _ => (None, None),
             };
 
+            println!("{:?}", column.column_length());
+
             let data_type = map_column_to_data_type(
                 column_type,
                 column_is_binary,
+                column_use_large_str_or_blob,
                 decimal_precision,
                 decimal_scale,
-                column_name.as_ref(),
             );
 
             arrow_fields.push(
@@ -136,6 +140,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             mysql_types.push(column_type);
             column_names.push(column_name.to_string());
             column_is_binary_stats.push(column_is_binary);
+            column_use_large_str_or_blob_stats.push(column_use_large_str_or_blob);
         }
     }
 
@@ -279,7 +284,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 }
                 ColumnType::MYSQL_TYPE_BLOB => {
                     match (
-                        column_names[i].starts_with("long"),
+                        column_use_large_str_or_blob_stats[i],
                         column_is_binary_stats[i],
                     ) {
                         (true, true) => handle_primitive_type!(
@@ -437,9 +442,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
+    column_use_large_str_or_blob: bool,
     column_decimal_precision: Option<u8>,
     column_decimal_scale: Option<i8>,
-    column_name: &str,
 ) -> Option<DataType> {
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
@@ -467,7 +472,7 @@ pub fn map_column_to_data_type(
         // MySQL String Type Storage requirement: https://dev.mysql.com/doc/refman/8.4/en/storage-requirements.html
         // Binary / Utf8 stores up to 2^31 - 1 length binary / non-binary string        
         ColumnType::MYSQL_TYPE_BLOB => {
-            match (column_name.starts_with("long"), column_is_binary) {
+            match (column_use_large_str_or_blob, column_is_binary) {
                 (true, true) => Some(DataType::LargeBinary),
                 (true, false) => Some(DataType::LargeUtf8),
                 (false, true) => Some(DataType::Binary),

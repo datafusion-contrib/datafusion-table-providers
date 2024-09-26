@@ -185,6 +185,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
 
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
+        let column_use_large_str_or_blob = map_str_type_to_use_large_str_or_blob(&data_type);
 
         let (precision, scale) = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -198,9 +199,9 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
         let arrow_data_type = map_column_to_data_type(
             column_type,
             column_is_binary,
+            column_use_large_str_or_blob,
             precision,
             scale,
-            &column_name,
         )
         .context(UnsupportedDataTypeSnafu { data_type })?;
 
@@ -263,6 +264,13 @@ fn map_str_type_to_is_binary(data_type: &str) -> bool {
         | data_type.starts_with("blob")
         | data_type.starts_with("longblob")
     {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_use_large_str_or_blob(data_type: &str) -> bool {
+    if data_type.starts_with("long") {
         return true;
     }
     false
