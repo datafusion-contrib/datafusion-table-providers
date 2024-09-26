@@ -272,6 +272,56 @@ VALUES
     .await;
 }
 
+async fn test_mysql_string_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE string_table (
+    name VARCHAR(255),
+    data VARBINARY(255),
+    fixed_name CHAR(10),
+    fixed_data BINARY(10)
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO string_table (name, data, fixed_name, fixed_data)
+VALUES 
+('Alice', 'Alice', 'ALICE', 'abc'),
+('Bob', 'Bob', 'BOB', 'bob1234567'),
+('Charlie', 'Charlie', 'CHARLIE', '0123456789'),
+('Dave', 'Dave', 'DAVE', 'dave000000');
+        ";
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("name", DataType::Utf8, true),
+        Field::new("data", DataType::Binary, true),
+        Field::new("fixed_name", DataType::Utf8, true),
+        Field::new("fixed_data", DataType::Binary, true),
+    ]));
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
+            Arc::new(BinaryArray::from_vec(vec![
+                b"Alice", b"Bob", b"Charlie", b"Dave",
+            ])),
+            Arc::new(StringArray::from(vec!["ALICE", "BOB", "CHARLIE", "DAVE"])),
+            Arc::new(BinaryArray::from_vec(vec![
+                b"abc\0\0\0\0\0\0\0",
+                b"bob1234567",
+                b"0123456789",
+                b"dave000000",
+            ])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+    arrow_mysql_one_way(
+        port,
+        "string_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn test_mysql_decimal_types_to_decimal256(port: usize) {
     let create_table_stmt = "
 CREATE TABLE high_precision_decimal (
@@ -437,6 +487,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
     test_mysql_time_types(port).await;
+    test_mysql_string_types(port).await;
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;
 
