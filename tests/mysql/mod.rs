@@ -289,12 +289,14 @@ VALUES
 ('Charlie', 'Charlie', 'CHARLIE', '0123456789'),
 ('Dave', 'Dave', 'DAVE', 'dave000000');
         ";
+
     let schema = Arc::new(Schema::new(vec![
         Field::new("name", DataType::Utf8, true),
         Field::new("data", DataType::Binary, true),
         Field::new("fixed_name", DataType::Utf8, true),
         Field::new("fixed_data", DataType::Binary, true),
     ]));
+
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
