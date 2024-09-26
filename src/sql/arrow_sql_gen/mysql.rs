@@ -3,7 +3,7 @@ use arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
         Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
-        NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
+        NullBuilder, RecordBatch, RecordBatchOptions, StringBuilder, Time64NanosecondBuilder,
         TimestampMicrosecondBuilder, UInt64Builder,
     },
     datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
@@ -292,14 +292,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             i
                         );
                     } else {
-                        handle_primitive_type!(
-                            builder,
-                            column_type,
-                            LargeStringBuilder,
-                            String,
-                            row,
-                            i
-                        );
+                        handle_primitive_type!(builder, column_type, StringBuilder, String, row, i);
                     }
                 }
                 ColumnType::MYSQL_TYPE_DATE => {
@@ -435,7 +428,7 @@ pub fn map_column_to_data_type(
             if column_is_binary {
                 Some(DataType::Binary)
             } else {
-                Some(DataType::LargeUtf8)
+                Some(DataType::Utf8)
             }
         },
         // replication only
