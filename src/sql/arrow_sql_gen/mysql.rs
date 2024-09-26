@@ -120,8 +120,6 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 _ => (None, None),
             };
 
-            println!("{:?}", column.column_length());
-
             let data_type = map_column_to_data_type(
                 column_type,
                 column_is_binary,
