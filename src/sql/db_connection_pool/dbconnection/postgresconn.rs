@@ -111,7 +111,7 @@ impl<'a>
             }
         };
 
-        let rec = match rows_to_arrow(rows.as_slice()) {
+        let rec = match rows_to_arrow(rows.as_slice(), &None) {
             Ok(rec) => rec,
             Err(e) => {
                 return Err(super::Error::UnableToGetSchema {
@@ -128,7 +128,7 @@ impl<'a>
         &self,
         sql: &str,
         params: &[&'a (dyn ToSql + Sync)],
-        _projected_schema: Option<SchemaRef>,
+        projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         // TODO: We should have a way to detect if params have been passed
         // if they haven't we should use .copy_out instead, because it should be much faster
@@ -139,12 +139,12 @@ impl<'a>
             .context(QuerySnafu)?;
 
         // chunk the stream into groups of rows
-        let mut stream = streamable.chunks(4_000).boxed().map(|rows| {
+        let mut stream = streamable.chunks(4_000).boxed().map(move |rows| {
             let rows = rows
                 .into_iter()
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .context(QuerySnafu)?;
-            let rec = rows_to_arrow(rows.as_slice()).context(ConversionSnafu)?;
+            let rec = rows_to_arrow(rows.as_slice(), &projected_schema).context(ConversionSnafu)?;
             Ok::<_, PostgresError>(rec)
         });
 
