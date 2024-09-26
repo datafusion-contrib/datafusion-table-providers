@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::*,
-    datatypes::{DataType, Field, Schema, TimeUnit, UInt16Type},
+    datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
 };
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
@@ -15,40 +15,6 @@ use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbCo
 use crate::docker::RunningContainer;
 
 mod common;
-
-async fn test_mysql_decimal_types(port: usize) {
-    let create_table_stmt = "
-        CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
-        ";
-    let insert_table_stmt = "
-        INSERT INTO decimal_table (decimal_col) VALUES (NULL), (12);
-        ";
-
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "decimal_col",
-        DataType::Decimal128(10, 2),
-        true,
-    )]));
-
-    let expected_record = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(
-            Decimal128Array::from(vec![None, Some(i128::from(1200))])
-                .with_precision_and_scale(10, 2)
-                .unwrap(),
-        )],
-    )
-    .expect("Failed to created arrow record batch");
-
-    let _ = arrow_mysql_one_way(
-        port,
-        "decimal_table",
-        create_table_stmt,
-        insert_table_stmt,
-        expected_record,
-    )
-    .await;
-}
 
 async fn test_mysql_timestamp_types(port: usize) {
     let create_table_stmt = "
@@ -234,7 +200,7 @@ VALUES (
     .await;
 }
 
-async fn test_time_types(port: usize) {
+async fn test_mysql_time_types(port: usize) {
     let create_table_stmt = "
 CREATE TABLE time_table (
     t0 TIME(0),  
@@ -352,6 +318,147 @@ VALUES
     .await;
 }
 
+async fn test_mysql_string_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE string_table (
+    name VARCHAR(255),
+    data VARBINARY(255),
+    fixed_name CHAR(10),
+    fixed_data BINARY(10)
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO string_table (name, data, fixed_name, fixed_data)
+VALUES 
+('Alice', 'Alice', 'ALICE', 'abc'),
+('Bob', 'Bob', 'BOB', 'bob1234567'),
+('Charlie', 'Charlie', 'CHARLIE', '0123456789'),
+('Dave', 'Dave', 'DAVE', 'dave000000');
+        ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("name", DataType::Utf8, true),
+        Field::new("data", DataType::Binary, true),
+        Field::new("fixed_name", DataType::Utf8, true),
+        Field::new("fixed_data", DataType::Binary, true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])),
+            Arc::new(BinaryArray::from_vec(vec![
+                b"Alice", b"Bob", b"Charlie", b"Dave",
+            ])),
+            Arc::new(StringArray::from(vec!["ALICE", "BOB", "CHARLIE", "DAVE"])),
+            Arc::new(BinaryArray::from_vec(vec![
+                b"abc\0\0\0\0\0\0\0",
+                b"bob1234567",
+                b"0123456789",
+                b"dave000000",
+            ])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+    arrow_mysql_one_way(
+        port,
+        "string_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_mysql_decimal_types_to_decimal256(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE high_precision_decimal (
+    decimal_values DECIMAL(50, 10)
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO high_precision_decimal (decimal_values) VALUES
+(NULL),
+(1234567890123456789012345678901234567890.1234567890),
+(-9876543210987654321098765432109876543210.9876543210),
+(0.0000000001),
+(-0.000000001),
+(0);
+        ";
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal_values",
+        DataType::Decimal256(50, 10),
+        true,
+    )]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(
+            Decimal256Array::from(vec![
+                None,
+                Some(
+                    i256::from_string("12345678901234567890123456789012345678901234567890")
+                        .unwrap(),
+                ),
+                Some(
+                    i256::from_string("-98765432109876543210987654321098765432109876543210")
+                        .unwrap(),
+                ),
+                Some(i256::from_string("1").unwrap()),
+                Some(i256::from_string("-10").unwrap()),
+                Some(i256::from_string("0").unwrap()),
+            ])
+            .with_precision_and_scale(50, 10)
+            .expect("Failed to create decimal256 array"),
+        )],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "high_precision_decimal",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_mysql_decimal_types_to_decimal128(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
+        ";
+    let insert_table_stmt = "
+        INSERT INTO decimal_table (decimal_col) VALUES (NULL), (12);
+        ";
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal_col",
+        DataType::Decimal128(10, 2),
+        true,
+    )]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(
+            Decimal128Array::from(vec![None, Some(i128::from(1200))])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        )],
+    )
+    .expect("Failed to created arrow record batch");
+
+    let _ = arrow_mysql_one_way(
+        port,
+        "decimal_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn arrow_mysql_one_way(
     port: usize,
     table_name: &str,
@@ -425,11 +532,13 @@ async fn test_mysql_arrow_oneway() {
     let port = crate::get_random_port();
     let mysql_container = start_mysql_container(port).await;
 
-    test_mysql_decimal_types(port).await;
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
-    test_time_types(port).await;
+    test_mysql_time_types(port).await;
     test_mysql_enum_types(port).await;
+    test_mysql_string_types(port).await;
+    test_mysql_decimal_types_to_decimal128(port).await;
+    test_mysql_decimal_types_to_decimal256(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
