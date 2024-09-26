@@ -290,6 +290,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
         
                             builder.append_value(val);
                         }
+                        // ColumnType::MYSQL_TYPE_DECIMAL & ColumnType::MYSQL_TYPE_NEWDECIMAL are only mapped to Decimal128/Decimal256 in `map_column_to_data_type` function
                         _ => unreachable!()
                     }
                 }
