@@ -1,20 +1,20 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal256Builder, Decimal128Builder, Float32Builder,
         Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
         NullBuilder, RecordBatch, RecordBatchOptions, StringBuilder, Time64NanosecondBuilder,
         TimestampMicrosecondBuilder, UInt64Builder,
     },
-    datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
+    datatypes::{i256, DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
 };
 use bigdecimal::BigDecimal;
-use bigdecimal::ToPrimitive;
 use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
 use time::PrimitiveDateTime;
+use bigdecimal::ToPrimitive;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -42,9 +42,6 @@ pub enum Error {
         mysql_type: ColumnType,
         source: mysql_async::FromValueError,
     },
-
-    #[snafu(display("Failed to parse raw Postgres Bytes as BigDecimal: {:?}", bytes))]
-    FailedToParseBigDecimalFromPostgres { bytes: Vec<u8> },
 
     #[snafu(display("Cannot represent BigDecimal as i128: {big_decimal}"))]
     FailedToConvertBigDecimalToI128 { big_decimal: BigDecimal },
@@ -105,14 +102,14 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
             let (decimal_precision, decimal_scale) = match column_type {
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                    // use 38 as default precision for decimal types if there is no way to get the precision from the column
+                    // use 76 as default precision for decimal types if there is no way to get the precision from the column
                     match projected_schema {
                         Some(schema) => {
                             let precision =
-                                get_decimal_column_precision(&column_name, schema).unwrap_or(38);
+                                get_decimal_column_precision(&column_name, schema).unwrap_or(76);
                             (Some(precision), Some(column.decimals() as i8))
                         }
-                        None => (Some(38), Some(column.decimals() as i8)),
+                        None => (Some(76), Some(column.decimals() as i8)),
                     }
                 }
                 _ => (None, None),
@@ -143,7 +140,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let Some(builder) = arrow_columns_builders.get_mut(i) else {
                 return NoBuilderForIndexSnafu { index: i }.fail();
             };
-
+            
             match *mysql_type {
                 ColumnType::MYSQL_TYPE_NULL => {
                     let Some(builder) = builder else {
@@ -235,34 +232,67 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         return NoBuilderForIndexSnafu { index: i }.fail();
                     };
 
-                    let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal128Builder>()
-                    else {
-                        return FailedToDowncastBuilderSnafu {
-                            mysql_type: format!("{mysql_type:?}"),
+                    let arrow_field = match arrow_fields.get(i) {
+                        Some(Some(field)) => field,
+                        _ => return NoArrowFieldForIndexSnafu { index: i }.fail(),
+                    };
+
+                    match arrow_field.data_type() {
+                        DataType::Decimal128(_, _) => {
+                            let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal128Builder>()
+                            else {
+                                return FailedToDowncastBuilderSnafu {
+                                    mysql_type: format!("{mysql_type:?}"),
+                               }
+                               .fail();
+                           };
+                           let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
+                               .context(FailedToGetRowValueSnafu {
+                                    mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
+                                })?;
+       
+                            let scale = match &val {
+                                Some(val) => val.fractional_digit_count(),
+                                None => 0,
+                            };
+       
+                            let Some(val) = val else {
+                                builder.append_null();
+                                continue;
+                            };
+       
+                            let Some(val) = to_decimal_128(&val, scale) else {
+                                return FailedToConvertBigDecimalToI128Snafu { big_decimal: val }.fail();
+                            };
+       
+                            builder.append_value(val);
                         }
-                        .fail();
-                    };
-
-                    let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
-                        .context(FailedToGetRowValueSnafu {
-                            mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
-                        })?;
-
-                    let scale = match &val {
-                        Some(val) => val.fractional_digit_count(),
-                        None => 0,
-                    };
-
-                    let Some(val) = val else {
-                        builder.append_null();
-                        continue;
-                    };
-
-                    let Some(val) = to_decimal_128(&val, scale) else {
-                        return FailedToConvertBigDecimalToI128Snafu { big_decimal: val }.fail();
-                    };
-
-                    builder.append_value(val);
+                        DataType::Decimal256(_, _) => {
+                            let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal256Builder>()
+                            else {
+                                return FailedToDowncastBuilderSnafu {
+                                    mysql_type: format!("{mysql_type:?}"),
+                                }
+                                .fail();
+                            };
+        
+                            let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
+                                .context(FailedToGetRowValueSnafu {
+                                    mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
+                                })?;
+        
+                            let Some(val) = val else {
+                                builder.append_null();
+                                continue;
+                            };
+        
+                            let val = to_decimal_256(&val);
+        
+                            builder.append_value(val);
+                        }
+                        // ColumnType::MYSQL_TYPE_DECIMAL & ColumnType::MYSQL_TYPE_NEWDECIMAL are only mapped to Decimal128/Decimal256 in `map_column_to_data_type` function
+                        _ => unreachable!()
+                    }
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
                 | ColumnType::MYSQL_TYPE_JSON
@@ -407,7 +437,12 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_FLOAT => Some(DataType::Float32),
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
         // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
-        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default())),
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+            if column_decimal_precision.unwrap_or_default() > 38 {
+                return Some(DataType::Decimal256(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default()));
+            } 
+            Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default()))
+        },
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, None))
         },
@@ -450,14 +485,32 @@ fn to_decimal_128(decimal: &BigDecimal, scale: i64) -> Option<i128> {
     (decimal * 10i128.pow(scale.try_into().unwrap_or_default())).to_i128()
 }
 
+fn to_decimal_256(decimal: &BigDecimal) -> i256 {
+    let (bigint_value, _) = decimal.as_bigint_and_exponent();
+    let mut bigint_bytes = bigint_value.to_signed_bytes_le();
+
+    let is_negative = bigint_value.sign() == num_bigint::Sign::Minus;
+    let fill_byte = if is_negative { 0xFF } else { 0x00 };
+
+    if bigint_bytes.len() > 32 {
+        bigint_bytes.truncate(32);
+    } else {
+        bigint_bytes.resize(32, fill_byte);
+    };
+
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&bigint_bytes);
+
+    i256::from_le_bytes(array)
+}
+
 fn get_decimal_column_precision(column_name: &str, projected_schema: &SchemaRef) -> Option<u8> {
     let field = projected_schema.field_with_name(column_name).ok()?;
     match field.data_type() {
-        DataType::Decimal128(precision, _) => Some(*precision),
+        DataType::Decimal256(precision, _) | DataType::Decimal128(precision, _) => Some(*precision),
         _ => None,
     }
 }
-
 fn handle_null_error<T>(
     result: Result<Option<T>, FromValueError>,
 ) -> Result<Option<T>, FromValueError> {
