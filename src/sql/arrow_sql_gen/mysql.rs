@@ -3,10 +3,10 @@ use arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Float32Builder,
         Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder,
-        NullBuilder, RecordBatch, RecordBatchOptions, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, UInt64Builder,
+        NullBuilder, RecordBatch, RecordBatchOptions, StringDictionaryBuilder,
+        Time64NanosecondBuilder, TimestampMicrosecondBuilder, UInt64Builder,
     },
-    datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit},
+    datatypes::{DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit, UInt16Type},
 };
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
@@ -95,6 +95,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     let mut mysql_types: Vec<ColumnType> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
     let mut column_is_binary_stats: Vec<bool> = Vec::new();
+    let mut column_is_enum_stats: Vec<bool> = Vec::new();
 
     if !rows.is_empty() {
         let row = &rows[0];
@@ -102,6 +103,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name_str();
             let column_type = column.column_type();
             let column_is_binary = column.flags().contains(ColumnFlags::BINARY_FLAG);
+            let column_is_enum = column.flags().contains(ColumnFlags::ENUM_FLAG);
 
             let (decimal_precision, decimal_scale) = match column_type {
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -121,6 +123,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let data_type = map_column_to_data_type(
                 column_type,
                 column_is_binary,
+                column_is_enum,
                 decimal_precision,
                 decimal_scale,
             );
@@ -135,6 +138,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             mysql_types.push(column_type);
             column_names.push(column_name.to_string());
             column_is_binary_stats.push(column_is_binary);
+            column_is_enum_stats.push(column_is_enum);
         }
     }
 
@@ -269,8 +273,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 | ColumnType::MYSQL_TYPE_TINY_BLOB
                 | ColumnType::MYSQL_TYPE_BLOB
                 | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                | ColumnType::MYSQL_TYPE_LONG_BLOB
-                | ColumnType::MYSQL_TYPE_ENUM) => {
+                | ColumnType::MYSQL_TYPE_LONG_BLOB) => {
                     handle_primitive_type!(
                         builder,
                         column_type,
@@ -280,26 +283,59 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         i
                     );
                 }
+                ColumnType::MYSQL_TYPE_ENUM => {
+                    // ENUM and SET values are returned as strings. For these, check that the type value is MYSQL_TYPE_STRING and that the ENUM_FLAG or SET_FLAG flag is set in the flags value.
+                    // https://dev.mysql.com/doc/c-api/9.0/en/c-api-data-structures.html
+                    unreachable!()
+                }
                 column_type @ (ColumnType::MYSQL_TYPE_STRING
                 | ColumnType::MYSQL_TYPE_VAR_STRING) => {
-                    if column_is_binary_stats[i] {
-                        handle_primitive_type!(
-                            builder,
-                            column_type,
-                            BinaryBuilder,
-                            Vec<u8>,
-                            row,
-                            i
-                        );
+                    // Handle MYSQL_TYPE_ENUM value
+                    if column_is_enum_stats[i] {
+                        let Some(builder) = builder else {
+                            return NoBuilderForIndexSnafu { index: i }.fail();
+                        };
+                        let Some(builder) = builder
+                            .as_any_mut()
+                            .downcast_mut::<StringDictionaryBuilder<UInt16Type>>()
+                        else {
+                            return FailedToDowncastBuilderSnafu {
+                                mysql_type: format!("{mysql_type:?}"),
+                            }
+                            .fail();
+                        };
+
+                        let v = handle_null_error(row.get_opt::<String, usize>(i).transpose())
+                            .context(FailedToGetRowValueSnafu {
+                                mysql_type: ColumnType::MYSQL_TYPE_ENUM,
+                            })?;
+
+                        match v {
+                            Some(v) => {
+                                builder.append_value(v);
+                            }
+                            None => builder.append_null(),
+                        }
                     } else {
-                        handle_primitive_type!(
-                            builder,
-                            column_type,
-                            LargeStringBuilder,
-                            String,
-                            row,
-                            i
-                        );
+                        if column_is_binary_stats[i] {
+                            handle_primitive_type!(
+                                builder,
+                                column_type,
+                                BinaryBuilder,
+                                Vec<u8>,
+                                row,
+                                i
+                            );
+                        } else {
+                            handle_primitive_type!(
+                                builder,
+                                column_type,
+                                LargeStringBuilder,
+                                String,
+                                row,
+                                i
+                            );
+                        }
                     }
                 }
                 ColumnType::MYSQL_TYPE_DATE => {
@@ -401,6 +437,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
+    column_is_enum: bool,
     column_decimal_precision: Option<u8>,
     column_decimal_scale: Option<i8>,
 ) -> Option<DataType> {
@@ -424,18 +461,20 @@ pub fn map_column_to_data_type(
         }
         ColumnType::MYSQL_TYPE_VARCHAR
         | ColumnType::MYSQL_TYPE_JSON
-        | ColumnType::MYSQL_TYPE_ENUM
-        | ColumnType::MYSQL_TYPE_SET
         | ColumnType::MYSQL_TYPE_TINY_BLOB
         | ColumnType::MYSQL_TYPE_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_LONG_BLOB => Some(DataType::LargeUtf8),
-        ColumnType::MYSQL_TYPE_STRING
-        | ColumnType::MYSQL_TYPE_VAR_STRING => {
-            if column_is_binary {
-                Some(DataType::Binary)
+        ColumnType::MYSQL_TYPE_ENUM | ColumnType::MYSQL_TYPE_SET => unreachable!(),
+        ColumnType::MYSQL_TYPE_STRING | ColumnType::MYSQL_TYPE_VAR_STRING => {
+            if column_is_enum {
+                Some(DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)))
             } else {
-                Some(DataType::LargeUtf8)
+                if column_is_binary {
+                    Some(DataType::Binary)
+                } else {
+                    Some(DataType::LargeUtf8)
+                }
             }
         },
         // replication only

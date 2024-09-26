@@ -185,6 +185,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
 
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
+        let column_is_enum = map_str_type_to_is_enum(&data_type);
 
         let (precision, scale) = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -195,9 +196,14 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             _ => (None, None),
         };
 
-        let arrow_data_type =
-            map_column_to_data_type(column_type, column_is_binary, precision, scale)
-                .context(UnsupportedDataTypeSnafu { data_type })?;
+        let arrow_data_type = map_column_to_data_type(
+            column_type,
+            column_is_binary,
+            column_is_enum,
+            precision,
+            scale,
+        )
+        .context(UnsupportedDataTypeSnafu { data_type })?;
 
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }
@@ -230,8 +236,9 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
         _ if data_type.starts_with("array") => ColumnType::MYSQL_TYPE_TYPED_ARRAY,
         _ if data_type.starts_with("json") => ColumnType::MYSQL_TYPE_JSON,
         _ if data_type.starts_with("newdecimal") => ColumnType::MYSQL_TYPE_NEWDECIMAL,
-        _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_ENUM,
-        _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_SET,
+        // MySQL ENUM & SET value is exported as MYSQL_TYPE_STRING under c api: https://dev.mysql.com/doc/c-api/9.0/en/c-api-data-structures.html
+        _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_STRING,
+        _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_STRING,
         _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_TINY_BLOB,
         _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_TINY_BLOB,
         _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
@@ -252,6 +259,13 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
 
 fn map_str_type_to_is_binary(data_type: &str) -> bool {
     if data_type.starts_with("binary") | data_type.starts_with("varbinary") {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_is_enum(data_type: &str) -> bool {
+    if data_type.starts_with("enum") {
         return true;
     }
     false
