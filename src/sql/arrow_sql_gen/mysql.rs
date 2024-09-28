@@ -346,26 +346,24 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             }
                             None => builder.append_null(),
                         }
+                    } else if column_is_binary_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            BinaryBuilder,
+                            Vec<u8>,
+                            row,
+                            i
+                        );
                     } else {
-                        if column_is_binary_stats[i] {
-                            handle_primitive_type!(
-                                builder,
-                                column_type,
-                                BinaryBuilder,
-                                Vec<u8>,
-                                row,
-                                i
-                            );
-                        } else {
-                            handle_primitive_type!(
-                                builder,
-                                column_type,
-                                StringBuilder,
-                                String,
-                                row,
-                                i
-                            );
-                        }
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            StringBuilder,
+                            String,
+                            row,
+                            i
+                        );
                     }
                 }
                 ColumnType::MYSQL_TYPE_DATE => {
@@ -504,12 +502,10 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_STRING | ColumnType::MYSQL_TYPE_VAR_STRING => {
             if column_is_enum {
                 Some(DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)))
+            } else if column_is_binary {
+                Some(DataType::Binary)
             } else {
-                if column_is_binary {
-                    Some(DataType::Binary)
-                } else {
-                    Some(DataType::Utf8)
-                }
+                Some(DataType::Utf8)
             }
         },
         // replication only
