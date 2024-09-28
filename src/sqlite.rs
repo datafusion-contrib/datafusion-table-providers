@@ -145,9 +145,7 @@ impl SqliteTableProviderFactory {
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
-        println!("{:?}", options);
         let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
-        println!("{:?}", busy_timeout);
         match busy_timeout {
             Some(busy_timeout) => {
                 let result: u64 = busy_timeout.parse().map_err(|_| {

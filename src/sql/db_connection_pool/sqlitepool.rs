@@ -171,7 +171,6 @@ impl SqliteConnectionPool {
                 conn.pragma_update(None, "temp_store", "memory")?;
                 // conn.set_transaction_behavior(TransactionBehavior::Immediate); introduced in rustqlite 0.32.1, but tokio-rusqlite is still on 0.31.0
 
-                println!("{:?}", busy_timeout);
                 // Set user configurable connection timeout
                 conn.busy_timeout(busy_timeout)?;
 
