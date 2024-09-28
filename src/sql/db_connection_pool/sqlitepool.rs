@@ -157,7 +157,7 @@ impl SqliteConnectionPool {
 
     pub async fn setup(&self) -> Result<()> {
         let conn = self.conn.clone();
-        let busy_timeout = self.busy_timeout.clone();
+        let busy_timeout = self.busy_timeout;
 
         // these configuration options are only applicable for file-mode databases
         if self.mode == Mode::File {
@@ -226,7 +226,7 @@ impl SqliteConnectionPool {
                 mode: self.mode,
                 path: Arc::clone(&self.path),
                 attach_databases: self.attach_databases.clone(),
-                busy_timeout: self.busy_timeout.clone(),
+                busy_timeout: self.busy_timeout,
             }),
             Mode::File => {
                 let attach_databases = if self.attach_databases.is_empty() {

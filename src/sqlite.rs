@@ -154,10 +154,10 @@ impl SqliteTableProviderFactory {
                     }
                     .build()
                 })?;
-                return Ok(Duration::from_millis(result));
+                Ok(Duration::from_millis(result))
             }
-            None => return Ok(Duration::from_millis(5000)),
-        };
+            None => Ok(Duration::from_millis(5000)),
+        }
     }
 
     pub async fn get_or_init_instance(
