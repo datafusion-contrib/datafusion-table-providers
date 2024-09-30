@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use snafu::{prelude::*, ResultExt};
@@ -26,14 +26,16 @@ pub struct SqliteConnectionPoolFactory {
     path: Arc<str>,
     mode: Mode,
     attach_databases: Option<Vec<Arc<str>>>,
+    busy_timeout: Duration,
 }
 
 impl SqliteConnectionPoolFactory {
-    pub fn new(path: &str, mode: Mode) -> Self {
+    pub fn new(path: &str, mode: Mode, busy_timeout: Duration) -> Self {
         SqliteConnectionPoolFactory {
             path: path.into(),
             mode,
             attach_databases: None,
+            busy_timeout,
         }
     }
 
@@ -80,9 +82,14 @@ impl SqliteConnectionPoolFactory {
             vec![]
         };
 
-        let pool =
-            SqliteConnectionPool::new(&self.path, self.mode, join_push_down, attach_databases)
-                .await?;
+        let pool = SqliteConnectionPool::new(
+            &self.path,
+            self.mode,
+            join_push_down,
+            attach_databases,
+            self.busy_timeout,
+        )
+        .await?;
 
         pool.setup().await?;
 
@@ -96,6 +103,7 @@ pub struct SqliteConnectionPool {
     mode: Mode,
     path: Arc<str>,
     attach_databases: Vec<Arc<str>>,
+    busy_timeout: Duration,
 }
 
 impl SqliteConnectionPool {
@@ -113,6 +121,7 @@ impl SqliteConnectionPool {
         mode: Mode,
         join_push_down: JoinPushDown,
         attach_databases: Vec<Arc<str>>,
+        busy_timeout: Duration,
     ) -> Result<Self> {
         let conn = match mode {
             Mode::Memory => Connection::open_in_memory()
@@ -130,6 +139,7 @@ impl SqliteConnectionPool {
             mode,
             attach_databases,
             path: path.into(),
+            busy_timeout,
         })
     }
 
@@ -147,19 +157,23 @@ impl SqliteConnectionPool {
 
     pub async fn setup(&self) -> Result<()> {
         let conn = self.conn.clone();
+        let busy_timeout = self.busy_timeout;
 
         // these configuration options are only applicable for file-mode databases
         if self.mode == Mode::File {
             // change transaction mode to Write-Ahead log instead of default atomic rollback journal: https://www.sqlite.org/wal.html
             // NOTE: This is a no-op if the database is in-memory, as only MEMORY or OFF are supported: https://www.sqlite.org/pragma.html#pragma_journal_mode
-            conn.call(|conn| {
+            conn.call(move |conn| {
                 conn.pragma_update(None, "journal_mode", "WAL")?;
-                conn.pragma_update(None, "busy_timeout", "5000")?;
                 conn.pragma_update(None, "synchronous", "NORMAL")?;
                 conn.pragma_update(None, "cache_size", "-20000")?;
                 conn.pragma_update(None, "foreign_keys", "true")?;
                 conn.pragma_update(None, "temp_store", "memory")?;
                 // conn.set_transaction_behavior(TransactionBehavior::Immediate); introduced in rustqlite 0.32.1, but tokio-rusqlite is still on 0.31.0
+
+                // Set user configurable connection timeout
+                conn.busy_timeout(busy_timeout)?;
+
                 Ok(())
             })
             .await
@@ -212,6 +226,7 @@ impl SqliteConnectionPool {
                 mode: self.mode,
                 path: Arc::clone(&self.path),
                 attach_databases: self.attach_databases.clone(),
+                busy_timeout: self.busy_timeout,
             }),
             Mode::File => {
                 let attach_databases = if self.attach_databases.is_empty() {
@@ -220,7 +235,7 @@ impl SqliteConnectionPool {
                     Some(self.attach_databases.clone())
                 };
 
-                SqliteConnectionPoolFactory::new(&self.path, self.mode)
+                SqliteConnectionPoolFactory::new(&self.path, self.mode, self.busy_timeout)
                     .with_databases(attach_databases)
                     .build()
                     .await
@@ -250,6 +265,7 @@ mod tests {
     use crate::sql::db_connection_pool::Mode;
     use rand::Rng;
     use rstest::rstest;
+    use std::time::Duration;
 
     fn random_db_name() -> String {
         let mut rng = rand::thread_rng();
@@ -266,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory() {
         let db_name = random_db_name();
-        let factory = SqliteConnectionPoolFactory::new(&db_name, Mode::File);
+        let factory = SqliteConnectionPoolFactory::new(&db_name, Mode::File, None);
         let pool = factory.build().await.unwrap();
 
         assert!(pool.join_push_down == JoinPushDown::AllowedFor(db_name.clone()));
@@ -285,10 +301,11 @@ mod tests {
         db_names.sort();
 
         let factory =
-            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File).with_databases(Some(vec![
-                db_names[1].clone().into(),
-                db_names[2].clone().into(),
-            ]));
+            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File, Duration::from_millis(5000))
+                .with_databases(Some(vec![
+                    db_names[1].clone().into(),
+                    db_names[2].clone().into(),
+                ]));
 
         SqliteConnectionPool::init(&db_names[1], Mode::File)
             .await
@@ -317,7 +334,8 @@ mod tests {
     async fn test_sqlite_connection_pool_factory_with_empty_attachments() {
         let db_name = random_db_name();
         let factory =
-            SqliteConnectionPoolFactory::new(&db_name, Mode::File).with_databases(Some(vec![]));
+            SqliteConnectionPoolFactory::new(&db_name, Mode::File, Duration::from_millis(5000))
+                .with_databases(Some(vec![]));
 
         let pool = factory.build().await.unwrap();
 
@@ -333,8 +351,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory_memory_with_attachments() {
-        let factory = SqliteConnectionPoolFactory::new("./test.sqlite", Mode::Memory)
-            .with_databases(Some(vec!["./test1.sqlite".into(), "./test2.sqlite".into()]));
+        let factory = SqliteConnectionPoolFactory::new(
+            "./test.sqlite",
+            Mode::Memory,
+            Duration::from_millis(5000),
+        )
+        .with_databases(Some(vec!["./test1.sqlite".into(), "./test2.sqlite".into()]));
         let pool = factory.build().await.unwrap();
 
         assert!(pool.join_push_down == JoinPushDown::Disallow);
@@ -355,10 +377,11 @@ mod tests {
         db_names.sort();
 
         let factory =
-            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File).with_databases(Some(vec![
-                db_names[1].clone().into(),
-                db_names[2].clone().into(),
-            ]));
+            SqliteConnectionPoolFactory::new(&db_names[0], Mode::File, Duration::from_millis(5000))
+                .with_databases(Some(vec![
+                    db_names[1].clone().into(),
+                    db_names[2].clone().into(),
+                ]));
         let pool = factory.build().await;
 
         assert!(pool.is_err());

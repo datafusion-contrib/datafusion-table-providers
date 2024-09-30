@@ -318,6 +318,68 @@ VALUES
     .await;
 }
 
+async fn test_mysql_blob_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE blobs_table (
+    tinyblob_col    TINYBLOB,
+    tinytext_col    TINYTEXT,
+    mediumblob_col  MEDIUMBLOB,
+    mediumtext_col  MEDIUMTEXT,
+    blob_col        BLOB,
+    text_col        TEXT,
+    longblob_col    LONGBLOB,
+    longtext_col    LONGTEXT
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO blobs_table (
+    tinyblob_col, tinytext_col, mediumblob_col, mediumtext_col, blob_col, text_col, longblob_col, longtext_col
+)
+VALUES
+    (
+        'small_blob', 'small_text',
+        'medium_blob', 'medium_text',
+        'larger_blob', 'larger_text',
+        'very_large_blob', 'very_large_text'
+    );
+        ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("tinyblob_col", DataType::Binary, true),
+        Field::new("tinytext_col", DataType::Utf8, true),
+        Field::new("mediumblob_col", DataType::Binary, true),
+        Field::new("mediumtext_col", DataType::Utf8, true),
+        Field::new("blob_col", DataType::Binary, true),
+        Field::new("text_col", DataType::Utf8, true),
+        Field::new("longblob_col", DataType::LargeBinary, true),
+        Field::new("longtext_col", DataType::LargeUtf8, true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(BinaryArray::from_vec(vec![b"small_blob"])),
+            Arc::new(StringArray::from(vec!["small_text"])),
+            Arc::new(BinaryArray::from_vec(vec![b"medium_blob"])),
+            Arc::new(StringArray::from(vec!["medium_text"])),
+            Arc::new(BinaryArray::from_vec(vec![b"larger_blob"])),
+            Arc::new(StringArray::from(vec!["larger_text"])),
+            Arc::new(LargeBinaryArray::from_vec(vec![b"very_large_blob"])),
+            Arc::new(LargeStringArray::from(vec!["very_large_text"])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "blobs_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn test_mysql_string_types(port: usize) {
     let create_table_stmt = "
 CREATE TABLE string_table (
@@ -536,6 +598,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_datetime_types(port).await;
     test_mysql_time_types(port).await;
     test_mysql_enum_types(port).await;
+    test_mysql_blob_types(port).await;
     test_mysql_string_types(port).await;
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;

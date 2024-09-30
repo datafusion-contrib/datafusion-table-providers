@@ -186,6 +186,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
         let column_is_enum = map_str_type_to_is_enum(&data_type);
+        let column_use_large_str_or_blob = map_str_type_to_use_large_str_or_blob(&data_type);
 
         let (precision, scale) = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -200,6 +201,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             column_type,
             column_is_binary,
             column_is_enum,
+            column_use_large_str_or_blob,
             precision,
             scale,
         )
@@ -238,12 +240,12 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
         // MySQL ENUM & SET value is exported as MYSQL_TYPE_STRING under c api: https://dev.mysql.com/doc/c-api/9.0/en/c-api-data-structures.html
         _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_STRING,
         _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_STRING,
-        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_LONG_BLOB,
-        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_LONG_BLOB,
+        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("blob") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("text") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("varchar") => ColumnType::MYSQL_TYPE_VAR_STRING,
@@ -258,7 +260,27 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
 }
 
 fn map_str_type_to_is_binary(data_type: &str) -> bool {
-    if data_type.starts_with("binary") | data_type.starts_with("varbinary") {
+    if data_type.starts_with("binary")
+        | data_type.starts_with("varbinary")
+        | data_type.starts_with("tinyblob")
+        | data_type.starts_with("mediumblob")
+        | data_type.starts_with("blob")
+        | data_type.starts_with("longblob")
+    {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_use_large_str_or_blob(data_type: &str) -> bool {
+    if data_type.starts_with("long") {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_is_enum(data_type: &str) -> bool {
+    if data_type.starts_with("enum") {
         return true;
     }
     false
