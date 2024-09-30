@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::*,
-    datatypes::{i256, DataType, Field, Schema, TimeUnit},
+    datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
 };
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
@@ -265,6 +265,52 @@ VALUES
     arrow_mysql_one_way(
         port,
         "time_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_mysql_enum_types(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE enum_table (
+    status ENUM('active', 'inactive', 'pending', 'suspended')
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO enum_table (status)
+VALUES
+(NULL),
+('active'),
+('inactive'),
+('pending'),
+('suspended'),
+('inactive');
+        ";
+
+    let mut builder = StringDictionaryBuilder::<UInt16Type>::new();
+    builder.append_null();
+    builder.append_value("active");
+    builder.append_value("inactive");
+    builder.append_value("pending");
+    builder.append_value("suspended");
+    builder.append_value("inactive");
+
+    let array: DictionaryArray<UInt16Type> = builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "status",
+        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+        true,
+    )]));
+
+    let expected_record = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
+        .expect("Failed to created arrow dictionary array record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "enum_table",
         create_table_stmt,
         insert_table_stmt,
         expected_record,
@@ -551,6 +597,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
     test_mysql_time_types(port).await;
+    test_mysql_enum_types(port).await;
     test_mysql_blob_types(port).await;
     test_mysql_string_types(port).await;
     test_mysql_decimal_types_to_decimal128(port).await;
