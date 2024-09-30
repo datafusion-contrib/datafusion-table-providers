@@ -108,7 +108,7 @@ pub struct SqliteTableProviderFactory {
 const SQLITE_DB_PATH_PARAM: &str = "file";
 const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
-const SQLITE_BUSY_TIMEOUT_PARAM: &str = "sqlite_busy_timeout";
+const SQLITE_BUSY_TIMEOUT_PARAM: &str = "busy_timeout";
 
 impl SqliteTableProviderFactory {
     #[must_use]
