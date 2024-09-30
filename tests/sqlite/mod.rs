@@ -21,10 +21,14 @@ async fn arrow_sqlite_round_trip(
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
-    let pool = SqliteConnectionPoolFactory::new(":memory:", Mode::Memory)
-        .build()
-        .await
-        .expect("Sqlite connection pool to be created");
+    let pool = SqliteConnectionPoolFactory::new(
+        ":memory:",
+        Mode::Memory,
+        std::time::Duration::from_millis(5000),
+    )
+    .build()
+    .await
+    .expect("Sqlite connection pool to be created");
 
     let conn = pool
         .connect()
