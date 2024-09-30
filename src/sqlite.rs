@@ -97,6 +97,11 @@ pub enum Error {
 
     #[snafu(display("Invalid SQLite busy_timeout value"))]
     InvalidBusyTimeoutValue { value: String },
+
+    #[snafu(display(
+        "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
+    ))]
+    UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -148,13 +153,9 @@ impl SqliteTableProviderFactory {
         let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
         match busy_timeout {
             Some(busy_timeout) => {
-                let result: u64 = busy_timeout.parse().map_err(|_| {
-                    InvalidBusyTimeoutValueSnafu {
-                        value: busy_timeout,
-                    }
-                    .build()
-                })?;
-                Ok(Duration::from_millis(result))
+                let duration = fundu::parse_duration(&busy_timeout)
+                    .context(UnableToParseBusyTimeoutParameterSnafu)?;
+                Ok(duration)
             }
             None => Ok(Duration::from_millis(5000)),
         }
