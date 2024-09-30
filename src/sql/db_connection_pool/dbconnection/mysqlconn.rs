@@ -286,13 +286,6 @@ fn map_str_type_to_is_enum(data_type: &str) -> bool {
     false
 }
 
-fn map_str_type_to_is_enum(data_type: &str) -> bool {
-    if data_type.starts_with("enum") {
-        return true;
-    }
-    false
-}
-
 fn extract_decimal_precision_and_scale(data_type: &str) -> Result<(u8, i8)> {
     let (start, end) = match (data_type.find('('), data_type.find(')')) {
         (Some(start), Some(end)) => (start, end),
