@@ -9,7 +9,7 @@ use arrow::{
         TimestampNanosecondBuilder, TimestampSecondBuilder, UInt16Builder, UInt32Builder,
         UInt64Builder, UInt8Builder,
     },
-    datatypes::{DataType, TimeUnit},
+    datatypes::{DataType, TimeUnit, UInt16Type},
 };
 
 pub fn map_data_type_to_array_builder_optional(
@@ -21,6 +21,7 @@ pub fn map_data_type_to_array_builder_optional(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
     match data_type {
         DataType::Int8 => Box::new(Int8Builder::new()),
@@ -66,6 +67,9 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
         DataType::Dictionary(ref key_type, ref value_type) => match (&**key_type, &**value_type) {
             (DataType::Int8, DataType::Utf8) => {
                 Box::new(StringDictionaryBuilder::<Int8Type>::new())
+            }
+            (DataType::UInt16, DataType::Utf8) => {
+                Box::new(StringDictionaryBuilder::<UInt16Type>::new())
             }
             _ => unimplemented!("Unimplemented dictionary type"),
         },

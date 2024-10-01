@@ -26,6 +26,7 @@ use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
 use sql_table::SQLiteTable;
 use std::collections::HashSet;
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tokio_rusqlite::Connection;
@@ -93,6 +94,14 @@ pub enum Error {
 
     #[snafu(display("Unable to infer schema: {source}"))]
     UnableToInferSchema { source: dbconnection::Error },
+
+    #[snafu(display("Invalid SQLite busy_timeout value"))]
+    InvalidBusyTimeoutValue { value: String },
+
+    #[snafu(display(
+        "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
+    ))]
+    UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -104,6 +113,7 @@ pub struct SqliteTableProviderFactory {
 const SQLITE_DB_PATH_PARAM: &str = "file";
 const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
+const SQLITE_BUSY_TIMEOUT_PARAM: &str = "busy_timeout";
 
 impl SqliteTableProviderFactory {
     #[must_use]
@@ -139,10 +149,23 @@ impl SqliteTableProviderFactory {
             .unwrap_or(default_filepath)
     }
 
+    pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
+        let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
+        match busy_timeout {
+            Some(busy_timeout) => {
+                let duration = fundu::parse_duration(&busy_timeout)
+                    .context(UnableToParseBusyTimeoutParameterSnafu)?;
+                Ok(duration)
+            }
+            None => Ok(Duration::from_millis(5000)),
+        }
+    }
+
     pub async fn get_or_init_instance(
         &self,
         db_path: impl Into<Arc<str>>,
         mode: Mode,
+        busy_timeout: Duration,
     ) -> Result<SqliteConnectionPool> {
         let db_path = db_path.into();
         let key = match mode {
@@ -155,7 +178,7 @@ impl SqliteTableProviderFactory {
             return instance.try_clone().await.context(DbConnectionPoolSnafu);
         }
 
-        let pool = SqliteConnectionPoolFactory::new(&db_path, mode)
+        let pool = SqliteConnectionPoolFactory::new(&db_path, mode, busy_timeout)
             .build()
             .await
             .context(DbConnectionPoolSnafu)?;
@@ -219,10 +242,13 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             );
         }
 
+        let busy_timeout = self
+            .sqlite_busy_timeout(&cmd.options)
+            .map_err(to_datafusion_error)?;
         let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
-            self.get_or_init_instance(Arc::clone(&db_path), mode)
+            self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)
                 .await
                 .map_err(to_datafusion_error)?,
         );
@@ -234,7 +260,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
             // and we can't have concurrent writes when sharing the same connection
             Arc::new(
-                self.get_or_init_instance(Arc::clone(&db_path), mode)
+                self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)
                     .await
                     .map_err(to_datafusion_error)?,
             )
