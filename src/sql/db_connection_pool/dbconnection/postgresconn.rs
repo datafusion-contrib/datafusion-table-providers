@@ -86,11 +86,9 @@ impl<'a>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let rows = match self
-            .conn
-            .query(&format!("SELECT * FROM {table_reference} LIMIT 1"), &[])
-            .await
-        {
+        let q = &format!("SELECT * FROM {table_reference} LIMIT 1");
+
+        let rows = match self.conn.query(q.as_str(), &[]).await {
             Ok(rows) => rows,
             Err(e) => {
                 if let Some(error_source) = e.source() {

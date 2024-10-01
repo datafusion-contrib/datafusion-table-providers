@@ -311,7 +311,24 @@ impl<T, P> SqlExec<T, P> {
     }
 
     fn table_name_escaped(&self) -> String {
-        self.ident_escaped(&self.table_reference.to_string())
+        match &self.table_reference {
+            TableReference::Bare { table } => self.ident_escaped(&table),
+            TableReference::Partial { schema, table } => format!(
+                "{}.{}",
+                self.ident_escaped(&schema),
+                self.ident_escaped(&table)
+            ),
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!(
+                "{}.{}.{}",
+                self.ident_escaped(&catalog),
+                self.ident_escaped(&schema),
+                self.ident_escaped(&table)
+            ),
+        }
     }
 
     fn column_name_escaped(&self, column_name: &str) -> String {
