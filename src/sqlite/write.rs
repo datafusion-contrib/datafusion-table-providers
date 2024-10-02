@@ -19,7 +19,9 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use crate::util::{
-    constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
+    constraints,
+    on_conflict::OnConflict,
+    retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
 
 use super::{to_datafusion_error, Sqlite};
@@ -126,8 +128,13 @@ impl DataSink for SqliteDataSink {
         let (notify_commit_transaction, mut on_commit_transaction) =
             tokio::sync::oneshot::channel();
 
-        let mut db_conn = self.sqlite.connect().await.map_err(to_datafusion_error)?;
-        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
+        let mut db_conn = self
+            .sqlite
+            .connect()
+            .await
+            .map_err(to_retriable_data_write_error)?;
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
@@ -191,11 +198,9 @@ impl DataSink for SqliteDataSink {
             })
             .await
             .context(super::UnableToInsertIntoTableAsyncSnafu)
-            .map_err(to_datafusion_error)?;
+            .map_err(to_retriable_data_write_error)?;
 
-        let num_rows = task.await.map_err(|err| {
-            DataFusionError::Execution(format!("Error sending data batch: {err}"))
-        })??;
+        let num_rows = task.await.map_err(to_retriable_data_write_error)??;
 
         Ok(num_rows)
     }
