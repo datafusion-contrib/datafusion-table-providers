@@ -2,7 +2,9 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::util::{
-    constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
+    constraints,
+    on_conflict::OnConflict,
+    retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -138,9 +140,12 @@ impl DataSink for DuckDBDataSink {
 
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
-                let mut db_conn = duckdb.connect_sync().map_err(to_datafusion_error)?;
+                let mut db_conn = duckdb
+                    .connect_sync()
+                    .map_err(to_retriable_data_write_error)?;
 
-                let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_datafusion_error)?;
+                let duckdb_conn =
+                    DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
 
                 let tx = duckdb_conn
                     .conn
@@ -159,15 +164,13 @@ impl DataSink for DuckDBDataSink {
                     )?,
                 };
 
-                if on_commit_transaction.try_recv().is_err() {
-                    return Err(DataFusionError::Execution(
-                        "No message to commit transaction has been received.".to_string(),
-                    ));
-                }
+                on_commit_transaction
+                    .try_recv()
+                    .map_err(to_retriable_data_write_error)?;
 
                 tx.commit()
                     .context(super::UnableToCommitTransactionSnafu)
-                    .map_err(to_datafusion_error)?;
+                    .map_err(to_retriable_data_write_error)?;
 
                 Ok(num_rows)
             });
