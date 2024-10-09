@@ -8,27 +8,25 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [dependencies]
-arrow = "52.2.0"
-arrow-array = { version = "52.2.0", optional = true }
-arrow-cast = { version = "52.2.0", optional = true }
-arrow-flight = { version = "52.2.0", optional = true, features = ["flight-sql-experimental", "tls"] }
-arrow-schema = { version = "52.2.0", optional = true, features = ["serde"] }
-arrow-json = "52.2.0"
+arrow = "53.1.0"
+arrow-array = { version = "53.1.0", optional = true }
+arrow-cast = { version = "53.1.0", optional = true }
+arrow-flight = { version = "53.1.0", optional = true, features = ["flight-sql-experimental", "tls"] }
+arrow-schema = { version = "53.1.0", optional = true, features = ["serde"] }
+arrow-json = "53.1.0"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
 num-bigint = "0.4.4"
-base64 = { version = "0.22.1", optional = true }
-bytes = { version = "1.7.1", optional = true }
 bigdecimal = "0.4.5"
 bigdecimal_0_3_0 = { package = "bigdecimal", version = "0.3.0" }
 byteorder = "1.5.0"
 chrono = "0.4.38"
-datafusion = "41.0.0"
-datafusion-expr = { version = "41.0.0", optional = true }
-datafusion-physical-expr = { version = "41.0.0", optional = true }
-datafusion-physical-plan = { version = "41.0.0", optional = true }
-datafusion-proto = { version = "41.0.0", optional = true }
-datafusion-federation = { version = "0.2.2", features = ["sql"] } 
+datafusion = "42.0.0"
+datafusion-expr = { version = "42.0.0", optional = true }
+datafusion-physical-expr = { version = "42.0.0", optional = true }
+datafusion-physical-plan = { version = "42.0.0", optional = true }
+datafusion-proto = { version = "42.0.0", optional = true }
+datafusion-federation = { version = "0.3.0", features = ["sql"] }
 duckdb = { version = "1", features = [
   "bundled",
   "r2d2",
@@ -39,7 +37,6 @@ duckdb = { version = "1", features = [
 fallible-iterator = "0.3.0"
 futures = "0.3.30"
 mysql_async = { version = "0.34.1", features = ["native-tls-tls", "chrono"], optional = true }
-prost = { version = "0.12" , optional = true } # pinned for arrow-flight compat
 r2d2 = { version = "0.8.10", optional = true }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { version = "0.31.0", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
@@ -60,7 +57,7 @@ trust-dns-resolver = "0.23.2"
 url = "2.5.1"
 pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
-tonic = { version = "0.11", optional = true } # pinned for arrow-flight compat
+tonic = { version = "0.12", optional = true }
 itertools = "0.13.0"
 geo-types = "0.7.13"
 
@@ -75,7 +72,8 @@ test-log = { version = "0.2.16", features = ["trace"] }
 rstest = "0.22.0"
 geozero = { version = "0.13.0", features = ["with-wkb"] }
 tokio-stream = { version = "0.1.15", features = ["net"] }
-arrow-schema = "52.2.0"
+arrow-schema = "53.1.0"
+prost = { version = "0.13"}
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -87,13 +85,10 @@ flight = [
   "dep:arrow-cast",
   "dep:arrow-flight",
   "dep:arrow-schema",
-  "dep:base64",
-  "dep:bytes",
   "dep:datafusion-expr",
   "dep:datafusion-physical-expr",
   "dep:datafusion-physical-plan",
   "dep:datafusion-proto",
-  "dep:prost",
   "dep:serde",
   "dep:tonic",
 ]
