@@ -115,3 +115,4 @@ postgres-federation = ["postgres"]
 
 [patch.crates-io]
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "5b98603705a381ceeb5cc371e4f606b7332b57ce" }
+
