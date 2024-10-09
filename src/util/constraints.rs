@@ -61,9 +61,7 @@ async fn validate_batch_with_constraint(
     let ctx = SessionContext::new();
     let df = ctx.read_batches(batches).context(DataFusionSnafu)?;
 
-    let Ok(count_name) = count(lit(COUNT_STAR_EXPANSION)).display_name() else {
-        unreachable!()
-    };
+    let count_name = count(lit(COUNT_STAR_EXPANSION)).schema_name().to_string();
 
     // This is equivalent to:
     // ```sql
