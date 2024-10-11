@@ -28,7 +28,7 @@ datafusion-physical-expr = { version = "42.0.0", optional = true }
 datafusion-physical-plan = { version = "42.0.0", optional = true }
 datafusion-proto = { version = "42.0.0", optional = true }
 datafusion-federation = { version = "0.3.0", features = ["sql"] } 
-duckdb = { version = "1", features = [
+duckdb = { version = "1.1.1", features = [
   "bundled",
   "r2d2",
   "vtab",
@@ -113,6 +113,4 @@ duckdb-federation = ["duckdb"]
 sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
 
-[patch.crates-io]
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "5b98603705a381ceeb5cc371e4f606b7332b57ce" }
 
