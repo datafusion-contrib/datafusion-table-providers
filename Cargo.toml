@@ -1,6 +1,6 @@
 [package]
 name = "datafusion-table-providers"
-version = "0.1.0"
+version = "0.2.0"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
@@ -17,8 +17,6 @@ arrow-json = "53"
 async-stream = { version = "0.3.5", optional = true }
 async-trait = "0.1.80"
 num-bigint = "0.4.4"
-base64 = { version = "0.22.1", optional = true }
-bytes = { version = "1.7.1", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
 chrono = "0.4.38"
@@ -87,7 +85,8 @@ test-log = { version = "0.2.16", features = ["trace"] }
 rstest = "0.22.0"
 geozero = { version = "0.13.0", features = ["with-wkb"] }
 tokio-stream = { version = "0.1.15", features = ["net"] }
-arrow-schema = "52.2.0"
+arrow-schema = "53.1.0"
+prost = { version = "0.13"}
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -99,13 +98,10 @@ flight = [
   "dep:arrow-cast",
   "dep:arrow-flight",
   "dep:arrow-schema",
-  "dep:base64",
-  "dep:bytes",
   "dep:datafusion-expr",
   "dep:datafusion-physical-expr",
   "dep:datafusion-physical-plan",
   "dep:datafusion-proto",
-  "dep:prost",
   "dep:serde",
   "dep:tonic",
 ]
