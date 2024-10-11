@@ -15,11 +15,8 @@ limitations under the License.
 */
 
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::{self, SqlTable};
-use datafusion::{
-    datasource::TableProvider,
-    sql::{unparser::dialect::MySqlDialect, TableReference},
-};
+use crate::sql::sql_provider_datafusion::{self};
+use datafusion::{datasource::TableProvider, sql::TableReference};
 use mysql_async::prelude::ToValue;
 use snafu::prelude::*;
 use sql_table::MySQLTable;

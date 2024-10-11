@@ -1,5 +1,4 @@
 use datafusion::sql::sqlparser::ast::{Expr, Function, Ident, VisitorMut, WindowType};
-use datafusion_expr::sqlparser::ast::WindowFrameBound;
 use std::ops::ControlFlow;
 
 #[derive(Default)]
