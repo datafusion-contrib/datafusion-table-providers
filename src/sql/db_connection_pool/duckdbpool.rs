@@ -1,9 +1,12 @@
 use async_trait::async_trait;
-use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager, ToSql};
+use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 
-use super::{DbConnectionPool, Result};
+use super::{
+    dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
+    DbConnectionPool, Mode, Result,
+};
 use crate::sql::db_connection_pool::{
     dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
     JoinPushDown,
@@ -36,6 +39,7 @@ pub struct DuckDbConnectionPool {
     pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
+    mode: Mode,
 }
 
 impl DuckDbConnectionPool {
@@ -71,6 +75,7 @@ impl DuckDbConnectionPool {
             // There can't be any other tables that share the same context for an in-memory DuckDB.
             join_push_down: JoinPushDown::Disallow,
             attached_databases: Vec::new(),
+            mode: Mode::Memory,
         })
     }
 
@@ -108,6 +113,7 @@ impl DuckDbConnectionPool {
             // Allow join-push down for any other instances that connect to the same underlying file.
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
+            mode: Mode::File,
         })
     }
 
@@ -134,55 +140,58 @@ impl DuckDbConnectionPool {
     pub fn connect_sync(
         self: Arc<Self>,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
-        Ok(Box::new(DuckDbConnection::new(conn)))
+
+        let attachments = self.get_attachments()?;
+
+        Ok(Box::new(
+            DuckDbConnection::new(conn).with_attachments(attachments),
+        ))
+    }
+
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn get_attachments(&self) -> Result<Option<Arc<DuckDBAttachments>>> {
+        if self.attached_databases.is_empty() {
+            Ok(None)
+        } else {
+            #[cfg(not(feature = "duckdb-federation"))]
+            return Ok(None);
+
+            #[cfg(feature = "duckdb-federation")]
+            Ok(Some(Arc::new(DuckDBAttachments::new(
+                &extract_db_name(Arc::clone(&self.path))?,
+                &self.attached_databases,
+            ))))
+        }
     }
 }
 
 #[async_trait]
-impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>
+impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnectionPool
 {
     async fn connect(
         &self,
     ) -> Result<
-        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, &'static dyn ToSql>>,
+        Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
-        #[cfg(feature = "duckdb-federation")]
-        if !self.attached_databases.is_empty() {
-            let mut db_ids = Vec::new();
-            db_ids.push(extract_db_name(Arc::clone(&self.path))?);
+        let attachments = self.get_attachments()?;
 
-            for (i, db) in self.attached_databases.iter().enumerate() {
-                // check the db file exists
-                std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
-                    path: Arc::clone(db),
-                })?;
-
-                let db_id = format!("attachment_{i}");
-                conn.execute(
-                    &format!(
-                        "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
-                        db_id.clone()
-                    ),
-                    [],
-                )
-                .context(DuckDBSnafu)?;
-                db_ids.push(db_id);
-            }
-            conn.execute(&format!("SET search_path = \"{}\"", db_ids.join(",")), [])
-                .context(DuckDBSnafu)?;
-        }
-
-        Ok(Box::new(DuckDbConnection::new(conn)))
+        Ok(Box::new(
+            DuckDbConnection::new(conn).with_attachments(attachments),
+        ))
     }
 
     fn join_push_down(&self) -> JoinPushDown {
@@ -225,7 +234,6 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-
     use rand::Rng;
 
     use super::*;
@@ -240,7 +248,7 @@ mod test {
             name.push(rng.gen_range(b'a'..=b'z') as char);
         }
 
-        format!("./{name}.sqlite")
+        format!("./{name}.duckdb")
     }
 
     #[tokio::test]
@@ -265,6 +273,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(feature = "duckdb-federation")]
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();

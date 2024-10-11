@@ -7,7 +7,9 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
+
+use crate::sql::sql_provider_datafusion::{Engine, SqlTable};
+
 use arrow::{
     array::RecordBatch,
     datatypes::{Schema, SchemaRef},
@@ -86,13 +88,6 @@ pub enum Error {
         source: tokio_postgres::error::Error,
     },
 
-    #[snafu(display(
-        "Unable to construct the DataFusion SQL Table Provider for Postgres: {source}"
-    ))]
-    UnableToConstructSqlTable {
-        source: sql_provider_datafusion::Error,
-    },
-
     #[snafu(display("Unable to generate SQL: {source}"))]
     UnableToGenerateSQL { source: DataFusionError },
 
@@ -156,6 +151,7 @@ impl PostgresTableFactory {
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
+
         let table_provider = Arc::new(
             table_provider
                 .create_federated_table_provider()
@@ -301,7 +297,9 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             Some(Engine::Postgres),
         ));
 
+        #[cfg(feature = "postgres-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+
         Ok(PostgresTableWriter::create(
             read_provider,
             postgres,

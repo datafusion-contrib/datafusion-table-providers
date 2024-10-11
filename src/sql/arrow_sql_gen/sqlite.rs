@@ -29,6 +29,7 @@ use arrow::array::StringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
 use rusqlite::types::Type;
 use rusqlite::Row;
 use rusqlite::Rows;
@@ -60,7 +61,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// # Errors
 ///
 /// Returns an error if there is a failure in converting the rows to a `RecordBatch`.
-pub fn rows_to_arrow(mut rows: Rows, num_cols: usize) -> Result<RecordBatch> {
+pub fn rows_to_arrow(
+    mut rows: Rows,
+    num_cols: usize,
+    projected_schema: Option<SchemaRef>,
+) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Field> = Vec::new();
     let mut arrow_columns_builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
     let mut sqlite_types: Vec<Type> = Vec::new();
@@ -68,7 +73,7 @@ pub fn rows_to_arrow(mut rows: Rows, num_cols: usize) -> Result<RecordBatch> {
 
     if let Ok(Some(row)) = rows.next() {
         for i in 0..num_cols {
-            let column_type = row
+            let mut column_type = row
                 .get_ref(i)
                 .context(FailedToExtractRowValueSnafu)?
                 .data_type();
@@ -77,6 +82,33 @@ pub fn rows_to_arrow(mut rows: Rows, num_cols: usize) -> Result<RecordBatch> {
                 .column_name(i)
                 .context(FailedToExtractColumnNameSnafu)?
                 .to_string();
+
+            // SQLite can store floating point values without a fractional component as integers.
+            // Therefore, we need to verify if the column is actually a floating point type
+            // by examining the projected schema.
+            // Note: The same column may contain both integer and floating point values.
+            // Reading values as Float is safe even if the value is stored as an integer.
+            // Refer to the rusqlite type handling documentation for more details:
+            // https://github.com/rusqlite/rusqlite/blob/95680270eca6f405fb51f5fbe6a214aac5fdce58/src/types/mod.rs#L21C1-L22C75
+            //
+            // `REAL` to integer: always returns an [`Error::InvalidColumnType`](crate::Error::InvalidColumnType) error.
+            // `INTEGER` to float: casts using `as` operator. Never fails.
+            // `REAL` to float: casts using `as` operator. Never fails.
+
+            if column_type == Type::Integer {
+                if let Some(projected_schema) = projected_schema.as_ref() {
+                    match projected_schema.fields[i].data_type() {
+                        DataType::Decimal128(..)
+                        | DataType::Float16
+                        | DataType::Float32
+                        | DataType::Float64 => {
+                            column_type = Type::Real;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             let data_type = map_column_type_to_data_type(column_type);
 
             arrow_fields.push(Field::new(column_name, data_type.clone(), true));

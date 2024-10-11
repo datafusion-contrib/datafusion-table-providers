@@ -1,6 +1,7 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
+use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
+use crate::sql::db_connection_pool::DbInstanceKey;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
@@ -8,6 +9,7 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
+use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -19,10 +21,14 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
+use futures::TryStreamExt;
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
 use sql_table::SQLiteTable;
+use std::collections::HashSet;
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 use tokio_rusqlite::Connection;
 
 use crate::util::{
@@ -88,20 +94,33 @@ pub enum Error {
 
     #[snafu(display("Unable to infer schema: {source}"))]
     UnableToInferSchema { source: dbconnection::Error },
+
+    #[snafu(display("Invalid SQLite busy_timeout value"))]
+    InvalidBusyTimeoutValue { value: String },
+
+    #[snafu(display(
+        "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
+    ))]
+    UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct SqliteTableProviderFactory {}
+pub struct SqliteTableProviderFactory {
+    instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
+}
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
 const SQLITE_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const SQLITE_ATTACH_DATABASES_PARAM: &str = "attach_databases";
+const SQLITE_BUSY_TIMEOUT_PARAM: &str = "busy_timeout";
 
 impl SqliteTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            instances: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     #[must_use]
@@ -129,6 +148,45 @@ impl SqliteTableProviderFactory {
             .cloned()
             .unwrap_or(default_filepath)
     }
+
+    pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
+        let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
+        match busy_timeout {
+            Some(busy_timeout) => {
+                let duration = fundu::parse_duration(&busy_timeout)
+                    .context(UnableToParseBusyTimeoutParameterSnafu)?;
+                Ok(duration)
+            }
+            None => Ok(Duration::from_millis(5000)),
+        }
+    }
+
+    pub async fn get_or_init_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+        mode: Mode,
+        busy_timeout: Duration,
+    ) -> Result<SqliteConnectionPool> {
+        let db_path = db_path.into();
+        let key = match mode {
+            Mode::Memory => DbInstanceKey::memory(),
+            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
+        };
+        let mut instances = self.instances.lock().await;
+
+        if let Some(instance) = instances.get(&key) {
+            return instance.try_clone().await.context(DbConnectionPoolSnafu);
+        }
+
+        let pool = SqliteConnectionPoolFactory::new(&db_path, mode, busy_timeout)
+            .build()
+            .await
+            .context(DbConnectionPoolSnafu)?;
+
+        instances.insert(key, pool.try_clone().await.context(DbConnectionPoolSnafu)?);
+
+        Ok(pool)
+    }
 }
 
 impl Default for SqliteTableProviderFactory {
@@ -139,10 +197,6 @@ impl Default for SqliteTableProviderFactory {
 
 pub type DynSqliteConnectionPool =
     dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
-
-fn handle_db_error(err: db_connection_pool::Error) -> DataFusionError {
-    to_datafusion_error(Error::DbConnectionPoolError { source: err })
-}
 
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
@@ -188,13 +242,15 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             );
         }
 
-        let db_path = self.sqlite_file_path(&name, &cmd.options);
+        let busy_timeout = self
+            .sqlite_busy_timeout(&cmd.options)
+            .map_err(to_datafusion_error)?;
+        let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
-            SqliteConnectionPoolFactory::new(&db_path, mode)
-                .build()
+            self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)
                 .await
-                .map_err(handle_db_error)?,
+                .map_err(to_datafusion_error)?,
         );
 
         let read_pool = if mode == Mode::Memory {
@@ -204,11 +260,9 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             // even though we setup SQLite to use WAL mode, the pool isn't really a pool so shares the same connection
             // and we can't have concurrent writes when sharing the same connection
             Arc::new(
-                SqliteConnectionPoolFactory::new(&db_path, mode)
-                    .with_databases(self.attach_databases(&options))
-                    .build()
+                self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)
                     .await
-                    .map_err(handle_db_error)?,
+                    .map_err(to_datafusion_error)?,
             )
         };
 
@@ -246,6 +300,20 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 .await
                 .context(UnableToCreateTableSnafu)
                 .map_err(to_datafusion_error)?;
+        } else {
+            let mut table_definition_matches = true;
+
+            table_definition_matches &= sqlite.verify_indexes_match(sqlite_conn, &indexes).await?;
+            table_definition_matches &= sqlite
+                .verify_primary_keys_match(sqlite_conn, &primary_keys)
+                .await?;
+
+            if !table_definition_matches {
+                tracing::warn!(
+                "The local table definition at '{db_path}' for '{name}' does not match the expected configuration. To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon first access.",
+                name = name
+            );
+            }
         }
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
@@ -261,7 +329,12 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .map_err(to_datafusion_error)?;
 
         #[cfg(feature = "sqlite-federation")]
-        let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
+        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
+            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
+            Arc::new(read_provider.create_federated_table_provider()?)
+        } else {
+            read_provider
+        };
 
         Ok(SqliteTableWriter::create(
             read_provider,
@@ -436,5 +509,249 @@ impl Sqlite {
         transaction.execute(&sql, [])?;
 
         Ok(())
+    }
+
+    async fn get_indexes(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+    ) -> DataFusionResult<HashSet<String>> {
+        let query_result = sqlite_conn
+            .query_arrow(
+                format!("PRAGMA index_list({name})", name = self.table_name).as_str(),
+                &[],
+                None,
+            )
+            .await?;
+
+        let mut indexes = HashSet::new();
+
+        query_result
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .into_iter()
+            .flatten()
+            .for_each(|batch| {
+                if let Some(name_array) = batch
+                    .column_by_name("name")
+                    .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+                {
+                    for index_name in name_array.iter().flatten() {
+                        // Filter out SQLite's auto-generated indexes
+                        if !index_name.starts_with("sqlite_autoindex_") {
+                            indexes.insert(index_name.to_string());
+                        }
+                    }
+                }
+            });
+
+        Ok(indexes)
+    }
+
+    async fn get_primary_keys(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+    ) -> DataFusionResult<HashSet<String>> {
+        let query_result = sqlite_conn
+            .query_arrow(
+                format!("PRAGMA table_info({name})", name = self.table_name).as_str(),
+                &[],
+                None,
+            )
+            .await?;
+
+        let mut primary_keys = HashSet::new();
+
+        query_result
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .into_iter()
+            .flatten()
+            .for_each(|batch| {
+                if let (Some(name_array), Some(pk_array)) = (
+                    batch
+                        .column_by_name("name")
+                        .and_then(|col| col.as_any().downcast_ref::<StringArray>()),
+                    batch
+                        .column_by_name("pk")
+                        .and_then(|col| col.as_any().downcast_ref::<Int64Array>()),
+                ) {
+                    // name and pk fields can't be None so it is safe to flatten both
+                    for (name, pk) in name_array.iter().flatten().zip(pk_array.iter().flatten()) {
+                        if pk > 0 {
+                            // pk > 0 indicates primary key
+                            primary_keys.insert(name.to_string());
+                        }
+                    }
+                }
+            });
+
+        Ok(primary_keys)
+    }
+
+    async fn verify_indexes_match(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+        indexes: &[(ColumnReference, IndexType)],
+    ) -> DataFusionResult<bool> {
+        let expected_indexes_str_map: HashSet<String> = indexes
+            .iter()
+            .map(|(col, _)| IndexBuilder::new(&self.table_name, col.iter().collect()).index_name())
+            .collect();
+
+        let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;
+
+        let missing_in_actual = expected_indexes_str_map
+            .difference(&actual_indexes_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_indexes_str_map
+            .difference(&expected_indexes_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Missing indexes detected for the table '{name}': {:?}.",
+                missing_in_actual,
+                name = self.table_name
+            );
+        }
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "The table '{name}' contains unexpected indexes not presented in the configuration: {:?}.",
+                extra_in_actual,
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
+
+    async fn verify_primary_keys_match(
+        &self,
+        sqlite_conn: &mut SqliteConnection,
+        primary_keys: &[String],
+    ) -> DataFusionResult<bool> {
+        let expected_pk_keys_str_map: HashSet<String> = primary_keys.iter().cloned().collect();
+
+        let actual_pk_keys_str_map = self.get_primary_keys(sqlite_conn).await?;
+
+        let missing_in_actual = expected_pk_keys_str_map
+            .difference(&actual_pk_keys_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_pk_keys_str_map
+            .difference(&expected_pk_keys_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Missing primary keys detected for the table '{name}': {:?}.",
+                missing_in_actual,
+                name = self.table_name
+            );
+        }
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "The table '{name}' contains unexpected primary keys not presented in the configuration: {:?}.",
+                extra_in_actual,
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion::{
+        common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sqlite_table_creation_with_indexes() {
+        let schema = Arc::new(Schema::new(vec![
+            arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+        ]));
+
+        let options: HashMap<String, String> = [(
+            "indexes".to_string(),
+            "id:enabled;(first_name, last_name):unique".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect();
+
+        let expected_indexes: HashSet<String> = [
+            "i_test_table_id".to_string(),
+            "i_test_table_first_name_last_name".to_string(),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
+
+        let primary_keys_constraints = Constraints::new_from_table_constraints(
+            &[TableConstraint::PrimaryKey {
+                columns: vec!["id"].into_iter().map(Into::into).collect(),
+                name: None,
+                index_name: None,
+                index_options: vec![],
+                characteristics: None,
+                index_type: None,
+            }],
+            &df_schema,
+        )
+        .expect("should create constraints");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("test_table"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: primary_keys_constraints,
+            column_defaults: HashMap::default(),
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let sqlite = table
+            .as_any()
+            .downcast_ref::<SqliteTableWriter>()
+            .expect("downcast to SqliteTableWriter")
+            .sqlite();
+
+        let mut db_conn = sqlite.connect().await.expect("should connect to db");
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).expect("should create sqlite connection");
+
+        let retrieved_indexes = sqlite
+            .get_indexes(sqlite_conn)
+            .await
+            .expect("should get indexes");
+
+        assert_eq!(retrieved_indexes, expected_indexes);
+
+        let retrieved_primary_keys = sqlite
+            .get_primary_keys(sqlite_conn)
+            .await
+            .expect("should get primary keys");
+
+        assert_eq!(retrieved_primary_keys, expected_primary_keys);
     }
 }

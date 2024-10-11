@@ -45,11 +45,7 @@ fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
 pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{MYSQL_DOCKER_CONTAINER}-{port}");
 
-    let port = if let Ok(port) = port.try_into() {
-        port
-    } else {
-        15432
-    };
+    let port = port.try_into().unwrap_or(15432);
 
     let mysql_docker_image = std::env::var("MYSQL_DOCKER_IMAGE")
         .unwrap_or_else(|_| format!("{}mysql:latest", container_registry()));
