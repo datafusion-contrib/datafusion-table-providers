@@ -395,7 +395,7 @@ mod tests {
         tracing::dispatcher::set_default(&dispatch)
     }
 
-    mod sql_table_tests {
+    mod sql_table_plan_to_sql_tests {
         use std::any::Any;
 
         use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -476,7 +476,7 @@ mod tests {
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
             let sql_table = new_sql_table("users", Some(Engine::SQLite))?;
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
-            assert_eq!(result, r#"SELECT "name" FROM users  "#);
+            assert_eq!(result, r#"SELECT `users`.`name` FROM `users`"#);
             Ok(())
         }
 
@@ -488,7 +488,7 @@ mod tests {
             let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
             assert_eq!(
                 result,
-                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
+                r#"SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"#
             );
             Ok(())
         }
