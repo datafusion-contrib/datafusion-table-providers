@@ -26,13 +26,16 @@ use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
-    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    logical_expr::{
+        logical_plan::builder::LogicalTableSource, Expr, LogicalPlan, LogicalPlanBuilder,
+        TableProviderFilterPushDown, TableType,
+    },
     physical_expr::EquivalenceProperties,
     physical_plan::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionMode,
         ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream,
     },
-    sql::{sqlparser::ast, unparser::Unparser, TableReference},
+    sql::{unparser::Unparser, TableReference},
 };
 
 pub mod federation;
@@ -130,21 +133,47 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
-    fn create_physical_plan(
+    pub fn scan_to_sql(
         &self,
-        projections: Option<&Vec<usize>>,
-        schema: &SchemaRef,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
+    ) -> DataFusionResult<String> {
+        let logical_plan = self.create_logical_plan(projection, filters, limit)?;
+        let sql = Unparser::new(self.engine.dialect().as_ref())
+            .plan_to_sql(&logical_plan)?
+            .to_string();
+
+        Ok(sql)
+    }
+
+    fn create_logical_plan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<LogicalPlan> {
+        let table_source = LogicalTableSource::new(self.schema());
+        LogicalPlanBuilder::scan_with_filters(
+            self.table_reference.clone(),
+            Arc::new(table_source),
+            projection.cloned(),
+            filters.to_vec(),
+        )?
+        .limit(0, limit)?
+        .build()
+    }
+
+    fn create_physical_plan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SqlExec::new(
-            projections,
-            schema,
-            &self.table_reference,
+            projection,
+            &self.schema(),
             Arc::clone(&self.pool),
-            filters,
-            limit,
-            Some(self.engine),
+            sql,
         )?))
     }
 
@@ -202,7 +231,8 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, &self.schema(), filters, limit);
+        let sql = self.scan_to_sql(projection, filters, limit)?;
+        return self.create_physical_plan(projection, sql);
     }
 }
 
@@ -210,17 +240,6 @@ impl<T, P> Display for SqlTable<T, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SqlTable {}", self.name)
     }
-}
-
-#[derive(Clone)]
-pub struct SqlExec<T, P> {
-    projected_schema: SchemaRef,
-    table_reference: TableReference,
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-    filters: Vec<Expr>,
-    limit: Option<usize>,
-    properties: PlanProperties,
-    engine: Engine,
 }
 
 pub fn project_schema_safe(
@@ -240,31 +259,32 @@ pub fn project_schema_safe(
     Ok(schema)
 }
 
+#[derive(Clone)]
+pub struct SqlExec<T, P> {
+    projected_schema: SchemaRef,
+    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    sql: String,
+    properties: PlanProperties,
+}
+
 impl<T, P> SqlExec<T, P> {
     pub fn new(
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        filters: &[Expr],
-        limit: Option<usize>,
-        engine: Option<Engine>,
+        sql: String,
     ) -> DataFusionResult<Self> {
-        let projected_schema = project_schema_safe(schema, projections)?;
-        let engine = engine.unwrap_or(Engine::Default);
+        let projected_schema = project_schema_safe(schema, projection)?;
 
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
-            table_reference: table_reference.clone(),
             pool,
-            filters: filters.to_vec(),
-            limit,
+            sql,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 ExecutionMode::Bounded,
             ),
-            engine,
         })
     }
 
@@ -274,57 +294,7 @@ impl<T, P> SqlExec<T, P> {
     }
 
     pub fn sql(&self) -> Result<String> {
-        let columns = self
-            .projected_schema
-            .fields()
-            .iter()
-            .map(|f| self.column_name_escaped(f.name()))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let limit_expr = match self.limit {
-            Some(limit) => format!("LIMIT {limit}"),
-            None => String::new(),
-        };
-
-        let where_expr = if self.filters.is_empty() {
-            String::new()
-        } else {
-            let filter_expr = self
-                .filters
-                .iter()
-                .map(|f| {
-                    Unparser::new(self.engine.dialect().as_ref())
-                        .expr_to_sql(f)
-                        .map(|e| e.to_string())
-                })
-                .collect::<DataFusionResult<Vec<String>>>()
-                .context(UnableToGenerateSQLSnafu)?
-                .join(" AND ");
-            format!("WHERE {}", filter_expr)
-        };
-
-        Ok(format!(
-            "SELECT {columns} FROM {table_reference} {where_expr} {limit_expr}",
-            table_reference = self.table_name_escaped(),
-        ))
-    }
-
-    fn table_name_escaped(&self) -> String {
-        self.ident_escaped(&self.table_reference.to_string())
-    }
-
-    fn column_name_escaped(&self, column_name: &str) -> String {
-        self.ident_escaped(column_name)
-    }
-
-    fn ident_escaped(&self, ident: &str) -> String {
-        let quote_style = self.engine.dialect().identifier_quote_style(ident);
-        ast::Expr::Identifier(ast::Ident {
-            value: ident.to_string(),
-            quote_style,
-        })
-        .to_string()
+        Ok(self.sql.clone())
     }
 }
 
@@ -425,13 +395,13 @@ mod tests {
         tracing::dispatcher::set_default(&dispatch)
     }
 
-    mod sql_exec_tests {
+    mod sql_table_plan_to_sql_tests {
         use std::any::Any;
 
         use arrow_schema::{DataType, Field, Schema, TimeUnit};
         use async_trait::async_trait;
         use datafusion::{
-            logical_expr::{col, lit, Expr},
+            logical_expr::{col, lit},
             sql::TableReference,
         };
 
@@ -439,7 +409,7 @@ mod tests {
             dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
         };
 
-        use super::super::{Engine, SqlExec};
+        use super::super::Engine;
         use super::*;
 
         struct MockConn {}
@@ -472,13 +442,10 @@ mod tests {
             }
         }
 
-        fn new_sql_exec(
-            projections: Option<&Vec<usize>>,
-            table_reference: &str,
-            filters: &[Expr],
-            limit: Option<usize>,
+        fn new_sql_table(
+            table_reference: &'static str,
             engine: Option<Engine>,
-        ) -> Result<SqlExec<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
+        ) -> Result<SqlTable<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
             let fields = vec![
                 Field::new("name", DataType::Utf8, false),
                 Field::new("age", DataType::Int16, false),
@@ -496,39 +463,20 @@ mod tests {
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
             let table_ref = TableReference::parse_str(table_reference);
 
-            Ok(SqlExec::new(
-                projections,
-                &schema,
-                &table_ref,
-                pool,
-                filters,
-                limit,
+            Ok(SqlTable::new_with_schema(
+                table_reference,
+                &pool,
+                schema,
+                table_ref,
                 engine,
-            )?)
+            ))
         }
 
         #[tokio::test]
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_exec = new_sql_exec(Some(&vec![0]), "users", &[], None, None)?;
-            assert_eq!(sql_exec.sql()?, r#"SELECT "name" FROM users  "#);
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_limit() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &[], Some(3), None)?;
-            assert_eq!(sql_exec.sql()?, r#"SELECT "name", age FROM users  LIMIT 3"#);
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_filters() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &filters, None, None)?;
-            assert_eq!(
-                sql_exec.sql()?,
-                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) "#
-            );
+            let sql_table = new_sql_table("users", Some(Engine::SQLite))?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
+            assert_eq!(result, r#"SELECT `users`.`name` FROM `users`"#);
             Ok(())
         }
 
@@ -536,57 +484,11 @@ mod tests {
         async fn test_sql_to_string_with_filters_and_limit(
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(Some(&vec![0, 1]), "users", &filters, Some(3), None)?;
+            let sql_table = new_sql_table("users", Some(Engine::SQLite))?;
+            let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
             assert_eq!(
-                sql_exec.sql()?,
-                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
-            );
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_engine() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(
-                Some(&vec![0, 1]),
-                "users",
-                &filters,
-                Some(3),
-                Some(Engine::DuckDB),
-            )?;
-            assert_eq!(
-                sql_exec.sql()?,
-                r#"SELECT "name", age FROM users WHERE ((age >= 30) AND ("name" = 'x')) LIMIT 3"#
-            );
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_not_reasonable_name(
-        ) -> Result<(), Box<dyn Error + Send + Sync>> {
-            let filters = vec![col("5e48").eq(lit("test")).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(Some(&vec![0, 1, 5]), "users", &filters, Some(3), None)?;
-            assert_eq!(
-                sql_exec.sql()?,
-                r#"SELECT "name", age, "5e48" FROM users WHERE (("5e48" = 'test') AND ("name" = 'x')) LIMIT 3"#
-            );
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_not_reasonable_name_mysql(
-        ) -> Result<(), Box<dyn Error + Send + Sync>> {
-            let filters = vec![col("5e48").eq(lit("test")).and(col("name").eq(lit("x")))];
-            let sql_exec = new_sql_exec(
-                Some(&vec![0, 1, 5]),
-                "users",
-                &filters,
-                Some(3),
-                Some(Engine::MySQL),
-            )?;
-            assert_eq!(
-                sql_exec.sql()?,
-                r#"SELECT `name`, `age`, `5e48` FROM `users` WHERE ((`5e48` = 'test') AND (`name` = 'x')) LIMIT 3"#
+                result,
+                r#"SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"#
             );
             Ok(())
         }
