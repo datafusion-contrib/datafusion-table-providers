@@ -1,4 +1,5 @@
 use datafusion::sql::sqlparser::ast::{Expr, Function, Ident, VisitorMut, WindowType};
+use datafusion_expr::sqlparser::ast::WindowFrameBound;
 use std::ops::ControlFlow;
 
 #[derive(Default)]
@@ -24,7 +25,7 @@ impl VisitorMut for MySQLRankVisitor {
 impl MySQLRankVisitor {
     pub fn replace_rank(func: &mut Function) {
         if let Some(WindowType::WindowSpec(spec)) = func.over.as_mut() {
-            spec.window_frame = None; // frame (window) clauses are ignored in MySQL: https://dev.mysql.com/doc/refman/8.4/en/window-functions-frames.html
+            spec.window_frame = None; // frame (window) clauses are ignored for rank() in MySQL: https://dev.mysql.com/doc/refman/8.4/en/window-functions-frames.html
 
             if let Some(order_by) = spec.order_by.first_mut() {
                 order_by.nulls_first = None; // nulls first/last are not supported in MySQL
