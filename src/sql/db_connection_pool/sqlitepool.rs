@@ -282,7 +282,8 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory() {
         let db_name = random_db_name();
-        let factory = SqliteConnectionPoolFactory::new(&db_name, Mode::File, None);
+        let factory =
+            SqliteConnectionPoolFactory::new(&db_name, Mode::File, Duration::from_secs(5));
         let pool = factory.build().await.unwrap();
 
         assert!(pool.join_push_down == JoinPushDown::AllowedFor(db_name.clone()));
