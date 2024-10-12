@@ -15,17 +15,19 @@ limitations under the License.
 */
 
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::{self, SqlTable};
-use datafusion::{
-    datasource::TableProvider,
-    sql::{unparser::dialect::MySqlDialect, TableReference},
-};
+use crate::sql::sql_provider_datafusion::{self};
+use datafusion::{datasource::TableProvider, sql::TableReference};
 use mysql_async::prelude::ToValue;
 use snafu::prelude::*;
+use sql_table::MySQLTable;
 use std::sync::Arc;
 
 pub type MySQLConnectionPool =
     dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> + Send + Sync;
+
+pub mod federation;
+pub(crate) mod mysql_rank;
+pub mod sql_table;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -53,10 +55,9 @@ impl MySQLTableFactory {
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let table_provider = Arc::new(
-            SqlTable::new("mysql", &pool, table_reference, None)
+            MySQLTable::new(&pool, table_reference)
                 .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                .with_dialect(Arc::new(MySqlDialect {})),
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
 
         let table_provider = Arc::new(
