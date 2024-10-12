@@ -6,6 +6,18 @@ The goal of this repo is to extend the capabilities of DataFusion to support add
 
 Many of the table providers in this repo are for querying data from other database systems. Those providers also integrate with the [`datafusion-federation`](https://github.com/datafusion-contrib/datafusion-federation/) crate to allow for more efficient query execution, such as pushing down joins between multiple tables from the same database system, or efficiently implementing TopK style queries (`SELECT * FROM table ORDER BY foo LIMIT 10`).
 
+To use these table providers with efficient federation push-down, add the `datafusion-federation` crate and create a DataFusion `SessionContext` using the Federation optimizer rule and query planner with:
+
+```rust
+use datafusion::prelude::SessionContext;
+
+let state = datafusion_federation::default_session_state();
+let ctx = SessionContext::with_state(state);
+
+// Register the specific table providers into ctx
+// queries will now automatically be federated
+```
+
 ## Table Providers
 
 - PostgreSQL
