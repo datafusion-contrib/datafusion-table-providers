@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 mod common;
+mod schema;
 
 async fn arrow_postgres_round_trip(
     port: usize,
