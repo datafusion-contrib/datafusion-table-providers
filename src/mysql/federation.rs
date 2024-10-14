@@ -10,7 +10,7 @@ use futures::TryStreamExt;
 use snafu::ResultExt;
 use std::sync::Arc;
 
-use super::mysql_rank::MySQLRankVisitor;
+use super::mysql_window::MySQLWindowVisitor;
 use super::sql_table::MySQLTable;
 use datafusion::{
     datasource::TableProvider,
@@ -51,8 +51,8 @@ fn mysql_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionE
         ast::Statement::Query(query) => {
             let mut new_query = query.clone();
 
-            let mut rank_visitor = MySQLRankVisitor::default();
-            new_query.visit(&mut rank_visitor);
+            let mut window_visitor = MySQLWindowVisitor::default();
+            new_query.visit(&mut window_visitor);
 
             Ok(ast::Statement::Query(new_query))
         }

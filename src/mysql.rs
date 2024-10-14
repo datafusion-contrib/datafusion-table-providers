@@ -26,7 +26,7 @@ pub type MySQLConnectionPool =
     dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> + Send + Sync;
 
 pub mod federation;
-pub(crate) mod mysql_rank;
+pub(crate) mod mysql_window;
 pub mod sql_table;
 
 #[derive(Debug, Snafu)]
