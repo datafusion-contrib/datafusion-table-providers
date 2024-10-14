@@ -78,11 +78,27 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         let columns_meta_query =
             format!("SHOW COLUMNS FROM {}", table_reference.to_quoted_string());
 
-        let columns_meta: Vec<Row> = conn
-            .exec(&columns_meta_query, Params::Empty)
-            .await
-            .boxed()
-            .context(super::UnableToGetSchemaSnafu)?;
+        let columns_meta: Vec<Row> = match conn.exec(&columns_meta_query, Params::Empty).await {
+            Ok(columns_meta) => columns_meta,
+            Err(e) => match e {
+                mysql_async::Error::Server(server_error) => {
+                    if server_error.code == 1146 {
+                        return Err(super::Error::UndefinedTable {
+                            source: Box::new(server_error.clone()),
+                            table_name: table_reference.to_string(),
+                        });
+                    }
+                    return Err(super::Error::UnableToGetSchema {
+                        source: Box::new(mysql_async::Error::Server(server_error)),
+                    });
+                }
+                _ => {
+                    return Err(super::Error::UnableToGetSchema {
+                        source: Box::new(e),
+                    })
+                }
+            },
+        };
 
         Ok(columns_meta_to_schema(columns_meta).context(super::UnableToGetSchemaSnafu)?)
     }
@@ -169,6 +185,8 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
 
         let column_type = map_str_type_to_column_type(&data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
+        let column_is_enum = map_str_type_to_is_enum(&data_type);
+        let column_use_large_str_or_blob = map_str_type_to_use_large_str_or_blob(&data_type);
 
         let (precision, scale) = match column_type {
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -179,9 +197,15 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             _ => (None, None),
         };
 
-        let arrow_data_type =
-            map_column_to_data_type(column_type, column_is_binary, precision, scale)
-                .context(UnsupportedDataTypeSnafu { data_type })?;
+        let arrow_data_type = map_column_to_data_type(
+            column_type,
+            column_is_binary,
+            column_is_enum,
+            column_use_large_str_or_blob,
+            precision,
+            scale,
+        )
+        .context(UnsupportedDataTypeSnafu { data_type })?;
 
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }
@@ -203,30 +227,28 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
         _ if data_type.starts_with("float") => ColumnType::MYSQL_TYPE_FLOAT,
         _ if data_type.starts_with("double") => ColumnType::MYSQL_TYPE_DOUBLE,
         _ if data_type.eq("null") => ColumnType::MYSQL_TYPE_NULL,
-        _ if data_type.eq("timestamp2") => ColumnType::MYSQL_TYPE_TIMESTAMP2,
-        _ if data_type.eq("timestamp") => ColumnType::MYSQL_TYPE_TIMESTAMP,
-        _ if data_type.eq("datetime2") => ColumnType::MYSQL_TYPE_DATETIME2,
-        _ if data_type.eq("datetime") => ColumnType::MYSQL_TYPE_DATETIME,
-        _ if data_type.eq("time2") => ColumnType::MYSQL_TYPE_TIME2,
-        _ if data_type.eq("time") => ColumnType::MYSQL_TYPE_TIME,
+        _ if data_type.starts_with("timestamp") => ColumnType::MYSQL_TYPE_TIMESTAMP,
+        _ if data_type.starts_with("time") => ColumnType::MYSQL_TYPE_TIME,
+        _ if data_type.starts_with("datetime") => ColumnType::MYSQL_TYPE_DATETIME,
         _ if data_type.eq("date") => ColumnType::MYSQL_TYPE_DATE,
         _ if data_type.eq("year") => ColumnType::MYSQL_TYPE_YEAR,
         _ if data_type.eq("newdate") => ColumnType::MYSQL_TYPE_NEWDATE,
-        _ if data_type.starts_with("varchar") => ColumnType::MYSQL_TYPE_VARCHAR,
         _ if data_type.starts_with("bit") => ColumnType::MYSQL_TYPE_BIT,
         _ if data_type.starts_with("array") => ColumnType::MYSQL_TYPE_TYPED_ARRAY,
         _ if data_type.starts_with("json") => ColumnType::MYSQL_TYPE_JSON,
         _ if data_type.starts_with("newdecimal") => ColumnType::MYSQL_TYPE_NEWDECIMAL,
-        _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_ENUM,
-        _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_SET,
-        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_TINY_BLOB,
-        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
-        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_LONG_BLOB,
-        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_LONG_BLOB,
+        // MySQL ENUM & SET value is exported as MYSQL_TYPE_STRING under c api: https://dev.mysql.com/doc/c-api/9.0/en/c-api-data-structures.html
+        _ if data_type.starts_with("enum") => ColumnType::MYSQL_TYPE_STRING,
+        _ if data_type.starts_with("set") => ColumnType::MYSQL_TYPE_STRING,
+        _ if data_type.starts_with("tinyblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("tinytext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("mediumtext") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longblob") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("longtext") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("blob") => ColumnType::MYSQL_TYPE_BLOB,
         _ if data_type.starts_with("text") => ColumnType::MYSQL_TYPE_BLOB,
+        _ if data_type.starts_with("varchar") => ColumnType::MYSQL_TYPE_VAR_STRING,
         _ if data_type.starts_with("varbinary") => ColumnType::MYSQL_TYPE_VAR_STRING,
         _ if data_type.starts_with("char") => ColumnType::MYSQL_TYPE_STRING,
         _ if data_type.starts_with("binary") => ColumnType::MYSQL_TYPE_STRING,
@@ -238,7 +260,27 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
 }
 
 fn map_str_type_to_is_binary(data_type: &str) -> bool {
-    if data_type.starts_with("binary") | data_type.starts_with("varbinary") {
+    if data_type.starts_with("binary")
+        | data_type.starts_with("varbinary")
+        | data_type.starts_with("tinyblob")
+        | data_type.starts_with("mediumblob")
+        | data_type.starts_with("blob")
+        | data_type.starts_with("longblob")
+    {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_use_large_str_or_blob(data_type: &str) -> bool {
+    if data_type.starts_with("long") {
+        return true;
+    }
+    false
+}
+
+fn map_str_type_to_is_enum(data_type: &str) -> bool {
+    if data_type.starts_with("enum") {
         return true;
     }
     false

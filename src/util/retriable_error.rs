@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use datafusion::error::DataFusionError;
 use snafu::Snafu;
 
@@ -6,6 +8,11 @@ pub enum RetriableError {
     #[snafu(display("{source}"))]
     DataRetrievalError {
         source: datafusion::error::DataFusionError,
+    },
+
+    #[snafu(display("{source}"))]
+    DataWriteError {
+        source: Box<dyn Error + Send + Sync>,
     },
 }
 
@@ -34,6 +41,17 @@ pub fn check_and_mark_retriable_error(err: DataFusionError) -> DataFusionError {
     }
 
     DataFusionError::External(Box::new(RetriableError::DataRetrievalError { source: err }))
+}
+
+// Wraps error as `RetriableError::DataWriteError` so we can detect this error and retry later at a higher level
+#[must_use]
+pub fn to_retriable_data_write_error<E>(error: E) -> DataFusionError
+where
+    E: Error + Send + Sync + 'static,
+{
+    DataFusionError::External(Box::new(RetriableError::DataWriteError {
+        source: error.into(),
+    }))
 }
 
 fn is_invalid_query_error(error: &DataFusionError) -> bool {

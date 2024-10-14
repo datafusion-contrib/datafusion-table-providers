@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use mysql_async::{
     prelude::{Queryable, ToValue},
-    DriverError, Params, Row, SslOpts,
+    DriverError, Opts, Params, Row, SslOpts,
 };
 use secrecy::{ExposeSecret, Secret, SecretString};
 use snafu::{ResultExt, Snafu};
@@ -13,27 +13,42 @@ use crate::{
         dbconnection::{mysqlconn::MySQLConnection, AsyncDbConnection, DbConnection},
         JoinPushDown,
     },
-    util,
+    util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
 };
 
 use super::DbConnectionPool;
 
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("ConnectionPoolError: {source}"))]
-    ConnectionPoolError { source: mysql_async::UrlError },
+    #[snafu(display("MySQL connection error: {source}"))]
+    MySQLConnectionError { source: mysql_async::Error },
 
-    #[snafu(display("ConnectionPoolRunError: {source}"))]
-    ConnectionPoolRunError { source: mysql_async::Error },
+    #[snafu(display("Invalid MySQL connection string: {source} "))]
+    InvalidConnectionString { source: mysql_async::UrlError },
 
     #[snafu(display("Invalid parameter: {parameter_name}"))]
     InvalidParameterError { parameter_name: String },
 
     #[snafu(display("Invalid root cert path: {path}"))]
     InvalidRootCertPathError { path: String },
-}
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+    #[snafu(display("Cannot connect to MySQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
+    InvalidHostOrPortError {
+        source: crate::util::ns_lookup::Error,
+        host: String,
+        port: u16,
+    },
+
+    #[snafu(display(
+        "Authentication failed. Ensure that the username and password are correctly configured."
+    ))]
+    InvalidUsernameOrPassword,
+
+    #[snafu(display("{message}"))]
+    UnknownMySQLDatabase { message: String },
+}
 
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
@@ -72,7 +87,7 @@ impl MySQLConnectionPool {
         {
             connection_string = mysql_async::OptsBuilder::from_opts(
                 mysql_async::Opts::from_url(mysql_connection_string.as_str())
-                    .context(ConnectionPoolSnafu)?,
+                    .context(InvalidConnectionStringSnafu)?,
             );
         } else {
             if let Some(mysql_host) = params.get("host").map(Secret::expose_secret) {
@@ -123,29 +138,39 @@ impl MySQLConnectionPool {
 
         let opts = mysql_async::Opts::from(connection_string);
 
+        verify_mysql_opts(&opts).await?;
+
         let join_push_down = get_join_context(&opts);
 
         let pool = mysql_async::Pool::new(opts);
 
         // Test the connection
-        let mut conn = pool
-            .get_conn()
-            .await
-            .map_err(|err| match err {
-                // In case of an incorrect user name, the error `Unknown authentication plugin 'sha256_password'` is returned.
-                // We override it with a more user-friendly error message.
-                mysql_async::Error::Driver(DriverError::UnknownAuthPlugin { .. }) => {
-                    mysql_async::Error::Other(
-                        "Unable to authenticate. Is the user name and password correct?".into(),
-                    )
+        let mut conn = pool.get_conn().await.map_err(|err| match err {
+            // In case of an incorrect user name, the error `Unknown authentication plugin 'sha256_password'` is returned.
+            // We override it with a more user-friendly error message.
+            mysql_async::Error::Driver(DriverError::UnknownAuthPlugin { .. }) => {
+                Error::InvalidUsernameOrPassword
+            }
+            mysql_async::Error::Server(server_error) => {
+                match server_error.code {
+                    // Code 1049: Server error: `ERROR 42000 (1049): Unknown database <database>
+                    1049 => Error::UnknownMySQLDatabase {
+                        message: server_error.message,
+                    },
+                    // Code 1045: Server error: ERROR 1045 (28000): Access denied for user <user> (using password: YES / NO)
+                    1045 => Error::InvalidUsernameOrPassword,
+                    _ => Error::MySQLConnectionError {
+                        source: mysql_async::Error::Server(server_error),
+                    },
                 }
-                _ => err,
-            })
-            .context(ConnectionPoolRunSnafu)?;
+            }
+            _ => Error::MySQLConnectionError { source: err },
+        })?;
+
         let _rows: Vec<Row> = conn
             .exec("SELECT 1", Params::Empty)
             .await
-            .context(ConnectionPoolRunSnafu)?;
+            .context(MySQLConnectionSnafu)?;
 
         Ok(Self {
             pool: Arc::new(pool),
@@ -160,9 +185,21 @@ impl MySQLConnectionPool {
     /// Returns an error if there is a problem creating the connection pool.
     pub async fn connect_direct(&self) -> super::Result<MySQLConnection> {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
+        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
         Ok(MySQLConnection::new(conn))
     }
+}
+
+async fn verify_mysql_opts(opts: &Opts) -> Result<()> {
+    // Verify the host and port are correct
+    let host = opts.ip_or_hostname();
+    let port = opts.tcp_port();
+
+    verify_ns_lookup_and_tcp_connect(host, port)
+        .await
+        .context(InvalidHostOrPortSnafu { host, port })?;
+
+    Ok(())
 }
 
 fn get_join_context(opts: &mysql_async::Opts) -> JoinPushDown {
@@ -207,7 +244,7 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
     ) -> super::Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>>
     {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
+        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
         Ok(Box::new(MySQLConnection::new(conn)))
     }
 

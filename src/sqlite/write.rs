@@ -19,7 +19,9 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use crate::util::{
-    constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
+    constraints,
+    on_conflict::OnConflict,
+    retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
 
 use super::{to_datafusion_error, Sqlite};
@@ -121,8 +123,18 @@ impl DataSink for SqliteDataSink {
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(1);
-        let mut db_conn = self.sqlite.connect().await.map_err(to_datafusion_error)?;
-        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
+
+        // Since the main task/stream can be dropped or fail, we use a oneshot channel to signal that all data is received and we should commit the transaction
+        let (notify_commit_transaction, mut on_commit_transaction) =
+            tokio::sync::oneshot::channel();
+
+        let mut db_conn = self
+            .sqlite
+            .connect()
+            .await
+            .map_err(to_retriable_data_write_error)?;
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
@@ -143,6 +155,15 @@ impl DataSink for SqliteDataSink {
                     DataFusionError::Execution(format!("Error sending data batch: {err}"))
                 })?;
             }
+
+            if notify_commit_transaction.send(()).is_err() {
+                return Err(DataFusionError::Execution(
+                    "Unable to send message to commit transaction to SQLite writer.".to_string(),
+                ));
+            };
+
+            // Drop the sender to signal the receiver that no more data is coming
+            drop(batch_tx);
 
             Ok::<_, DataFusionError>(num_rows)
         });
@@ -165,17 +186,21 @@ impl DataSink for SqliteDataSink {
                     }
                 }
 
+                if on_commit_transaction.try_recv().is_err() {
+                    return Err(tokio_rusqlite::Error::Other(
+                        "No message to commit transaction has been received.".into(),
+                    ));
+                }
+
                 transaction.commit()?;
 
                 Ok(())
             })
             .await
             .context(super::UnableToInsertIntoTableAsyncSnafu)
-            .map_err(to_datafusion_error)?;
+            .map_err(to_retriable_data_write_error)?;
 
-        let num_rows = task.await.map_err(|err| {
-            DataFusionError::Execution(format!("Error sending data batch: {err}"))
-        })??;
+        let num_rows = task.await.map_err(to_retriable_data_write_error)??;
 
         Ok(num_rows)
     }

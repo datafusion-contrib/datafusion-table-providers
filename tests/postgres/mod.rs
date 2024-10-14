@@ -1,5 +1,8 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{
+    array::{Decimal128Array, RecordBatch},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
@@ -7,7 +10,11 @@ use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
-use datafusion_table_providers::postgres::PostgresTableProviderFactory;
+
+use datafusion_table_providers::{
+    postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
+    sql::sql_provider_datafusion::SqlTable,
+};
 use rstest::{fixture, rstest};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -136,4 +143,155 @@ async fn test_arrow_postgres_roundtrip(
         &format!("{table_name}_types"),
     )
     .await;
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>) {
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_container(&container_manager).await;
+    }
+
+    test_postgres_enum_type(container_manager.port).await;
+    test_postgres_numeric_type(container_manager.port).await;
+}
+
+async fn test_postgres_enum_type(port: usize) {
+    let extra_stmt = Some("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral');");
+    let create_table_stmt = "
+    CREATE TABLE person_mood (
+    mood_status mood NOT NULL
+    );";
+
+    let insert_table_stmt = "
+    INSERT INTO person_mood (mood_status) VALUES ('happy'), ('sad'), ('neutral');
+    ";
+
+    let (expected_record, _) = get_arrow_dictionary_array_record_batch();
+
+    arrow_postgres_one_way(
+        port,
+        "person_mood",
+        create_table_stmt,
+        insert_table_stmt,
+        extra_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn test_postgres_numeric_type(port: usize) {
+    let extra_stmt = None;
+    let create_table_stmt = "
+    CREATE TABLE numeric_values (
+    first_column NUMERIC,  -- No precision specified
+    second_column NUMERIC  -- No precision specified
+);";
+
+    let insert_table_stmt = "
+    INSERT INTO numeric_values (first_column, second_column) VALUES
+(1.0917217805754313, 0.00000000000000000000),
+(0.97824560830666753739, 1220.9175000000000000),
+(1.0917217805754313, 52.9533333333333333);
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("first_column", DataType::Decimal128(38, 16), true),
+        Field::new("second_column", DataType::Decimal128(38, 20), true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(
+                Decimal128Array::from(vec![
+                    10917217805754313i128,
+                    9782456083066675i128,
+                    10917217805754313i128,
+                ])
+                .with_precision_and_scale(38, 16)
+                .unwrap(),
+            ),
+            Arc::new(
+                Decimal128Array::from(vec![
+                    0i128,
+                    122091750000000000000000i128,
+                    5295333333333333330000i128,
+                ])
+                .with_precision_and_scale(38, 20)
+                .unwrap(),
+            ),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_postgres_one_way(
+        port,
+        "numeric_values",
+        create_table_stmt,
+        insert_table_stmt,
+        extra_stmt,
+        expected_record,
+    )
+    .await;
+}
+
+async fn arrow_postgres_one_way(
+    port: usize,
+    table_name: &str,
+    create_table_stmt: &str,
+    insert_table_stmt: &str,
+    extra_stmt: Option<&str>,
+    expected_record: RecordBatch,
+) {
+    tracing::debug!("Running tests on {table_name}");
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    if let Some(extra_stmt) = extra_stmt {
+        let _ = db_conn
+            .conn
+            .execute(extra_stmt, &[])
+            .await
+            .expect("Statement should be created");
+    }
+
+    let _ = db_conn
+        .conn
+        .execute(create_table_stmt, &[])
+        .await
+        .expect("Postgres table should be created");
+
+    let _ = db_conn
+        .conn
+        .execute(insert_table_stmt, &[])
+        .await
+        .expect("Postgres table data should be inserted");
+
+    // Register datafusion table, test row -> arrow conversion
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table(table_name, Arc::new(table))
+        .expect("Table should be registered");
+    let sql = format!("SELECT * FROM {table_name}");
+    let df = ctx
+        .sql(&sql)
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+
+    assert_eq!(record_batch[0], expected_record);
 }
