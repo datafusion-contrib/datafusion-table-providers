@@ -16,7 +16,7 @@ use crate::{
     util,
 };
 
-use super::{DbConnectionPool, Result};
+use super::DbConnectionPool;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -32,6 +32,8 @@ pub enum Error {
     #[snafu(display("Invalid root cert path: {path}"))]
     InvalidRootCertPathError { path: String },
 }
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
@@ -68,9 +70,10 @@ impl MySQLConnectionPool {
         if let Some(mysql_connection_string) =
             params.get("connection_string").map(Secret::expose_secret)
         {
-            connection_string = mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(
-                mysql_connection_string.as_str(),
-            )?);
+            connection_string = mysql_async::OptsBuilder::from_opts(
+                mysql_async::Opts::from_url(mysql_connection_string.as_str())
+                    .context(ConnectionPoolSnafu)?,
+            );
         } else {
             if let Some(mysql_host) = params.get("host").map(Secret::expose_secret) {
                 connection_string = connection_string.ip_or_hostname(mysql_host.as_str());
@@ -201,7 +204,8 @@ fn get_ssl_opts(ssl_mode: &str, rootcert_path: Option<PathBuf>) -> Option<SslOpt
 impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQLConnectionPool {
     async fn connect(
         &self,
-    ) -> Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>> {
+    ) -> super::Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>>
+    {
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_conn().await.context(ConnectionPoolRunSnafu)?;
         Ok(Box::new(MySQLConnection::new(conn)))
