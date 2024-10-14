@@ -41,7 +41,7 @@ fn get_schema() -> SchemaRef {
 #[tokio::test]
 async fn test_postgres_schema_inference() {
     let port = crate::get_random_port();
-    let _ = common::start_postgres_docker_container(port)
+    let container = common::start_postgres_docker_container(port)
         .await
         .expect("Postgres container to start");
 
@@ -81,4 +81,10 @@ async fn test_postgres_schema_inference() {
         .expect("to create table provider");
 
     assert_eq!(table_provider.schema(), get_schema());
+
+    // Tear down
+    container
+        .remove()
+        .await
+        .expect("to stop postgres container");
 }
