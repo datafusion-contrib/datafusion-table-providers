@@ -40,6 +40,7 @@ use datafusion::{
 };
 use mysql_async::prelude::{Queryable, ToValue};
 use mysql_async::TxOpts;
+use sea_query::{Alias, DeleteStatement, MysqlQueryBuilder};
 use snafu::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -390,8 +391,11 @@ impl MySQL {
         &self,
         transaction: &mut mysql_async::Transaction<'_>,
     ) -> Result<()> {
+        let delete = DeleteStatement::new()
+            .from_table(Alias::new(self.table_name.clone()))
+            .to_string(MysqlQueryBuilder);
         transaction
-            .exec_drop(format!(r#"DELETE FROM "{}""#, self.table_name).as_str(), ())
+            .exec_drop(delete.as_str(), ())
             .await
             .context(UnableToDeleteAllTableDataSnafu)?;
 
