@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::flight::{FlightMetadata, FlightProperties, SizeLimits};
+use crate::flight::{flight_channel, to_df_err, FlightMetadata, FlightProperties, SizeLimits};
 use arrow_array::RecordBatch;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
@@ -41,7 +41,6 @@ use datafusion_physical_plan::{
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tonic::metadata::{AsciiMetadataKey, MetadataMap};
-use tonic::transport::Channel;
 
 /// Arrow Flight physical plan that maps flight endpoints to partitions
 #[derive(Clone, Debug)]
@@ -170,11 +169,7 @@ async fn flight_client(
     grpc_headers: &MetadataMap,
     size_limits: &SizeLimits,
 ) -> Result<FlightClient> {
-    let channel = Channel::from_shared(source.into())
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .connect()
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let channel = flight_channel(source).await?;
     let inner_client = FlightServiceClient::new(channel)
         .max_encoding_message_size(size_limits.encoding)
         .max_decoding_message_size(size_limits.decoding);
@@ -212,10 +207,7 @@ async fn try_fetch_stream(
     schema: SchemaRef,
 ) -> arrow_flight::error::Result<SendableRecordBatchStream> {
     let ticket = Ticket::new(ticket.0.to_vec());
-    let stream = client
-        .do_get(ticket)
-        .await?
-        .map_err(|e| DataFusionError::External(Box::new(e)));
+    let stream = client.do_get(ticket).await?.map_err(to_df_err);
     Ok(Box::pin(RecordBatchStreamAdapter::new(
         schema.clone(),
         stream.map(move |item| item.and_then(|rb| enforce_schema(rb, &schema).map_err(Into::into))),

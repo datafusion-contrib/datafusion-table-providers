@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -35,7 +36,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use serde::{Deserialize, Serialize};
-use tonic::transport::Channel;
+use tonic::transport::{Channel, ClientTlsConfig};
 
 pub mod codec;
 mod exec;
@@ -107,16 +108,12 @@ impl FlightTableFactory {
         options: HashMap<String, String>,
     ) -> datafusion::common::Result<FlightTable> {
         let origin = entry_point.into();
-        let channel = Channel::from_shared(origin.clone())
-            .unwrap()
-            .connect()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let channel = flight_channel(&origin).await?;
         let metadata = self
             .driver
             .metadata(channel.clone(), &options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(to_df_err)?;
         let num_rows = precision(metadata.info.total_records);
         let total_byte_size = precision(metadata.info.total_bytes);
         let logical_schema = metadata.schema;
@@ -133,14 +130,6 @@ impl FlightTableFactory {
             logical_schema,
             stats,
         })
-    }
-}
-
-fn precision(total: i64) -> Precision<usize> {
-    if total < 0 {
-        Precision::Absent
-    } else {
-        Precision::Exact(total as usize)
     }
 }
 
@@ -292,7 +281,7 @@ impl TableProvider for FlightTable {
             .driver
             .metadata(self.channel.clone(), &self.options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(to_df_err)?;
         Ok(Arc::new(FlightExec::try_new(
             metadata,
             projection,
@@ -302,5 +291,28 @@ impl TableProvider for FlightTable {
 
     fn statistics(&self) -> Option<Statistics> {
         Some(self.stats.clone())
+    }
+}
+
+fn to_df_err<E: Error + Send + Sync + 'static>(err: E) -> DataFusionError {
+    DataFusionError::External(Box::new(err))
+}
+
+async fn flight_channel(source: impl Into<String>) -> datafusion::common::Result<Channel> {
+    let tls_config = ClientTlsConfig::new().with_enabled_roots();
+    Channel::from_shared(source.into())
+        .map_err(to_df_err)?
+        .tls_config(tls_config)
+        .map_err(to_df_err)?
+        .connect()
+        .await
+        .map_err(to_df_err)
+}
+
+fn precision(total: i64) -> Precision<usize> {
+    if total < 0 {
+        Precision::Absent
+    } else {
+        Precision::Exact(total as usize)
     }
 }
