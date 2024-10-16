@@ -80,7 +80,7 @@ pub mod sql;
 ///             CustomFlightDriver::default(),
 ///         ))),
 ///     );
-///     _ = ctx.sql(
+///     let _ = ctx.sql(
 ///         r#"
 ///         CREATE EXTERNAL TABLE custom_flight_table STORED AS CUSTOM_FLIGHT
 ///         LOCATION 'https://custom.flight.rpc'
@@ -177,30 +177,26 @@ pub trait FlightDriver: Sync + Send + Debug {
 pub struct FlightMetadata {
     /// FlightInfo object produced by the driver
     info: FlightInfo,
-    /// Arrow schema. Can be enforced by the driver or inferred from the FlightInfo
-    schema: SchemaRef,
     /// Various knobs that control execution
     props: FlightProperties,
+    /// Arrow schema. Can be enforced by the driver or inferred from the FlightInfo
+    schema: SchemaRef,
 }
 
 impl FlightMetadata {
     /// Customize everything that is in the driver's control
-    pub fn new(info: FlightInfo, schema: SchemaRef, props: FlightProperties) -> Self {
+    pub fn new(info: FlightInfo, props: FlightProperties, schema: SchemaRef) -> Self {
         Self {
             info,
-            schema,
             props,
+            schema,
         }
     }
 
-    /// Customize gRPC headers
-    pub fn try_new(
-        info: FlightInfo,
-        grpc_headers: HashMap<String, String>,
-    ) -> arrow_flight::error::Result<Self> {
+    /// Customize flight properties and try to use the FlightInfo schema
+    pub fn try_new(info: FlightInfo, props: FlightProperties) -> arrow_flight::error::Result<Self> {
         let schema = Arc::new(info.clone().try_decode_schema()?);
-        let props = grpc_headers.into();
-        Ok(Self::new(info, schema, props))
+        Ok(Self::new(info, props, schema))
     }
 }
 
@@ -208,34 +204,60 @@ impl TryFrom<FlightInfo> for FlightMetadata {
     type Error = FlightError;
 
     fn try_from(info: FlightInfo) -> Result<Self, Self::Error> {
-        Self::try_new(info, HashMap::default())
+        Self::try_new(info, FlightProperties::default())
     }
 }
 
 /// Meant to gradually encapsulate all sorts of knobs required
 /// for controlling the protocol and query execution details.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlightProperties {
     unbounded_stream: bool,
     grpc_headers: HashMap<String, String>,
+    size_limits: SizeLimits,
 }
 
 impl FlightProperties {
-    pub fn new(unbounded_stream: bool, grpc_headers: HashMap<String, String>) -> Self {
-        Self {
-            unbounded_stream,
-            grpc_headers,
+    pub fn unbounded_stream(mut self, unbounded_stream: bool) -> Self {
+        self.unbounded_stream = unbounded_stream;
+        self
+    }
+
+    pub fn grpc_headers(mut self, grpc_headers: HashMap<String, String>) -> Self {
+        self.grpc_headers = grpc_headers;
+        self
+    }
+
+    pub fn size_limits(mut self, size_limits: SizeLimits) -> Self {
+        self.size_limits = size_limits;
+        self
+    }
+}
+
+/// Message size limits to be passed to the underlying gRPC library.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SizeLimits {
+    encoding: usize,
+    decoding: usize,
+}
+
+impl SizeLimits {
+    pub fn new(encoding: usize, decoding: usize) -> Self {
+        Self { encoding, decoding }
+    }
+}
+
+impl Default for SizeLimits {
+    fn default() -> Self {
+        Self { // no limits
+            encoding: usize::MAX,
+            decoding: usize::MAX,
         }
     }
 }
 
-impl From<HashMap<String, String>> for FlightProperties {
-    fn from(grpc_headers: HashMap<String, String>) -> Self {
-        Self::new(false, grpc_headers)
-    }
-}
-
 /// Table provider that wraps a specific flight from an Arrow Flight service
+#[derive(Debug)]
 pub struct FlightTable {
     driver: Arc<dyn FlightDriver>,
     channel: Channel,

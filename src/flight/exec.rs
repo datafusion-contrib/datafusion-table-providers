@@ -23,9 +23,10 @@ use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::flight::{FlightMetadata, FlightProperties};
+use crate::flight::{FlightMetadata, FlightProperties, SizeLimits};
 use arrow_array::RecordBatch;
 use arrow_flight::error::FlightError;
+use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
 use arrow_schema::{ArrowError, SchemaRef};
 use datafusion::arrow::datatypes::ToByteSlice;
@@ -164,21 +165,34 @@ impl FlightPartition {
     }
 }
 
+async fn flight_client(
+    source: impl Into<String>,
+    grpc_headers: &MetadataMap,
+    size_limits: &SizeLimits,
+) -> Result<FlightClient> {
+    let channel = Channel::from_shared(source.into())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .connect()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let inner_client = FlightServiceClient::new(channel)
+        .max_encoding_message_size(size_limits.encoding)
+        .max_decoding_message_size(size_limits.decoding);
+    let mut client = FlightClient::new_from_inner(inner_client);
+    client.metadata_mut().clone_from(grpc_headers);
+    Ok(client)
+}
+
 async fn flight_stream(
     partition: FlightPartition,
     schema: SchemaRef,
     grpc_headers: Arc<MetadataMap>,
+    size_limits: SizeLimits,
 ) -> Result<SendableRecordBatchStream> {
     let mut errors: Vec<Box<dyn Error + Send + Sync>> = vec![];
     for loc in partition.locations.iter() {
-        match try_fetch_stream(
-            loc,
-            partition.ticket.clone(),
-            schema.clone(),
-            grpc_headers.clone(),
-        )
-        .await
-        {
+        let client = flight_client(loc, grpc_headers.as_ref(), &size_limits).await?;
+        match try_fetch_stream(client, &partition.ticket, schema.clone()).await {
             Ok(stream) => return Ok(stream),
             Err(e) => errors.push(Box::new(e)),
         }
@@ -193,19 +207,11 @@ async fn flight_stream(
 }
 
 async fn try_fetch_stream(
-    source: impl Into<String>,
-    ticket: FlightTicket,
+    mut client: FlightClient,
+    ticket: &FlightTicket,
     schema: SchemaRef,
-    grpc_headers: Arc<MetadataMap>,
 ) -> arrow_flight::error::Result<SendableRecordBatchStream> {
     let ticket = Ticket::new(ticket.0.to_vec());
-    let channel = Channel::from_shared(source.into())
-        .map_err(|e| FlightError::ExternalError(Box::new(e)))?
-        .connect()
-        .await
-        .map_err(|e| FlightError::ExternalError(Box::new(e)))?;
-    let mut client = FlightClient::new(channel);
-    client.metadata_mut().clone_from(grpc_headers.as_ref());
     let stream = client
         .do_get(ticket)
         .await?
@@ -291,6 +297,7 @@ impl ExecutionPlan for FlightExec {
             self.config.partitions[partition].clone(),
             self.schema(),
             self.metadata_map.clone(),
+            self.config.properties.size_limits,
         );
         let stream = futures::stream::once(future_stream).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -303,7 +310,7 @@ impl ExecutionPlan for FlightExec {
 #[cfg(test)]
 mod tests {
     use crate::flight::exec::{enforce_schema, FlightConfig, FlightPartition, FlightTicket};
-    use crate::flight::FlightProperties;
+    use crate::flight::{FlightProperties, SizeLimits};
     use arrow_array::{
         BooleanArray, Float32Array, Int32Array, RecordBatch, StringArray, StructArray,
     };
@@ -328,10 +335,13 @@ mod tests {
             },
         ]
         .into();
-        let properties = FlightProperties::new(
-            true,
-            HashMap::from([("h1".into(), "v1".into()), ("h2".into(), "v2".into())]),
-        );
+        let properties = FlightProperties::default()
+            .unbounded_stream(true)
+            .grpc_headers(HashMap::from([
+                ("h1".into(), "v1".into()),
+                ("h2".into(), "v2".into()),
+            ]))
+            .size_limits(SizeLimits::new(1024, 1024));
         let config = FlightConfig {
             origin: "http://localhost:50050".into(),
             schema,
