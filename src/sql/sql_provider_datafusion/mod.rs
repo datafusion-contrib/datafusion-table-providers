@@ -38,6 +38,7 @@ use datafusion::{
     sql::{unparser::Unparser, TableReference},
 };
 
+#[cfg(feature = "federation")]
 pub mod federation;
 
 #[derive(Debug, Snafu)]

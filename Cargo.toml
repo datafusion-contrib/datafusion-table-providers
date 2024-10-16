@@ -25,7 +25,7 @@ datafusion-expr = { version = "42.0.0", optional = true }
 datafusion-physical-expr = { version = "42.0.0", optional = true }
 datafusion-physical-plan = { version = "42.0.0", optional = true }
 datafusion-proto = { version = "42.0.0", optional = true }
-datafusion-federation = { version = "0.3.0", features = ["sql"] } 
+datafusion-federation = { version = "0.3.0", features = ["sql"], optional = true }
 duckdb = { version = "1.1.1", features = [
   "bundled",
   "r2d2",
@@ -105,8 +105,9 @@ flight = [
   "dep:serde",
   "dep:tonic",
 ]
-duckdb-federation = ["duckdb"]
-sqlite-federation = ["sqlite"]
-postgres-federation = ["postgres"]
+federation = ["dep:datafusion-federation"]
+duckdb-federation = ["duckdb", "federation"]
+sqlite-federation = ["sqlite", "federation"]
+postgres-federation = ["postgres", "federation"]
 
 
