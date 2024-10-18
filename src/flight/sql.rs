@@ -24,7 +24,7 @@ use arrow_flight::sql::client::FlightSqlServiceClient;
 use async_trait::async_trait;
 use tonic::transport::Channel;
 
-use crate::flight::{FlightDriver, FlightMetadata};
+use crate::flight::{FlightDriver, FlightMetadata, FlightProperties};
 
 pub const QUERY: &str = "flight.sql.query";
 pub const USERNAME: &str = "flight.sql.username";
@@ -60,13 +60,13 @@ impl FlightDriver for FlightSqlDriver {
         if let Some(username) = options.get(USERNAME) {
             let default_password = "".to_string();
             let password = options.get(PASSWORD).unwrap_or(&default_password);
-            _ = client.handshake(username, password).await?;
+            client.handshake(username, password).await.ok();
         }
         let info = client.execute(options[QUERY].clone(), None).await?;
         let mut grpc_headers = HashMap::default();
         if let Some(token) = client.token() {
             grpc_headers.insert("authorization".into(), format!("Bearer {}", token));
         }
-        FlightMetadata::try_new(info, grpc_headers)
+        FlightMetadata::try_new(info, FlightProperties::default().grpc_headers(grpc_headers))
     }
 }
