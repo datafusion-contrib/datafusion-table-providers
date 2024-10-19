@@ -250,15 +250,13 @@ fn find_matching_column(
         } else {
             cast(column.as_ref(), field.data_type())
         }
+    } else if field.is_nullable() {
+        Ok(new_null_array(field.data_type(), batch.num_rows()))
     } else {
-        if field.is_nullable() {
-            Ok(new_null_array(field.data_type(), batch.num_rows()))
-        } else {
-            Err(ArrowError::SchemaError(format!(
-                "Required field `{}` is missing from the original record batch",
-                field.name()
-            )))
-        }
+        Err(ArrowError::SchemaError(format!(
+            "Required field `{}` is missing from the original record batch",
+            field.name()
+        )))
     }
 }
 
