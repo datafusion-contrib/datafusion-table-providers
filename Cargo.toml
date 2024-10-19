@@ -76,7 +76,7 @@ fundu = "2.0.1"
 
 [dev-dependencies]
 anyhow = "1.0.86"
-bollard = "0.16.1"
+bollard = "0.17.1"
 rand = "0.8.5"
 reqwest = "0.12.5"
 secrecy = "0.8.0"
