@@ -2,6 +2,7 @@ use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+#[cfg(feature = "sqlite-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
@@ -68,6 +69,7 @@ async fn arrow_sqlite_round_trip(
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
+    #[cfg(feature = "sqlite-federation")]
     let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
@@ -80,6 +82,7 @@ async fn arrow_sqlite_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    #[cfg(feature = "sqlite-federation")]
     assert_eq!(casted_record, arrow_record);
 }
 

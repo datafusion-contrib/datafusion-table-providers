@@ -9,6 +9,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+#[cfg(feature = "postgres-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
 use datafusion_table_providers::{
@@ -76,6 +77,7 @@ async fn arrow_postgres_round_trip(
         record_batch[0].columns()
     );
 
+    #[cfg(feature = "postgres-federation")]
     let casted_result =
         try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
@@ -83,6 +85,7 @@ async fn arrow_postgres_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    #[cfg(feature = "postgres-federation")]
     assert_eq!(arrow_record, casted_result);
 }
 

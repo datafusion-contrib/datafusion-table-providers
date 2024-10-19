@@ -109,5 +109,6 @@ federation = ["dep:datafusion-federation"]
 duckdb-federation = ["duckdb", "federation"]
 sqlite-federation = ["sqlite", "federation"]
 postgres-federation = ["postgres", "federation"]
+mysql-federation = ["mysql", "federation"]
 
 
