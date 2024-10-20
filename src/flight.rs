@@ -42,6 +42,8 @@ pub mod codec;
 mod exec;
 pub mod sql;
 
+pub use exec::enforce_schema;
+
 /// Generic Arrow Flight data source. Requires a [FlightDriver] that allows implementors
 /// to integrate any custom Flight RPC service by producing a [FlightMetadata] for some DDL.
 ///
@@ -238,7 +240,8 @@ impl SizeLimits {
 
 impl Default for SizeLimits {
     fn default() -> Self {
-        Self { // no limits
+        Self {
+            // no limits
             encoding: usize::MAX,
             decoding: usize::MAX,
         }
