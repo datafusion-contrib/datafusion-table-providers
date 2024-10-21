@@ -247,6 +247,63 @@ pub(crate) fn get_arrow_timestamp_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
+pub(crate) fn get_arrow_timestamp_record_batch_without_timezone() -> (RecordBatch, SchemaRef) {
+    // Timestamp Types
+    let timestamp_second_array =
+        TimestampSecondArray::from(vec![1_680_000_000, 1_680_040_000, 1_680_080_000]);
+    let timestamp_milli_array = TimestampMillisecondArray::from(vec![
+        1_680_000_000_000,
+        1_680_040_000_000,
+        1_680_080_000_000,
+    ]);
+    let timestamp_micro_array = TimestampMicrosecondArray::from(vec![
+        1_680_000_000_000_000,
+        1_680_040_000_000_000,
+        1_680_080_000_000_000,
+    ]);
+    let timestamp_nano_array = TimestampNanosecondArray::from(vec![
+        1_680_000_000_000_000_000,
+        1_680_040_000_000_000_000,
+        1_680_080_000_000_000_000,
+    ]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp_second",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_milli",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_micro",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
+        Field::new(
+            "timestamp_nano",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(timestamp_second_array),
+            Arc::new(timestamp_milli_array),
+            Arc::new(timestamp_micro_array),
+            Arc::new(timestamp_nano_array),
+        ],
+    )
+    .expect("Failed to created arrow timestamp record batch");
+
+    (record_batch, schema)
+}
+
 // Date32, Date64
 pub(crate) fn get_arrow_date_record_batch() -> (RecordBatch, SchemaRef) {
     let date32_array = Date32Array::from(vec![
@@ -348,6 +405,28 @@ pub(crate) fn get_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("decimal128", DataType::Decimal128(38, 10), false),
         Field::new("decimal256", DataType::Decimal256(76, 10), false),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(decimal128_array), Arc::new(decimal256_array)],
+    )
+    .expect("Failed to created arrow decimal record batch");
+
+    (record_batch, schema)
+}
+
+pub(crate) fn get_mysql_arrow_decimal_record() -> (RecordBatch, SchemaRef) {
+    let decimal128_array =
+        Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)]);
+    let decimal256_array =
+        Decimal256Array::from(vec![i256::from(-123), i256::from(222), i256::from(0)])
+            .with_precision_and_scale(65, 10)
+            .expect("Fail to create Decimal256(65, 10) array");
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("decimal128", DataType::Decimal128(38, 10), false),
+        Field::new("decimal256", DataType::Decimal256(65, 10), false), // Maximum is 65.
     ]));
 
     let record_batch = RecordBatch::try_new(
