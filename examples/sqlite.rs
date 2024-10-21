@@ -1,20 +1,24 @@
-use std::sync::Arc;
-use std::time::Duration;
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
     sql::db_connection_pool::{sqlitepool::SqliteConnectionPoolFactory, Mode},
     sqlite::SqliteTableFactory,
 };
+use std::sync::Arc;
+use std::time::Duration;
 
 /// This example demonstrates how to create a SqliteTableFactory and use it to create TableProviders
 /// that can be registered with DataFusion.
 #[tokio::main]
 async fn main() {
     let sqlite_pool = Arc::new(
-        SqliteConnectionPoolFactory::new("examples/sqlite_example.db", Mode::File, Duration::default())
-            .build()
-            .await
-            .expect("unable to create Sqlite connection pool"),
+        SqliteConnectionPoolFactory::new(
+            "examples/sqlite_example.db",
+            Mode::File,
+            Duration::default(),
+        )
+        .build()
+        .await
+        .expect("unable to create Sqlite connection pool"),
     );
 
     let sqlite_table_factory = SqliteTableFactory::new(sqlite_pool);

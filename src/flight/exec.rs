@@ -240,10 +240,7 @@ pub fn enforce_schema(
 /// For a target schema field, extract the column with the same name if present in the
 /// record batch and cast it to the desired data type if needed. If the column is missing
 /// but the target schema field is nullable, generates a null-array column.
-fn find_matching_column(
-    batch: &RecordBatch,
-    field: &Field,
-) -> arrow::error::Result<ArrayRef> {
+fn find_matching_column(batch: &RecordBatch, field: &Field) -> arrow::error::Result<ArrayRef> {
     if let Some(column) = batch.column_by_name(field.name()) {
         if column.data_type() == field.data_type() {
             Ok(column.to_owned())
