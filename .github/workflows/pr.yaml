@@ -50,6 +50,9 @@ jobs:
       - name: Build with only mysql
         run: cargo check --no-default-features --features mysql
 
+      - name: Build with only flight
+        run: cargo check --no-default-features --features flight
+
   integration-test:
     name: Integration Test
     runs-on: ubuntu-latest
