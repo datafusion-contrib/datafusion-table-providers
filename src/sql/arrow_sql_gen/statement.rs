@@ -185,11 +185,19 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
     data_type: &DataType,
     query_builder: &T,
 ) -> bool {
-    #[cfg(any(feature = "sqlite", feature = "mysql"))]
+    #[cfg(feature = "sqlite")]
     {
         use std::any::Any;
         let any_builder = query_builder as &dyn Any;
-        if any_builder.is::<SqliteQueryBuilder>() || any_builder.is::<MysqlQueryBuilder>() {
+        if any_builder.is::<SqliteQueryBuilder>() {
+            return data_type.is_nested();
+        }
+    }
+    #[cfg(feature = "mysql")]
+    {
+        use std::any::Any;
+        let any_builder = query_builder as &dyn Any;
+        if any_builder.is::<MysqlQueryBuilder>() {
             return data_type.is_nested();
         }
     }
