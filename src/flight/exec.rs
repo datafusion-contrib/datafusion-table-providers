@@ -222,7 +222,7 @@ async fn try_fetch_stream(
 pub fn enforce_schema(
     batch: RecordBatch,
     target_schema: &SchemaRef,
-) -> std::result::Result<RecordBatch, ArrowError> {
+) -> arrow::error::Result<RecordBatch> {
     if target_schema.fields.is_empty() || batch.schema() == *target_schema {
         Ok(batch)
     } else if target_schema.contains(batch.schema_ref()) {
@@ -232,7 +232,7 @@ pub fn enforce_schema(
             .fields
             .iter()
             .map(|field| find_matching_column(&batch, field.as_ref()))
-            .collect::<std::result::Result<_, _>>()?;
+            .collect::<arrow::error::Result<_>>()?;
         RecordBatch::try_new(target_schema.to_owned(), columns)
     }
 }
@@ -243,7 +243,7 @@ pub fn enforce_schema(
 fn find_matching_column(
     batch: &RecordBatch,
     field: &Field,
-) -> std::result::Result<ArrayRef, ArrowError> {
+) -> arrow::error::Result<ArrayRef> {
     if let Some(column) = batch.column_by_name(field.name()) {
         if column.data_type() == field.data_type() {
             Ok(column.to_owned())
