@@ -54,7 +54,7 @@ jobs:
         run: cargo check --no-default-features --features flight
 
   integration-test:
-    name: Integration Test
+    name: Tests
     runs-on: ubuntu-latest
 
     env:
@@ -71,5 +71,5 @@ jobs:
           docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
 
-      - name: Run integration test
-        run: make test-integration
+      - name: Run tests
+        run: make test
