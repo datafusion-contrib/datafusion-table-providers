@@ -14,6 +14,8 @@ use datafusion_table_providers::postgres::PostgresTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::util::secrets::to_secret_map;
 
+const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table.sql");
+
 fn get_schema() -> SchemaRef {
     let fields = vec![
         Field::new("id", DataType::Int32, false),
@@ -81,6 +83,49 @@ async fn test_postgres_schema_inference() {
         .expect("to create table provider");
 
     assert_eq!(table_provider.schema(), get_schema());
+
+    // Tear down
+    container
+        .remove()
+        .await
+        .expect("to stop postgres container");
+}
+
+#[tokio::test]
+async fn test_postgres_schema_inference_complex_types() {
+    let port = crate::get_random_port();
+    let container = common::start_postgres_docker_container(port)
+        .await
+        .expect("Postgres container to start");
+
+    let table_name = "example_table";
+
+    let postgres_pool = Arc::new(
+        PostgresConnectionPool::new(to_secret_map(common::get_pg_params(port)))
+            .await
+            .expect("unable to create Postgres connection pool"),
+    );
+
+    let pg_conn = postgres_pool
+        .connect_direct()
+        .await
+        .expect("to connect to postgres");
+    for cmd in COMPLEX_TABLE_SQL.split(";") {
+        pg_conn
+            .conn
+            .execute(cmd, &[])
+            .await
+            .expect("to create table");
+    }
+
+    let table_factory = PostgresTableFactory::new(postgres_pool);
+    let table_provider = table_factory
+        .table_provider(TableReference::bare(table_name))
+        .await
+        .expect("to create table provider");
+
+    let pretty_schema = format!("{:#?}", table_provider.schema());
+    insta::assert_snapshot!(pretty_schema);
 
     // Tear down
     container
