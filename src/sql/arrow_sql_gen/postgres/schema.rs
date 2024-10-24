@@ -20,7 +20,9 @@ pub(crate) fn pg_data_type_to_arrow_type(
         }
         "real" | "float4" => Ok(DataType::Float32),
         "double precision" | "float8" => Ok(DataType::Float64),
-        "character" | "char" | "character varying" | "varchar" | "text" => Ok(DataType::Utf8),
+        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" => {
+            Ok(DataType::Utf8)
+        }
         "bytea" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
         "time" | "time without time zone" => Ok(DataType::Time64(TimeUnit::Nanosecond)),
@@ -244,11 +246,11 @@ mod tests {
         // Test numeric types
         assert_eq!(
             pg_data_type_to_arrow_type("numeric", None).expect("Failed to convert numeric"),
-            DataType::Decimal128(38, 0)
+            DataType::Decimal128(38, 20)
         );
         assert_eq!(
             pg_data_type_to_arrow_type("numeric()", None).expect("Failed to convert numeric()"),
-            DataType::Decimal128(38, 0)
+            DataType::Decimal128(38, 20)
         );
         assert_eq!(
             pg_data_type_to_arrow_type("numeric(10,2)", None)
@@ -289,11 +291,11 @@ mod tests {
     fn test_parse_numeric_type() {
         assert_eq!(
             parse_numeric_type("numeric").expect("Failed to parse numeric"),
-            (38, 0)
+            (38, 20)
         );
         assert_eq!(
             parse_numeric_type("numeric()").expect("Failed to parse numeric()"),
-            (38, 0)
+            (38, 20)
         );
         assert_eq!(
             parse_numeric_type("numeric(10)").expect("Failed to parse numeric(10)"),
@@ -305,11 +307,11 @@ mod tests {
         );
         assert_eq!(
             parse_numeric_type("decimal").expect("Failed to parse decimal"),
-            (38, 0)
+            (38, 20)
         );
         assert_eq!(
             parse_numeric_type("decimal()").expect("Failed to parse decimal()"),
-            (38, 0)
+            (38, 20)
         );
         assert_eq!(
             parse_numeric_type("decimal(15)").expect("Failed to parse decimal(15)"),
@@ -448,6 +450,18 @@ mod tests {
         assert_eq!(
             pg_data_type_to_arrow_type("tsquery", None).expect("Failed to convert tsquery"),
             DataType::LargeUtf8
+        );
+
+        // Test bpchar type
+        assert_eq!(
+            pg_data_type_to_arrow_type("bpchar", None).expect("Failed to convert bpchar"),
+            DataType::Utf8
+        );
+
+        // Test bpchar with length specification
+        assert_eq!(
+            pg_data_type_to_arrow_type("bpchar(10)", None).expect("Failed to convert bpchar(10)"),
+            DataType::Utf8
         );
     }
 

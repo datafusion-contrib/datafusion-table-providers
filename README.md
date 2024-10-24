@@ -19,6 +19,7 @@ Many of the table providers in this repo are for querying data from other databa
 Run the included examples to see how to use the table providers:
 
 ### DuckDB
+
 ```bash
 # Read from a table in a DuckDB file
 cargo run --example duckdb --features duckdb
@@ -29,6 +30,7 @@ cargo run --example duckdb_function --features duckdb
 ```
 
 ### SQLite
+
 ```bash
 cargo run --example sqlite --features sqlite
 ```
@@ -82,6 +84,7 @@ cargo run --example mysql --features mysql
 ```
 
 ### Flight SQL
+
 ```bash
 brew install roapi
 # or
