@@ -279,6 +279,7 @@ impl TableProviderFactory for MySQLTableProviderFactory {
             Some(Engine::MySQL),
         ));
 
+        #[cfg(feature = "mysql-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
         Ok(MySQLTableWriter::create(read_provider, mysql, on_conflict))
     }
