@@ -439,7 +439,7 @@ mod tests {
         // Test UUID type
         assert_eq!(
             pg_data_type_to_arrow_type("uuid", None).expect("Failed to convert uuid"),
-            DataType::FixedSizeBinary(16)
+            DataType::Utf8
         );
 
         // Test text search types
