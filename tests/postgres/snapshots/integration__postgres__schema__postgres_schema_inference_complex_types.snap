@@ -168,7 +168,10 @@ Schema {
         },
         Field {
             name: "mood_col",
-            data_type: Utf8,
+            data_type: Dictionary(
+                Int8,
+                Utf8,
+            ),
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -176,7 +179,17 @@ Schema {
         },
         Field {
             name: "point_col",
-            data_type: Binary,
+            data_type: FixedSizeList(
+                Field {
+                    name: "item",
+                    data_type: Float64,
+                    nullable: true,
+                    dict_id: 0,
+                    dict_is_ordered: false,
+                    metadata: {},
+                },
+                2,
+            ),
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -288,9 +301,7 @@ Schema {
         },
         Field {
             name: "uuid_col",
-            data_type: FixedSizeBinary(
-                16,
-            ),
+            data_type: Utf8,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
