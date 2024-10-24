@@ -13,10 +13,10 @@ use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SimpleExpr, SqliteQueryBuilder, StringLen, Table,
+    QueryBuilder, SimpleExpr, SqliteQueryBuilder, Table,
 };
 use snafu::Snafu;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]
@@ -105,6 +105,11 @@ impl CreateTableBuilder {
     #[must_use]
     pub fn build_mysql(self) -> String {
         self.build(MysqlQueryBuilder, &|f: &Arc<Field>| -> ColumnType {
+            // MySQL does not natively support Arrays, Structs, etc
+            // so we use JSON column type for List, FixedSizeList, LargeList, Struct, etc
+            if f.data_type().is_nested() {
+                return ColumnType::JsonBinary;
+            }
             map_data_type_to_column_type(f.data_type())
         })
     }
@@ -181,11 +186,20 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
     query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
-    if (query_builder as &dyn Any)
-        .downcast_ref::<SqliteQueryBuilder>()
-        .is_some()
     {
-        return data_type.is_nested();
+        use std::any::Any;
+        let any_builder = query_builder as &dyn Any;
+        if any_builder.is::<SqliteQueryBuilder>() {
+            return data_type.is_nested();
+        }
+    }
+    #[cfg(feature = "mysql")]
+    {
+        use std::any::Any;
+        let any_builder = query_builder as &dyn Any;
+        if any_builder.is::<MysqlQueryBuilder>() {
+            return data_type.is_nested();
+        }
     }
     false
 }
@@ -1264,7 +1278,11 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         | DataType::FixedSizeList(list_type, _) => {
             ColumnType::Array(map_data_type_to_column_type(list_type.data_type()).into())
         }
-        DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
+        // Originally mapped to VarBinary type, corresponding to MySQL's varbinary, which has a maximum length of 65535.
+        // This caused the error: "Row size too large. The maximum row size for the used table type, not counting BLOBs, is 65535.
+        // This includes storage overhead, check the manual. You have to change some columns to TEXT or BLOBs."
+        // Changing to Blob fixes this issue. This change does not affect Postgres, and for Sqlite, the mapping type changes from varbinary_blob to blob.
+        DataType::Binary | DataType::LargeBinary => ColumnType::Blob,
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
         DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
