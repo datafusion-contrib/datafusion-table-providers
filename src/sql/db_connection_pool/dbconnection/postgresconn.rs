@@ -3,6 +3,8 @@ use std::error::Error;
 use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
+use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
+use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_stream::stream;
@@ -20,6 +22,92 @@ use snafu::prelude::*;
 use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
+
+const SCHEMA_QUERY: &str = r#"
+WITH custom_type_details AS (
+SELECT 
+t.typname,
+t.typtype,
+CASE 
+    WHEN t.typtype = 'e' THEN 
+        jsonb_build_object(
+            'type', 'enum',
+            'values', (
+                SELECT jsonb_agg(e.enumlabel ORDER BY e.enumsortorder)
+                FROM pg_enum e 
+                WHERE e.enumtypid = t.oid
+            )
+        )
+    WHEN t.typtype = 'c' THEN
+        jsonb_build_object(
+            'type', 'composite',
+            'attributes', (
+                SELECT jsonb_agg(
+                    jsonb_build_object(
+                        'name', a.attname,
+                        'type', pg_catalog.format_type(a.atttypid, a.atttypmod)
+                    )
+                    ORDER BY a.attnum
+                )
+                FROM pg_attribute a
+                WHERE a.attrelid = t.typrelid 
+                AND a.attnum > 0 
+                AND NOT a.attisdropped
+            )
+        )
+END as type_details
+FROM pg_type t
+WHERE t.typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+)
+SELECT 
+c.column_name,
+CASE 
+WHEN c.data_type = 'USER-DEFINED' THEN
+    CASE 
+        WHEN t.typtype = 'e' THEN 'enum'
+        WHEN t.typtype = 'c' THEN 'composite'
+        ELSE c.data_type
+    END
+WHEN c.data_type = 'ARRAY' THEN
+    'array'
+ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
+END as data_type,
+c.is_nullable,
+CASE 
+WHEN c.data_type = 'ARRAY' THEN
+    jsonb_build_object(
+        'type', 'array',
+        'element_type', (
+            SELECT pg_catalog.format_type(et.oid, a.atttypmod)
+            FROM pg_type t
+            JOIN pg_type et ON t.typelem = et.oid
+            WHERE t.typname = c.udt_name
+        )
+    )
+ELSE td.type_details
+END as type_details
+FROM 
+information_schema.columns c
+LEFT JOIN custom_type_details td ON td.typname = c.udt_name
+LEFT JOIN pg_type t ON t.typname = c.udt_name
+LEFT JOIN pg_attribute a ON 
+a.attrelid = (
+    SELECT oid 
+    FROM pg_class 
+    WHERE relname = c.table_name 
+    AND relnamespace = (
+        SELECT oid 
+        FROM pg_namespace 
+        WHERE nspname = c.table_schema
+    )
+)
+AND a.attname = c.column_name
+WHERE 
+c.table_schema = $1
+AND c.table_name = $2
+ORDER BY 
+c.ordinal_position;
+"#;
 
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
@@ -86,9 +174,12 @@ impl<'a>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
+        let table_name = table_reference.table();
+        let schema_name = table_reference.schema().unwrap_or("public");
+
         let rows = match self
             .conn
-            .query(&format!("SELECT * FROM {table_reference} LIMIT 1"), &[])
+            .query(SCHEMA_QUERY, &[&schema_name, &table_name])
             .await
         {
             Ok(rows) => rows,
@@ -111,16 +202,20 @@ impl<'a>
             }
         };
 
-        let rec = match rows_to_arrow(rows.as_slice(), &None) {
-            Ok(rec) => rec,
-            Err(e) => {
-                return Err(super::Error::UnableToGetSchema {
-                    source: Box::new(PostgresError::ConversionError { source: e }),
-                })
-            }
-        };
+        let mut fields = Vec::new();
+        for row in rows {
+            let column_name = row.get::<usize, String>(0);
+            let pg_type = row.get::<usize, String>(1);
+            let nullable_str = row.get::<usize, String>(2);
+            let nullable = nullable_str == "YES";
+            let type_details = row.get::<usize, Option<serde_json::Value>>(3);
+            let arrow_type = pg_data_type_to_arrow_type(&pg_type, type_details)
+                .boxed()
+                .context(super::UnableToGetSchemaSnafu)?;
+            fields.push(Field::new(column_name, arrow_type, nullable));
+        }
 
-        let schema = rec.schema();
+        let schema = Arc::new(Schema::new(fields));
         Ok(schema)
     }
 

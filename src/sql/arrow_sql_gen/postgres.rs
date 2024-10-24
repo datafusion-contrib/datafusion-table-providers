@@ -33,6 +33,7 @@ use tokio_postgres::{types::Type, Row};
 
 pub mod builder;
 pub mod composite;
+pub mod schema;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -1116,6 +1117,17 @@ impl<'a> FromSql<'a> for GeometryFromSql<'a> {
     }
 }
 
+fn get_decimal_column_precision_and_scale(
+    column_name: &str,
+    projected_schema: &SchemaRef,
+) -> Option<(u8, i8)> {
+    let field = projected_schema.field_with_name(column_name).ok()?;
+    match field.data_type() {
+        DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1268,16 +1280,5 @@ mod tests {
         )
         .expect("Failed to run FromSql");
         assert_eq!(positive_result.wkb, positive_geometry);
-    }
-}
-
-fn get_decimal_column_precision_and_scale(
-    column_name: &str,
-    projected_schema: &SchemaRef,
-) -> Option<(u8, i8)> {
-    let field = projected_schema.field_with_name(column_name).ok()?;
-    match field.data_type() {
-        DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
-        _ => None,
     }
 }

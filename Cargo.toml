@@ -87,6 +87,7 @@ geozero = { version = "0.14.0", features = ["with-wkb"] }
 tokio-stream = { version = "0.1.15", features = ["net"] }
 arrow-schema = "53.1.0"
 prost = { version = "0.13"}
+insta = { version = "1.40.0", features = ["filters"] }
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
