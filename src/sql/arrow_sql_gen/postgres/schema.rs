@@ -40,7 +40,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
         "bit" | "bit varying" => Ok(DataType::Binary),
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
-        "uuid" => Ok(DataType::FixedSizeBinary(16)),
+        "uuid" => Ok(DataType::Utf8),
         "xml" | "json" | "jsonb" => Ok(DataType::LargeUtf8),
         "array" => parse_array_type(type_details),
         "int4range" => Ok(DataType::Struct(Fields::from(vec![
