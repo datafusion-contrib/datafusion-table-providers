@@ -324,6 +324,9 @@ mod test {
             .as_sync()
             .expect("DuckDB connection should be synchronous");
 
+        // sleep to let writes clear
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
         conn.query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
 
