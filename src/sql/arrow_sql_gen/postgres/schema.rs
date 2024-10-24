@@ -13,14 +13,14 @@ pub(crate) fn pg_data_type_to_arrow_type(
     match base_type {
         "smallint" => Ok(DataType::Int16),
         "integer" | "int" | "int4" => Ok(DataType::Int32),
-        "bigint" | "int8" => Ok(DataType::Int64),
+        "bigint" | "int8" | "money" => Ok(DataType::Int64),
         "numeric" | "decimal" => {
             let (precision, scale) = parse_numeric_type(pg_type)?;
             Ok(DataType::Decimal128(precision, scale))
         }
         "real" | "float4" => Ok(DataType::Float32),
         "double precision" | "float8" => Ok(DataType::Float64),
-        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" => {
+        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid" => {
             Ok(DataType::Utf8)
         }
         "bytea" => Ok(DataType::Binary),
@@ -29,18 +29,24 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "timestamp" | "timestamp without time zone" => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
-        "timestamp with time zone" => Ok(DataType::Timestamp(
+        "timestamp with time zone" | "timestamptz" => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
             Some("UTC".into()),
         )),
         "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
         "boolean" => Ok(DataType::Boolean),
-        "enum" => Ok(DataType::Utf8),
-        "point" | "line" | "lseg" | "box" | "path" | "polygon" | "circle" => Ok(DataType::Binary),
+        "enum" => Ok(DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Utf8),
+        )),
+        "point" => Ok(DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            2,
+        )),
+        "line" | "lseg" | "box" | "path" | "polygon" | "circle" => Ok(DataType::Binary),
         "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
         "bit" | "bit varying" => Ok(DataType::Binary),
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
-        "uuid" => Ok(DataType::Utf8),
         "xml" | "json" | "jsonb" => Ok(DataType::LargeUtf8),
         "array" => parse_array_type(type_details),
         "int4range" => Ok(DataType::Struct(Fields::from(vec![
@@ -48,6 +54,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Field::new("upper", DataType::Int32, true),
         ]))),
         "composite" => parse_composite_type(type_details),
+        "geometry" | "geography" => Ok(DataType::Binary),
         _ => Err(ArrowError::ParseError(format!(
             "Unsupported PostgreSQL type: {}",
             pg_type
@@ -394,13 +401,13 @@ mod tests {
             Some(json!({"type": "enum", "values": ["small", "medium", "large"]}));
         assert_eq!(
             pg_data_type_to_arrow_type("enum", enum_type_details).expect("Failed to convert enum"),
-            DataType::Utf8
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8))
         );
 
         // Test geometric types
         assert_eq!(
             pg_data_type_to_arrow_type("point", None).expect("Failed to convert point"),
-            DataType::Binary
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 2)
         );
         assert_eq!(
             pg_data_type_to_arrow_type("line", None).expect("Failed to convert line"),
