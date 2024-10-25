@@ -96,10 +96,10 @@ pub enum Error {
     #[snafu(display("Unable to rollback transaction: {source}"))]
     UnableToRollbackTransaction { source: duckdb::Error },
 
-    #[snafu(display("Unable to delete all data from the Postgres table: {source}"))]
+    #[snafu(display("Unable to delete all data from the DuckDB table: {source}"))]
     UnableToDeleteAllTableData { source: duckdb::Error },
 
-    #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
+    #[snafu(display("Unable to insert data into the DuckDB table: {source}"))]
     UnableToInsertIntoTableAsync { source: duckdb::Error },
 
     #[snafu(display("The table '{table_name}' doesn't exist in the DuckDB server"))]
