@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 mod common;
+mod schema;
 
 async fn arrow_postgres_round_trip(
     port: usize,
@@ -201,7 +202,7 @@ async fn test_postgres_numeric_type(port: usize) {
     ";
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new("first_column", DataType::Decimal128(38, 16), true),
+        Field::new("first_column", DataType::Decimal128(38, 20), true),
         Field::new("second_column", DataType::Decimal128(38, 20), true),
     ]));
 
@@ -210,11 +211,11 @@ async fn test_postgres_numeric_type(port: usize) {
         vec![
             Arc::new(
                 Decimal128Array::from(vec![
-                    10917217805754313i128,
-                    9782456083066675i128,
-                    10917217805754313i128,
+                    109172178057543130000i128,
+                    97824560830666753739i128,
+                    109172178057543130000i128,
                 ])
-                .with_precision_and_scale(38, 16)
+                .with_precision_and_scale(38, 20)
                 .unwrap(),
             ),
             Arc::new(
