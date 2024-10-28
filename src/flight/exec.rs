@@ -23,11 +23,13 @@ use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::flight::{FlightMetadata, FlightProperties};
-use arrow_array::RecordBatch;
+use crate::flight::{flight_channel, to_df_err, FlightMetadata, FlightProperties, SizeLimits};
+use arrow_array::{new_null_array, ArrayRef, RecordBatch};
+use arrow_cast::cast;
 use arrow_flight::error::FlightError;
+use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, Field, SchemaRef};
 use datafusion::arrow::datatypes::ToByteSlice;
 use datafusion::common::Result;
 use datafusion::common::{project_schema, DataFusionError};
@@ -40,7 +42,6 @@ use datafusion_physical_plan::{
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tonic::metadata::{AsciiMetadataKey, MetadataMap};
-use tonic::transport::Channel;
 
 /// Arrow Flight physical plan that maps flight endpoints to partitions
 #[derive(Clone, Debug)]
@@ -164,21 +165,30 @@ impl FlightPartition {
     }
 }
 
+async fn flight_client(
+    source: impl Into<String>,
+    grpc_headers: &MetadataMap,
+    size_limits: &SizeLimits,
+) -> Result<FlightClient> {
+    let channel = flight_channel(source).await?;
+    let inner_client = FlightServiceClient::new(channel)
+        .max_encoding_message_size(size_limits.encoding)
+        .max_decoding_message_size(size_limits.decoding);
+    let mut client = FlightClient::new_from_inner(inner_client);
+    client.metadata_mut().clone_from(grpc_headers);
+    Ok(client)
+}
+
 async fn flight_stream(
     partition: FlightPartition,
     schema: SchemaRef,
     grpc_headers: Arc<MetadataMap>,
+    size_limits: SizeLimits,
 ) -> Result<SendableRecordBatchStream> {
     let mut errors: Vec<Box<dyn Error + Send + Sync>> = vec![];
     for loc in partition.locations.iter() {
-        match try_fetch_stream(
-            loc,
-            partition.ticket.clone(),
-            schema.clone(),
-            grpc_headers.clone(),
-        )
-        .await
-        {
+        let client = flight_client(loc, grpc_headers.as_ref(), &size_limits).await?;
+        match try_fetch_stream(client, &partition.ticket, schema.clone()).await {
             Ok(stream) => return Ok(stream),
             Err(e) => errors.push(Box::new(e)),
         }
@@ -193,50 +203,57 @@ async fn flight_stream(
 }
 
 async fn try_fetch_stream(
-    source: impl Into<String>,
-    ticket: FlightTicket,
+    mut client: FlightClient,
+    ticket: &FlightTicket,
     schema: SchemaRef,
-    grpc_headers: Arc<MetadataMap>,
 ) -> arrow_flight::error::Result<SendableRecordBatchStream> {
     let ticket = Ticket::new(ticket.0.to_vec());
-    let channel = Channel::from_shared(source.into())
-        .map_err(|e| FlightError::ExternalError(Box::new(e)))?
-        .connect()
-        .await
-        .map_err(|e| FlightError::ExternalError(Box::new(e)))?;
-    let mut client = FlightClient::new(channel);
-    client.metadata_mut().clone_from(grpc_headers.as_ref());
-    let stream = client
-        .do_get(ticket)
-        .await?
-        .map_err(|e| DataFusionError::External(Box::new(e)));
+    let stream = client.do_get(ticket).await?.map_err(to_df_err);
     Ok(Box::pin(RecordBatchStreamAdapter::new(
         schema.clone(),
         stream.map(move |item| item.and_then(|rb| enforce_schema(rb, &schema).map_err(Into::into))),
     )))
 }
 
-fn enforce_schema(rb: RecordBatch, target_schema: &SchemaRef) -> arrow::error::Result<RecordBatch> {
-    if target_schema.fields.is_empty() || rb.schema() == *target_schema {
-        Ok(rb)
-    } else if target_schema.contains(rb.schema_ref()) {
-        rb.with_schema(target_schema.clone())
+/// Best-effort morphing of a record batch into a new schema.
+/// - drops columns if the corresponding field is missing from the target schema
+/// - attempts a column-wise cast if data types are different
+/// - generates missing columns as all-nulls if the corresponding field is nullable
+pub fn enforce_schema(
+    batch: RecordBatch,
+    target_schema: &SchemaRef,
+) -> arrow::error::Result<RecordBatch> {
+    if target_schema.fields.is_empty() || batch.schema() == *target_schema {
+        Ok(batch)
+    } else if target_schema.contains(batch.schema_ref()) {
+        batch.with_schema(target_schema.to_owned())
     } else {
         let columns = target_schema
             .fields
             .iter()
-            .map(|field| {
-                rb.column_by_name(field.name())
-                    .ok_or(ArrowError::SchemaError(format!(
-                        "Required field `{}` is missing from the flight response",
-                        field.name()
-                    )))
-                    .and_then(|original_array| {
-                        arrow_cast::cast(original_array.as_ref(), field.data_type())
-                    })
-            })
-            .collect::<Result<_, _>>()?;
-        RecordBatch::try_new(target_schema.clone(), columns)
+            .map(|field| find_matching_column(&batch, field.as_ref()))
+            .collect::<arrow::error::Result<_>>()?;
+        RecordBatch::try_new(target_schema.to_owned(), columns)
+    }
+}
+
+/// For a target schema field, extract the column with the same name if present in the
+/// record batch and cast it to the desired data type if needed. If the column is missing
+/// but the target schema field is nullable, generates a null-array column.
+fn find_matching_column(batch: &RecordBatch, field: &Field) -> arrow::error::Result<ArrayRef> {
+    if let Some(column) = batch.column_by_name(field.name()) {
+        if column.data_type() == field.data_type() {
+            Ok(column.to_owned())
+        } else {
+            cast(column.as_ref(), field.data_type())
+        }
+    } else if field.is_nullable() {
+        Ok(new_null_array(field.data_type(), batch.num_rows()))
+    } else {
+        Err(ArrowError::SchemaError(format!(
+            "Required field `{}` is missing from the original record batch",
+            field.name()
+        )))
     }
 }
 
@@ -291,6 +308,7 @@ impl ExecutionPlan for FlightExec {
             self.config.partitions[partition].clone(),
             self.schema(),
             self.metadata_map.clone(),
+            self.config.properties.size_limits,
         );
         let stream = futures::stream::once(future_stream).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -303,7 +321,7 @@ impl ExecutionPlan for FlightExec {
 #[cfg(test)]
 mod tests {
     use crate::flight::exec::{enforce_schema, FlightConfig, FlightPartition, FlightTicket};
-    use crate::flight::FlightProperties;
+    use crate::flight::{FlightProperties, SizeLimits};
     use arrow_array::{
         BooleanArray, Float32Array, Int32Array, RecordBatch, StringArray, StructArray,
     };
@@ -328,10 +346,13 @@ mod tests {
             },
         ]
         .into();
-        let properties = FlightProperties::new(
-            true,
-            HashMap::from([("h1".into(), "v1".into()), ("h2".into(), "v2".into())]),
-        );
+        let properties = FlightProperties::default()
+            .unbounded_stream(true)
+            .grpc_headers(HashMap::from([
+                ("h1".into(), "v1".into()),
+                ("h2".into(), "v2".into()),
+            ]))
+            .size_limits(SizeLimits::new(1024, 1024));
         let config = FlightConfig {
             origin: "http://localhost:50050".into(),
             schema,
@@ -344,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_enforcement() -> arrow::error::Result<()> {
+    fn test_schema_enforcement() {
         let data = StructArray::new(
             Fields::from(vec![
                 Arc::new(Field::new("f_int", DataType::Int32, true)),
@@ -359,7 +380,8 @@ mod tests {
         let input_rb = RecordBatch::from(data);
 
         let empty_schema = Arc::new(Schema::empty());
-        let same_rb = enforce_schema(input_rb.clone(), &empty_schema)?;
+        let same_rb =
+            enforce_schema(input_rb.clone(), &empty_schema).expect("error enforcing empty schema");
         assert_eq!(input_rb, same_rb);
 
         let coerced_rb = enforce_schema(
@@ -369,7 +391,8 @@ mod tests {
                 Arc::new(Field::new("f_int", DataType::Float32, false)),
                 Arc::new(Field::new("f_bool", DataType::Utf8, true)),
             ])),
-        )?;
+        )
+        .expect("error enforcing a compatible schema");
         assert_ne!(input_rb, coerced_rb);
         assert_eq!(coerced_rb.num_columns(), 2);
         assert_eq!(coerced_rb.num_rows(), 2);
@@ -388,7 +411,8 @@ mod tests {
                 // keep only the first column and make it non-nullable int16
                 Arc::new(Field::new("f_int", DataType::Int16, false)),
             ])),
-        )?;
+        )
+        .expect("error enforcing a compatible subset of fields");
         assert_eq!(projection_rb.num_columns(), 1);
         assert_eq!(projection_rb.num_rows(), 2);
         assert_eq!(projection_rb.schema().fields().len(), 1);
@@ -400,26 +424,40 @@ mod tests {
                 Arc::new(Field::new("f_int", DataType::Float32, true)),
                 Arc::new(Field::new("f_bool", DataType::Date32, false)),
             ])),
-        );
-        assert!(incompatible_schema_attempt.is_err());
+        )
+        .expect_err("got successful result for incompatible schema");
         assert_eq!(
-            incompatible_schema_attempt.unwrap_err().to_string(),
+            incompatible_schema_attempt.to_string(),
             "Cast error: Casting from Boolean to Date32 not supported"
         );
 
-        let broader_schema_attempt = enforce_schema(
+        let enhanced_with_null_column = enforce_schema(
             input_rb.clone(),
             &Arc::new(Schema::new(vec![
                 Arc::new(Field::new("f_int", DataType::Int32, true)),
                 Arc::new(Field::new("f_bool", DataType::Boolean, false)),
                 Arc::new(Field::new("f_extra", DataType::Utf8, true)),
             ])),
-        );
-        assert!(broader_schema_attempt.is_err());
+        )
+        .expect("error adding a nullable extra field");
+        assert_eq!(enhanced_with_null_column.num_columns(), 3);
         assert_eq!(
-            broader_schema_attempt.unwrap_err().to_string(),
-            "Schema error: Required field `f_extra` is missing from the flight response"
+            enhanced_with_null_column.column(2).as_ref(),
+            &StringArray::new_null(2)
         );
-        Ok(())
+
+        let non_nullable_extra_field_attempt = enforce_schema(
+            input_rb.clone(),
+            &Arc::new(Schema::new(vec![
+                Arc::new(Field::new("f_int", DataType::Int32, true)),
+                Arc::new(Field::new("f_bool", DataType::Boolean, false)),
+                Arc::new(Field::new("f_extra", DataType::Utf8, false)),
+            ])),
+        )
+        .expect_err("got successful result for missing non-nullable field");
+        assert_eq!(
+            non_nullable_extra_field_attempt.to_string(),
+            "Schema error: Required field `f_extra` is missing from the original record batch"
+        );
     }
 }
