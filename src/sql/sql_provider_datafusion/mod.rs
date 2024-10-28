@@ -18,7 +18,7 @@ use datafusion::{
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::{any::Any, fmt, sync::Arc};
 
 use datafusion::{
@@ -38,6 +38,7 @@ use datafusion::{
     sql::{unparser::Unparser, TableReference},
 };
 
+#[cfg(feature = "federation")]
 pub mod federation;
 
 #[derive(Debug, Snafu)]
@@ -88,6 +89,17 @@ pub struct SqlTable<T: 'static, P: 'static> {
     schema: SchemaRef,
     pub table_reference: TableReference,
     engine: Engine,
+}
+
+impl<T, P> fmt::Debug for SqlTable<T, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqlTable")
+            .field("name", &self.name)
+            .field("schema", &self.schema)
+            .field("table_reference", &self.table_reference)
+            .field("engine", &self.engine)
+            .finish()
+    }
 }
 
 impl<T, P> SqlTable<T, P> {
