@@ -94,7 +94,9 @@ pub fn rows_to_arrow(
                 .to_string();
 
             let data_type = match &projected_schema {
-                Some(schema) => to_sqlite_decoding_type(schema.fields()[i].data_type()),
+                Some(schema) => {
+                    to_sqlite_decoding_type(schema.fields()[i].data_type(), &column_type)
+                }
                 None => map_column_type_to_data_type(column_type),
             };
 
@@ -124,7 +126,13 @@ pub fn rows_to_arrow(
     }
 }
 
-fn to_sqlite_decoding_type(data_type: &DataType) -> DataType {
+fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType {
+    if *sqlite_type == Type::Text {
+        // Text is a special case as it can represent different types while correctly decoded to
+        // desired Arrow type during additional type casting step.
+        return DataType::Utf8;
+    }
+    // Other SQLite types are Integer, Real, Blob, Null are safe to decode based on target Arrow type
     match data_type {
         DataType::Null => DataType::Null,
         DataType::Int8 => DataType::Int8,
