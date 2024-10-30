@@ -55,32 +55,50 @@ async fn arrow_sqlite_round_trip(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynSqliteConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("sqlite", &sqltable_pool, table_name, None)
-        .await
-        .expect("Table should be created");
-    ctx.register_table(table_name, Arc::new(table))
-        .expect("Table should be registered");
-    let sql = format!("SELECT * FROM {table_name}");
-    let df = ctx
-        .sql(&sql)
-        .await
-        .expect("DataFrame should be created from query");
 
-    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    // Perform the test twice: first, simulate a request without a known schema;
+    // then, test result conversion with a known projected schema (matching the test RecordBatch).
+    for projected_schema in vec![None, Some(arrow_record.schema())] {
+        if ctx.table_exist(table_name).expect("should be able to check if table exists") {
+            ctx.deregister_table(table_name)
+                .expect("Table should be deregistered");
+        }
 
-    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
+        let table = match projected_schema {
+            None => SqlTable::new("sqlite", &sqltable_pool, table_name, None)
+                .await
+                .expect("Table should be created"),
+            Some(schema) => {
+                SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None)
+            }
+        };
 
-    tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
-    tracing::debug!(
-        "Sqlite returned Record Batch: {:?}",
-        record_batch[0].columns()
-    );
+        ctx.register_table(table_name, Arc::new(table))
+            .expect("Table should be registered");
 
-    // Check results
-    assert_eq!(record_batch.len(), 1);
-    assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
-    assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-    assert_eq!(casted_record, arrow_record);
+        let sql = format!("SELECT * FROM {table_name}");
+        let df = ctx
+            .sql(&sql)
+            .await
+            .expect("DataFrame should be created from query");
+
+        let record_batch = df.collect().await.expect("RecordBatch should be collected");
+
+        let casted_record =
+            try_cast_to(record_batch[0].clone(), Arc::clone(&source_schema)).unwrap();
+
+        tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
+        tracing::debug!(
+            "Sqlite returned Record Batch: {:?}",
+            record_batch[0].columns()
+        );
+
+        // Check results
+        assert_eq!(record_batch.len(), 1);
+        assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
+        assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+        assert_eq!(casted_record, arrow_record);
+    }
 }
 
 #[rstest]
@@ -92,8 +110,7 @@ async fn arrow_sqlite_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-// SQLite only supports up to 16 precision for decimal through REAL type.
-#[case::decimal(get_sqlite_arrow_decimal_record_batch(), "decimal")]
+#[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
