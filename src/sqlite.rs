@@ -329,12 +329,8 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .map_err(to_datafusion_error)?;
 
         #[cfg(feature = "sqlite-federation")]
-        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
-            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
-            Arc::new(read_provider.create_federated_table_provider()?)
-        } else {
-            read_provider
-        };
+        let read_provider: Arc<dyn TableProvider> =
+            Arc::new(read_provider.create_federated_table_provider()?);
 
         Ok(SqliteTableWriter::create(
             read_provider,

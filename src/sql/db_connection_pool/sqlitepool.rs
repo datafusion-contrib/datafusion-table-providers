@@ -73,7 +73,7 @@ impl SqliteConnectionPoolFactory {
                 }
             }
             (Mode::File, None) => JoinPushDown::AllowedFor(self.path.to_string()),
-            _ => JoinPushDown::Disallow,
+            (Mode::Memory, _) => JoinPushDown::AllowedFor("memory".to_string()),
         };
 
         let attach_databases = if let Some(attach_databases) = &self.attach_databases {
