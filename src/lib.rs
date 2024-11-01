@@ -27,7 +27,7 @@ pub enum Error {
 
 pub(crate) fn check_path_within_current_directory(filepath: &str) -> Result<String, Error> {
     let path = Path::new(filepath);
-    if path.is_symlink() {
+    if path.exists() && path.is_symlink() {
         return Err(Error::FileIsSymlink {
             path: filepath.to_string(),
         });
@@ -60,6 +60,12 @@ mod test {
     fn test_check_path_outside_of_current_directory() {
         let path = check_path_within_current_directory("/etc/passwd");
         assert!(path.is_err());
+    }
+
+    #[test]
+    fn test_check_nonexistant_path_in_directory() {
+        let path = check_path_within_current_directory("src/notreal.rs");
+        assert!(path.is_ok());
     }
 
     #[test]
