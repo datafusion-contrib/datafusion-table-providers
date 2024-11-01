@@ -360,7 +360,7 @@ mod tests {
         .with_databases(Some(vec!["./test1.sqlite".into(), "./test2.sqlite".into()]));
         let pool = factory.build().await.unwrap();
 
-        assert!(pool.join_push_down == JoinPushDown::Disallow);
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor("memory".to_string()));
         assert!(pool.mode == Mode::Memory);
         assert_eq!(pool.path, "./test.sqlite".into());
 
