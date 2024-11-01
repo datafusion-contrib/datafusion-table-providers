@@ -104,8 +104,8 @@ pub enum Error {
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 
-    #[snafu(display("The database file path is not within the current directory: {path}"))]
-    FileNotInDirectory { path: String },
+    #[snafu(display("{source}"))]
+    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -146,7 +146,7 @@ impl SqliteTableProviderFactory {
         &self,
         name: &str,
         options: &HashMap<String, String>,
-    ) -> Result<String> {
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
 
         let db_base_folder = options
@@ -159,9 +159,7 @@ impl SqliteTableProviderFactory {
             .get(SQLITE_DB_PATH_PARAM)
             .unwrap_or(default_filepath);
 
-        check_path_within_current_directory(filepath).map_err(|_| Error::FileNotInDirectory {
-            path: filepath.clone(),
-        })
+        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {

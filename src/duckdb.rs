@@ -115,8 +115,8 @@ pub enum Error {
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
 
-    #[snafu(display("The database file path is not within the current directory: {path}"))]
-    FileNotInDirectory { path: String },
+    #[snafu(display("{source}"))]
+    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -161,7 +161,7 @@ impl DuckDBTableProviderFactory {
         &self,
         name: &str,
         options: &mut HashMap<String, String>,
-    ) -> Result<String> {
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
 
         let db_base_folder = options
@@ -174,9 +174,7 @@ impl DuckDBTableProviderFactory {
             .get(DUCKDB_DB_PATH_PARAM)
             .unwrap_or(default_filepath);
 
-        check_path_within_current_directory(filepath).map_err(|_| Error::FileNotInDirectory {
-            path: filepath.clone(),
-        })
+        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
