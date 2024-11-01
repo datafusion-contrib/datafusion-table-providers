@@ -11,3 +11,7 @@ pub mod mysql;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+
+pub(crate) fn path_has_absolute_sequence(path: &str) -> bool {
+    path.starts_with("./") || path.starts_with("../")
+}
