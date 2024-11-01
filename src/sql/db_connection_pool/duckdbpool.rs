@@ -333,6 +333,8 @@ mod test {
             .query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
 
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
         conn_attached
             .query_arrow("SELECT * FROM test_one", &[], None)
             .expect("Query should be successful");
