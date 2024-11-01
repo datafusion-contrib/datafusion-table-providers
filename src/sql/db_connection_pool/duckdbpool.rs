@@ -72,8 +72,7 @@ impl DuckDbConnectionPool {
         Ok(DuckDbConnectionPool {
             path: ":memory:".into(),
             pool,
-            // There can't be any other tables that share the same context for an in-memory DuckDB.
-            join_push_down: JoinPushDown::Disallow,
+            join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
             attached_databases: Vec::new(),
             mode: Mode::Memory,
         })
@@ -333,6 +332,8 @@ mod test {
         conn_attached
             .query_arrow("SELECT * FROM test_two", &[], None)
             .expect("Query should be successful");
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         conn_attached
             .query_arrow("SELECT * FROM test_one", &[], None)
