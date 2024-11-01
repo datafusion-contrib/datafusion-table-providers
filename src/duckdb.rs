@@ -1,3 +1,15 @@
+use crate::check_path_within_current_directory;
+use crate::sql::db_connection_pool::{
+    self,
+    dbconnection::{
+        duckdbconn::{
+            flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+        },
+        get_schema, DbConnection,
+    },
+    duckdbpool::DuckDbConnectionPool,
+    DbConnectionPool, DbInstanceKey, Mode,
+};
 use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
@@ -5,20 +17,6 @@ use crate::util::{
     constraints,
     indexes::IndexType,
     on_conflict::{self, OnConflict},
-};
-use crate::{
-    path_has_absolute_sequence,
-    sql::db_connection_pool::{
-        self,
-        dbconnection::{
-            duckdbconn::{
-                flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
-            },
-            get_schema, DbConnection,
-        },
-        duckdbpool::DuckDbConnectionPool,
-        DbConnectionPool, DbInstanceKey, Mode,
-    },
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -117,8 +115,8 @@ pub enum Error {
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
 
-    #[snafu(display("The file or directory path includes an absolute sequence, like './', which is not allowed: {path}"))]
-    AbsoluteSequenceNotAllowed { path: String },
+    #[snafu(display("The database file path is not within the current directory: {path}"))]
+    FileNotInDirectory { path: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -164,30 +162,21 @@ impl DuckDBTableProviderFactory {
         name: &str,
         options: &mut HashMap<String, String>,
     ) -> Result<String> {
-        if path_has_absolute_sequence(name) {
-            return Err(Error::AbsoluteSequenceNotAllowed {
-                path: name.to_string(),
-            });
-        }
-
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
 
-        let db_base_folder = options.get(DUCKDB_DB_BASE_FOLDER_PARAM).cloned().map_or(
-            Ok(".".to_string()),
-            |base| {
-                if path_has_absolute_sequence(&base) {
-                    Err(Error::AbsoluteSequenceNotAllowed { path: base.clone() })
-                } else {
-                    Ok(base)
-                }
-            },
-        )?; // default to the current directory
-        let default_filepath = format!("{db_base_folder}/{name}.db");
-
-        Ok(options
-            .get(DUCKDB_DB_PATH_PARAM)
+        let db_base_folder = options
+            .get(DUCKDB_DB_BASE_FOLDER_PARAM)
             .cloned()
-            .unwrap_or(default_filepath))
+            .unwrap_or(".".to_string()); // default to the current directory
+        let default_filepath = &format!("{db_base_folder}/{name}.db");
+
+        let filepath = options
+            .get(DUCKDB_DB_PATH_PARAM)
+            .unwrap_or(default_filepath);
+
+        check_path_within_current_directory(filepath).map_err(|_| Error::FileNotInDirectory {
+            path: filepath.clone(),
+        })
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {

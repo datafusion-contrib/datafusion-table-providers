@@ -1,3 +1,5 @@
+use std::path::Path;
+
 pub mod sql;
 pub mod util;
 
@@ -12,6 +14,13 @@ pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-pub(crate) fn path_has_absolute_sequence(path: &str) -> bool {
-    path.starts_with("./") || path.starts_with("../")
+pub(crate) fn check_path_within_current_directory(
+    filepath: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let path = Path::new(filepath);
+    if path.canonicalize()?.starts_with(std::env::current_dir()?) {
+        Ok(filepath.to_string())
+    } else {
+        Err("Path must be absolute or relative to the current directory".into())
+    }
 }
