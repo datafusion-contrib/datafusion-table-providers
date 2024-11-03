@@ -27,14 +27,13 @@ pub enum Error {
 
 pub(crate) fn check_path_within_current_directory(filepath: &str) -> Result<String, Error> {
     let path = Path::new(filepath);
-    if path.exists() && path.is_symlink() {
+    if path.is_symlink() {
         return Err(Error::FileIsSymlink {
             path: filepath.to_string(),
         });
     }
 
-    if path
-        .canonicalize()
+    if std::path::absolute(path)
         .context(FileReadSnafu)?
         .starts_with(std::env::current_dir().context(FileReadSnafu)?)
     {
