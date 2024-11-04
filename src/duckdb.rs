@@ -1,4 +1,3 @@
-use crate::check_path_within_current_directory;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{
@@ -114,9 +113,6 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
-
-    #[snafu(display("{source}"))]
-    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -174,7 +170,7 @@ impl DuckDBTableProviderFactory {
             .get(DUCKDB_DB_PATH_PARAM)
             .unwrap_or(default_filepath);
 
-        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
+        Ok(filepath.to_string())
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
