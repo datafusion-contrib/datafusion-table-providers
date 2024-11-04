@@ -103,7 +103,6 @@ postgres-federation = ["postgres"]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "914bd0836baa6990c5d03f977e5e87fe5eeaf4d6" }
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "5b98603705a381ceeb5cc371e4f606b7332b57ce" }
 
-# Temporary patch to address SessionConfig::new().with_optimize_projections_preserve_existing_projections(true), method not found in `SessionConfig` when using datafusion-federation
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
 datafusion-common = { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9" }
 datafusion-execution = { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9" }
