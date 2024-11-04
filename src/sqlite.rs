@@ -1,3 +1,4 @@
+use crate::check_path_within_current_directory;
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
@@ -102,6 +103,9 @@ pub enum Error {
         "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
+
+    #[snafu(display("{source}"))]
+    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -133,20 +137,29 @@ impl SqliteTableProviderFactory {
         })
     }
 
-    #[must_use]
-    pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
+    /// Get the path to the SQLite file database.
+    ///
+    /// ## Errors
+    ///
+    /// - If the path includes absolute sequences to escape the current directory, like `./`, `../`, or `/`.
+    pub fn sqlite_file_path(
+        &self,
+        name: &str,
+        options: &HashMap<String, String>,
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
 
         let db_base_folder = options
             .get(SQLITE_DB_BASE_FOLDER_PARAM)
             .cloned()
             .unwrap_or(".".to_string()); // default to the current directory
-        let default_filepath = format!("{db_base_folder}/{name}_sqlite.db");
+        let default_filepath = &format!("{db_base_folder}/{name}_sqlite.db");
 
-        options
+        let filepath = options
             .get(SQLITE_DB_PATH_PARAM)
-            .cloned()
-            .unwrap_or(default_filepath)
+            .unwrap_or(default_filepath);
+
+        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
@@ -245,7 +258,10 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let busy_timeout = self
             .sqlite_busy_timeout(&cmd.options)
             .map_err(to_datafusion_error)?;
-        let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
+        let db_path: Arc<str> = self
+            .sqlite_file_path(&name, &cmd.options)
+            .map_err(to_datafusion_error)?
+            .into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
             self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)

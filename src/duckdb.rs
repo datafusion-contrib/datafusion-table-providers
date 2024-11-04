@@ -1,3 +1,4 @@
+use crate::check_path_within_current_directory;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{
@@ -113,6 +114,9 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
+
+    #[snafu(display("{source}"))]
+    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -148,20 +152,29 @@ impl DuckDBTableProviderFactory {
             .unwrap_or_default()
     }
 
-    #[must_use]
-    pub fn duckdb_file_path(&self, name: &str, options: &mut HashMap<String, String>) -> String {
+    /// Get the path to the DuckDB file database.
+    ///
+    /// ## Errors
+    ///
+    /// - If the path includes absolute sequences to escape the current directory, like `./`, `../`, or `/`.
+    pub fn duckdb_file_path(
+        &self,
+        name: &str,
+        options: &mut HashMap<String, String>,
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
 
         let db_base_folder = options
             .get(DUCKDB_DB_BASE_FOLDER_PARAM)
             .cloned()
             .unwrap_or(".".to_string()); // default to the current directory
-        let default_filepath = format!("{db_base_folder}/{name}.db");
+        let default_filepath = &format!("{db_base_folder}/{name}.db");
 
-        options
+        let filepath = options
             .get(DUCKDB_DB_PATH_PARAM)
-            .cloned()
-            .unwrap_or(default_filepath)
+            .unwrap_or(default_filepath);
+
+        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
@@ -250,7 +263,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
-                let db_path = self.duckdb_file_path(&name, &mut options);
+                let db_path = self
+                    .duckdb_file_path(&name, &mut options)
+                    .map_err(to_datafusion_error)?;
 
                 self.get_or_init_file_instance(db_path)
                     .await
