@@ -1,4 +1,3 @@
-use crate::check_path_within_current_directory;
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
@@ -103,9 +102,6 @@ pub enum Error {
         "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
-
-    #[snafu(display("{source}"))]
-    InvalidFilePath { source: super::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -159,7 +155,7 @@ impl SqliteTableProviderFactory {
             .get(SQLITE_DB_PATH_PARAM)
             .unwrap_or(default_filepath);
 
-        check_path_within_current_directory(filepath).context(InvalidFilePathSnafu)
+        Ok(filepath.to_string())
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
