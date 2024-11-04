@@ -20,7 +20,7 @@ use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
 use bigdecimal::ToPrimitive;
 use byteorder::{BigEndian, ReadBytesExt};
-use chrono::{DateTime, Offset, Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use composite::CompositeType;
 use geo_types::geometry::Point;
 use sea_query::{Alias, ColumnType, SeaRc};
@@ -528,14 +528,11 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             pg_type: Type::TIMESTAMPTZ,
                         })?;
 
-                    let time_zone = v.unwrap_or_default().offset().fix();
-                    let timestampz_builder = builder.get_or_insert_with(|| {
-                        Box::new(
-                            TimestampNanosecondBuilder::new().with_timezone(time_zone.to_string()),
-                        )
+                    let timestamptz_builder = builder.get_or_insert_with(|| {
+                        Box::new(TimestampNanosecondBuilder::new().with_timezone("UTC"))
                     });
 
-                    let Some(timestampz_builder) = timestampz_builder
+                    let Some(timestamptz_builder) = timestamptz_builder
                         .as_any_mut()
                         .downcast_mut::<TimestampNanosecondBuilder>()
                     else {
@@ -551,10 +548,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         };
                         let new_arrow_field = Field::new(
                             field_name,
-                            DataType::Timestamp(
-                                TimeUnit::Nanosecond,
-                                Some(Arc::from(time_zone.to_string())),
-                            ),
+                            DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
                             true,
                         );
 
@@ -565,9 +559,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Some(v) => {
                             let utc_timestamp =
                                 v.to_utc().timestamp_nanos_opt().unwrap_or_default();
-                            timestampz_builder.append_value(utc_timestamp);
+                            timestamptz_builder.append_value(utc_timestamp);
                         }
-                        None => timestampz_builder.append_null(),
+                        None => timestamptz_builder.append_null(),
                     }
                 }
 
@@ -840,7 +834,11 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         Type::BOOL => Some(DataType::Boolean),
         Type::JSON => Some(DataType::LargeUtf8),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
-        Type::NUMERIC | Type::TIMESTAMPTZ => None,
+        Type::NUMERIC => None,
+        Type::TIMESTAMPTZ => Some(DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            Some(Arc::from("UTC")),
+        )),
         // We get a SystemTime that we can always convert into milliseconds
         Type::TIMESTAMP => Some(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         Type::DATE => Some(DataType::Date32),

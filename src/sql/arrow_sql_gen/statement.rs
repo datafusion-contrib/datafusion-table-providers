@@ -1,14 +1,14 @@
 use arrow::{
     array::{
-        array, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
+        array, timezone::Tz, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
         UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
 use bigdecimal::BigDecimal;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Offset, TimeZone};
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
@@ -16,7 +16,7 @@ use sea_query::{
     QueryBuilder, SimpleExpr, SqliteQueryBuilder, StringLen, Table,
 };
 use snafu::Snafu;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]
@@ -473,11 +473,14 @@ impl InsertBuilder {
                                     valid_array.value(row) * 1_000_000_000,
                                 )
                                 .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -503,11 +506,14 @@ impl InsertBuilder {
                                     valid_array.value(row) * 1_000_000,
                                 )
                                 .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -534,11 +540,14 @@ impl InsertBuilder {
                                 let utc_time =
                                     DateTime::from_timestamp_nanos(valid_array.value(row) * 1_000)
                                         .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -564,11 +573,14 @@ impl InsertBuilder {
                             if let Some(timezone) = timezone {
                                 let utc_time =
                                     DateTime::from_timestamp_nanos(valid_array.value(row)).to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -1093,34 +1105,6 @@ fn insert_timestamp_into_row_values(
         Err(e) => Err(Error::FailedToCreateInsertStatement {
             source: Box::new(e),
         }),
-    }
-}
-
-// Reference: https://github.com/apache/arrow-rs/blob/6c59b7637592e4b67b18762b8313f91086c0d5d8/arrow-array/src/timezone.rs#L25
-#[allow(clippy::cast_lossless)]
-fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
-    let bytes = tz.as_bytes();
-
-    let mut values = match bytes.len() {
-        // [+-]XX:XX
-        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
-        // [+-]XXXX
-        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
-        // [+-]XX
-        3 => [bytes[1], bytes[2], b'0', b'0'],
-        _ => return None,
-    };
-    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
-    if values.iter().any(|x| *x > 9) {
-        return None;
-    }
-    let secs =
-        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
-
-    match bytes[0] {
-        b'+' => FixedOffset::east_opt(secs),
-        b'-' => FixedOffset::west_opt(secs),
-        _ => None,
     }
 }
 
