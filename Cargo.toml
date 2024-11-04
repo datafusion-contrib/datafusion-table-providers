@@ -110,3 +110,4 @@ datafusion-execution = { git = "https://github.com/spiceai/datafusion.git", rev 
 datafusion-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
 datafusion-physical-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
 datafusion-physical-plan =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
+datafusion-proto =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
