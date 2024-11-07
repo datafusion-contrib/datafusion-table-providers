@@ -1,14 +1,3 @@
-use crate::sql::db_connection_pool::{
-    self,
-    dbconnection::{
-        duckdbconn::{
-            flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
-        },
-        get_schema, DbConnection,
-    },
-    duckdbpool::DuckDbConnectionPool,
-    DbConnectionPool, DbInstanceKey, Mode,
-};
 use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
@@ -16,6 +5,20 @@ use crate::util::{
     constraints,
     indexes::IndexType,
     on_conflict::{self, OnConflict},
+};
+use crate::{
+    sql::db_connection_pool::{
+        self,
+        dbconnection::{
+            duckdbconn::{
+                flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+            },
+            get_schema, DbConnection,
+        },
+        duckdbpool::DuckDbConnectionPool,
+        DbConnectionPool, DbInstanceKey, Mode,
+    },
+    InvalidTypeAction,
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -120,6 +123,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
+    invalid_type_action: InvalidTypeAction,
 }
 
 const DUCKDB_DB_PATH_PARAM: &str = "open";
@@ -132,7 +136,14 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode,
             instances: Arc::new(Mutex::new(HashMap::new())),
+            invalid_type_action: InvalidTypeAction::Error,
         }
+    }
+
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = invalid_type_action;
+        self
     }
 
     #[must_use]
@@ -181,7 +192,9 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_memory().context(DbConnectionPoolSnafu)?;
+        let pool = DuckDbConnectionPool::new_memory()
+            .context(DbConnectionPoolSnafu)?
+            .with_invalid_type_action(self.invalid_type_action.clone());
 
         instances.insert(key, pool.clone());
 
@@ -201,7 +214,8 @@ impl DuckDBTableProviderFactory {
         }
 
         let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-            .context(DbConnectionPoolSnafu)?;
+            .context(DbConnectionPoolSnafu)?
+            .with_invalid_type_action(self.invalid_type_action.clone());
 
         instances.insert(key, pool.clone());
 

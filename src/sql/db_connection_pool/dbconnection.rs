@@ -1,5 +1,6 @@
 use std::{any::Any, sync::Arc};
 
+use arrow_schema::DataType;
 use datafusion::{
     arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream, sql::TableReference,
 };
@@ -24,6 +25,12 @@ pub enum Error {
 
     #[snafu(display("Unable to get schema: {source}"))]
     UnableToGetSchema { source: GenericError },
+
+    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}"))]
+    UnsupportedDataType {
+        data_type: DataType,
+        field_name: String,
+    },
 
     #[snafu(display("Unable to query arrow: {source}"))]
     UnableToQueryArrow { source: GenericError },
