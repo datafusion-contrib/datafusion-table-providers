@@ -39,7 +39,7 @@ r2d2 = { version = "0.8.10", optional = true }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
 secrecy = "0.8.0"
-serde = { version = "1.0.209", optional = true }
+serde = { version = "1.0.209", features = ["derive"] }
 serde_json = "1.0.124"
 snafu = "0.8.3"
 time = "0.3.36"
@@ -80,7 +80,7 @@ insta = { version = "1.40.0", features = ["filters"] }
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
-duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream"]
+duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream", "dep:arrow-schema"]
 flight = [
   "dep:arrow-array",
   "dep:arrow-flight",
@@ -92,7 +92,6 @@ flight = [
   "dep:datafusion-physical-plan",
   "dep:datafusion-proto",
   "dep:prost",
-  "dep:serde",
   "dep:tonic",
 ]
 duckdb-federation = ["duckdb"]

@@ -7,9 +7,12 @@ use super::{
     dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
     DbConnectionPool, Mode, Result,
 };
-use crate::sql::db_connection_pool::{
-    dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
-    JoinPushDown,
+use crate::{
+    sql::db_connection_pool::{
+        dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
+        JoinPushDown,
+    },
+    InvalidTypeAction,
 };
 
 #[derive(Debug, Snafu)]
@@ -40,6 +43,7 @@ pub struct DuckDbConnectionPool {
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
     mode: Mode,
+    invalid_type_action: InvalidTypeAction,
 }
 
 impl DuckDbConnectionPool {
@@ -75,6 +79,7 @@ impl DuckDbConnectionPool {
             join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
             attached_databases: Vec::new(),
             mode: Mode::Memory,
+            invalid_type_action: InvalidTypeAction::Error,
         })
     }
 
@@ -113,7 +118,14 @@ impl DuckDbConnectionPool {
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
             mode: Mode::File,
+            invalid_type_action: InvalidTypeAction::Error,
         })
+    }
+
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = action;
+        self
     }
 
     #[must_use]
@@ -148,7 +160,9 @@ impl DuckDbConnectionPool {
         let attachments = self.get_attachments()?;
 
         Ok(Box::new(
-            DuckDbConnection::new(conn).with_attachments(attachments),
+            DuckDbConnection::new(conn)
+                .with_attachments(attachments)
+                .with_invalid_type_action(self.invalid_type_action),
         ))
     }
 
@@ -189,7 +203,9 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let attachments = self.get_attachments()?;
 
         Ok(Box::new(
-            DuckDbConnection::new(conn).with_attachments(attachments),
+            DuckDbConnection::new(conn)
+                .with_attachments(attachments)
+                .with_invalid_type_action(self.invalid_type_action),
         ))
     }
 

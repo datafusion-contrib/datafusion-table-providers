@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow_schema::{DataType, Fields, SchemaBuilder};
 use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
@@ -11,11 +12,14 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
+use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
+
+use crate::InvalidTypeAction;
 
 use super::DbConnection;
 use super::Result;
@@ -150,6 +154,7 @@ impl DuckDBAttachments {
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
     attachments: Option<Arc<DuckDBAttachments>>,
+    invalid_type_action: InvalidTypeAction,
 }
 
 impl DuckDbConnection {
@@ -157,6 +162,12 @@ impl DuckDbConnection {
         &mut self,
     ) -> &mut r2d2::PooledConnection<DuckdbConnectionManager> {
         &mut self.conn
+    }
+
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = invalid_type_action;
+        self
     }
 
     #[must_use]
@@ -188,6 +199,42 @@ impl DuckDbConnection {
         }
         Ok(())
     }
+
+    /// For a given input schema, rebuild it according to the `InvalidTypeAction` set in the connection.
+    /// If the `InvalidTypeAction` is `Error`, the function will return an error if the schema contains an unsupported data type.
+    /// If the `InvalidTypeAction` is `Warn`, the function will log a warning if the schema contains an unsupported data type and remove the column.
+    /// If the `InvalidTypeAction` is `Ignore`, the function will remove the column silently.
+    ///
+    /// # Errors
+    ///
+    /// If the `InvalidTypeAction` is `Error` and the schema contains an unsupported data type, the function will return an error.
+    fn rebuild_schema(&self, input_schema: &SchemaRef) -> Result<SchemaRef, super::Error> {
+        let mut schema_builder = SchemaBuilder::new();
+        for field in &input_schema.fields {
+            let duckdb_type_id = to_duckdb_type_id(field.data_type());
+            let unsupported =
+                data_type_is_unsupported(field.data_type()) || duckdb_type_id.is_err();
+
+            if unsupported {
+                let error = super::Error::UnsupportedDataType {
+                    data_type: field.data_type().clone(),
+                    field_name: field.name().clone(),
+                };
+
+                match self.invalid_type_action {
+                    InvalidTypeAction::Error => return Err(error),
+                    InvalidTypeAction::Warn => {
+                        tracing::warn!("{error}");
+                    }
+                    InvalidTypeAction::Ignore => {}
+                }
+            } else {
+                schema_builder.push(Arc::clone(field));
+            }
+        }
+
+        Ok(Arc::new(schema_builder.finish()))
+    }
 }
 
 impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
@@ -210,6 +257,52 @@ impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParamet
     }
 }
 
+fn struct_type_is_unsupported(fields: &Fields) -> bool {
+    let mut any_unsupported = false;
+    for field in fields {
+        match field.data_type() {
+            dt if dt.is_primitive() => continue,
+            DataType::Utf8 | DataType::Binary => continue,
+            DataType::List(inner_field)
+            | DataType::LargeList(inner_field)
+            | DataType::FixedSizeList(inner_field, _) => {
+                any_unsupported = data_type_is_unsupported(inner_field.data_type());
+                if any_unsupported {
+                    break;
+                }
+            }
+            DataType::Struct(inner_fields) => {
+                any_unsupported = struct_type_is_unsupported(inner_fields);
+                if any_unsupported {
+                    break;
+                }
+            }
+            _ => {
+                any_unsupported = true;
+                break;
+            }
+        }
+    }
+    any_unsupported
+}
+
+/// Returns true if the given `DataType` is not supported by the `DuckDB` `TableProvider`
+fn data_type_is_unsupported(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::List(inner_field)
+        | DataType::FixedSizeList(inner_field, _)
+        | DataType::LargeList(inner_field) => {
+            match inner_field.data_type() {
+                dt if dt.is_primitive() => false,
+                DataType::Utf8 | DataType::Binary => false,
+                _ => true, // nested lists don't support anything else yet
+            }
+        }
+        DataType::Struct(inner_fields) => struct_type_is_unsupported(inner_fields),
+        _ => false,
+    }
+}
+
 impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
@@ -217,6 +310,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         DuckDbConnection {
             conn,
             attachments: None,
+            invalid_type_action: InvalidTypeAction::Error,
         }
     }
 
@@ -237,7 +331,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Ok(result.get_schema())
+        self.rebuild_schema(&result.get_schema())
     }
 
     fn query_arrow(
@@ -380,6 +474,8 @@ pub fn is_table_function(table_reference: &TableReference) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::Field;
+
     use super::*;
 
     #[test]
@@ -398,5 +494,166 @@ mod tests {
             let table_reference = TableReference::bare(table_name.to_string());
             assert_eq!(is_table_function(&table_reference), expected);
         }
+    }
+
+    #[test]
+    fn test_field_is_unsupported() {
+        // A list with a struct is not supported
+        let field = Field::new(
+            "list_struct",
+            DataType::List(Arc::new(Field::new(
+                "struct",
+                DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                false,
+            ))),
+            false,
+        );
+
+        assert!(
+            data_type_is_unsupported(field.data_type()),
+            "list with struct should be unsupported"
+        );
+    }
+
+    #[test]
+    fn test_fields_are_supported() {
+        // test that the usual field types are supported, string, numbers, etc
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+        ];
+
+        for field in fields {
+            assert!(
+                !data_type_is_unsupported(field.data_type()),
+                "field should be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_rebuild_with_supported_fields() {
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+        ];
+
+        let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
+
+        let conn = DuckDbConnection {
+            conn: r2d2::Pool::new(
+                DuckdbConnectionManager::memory().expect("should have a memory connection"),
+            )
+            .expect("should have pool")
+            .get()
+            .expect("should have connection"),
+            attachments: None,
+            invalid_type_action: InvalidTypeAction::Error,
+        };
+
+        let rebuilt_schema = conn
+            .rebuild_schema(&schema)
+            .expect("should rebuild schema successfully");
+
+        assert_eq!(schema, rebuilt_schema);
+    }
+
+    #[test]
+    fn test_schema_rebuild_with_unsupported_fields() {
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+            Field::new(
+                "list_struct",
+                DataType::List(Arc::new(Field::new(
+                    "struct",
+                    DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                    false,
+                ))),
+                false,
+            ),
+            Field::new("another_bool", DataType::Boolean, false),
+            Field::new(
+                "another_list_struct",
+                DataType::List(Arc::new(Field::new(
+                    "struct",
+                    DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                    false,
+                ))),
+                false,
+            ),
+            Field::new("another_float", DataType::Float32, false),
+        ];
+
+        let rebuilt_fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+            // this also tests that ordering is preserved when rebuilding the schema with removed fields
+            Field::new("another_bool", DataType::Boolean, false),
+            Field::new("another_float", DataType::Float32, false),
+        ];
+
+        let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
+        let expected_rebuilt_schema =
+            Arc::new(SchemaBuilder::from(Fields::from(rebuilt_fields)).finish());
+
+        let conn = DuckDbConnection {
+            conn: r2d2::Pool::new(
+                DuckdbConnectionManager::memory().expect("should have a memory connection"),
+            )
+            .expect("should have pool")
+            .get()
+            .expect("should have connection"),
+            attachments: None,
+            invalid_type_action: InvalidTypeAction::Error,
+        };
+
+        assert!(conn.rebuild_schema(&schema).is_err());
+
+        let conn = DuckDbConnection {
+            conn: r2d2::Pool::new(
+                DuckdbConnectionManager::memory().expect("should have a memory connection"),
+            )
+            .expect("should have pool")
+            .get()
+            .expect("should have connection"),
+            attachments: None,
+            invalid_type_action: InvalidTypeAction::Warn,
+        };
+
+        let rebuilt_schema = conn
+            .rebuild_schema(&schema)
+            .expect("should rebuild schema successfully");
+
+        assert_eq!(rebuilt_schema, expected_rebuilt_schema);
+
+        let conn = DuckDbConnection {
+            conn: r2d2::Pool::new(
+                DuckdbConnectionManager::memory().expect("should have a memory connection"),
+            )
+            .expect("should have pool")
+            .get()
+            .expect("should have connection"),
+            attachments: None,
+            invalid_type_action: InvalidTypeAction::Ignore,
+        };
+
+        let rebuilt_schema = conn
+            .rebuild_schema(&schema)
+            .expect("should rebuild schema successfully");
+
+        assert_eq!(rebuilt_schema, expected_rebuilt_schema);
     }
 }

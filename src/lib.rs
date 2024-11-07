@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 
 pub mod sql;
@@ -22,4 +23,13 @@ pub enum Error {
     FileIsSymlink { path: String },
     #[snafu(display("Error reading file: {source}"))]
     FileReadError { source: std::io::Error },
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Default, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InvalidTypeAction {
+    #[default]
+    Error,
+    Warn,
+    Ignore,
 }
