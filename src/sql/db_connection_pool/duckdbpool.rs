@@ -162,7 +162,7 @@ impl DuckDbConnectionPool {
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
-                .with_invalid_type_action(self.invalid_type_action.clone()),
+                .with_invalid_type_action(self.invalid_type_action),
         ))
     }
 
@@ -205,7 +205,7 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
-                .with_invalid_type_action(self.invalid_type_action.clone()),
+                .with_invalid_type_action(self.invalid_type_action),
         ))
     }
 

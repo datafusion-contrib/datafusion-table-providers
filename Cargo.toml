@@ -39,7 +39,7 @@ r2d2 = { version = "0.8.10", optional = true }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
 secrecy = "0.8.0"
-serde = { version = "1.0.209", optional = true }
+serde = "1.0.209"
 serde_json = "1.0.124"
 snafu = "0.8.3"
 time = "0.3.36"
@@ -92,13 +92,11 @@ flight = [
   "dep:datafusion-physical-plan",
   "dep:datafusion-proto",
   "dep:prost",
-  "dep:serde",
   "dep:tonic",
 ]
 duckdb-federation = ["duckdb"]
 sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
-default = ["dep:serde"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "914bd0836baa6990c5d03f977e5e87fe5eeaf4d6" }

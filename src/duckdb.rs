@@ -194,7 +194,7 @@ impl DuckDBTableProviderFactory {
 
         let pool = DuckDbConnectionPool::new_memory()
             .context(DbConnectionPoolSnafu)?
-            .with_invalid_type_action(self.invalid_type_action.clone());
+            .with_invalid_type_action(self.invalid_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -215,7 +215,7 @@ impl DuckDBTableProviderFactory {
 
         let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
             .context(DbConnectionPoolSnafu)?
-            .with_invalid_type_action(self.invalid_type_action.clone());
+            .with_invalid_type_action(self.invalid_type_action);
 
         instances.insert(key, pool.clone());
 

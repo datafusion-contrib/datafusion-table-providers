@@ -25,9 +25,10 @@ pub enum Error {
     FileReadError { source: std::io::Error },
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InvalidTypeAction {
+    #[default]
     Error,
     Warn,
     Ignore,
