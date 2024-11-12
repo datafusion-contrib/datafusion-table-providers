@@ -182,6 +182,7 @@ impl PostgresTableFactory {
     }
 }
 
+#[derive(Debug)]
 pub struct PostgresTableProviderFactory {}
 
 impl PostgresTableProviderFactory {
@@ -323,6 +324,16 @@ pub struct Postgres {
     pool: Arc<PostgresConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
+}
+
+impl std::fmt::Debug for Postgres {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Postgres")
+            .field("table_name", &self.table_name)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
 }
 
 impl Postgres {

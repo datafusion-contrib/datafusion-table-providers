@@ -7,7 +7,7 @@ use datafusion::{
     common::Constraints,
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::Expr,
+    logical_expr::{dml::InsertOp, Expr},
     physical_plan::{
         insert::{DataSink, DataSinkExec},
         metrics::MetricsSet,
@@ -23,7 +23,7 @@ use crate::util::{
 
 use super::{to_datafusion_error, Postgres};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PostgresTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
@@ -82,7 +82,7 @@ impl TableProvider for PostgresTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        overwrite: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
@@ -100,7 +100,7 @@ impl TableProvider for PostgresTableWriter {
 #[derive(Clone)]
 struct PostgresDataSink {
     postgres: Arc<Postgres>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
 }
 
@@ -131,7 +131,7 @@ impl DataSink for PostgresDataSink {
             .context(super::UnableToBeginTransactionSnafu)
             .map_err(to_datafusion_error)?;
 
-        if self.overwrite {
+        if matches!(self.overwrite, InsertOp::Overwrite) {
             self.postgres
                 .delete_all_table_data(&tx)
                 .await
@@ -172,7 +172,7 @@ impl DataSink for PostgresDataSink {
 }
 
 impl PostgresDataSink {
-    fn new(postgres: Arc<Postgres>, overwrite: bool, on_conflict: Option<OnConflict>) -> Self {
+    fn new(postgres: Arc<Postgres>, overwrite: InsertOp, on_conflict: Option<OnConflict>) -> Self {
         Self {
             postgres,
             overwrite,

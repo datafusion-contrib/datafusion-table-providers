@@ -10,6 +10,7 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
@@ -29,7 +30,7 @@ use tokio::task::JoinHandle;
 
 use super::to_datafusion_error;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     duckdb: Arc<DuckDB>,
@@ -88,7 +89,7 @@ impl TableProvider for DuckDBTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        overwrite: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
@@ -106,7 +107,7 @@ impl TableProvider for DuckDBTableWriter {
 #[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
     duckdb: Arc<DuckDB>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
 }
 
@@ -226,7 +227,7 @@ impl DataSink for DuckDBDataSink {
 impl DuckDBDataSink {
     pub(crate) fn new(
         duckdb: Arc<DuckDB>,
-        overwrite: bool,
+        overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
     ) -> Self {
         Self {
@@ -257,7 +258,7 @@ fn try_write_all_with_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
 ) -> datafusion::common::Result<u64> {
     // We want to clone the current table into our insert table
@@ -288,7 +289,7 @@ fn try_write_all_with_constraints(
             .map_err(to_datafusion_error)?;
     }
 
-    if overwrite {
+    if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
             .replace_table(tx, orig_table_creator)
             .map_err(to_datafusion_error)?;
@@ -309,11 +310,11 @@ fn try_write_all_no_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
-    overwrite: bool,
+    overwrite: InsertOp,
 ) -> datafusion::common::Result<u64> {
     let mut num_rows = 0;
 
-    if overwrite {
+    if matches!(overwrite, InsertOp::Overwrite) {
         tracing::debug!("Deleting all data from table.");
         duckdb
             .delete_all_table_data(tx)

@@ -65,6 +65,7 @@ async fn test_postgres_schema_inference() {
         options: common::get_pg_params(port),
         constraints: Constraints::empty(),
         column_defaults: HashMap::new(),
+        temporary: false,
     };
     let _ = factory
         .create(&ctx.state(), &cmd)

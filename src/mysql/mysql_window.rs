@@ -72,7 +72,10 @@ impl MySQLWindowVisitor {
 
 #[cfg(test)]
 mod test {
-    use datafusion_expr::sqlparser::ast::{ObjectName, WindowFrame};
+    use datafusion::sql::sqlparser::{
+        self,
+        ast::{self, ObjectName, WindowFrame},
+    };
 
     use super::*;
 
@@ -83,43 +86,39 @@ mod test {
                 value: "RANK".to_string(),
                 quote_style: None,
             }]),
-            args: datafusion_expr::sqlparser::ast::FunctionArguments::None,
-            over: Some(WindowType::WindowSpec(
-                datafusion_expr::sqlparser::ast::WindowSpec {
-                    window_name: None,
-                    partition_by: vec![],
-                    order_by: vec![datafusion_expr::sqlparser::ast::OrderByExpr {
-                        expr: datafusion_expr::sqlparser::ast::Expr::Wildcard,
-                        asc: None,
-                        nulls_first: Some(true),
-                        with_fill: None,
-                    }],
-                    window_frame: Some(WindowFrame {
-                        units: datafusion_expr::sqlparser::ast::WindowFrameUnits::Rows,
-                        start_bound: datafusion_expr::sqlparser::ast::WindowFrameBound::CurrentRow,
-                        end_bound: None,
-                    }),
-                },
-            )),
-            parameters: datafusion_expr::sqlparser::ast::FunctionArguments::None,
+            args: ast::FunctionArguments::None,
+            over: Some(WindowType::WindowSpec(ast::WindowSpec {
+                window_name: None,
+                partition_by: vec![],
+                order_by: vec![sqlparser::ast::OrderByExpr {
+                    expr: sqlparser::ast::Expr::Wildcard,
+                    asc: None,
+                    nulls_first: Some(true),
+                    with_fill: None,
+                }],
+                window_frame: Some(WindowFrame {
+                    units: sqlparser::ast::WindowFrameUnits::Rows,
+                    start_bound: sqlparser::ast::WindowFrameBound::CurrentRow,
+                    end_bound: None,
+                }),
+            })),
+            parameters: sqlparser::ast::FunctionArguments::None,
             null_treatment: None,
             filter: None,
             within_group: vec![],
         };
 
-        let expected = Some(WindowType::WindowSpec(
-            datafusion_expr::sqlparser::ast::WindowSpec {
-                window_name: None,
-                partition_by: vec![],
-                order_by: vec![datafusion_expr::sqlparser::ast::OrderByExpr {
-                    expr: datafusion_expr::sqlparser::ast::Expr::Wildcard,
-                    asc: None,
-                    nulls_first: Some(true),
-                    with_fill: None,
-                }],
-                window_frame: None,
-            },
-        ));
+        let expected = Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
+            window_name: None,
+            partition_by: vec![],
+            order_by: vec![sqlparser::ast::OrderByExpr {
+                expr: sqlparser::ast::Expr::Wildcard,
+                asc: None,
+                nulls_first: Some(true),
+                with_fill: None,
+            }],
+            window_frame: None,
+        }));
 
         MySQLWindowVisitor::remove_frame_clause(&mut func);
 
@@ -133,47 +132,43 @@ mod test {
                 value: "RANK".to_string(),
                 quote_style: None,
             }]),
-            args: datafusion_expr::sqlparser::ast::FunctionArguments::None,
-            over: Some(WindowType::WindowSpec(
-                datafusion_expr::sqlparser::ast::WindowSpec {
-                    window_name: None,
-                    partition_by: vec![],
-                    order_by: vec![datafusion_expr::sqlparser::ast::OrderByExpr {
-                        expr: datafusion_expr::sqlparser::ast::Expr::Wildcard,
-                        asc: None,
-                        nulls_first: Some(true),
-                        with_fill: None,
-                    }],
-                    window_frame: Some(WindowFrame {
-                        units: datafusion_expr::sqlparser::ast::WindowFrameUnits::Rows,
-                        start_bound: datafusion_expr::sqlparser::ast::WindowFrameBound::CurrentRow,
-                        end_bound: None,
-                    }),
-                },
-            )),
-            parameters: datafusion_expr::sqlparser::ast::FunctionArguments::None,
+            args: sqlparser::ast::FunctionArguments::None,
+            over: Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
+                window_name: None,
+                partition_by: vec![],
+                order_by: vec![sqlparser::ast::OrderByExpr {
+                    expr: sqlparser::ast::Expr::Wildcard,
+                    asc: None,
+                    nulls_first: Some(true),
+                    with_fill: None,
+                }],
+                window_frame: Some(WindowFrame {
+                    units: sqlparser::ast::WindowFrameUnits::Rows,
+                    start_bound: sqlparser::ast::WindowFrameBound::CurrentRow,
+                    end_bound: None,
+                }),
+            })),
+            parameters: sqlparser::ast::FunctionArguments::None,
             null_treatment: None,
             filter: None,
             within_group: vec![],
         };
 
-        let expected = Some(WindowType::WindowSpec(
-            datafusion_expr::sqlparser::ast::WindowSpec {
-                window_name: None,
-                partition_by: vec![],
-                order_by: vec![datafusion_expr::sqlparser::ast::OrderByExpr {
-                    expr: datafusion_expr::sqlparser::ast::Expr::Wildcard,
-                    asc: None,
-                    nulls_first: None,
-                    with_fill: None,
-                }],
-                window_frame: Some(WindowFrame {
-                    units: datafusion_expr::sqlparser::ast::WindowFrameUnits::Rows,
-                    start_bound: datafusion_expr::sqlparser::ast::WindowFrameBound::CurrentRow,
-                    end_bound: None,
-                }),
-            },
-        ));
+        let expected = Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
+            window_name: None,
+            partition_by: vec![],
+            order_by: vec![sqlparser::ast::OrderByExpr {
+                expr: sqlparser::ast::Expr::Wildcard,
+                asc: None,
+                nulls_first: None,
+                with_fill: None,
+            }],
+            window_frame: Some(WindowFrame {
+                units: sqlparser::ast::WindowFrameUnits::Rows,
+                start_bound: sqlparser::ast::WindowFrameBound::CurrentRow,
+                end_bound: None,
+            }),
+        }));
 
         MySQLWindowVisitor::remove_nulls_first_last(&mut func);
 

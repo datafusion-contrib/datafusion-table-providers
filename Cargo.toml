@@ -19,11 +19,11 @@ bytes = { version = "1.7.1", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
 chrono = "0.4.38"
-datafusion = "42"
-datafusion-expr = { version = "42", optional = true }
-datafusion-physical-expr = { version = "42", optional = true }
-datafusion-physical-plan = { version = "42", optional = true }
-datafusion-proto = { version = "42", optional = true }
+datafusion = "43"
+datafusion-expr = { version = "43", optional = true }
+datafusion-physical-expr = { version = "43", optional = true }
+datafusion-physical-plan = { version = "43", optional = true }
+datafusion-proto = { version = "43", optional = true }
 duckdb = { version = "1", features = [
   "bundled",
   "r2d2",
@@ -57,7 +57,7 @@ pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 tonic = { version = "0.12.2", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "914bd0836baa6990c5d03f977e5e87fe5eeaf4d6" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "5af0df83c2cd1d3f82f293b066b401a4dfd4064b" }
 itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
@@ -99,11 +99,11 @@ sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "914bd0836baa6990c5d03f977e5e87fe5eeaf4d6" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "5af0df83c2cd1d3f82f293b066b401a4dfd4064b" }
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "5b98603705a381ceeb5cc371e4f606b7332b57ce" }
 
-datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
-datafusion-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
-datafusion-physical-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
-datafusion-physical-plan =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
-datafusion-proto =  { git = "https://github.com/spiceai/datafusion.git", rev = "06969ee5af853f0c071a98683dc2b9fde71b81a9"}
+datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
+datafusion-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
+datafusion-physical-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
+datafusion-physical-plan =  { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
+datafusion-proto =  { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
