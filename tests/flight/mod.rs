@@ -28,7 +28,7 @@ use tonic::transport::Server;
 use tonic::{Extensions, Request, Response, Status, Streaming};
 
 use datafusion_table_providers::flight::sql::FlightSqlDriver;
-use datafusion_table_providers::flight::FlightTableFactory;
+use datafusion_table_providers::flight::{FlightProperties, FlightTableFactory};
 
 const AUTH_HEADER: &str = "authorization";
 const BEARER_TOKEN: &str = "Bearer flight-sql-token";
@@ -191,11 +191,11 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
     };
     let port = service.run_in_background(rx).await.port();
     let ctx = SessionContext::new();
+    let props_template = FlightProperties::new().with_reusable_flight_info(true);
+    let driver = FlightSqlDriver::new().with_properties_template(props_template);
     ctx.state_ref().write().table_factories_mut().insert(
         "FLIGHT_SQL".into(),
-        Arc::new(FlightTableFactory::new(
-            Arc::new(FlightSqlDriver::default()),
-        )),
+        Arc::new(FlightTableFactory::new(Arc::new(driver))),
     );
     let _ = ctx
         .sql(&format!(
