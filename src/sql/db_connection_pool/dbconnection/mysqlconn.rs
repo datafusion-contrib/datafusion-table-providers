@@ -53,7 +53,13 @@ impl MySQLConnection {
         let tbl_name = [tbl.catalog(), tbl.schema(), Some(tbl.table())]
             .into_iter()
             .filter_map(|part| part)
-            .map(|part| format!("{quote}{part}{quote}", quote = q))
+            .map(|part| {
+                if part.starts_with(quote) && part.ends_with(quote) {
+                    part.to_string()
+                } else {
+                    format!("{quote}{part}{quote}", quote = q)
+                }
+            })
             .collect::<Vec<_>>()
             .join(".");
 
