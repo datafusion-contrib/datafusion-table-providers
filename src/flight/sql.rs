@@ -75,7 +75,7 @@ impl FlightDriver for FlightSqlDriver {
     ) -> Result<FlightMetadata> {
         let mut client = FlightSqlServiceClient::new(channel);
         let mut handshake_headers = self.properties_template.grpc_headers.clone();
-        let headers_overlay = options.into_iter().filter_map(|(key, value)| {
+        let headers_overlay = options.iter().filter_map(|(key, value)| {
             key.strip_prefix(HEADER_PREFIX)
                 .map(|header_name| (header_name.to_owned(), value.to_owned()))
         });
