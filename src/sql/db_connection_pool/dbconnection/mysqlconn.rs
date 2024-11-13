@@ -55,7 +55,7 @@ impl MySQLConnection {
 
         [tbl.catalog(), tbl.schema(), Some(tbl.table())]
             .into_iter()
-            .filter_map(|part| part)
+            flatten()
             .map(|part| {
                 if part.starts_with(q) && part.ends_with(q) {
                     part.to_string()
