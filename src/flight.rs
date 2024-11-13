@@ -118,16 +118,23 @@ impl FlightTableFactory {
             .map_err(to_df_err)?;
         let num_rows = precision(metadata.info.total_records);
         let total_byte_size = precision(metadata.info.total_bytes);
-        let logical_schema = metadata.schema;
+        let logical_schema = metadata.schema.clone();
         let stats = Statistics {
             num_rows,
             total_byte_size,
             column_statistics: vec![],
         };
+        let metadata_supplier = if metadata.props.reusable_flight_info {
+            MetadataSupplier::Reusable(Arc::new(metadata))
+        } else {
+            MetadataSupplier::Refresh {
+                driver: self.driver.clone(),
+                channel,
+                options,
+            }
+        };
         Ok(FlightTable {
-            driver: self.driver.clone(),
-            channel,
-            options,
+            metadata_supplier,
             origin,
             logical_schema,
             stats,
@@ -203,24 +210,39 @@ impl TryFrom<FlightInfo> for FlightMetadata {
 /// for controlling the protocol and query execution details.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlightProperties {
-    unbounded_stream: bool,
+    unbounded_streams: bool,
     grpc_headers: HashMap<String, String>,
     size_limits: SizeLimits,
+    reusable_flight_info: bool,
 }
 
 impl FlightProperties {
-    pub fn unbounded_stream(mut self, unbounded_stream: bool) -> Self {
-        self.unbounded_stream = unbounded_stream;
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Whether the service will produce infinite streams
+    pub fn with_unbounded_streams(mut self, unbounded_streams: bool) -> Self {
+        self.unbounded_streams = unbounded_streams;
         self
     }
 
-    pub fn grpc_headers(mut self, grpc_headers: HashMap<String, String>) -> Self {
+    /// gRPC headers to use on subsequent calls.
+    pub fn with_grpc_headers(mut self, grpc_headers: HashMap<String, String>) -> Self {
         self.grpc_headers = grpc_headers;
         self
     }
 
-    pub fn size_limits(mut self, size_limits: SizeLimits) -> Self {
+    /// Max sizes in bytes for encoded/decoded gRPC messages.
+    pub fn with_size_limits(mut self, size_limits: SizeLimits) -> Self {
         self.size_limits = size_limits;
+        self
+    }
+
+    /// Whether the FlightInfo objects produced by the service can be used multiple times
+    /// or need to be refreshed before every table scan.
+    pub fn with_reusable_flight_info(mut self, reusable_flight_info: bool) -> Self {
+        self.reusable_flight_info = reusable_flight_info;
         self
     }
 }
@@ -248,12 +270,38 @@ impl Default for SizeLimits {
     }
 }
 
+#[derive(Clone, Debug)]
+enum MetadataSupplier {
+    Reusable(Arc<FlightMetadata>),
+    Refresh {
+        driver: Arc<dyn FlightDriver>,
+        channel: Channel,
+        options: HashMap<String, String>,
+    },
+}
+
+impl MetadataSupplier {
+    async fn flight_metadata(&self) -> datafusion::common::Result<Arc<FlightMetadata>> {
+        match self {
+            Self::Reusable(metadata) => Ok(metadata.clone()),
+            Self::Refresh {
+                driver,
+                channel,
+                options,
+            } => Ok(Arc::new(
+                driver
+                    .metadata(channel.clone(), options)
+                    .await
+                    .map_err(to_df_err)?,
+            )),
+        }
+    }
+}
+
 /// Table provider that wraps a specific flight from an Arrow Flight service
 #[derive(Debug)]
 pub struct FlightTable {
-    driver: Arc<dyn FlightDriver>,
-    channel: Channel,
-    options: HashMap<String, String>,
+    metadata_supplier: MetadataSupplier,
     origin: String,
     logical_schema: SchemaRef,
     stats: Statistics,
@@ -280,13 +328,9 @@ impl TableProvider for FlightTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        let metadata = self
-            .driver
-            .metadata(self.channel.clone(), &self.options)
-            .await
-            .map_err(to_df_err)?;
+        let metadata = self.metadata_supplier.flight_metadata().await?;
         Ok(Arc::new(FlightExec::try_new(
-            metadata,
+            metadata.as_ref(),
             projection,
             &self.origin,
         )?))

@@ -40,7 +40,31 @@ pub const HEADER_PREFIX: &str = "flight.sql.header.";
 /// stored as a gRPC authorization header within the returned [FlightMetadata],
 /// to be sent with the subsequent `DoGet` requests.
 #[derive(Clone, Debug, Default)]
-pub struct FlightSqlDriver {}
+pub struct FlightSqlDriver {
+    properties_template: FlightProperties,
+    persistent_headers: bool,
+}
+
+impl FlightSqlDriver {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Custom flight properties to be returned from the metadata call instead of the default ones.
+    /// The headers (if any) will only be used for the Handshake/GetFlightInfo calls by default.
+    /// This behaviour can be changed by calling [Self::with_persistent_headers] below.
+    /// Headers provided as options for the metadata call will overwrite the template ones.
+    pub fn with_properties_template(mut self, properties_template: FlightProperties) -> Self {
+        self.properties_template = properties_template;
+        self
+    }
+
+    /// Propagate the static headers configured for Handshake/GetFlightInfo to the subsequent DoGet calls.
+    pub fn with_persistent_headers(mut self, persistent_headers: bool) -> Self {
+        self.persistent_headers = persistent_headers;
+        self
+    }
+}
 
 #[async_trait]
 impl FlightDriver for FlightSqlDriver {
@@ -50,11 +74,13 @@ impl FlightDriver for FlightSqlDriver {
         options: &HashMap<String, String>,
     ) -> Result<FlightMetadata> {
         let mut client = FlightSqlServiceClient::new(channel);
-        let headers = options.iter().filter_map(|(key, value)| {
+        let mut handshake_headers = self.properties_template.grpc_headers.clone();
+        let headers_overlay = options.iter().filter_map(|(key, value)| {
             key.strip_prefix(HEADER_PREFIX)
-                .map(|header_name| (header_name, value))
+                .map(|header_name| (header_name.to_owned(), value.to_owned()))
         });
-        for (name, value) in headers {
+        handshake_headers.extend(headers_overlay);
+        for (name, value) in &handshake_headers {
             client.set_header(name, value)
         }
         if let Some(username) = options.get(USERNAME) {
@@ -63,10 +89,18 @@ impl FlightDriver for FlightSqlDriver {
             client.handshake(username, password).await.ok();
         }
         let info = client.execute(options[QUERY].clone(), None).await?;
-        let mut grpc_headers = HashMap::default();
+        let mut partition_headers = if self.persistent_headers {
+            handshake_headers
+        } else {
+            HashMap::default()
+        };
         if let Some(token) = client.token() {
-            grpc_headers.insert("authorization".into(), format!("Bearer {}", token));
+            partition_headers.insert("authorization".into(), format!("Bearer {token}"));
         }
-        FlightMetadata::try_new(info, FlightProperties::default().grpc_headers(grpc_headers))
+        let props = self
+            .properties_template
+            .clone()
+            .with_grpc_headers(partition_headers);
+        FlightMetadata::try_new(info, props)
     }
 }

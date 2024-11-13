@@ -55,7 +55,7 @@ impl FlightExec {
     /// Creates a FlightExec with the provided [FlightMetadata]
     /// and origin URL (used as fallback location as per the protocol spec).
     pub fn try_new(
-        metadata: FlightMetadata,
+        metadata: &FlightMetadata,
         projection: Option<&Vec<usize>>,
         origin: &str,
     ) -> Result<Self> {
@@ -70,7 +70,7 @@ impl FlightExec {
             origin: origin.into(),
             schema,
             partitions,
-            properties: metadata.props,
+            properties: metadata.props.clone(),
         };
         Ok(config.into())
     }
@@ -82,7 +82,7 @@ impl FlightExec {
 
 impl From<FlightConfig> for FlightExec {
     fn from(config: FlightConfig) -> Self {
-        let exec_mode = if config.properties.unbounded_stream {
+        let exec_mode = if config.properties.unbounded_streams {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
@@ -347,12 +347,12 @@ mod tests {
         ]
         .into();
         let properties = FlightProperties::default()
-            .unbounded_stream(true)
-            .grpc_headers(HashMap::from([
+            .with_unbounded_streams(true)
+            .with_grpc_headers(HashMap::from([
                 ("h1".into(), "v1".into()),
                 ("h2".into(), "v2".into()),
             ]))
-            .size_limits(SizeLimits::new(1024, 1024));
+            .with_size_limits(SizeLimits::new(1024, 1024));
         let config = FlightConfig {
             origin: "http://localhost:50050".into(),
             schema,
