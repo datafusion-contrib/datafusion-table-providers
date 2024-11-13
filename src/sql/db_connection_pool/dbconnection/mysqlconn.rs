@@ -45,28 +45,26 @@ pub struct MySQLConnection {
 }
 
 impl MySQLConnection {
-    fn column_meta_query_for(tbl: &TableReference) -> String {
+    /// Create a [`TableReference`] in a manner that properly handles the unique quote style for MySQL.
+    ///
+    /// [`TableReference::from`] uses `DefaultDialect` and therefore gets quoting incorrect.
+    fn to_mysql_quoted_string(tbl: &TableReference) -> String {
         let q = MySqlDialect {}
             .identifier_quote_style("") // parameter unimportant for `MySqlDialect`.
             .unwrap_or_default();
 
-        let tbl_name = [tbl.catalog(), tbl.schema(), Some(tbl.table())]
+        [tbl.catalog(), tbl.schema(), Some(tbl.table())]
             .into_iter()
             .filter_map(|part| part)
             .map(|part| {
-                if part.starts_with(quote) && part.ends_with(quote) {
+                if part.starts_with(q) && part.ends_with(q) {
                     part.to_string()
                 } else {
                     format!("{quote}{part}{quote}", quote = q)
                 }
             })
             .collect::<Vec<_>>()
-            .join(".");
-
-        // we don't use SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}' AND TABLE_SCHEMA = '{}'
-        // as table_reference don't always have schema specified so we need to extract schema/db name from connection properties
-        // to ensure we are querying information for correct table
-        format!("SHOW COLUMNS FROM {tbl_name}")
+            .join(".")
     }
 }
 
@@ -99,8 +97,17 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 
+        // we don't use SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}' AND TABLE_SCHEMA = '{}'
+        // as table_reference don't always have schema specified so we need to extract schema/db name from connection properties
+        // to ensure we are querying information for correct table
         let columns_meta: Vec<Row> = match conn
-            .exec(Self::column_meta_query_for(table_reference), Params::Empty)
+            .exec(
+                format!(
+                    "SHOW COLUMNS FROM {table_name}",
+                    table_name = Self::to_mysql_quoted_string(table_reference)
+                ),
+                Params::Empty,
+            )
             .await
         {
             Ok(columns_meta) => columns_meta,
