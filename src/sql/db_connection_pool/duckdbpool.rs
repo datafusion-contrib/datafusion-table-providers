@@ -46,6 +46,18 @@ pub struct DuckDbConnectionPool {
     invalid_type_action: InvalidTypeAction,
 }
 
+impl std::fmt::Debug for DuckDbConnectionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDbConnectionPool")
+            .field("path", &self.path)
+            .field("join_push_down", &self.join_push_down)
+            .field("attached_databases", &self.attached_databases)
+            .field("mode", &self.mode)
+            .field("invalid_type_action", &self.invalid_type_action)
+            .finish()
+    }
+}
+
 impl DuckDbConnectionPool {
     /// Create a new `DuckDbConnectionPool` from memory.
     ///

@@ -116,9 +116,8 @@ pub(crate) mod tests {
 
     use arrow::datatypes::SchemaRef;
     use datafusion::{
-        common::{Constraints, DFSchema},
+        common::{Constraint, Constraints},
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-        sql::sqlparser::ast::{Ident, TableConstraint},
     };
 
     #[tokio::test]
@@ -164,33 +163,22 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn get_unique_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_from_table_constraints(
-            &[TableConstraint::Unique {
-                name: None,
-                index_name: None,
-                index_type_display: datafusion::sql::sqlparser::ast::KeyOrIndexDisplay::None,
-                index_type: None,
-                columns: cols.iter().map(|col| Ident::new(*col)).collect(),
-                index_options: vec![],
-                characteristics: None,
-            }],
-            &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
-        )
-        .expect("valid constraints")
+        // Convert column names to their corresponding indices
+        let indices: Vec<usize> = cols
+            .iter()
+            .filter_map(|&col_name| schema.column_with_name(col_name).map(|(index, _)| index))
+            .collect();
+
+        Constraints::new_unverified(vec![Constraint::Unique(indices)])
     }
 
     pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_from_table_constraints(
-            &[TableConstraint::PrimaryKey {
-                name: None,
-                index_name: None,
-                index_type: None,
-                columns: cols.iter().map(|col| Ident::new(*col)).collect(),
-                index_options: vec![],
-                characteristics: None,
-            }],
-            &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
-        )
-        .expect("valid constraints")
+        // Convert column names to their corresponding indices
+        let indices: Vec<usize> = cols
+            .iter()
+            .filter_map(|&col_name| schema.column_with_name(col_name).map(|(index, _)| index))
+            .collect();
+
+        Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
     }
 }

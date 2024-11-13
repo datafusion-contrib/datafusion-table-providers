@@ -26,6 +26,14 @@ pub struct MySQLTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
 }
 
+impl<T, P> std::fmt::Debug for MySQLTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MySQLTable")
+            .field("base_table", &self.base_table)
+            .finish()
+    }
+}
+
 impl<T, P> MySQLTable<T, P> {
     pub async fn new(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,

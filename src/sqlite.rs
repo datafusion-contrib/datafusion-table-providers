@@ -106,6 +106,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
 }
@@ -397,6 +398,16 @@ pub struct Sqlite {
     constraints: Constraints,
 }
 
+impl std::fmt::Debug for Sqlite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sqlite")
+            .field("table_name", &self.table_name)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
+}
+
 impl Sqlite {
     #[must_use]
     pub fn new(
@@ -672,7 +683,8 @@ impl Sqlite {
 pub(crate) mod tests {
     use arrow::datatypes::{DataType, Schema};
     use datafusion::{
-        common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
+        common::{Constraint, ToDFSchema},
+        prelude::SessionContext,
     };
 
     use super::*;
@@ -703,20 +715,15 @@ pub(crate) mod tests {
 
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
 
-        let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
+        let primary_keys_constraints = {
+            let schema = Arc::clone(&schema);
+            let indices: Vec<usize> = ["id"]
+                .iter()
+                .filter_map(|&col_name| schema.column_with_name(col_name).map(|(index, _)| index))
+                .collect();
 
-        let primary_keys_constraints = Constraints::new_from_table_constraints(
-            &[TableConstraint::PrimaryKey {
-                columns: vec!["id"].into_iter().map(Into::into).collect(),
-                name: None,
-                index_name: None,
-                index_options: vec![],
-                characteristics: None,
-                index_type: None,
-            }],
-            &df_schema,
-        )
-        .expect("should create constraints");
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
+        };
 
         let external_table = CreateExternalTable {
             schema: df_schema,
@@ -731,6 +738,7 @@ pub(crate) mod tests {
             options,
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
+            temporary: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -760,6 +768,11 @@ pub(crate) mod tests {
             .await
             .expect("should get primary keys");
 
-        assert_eq!(retrieved_primary_keys, expected_primary_keys);
+        assert_eq!(
+            retrieved_primary_keys,
+            vec!["id".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>()
+        );
     }
 }
