@@ -59,6 +59,17 @@ pub struct SqlTable<T: 'static, P: 'static> {
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
+impl<T, P> std::fmt::Debug for SqlTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlTable")
+            .field("name", &self.name)
+            .field("table_reference", &self.table_reference)
+            .field("schema", &self.schema)
+            .field("engine", &self.engine)
+            .finish()
+    }
+}
+
 impl<T, P> SqlTable<T, P> {
     pub async fn new(
         name: &'static str,

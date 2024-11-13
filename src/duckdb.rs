@@ -120,6 +120,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
@@ -335,6 +336,16 @@ pub struct DuckDB {
     schema: SchemaRef,
     constraints: Constraints,
     table_creator: Option<TableCreator>,
+}
+
+impl std::fmt::Debug for DuckDB {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDB")
+            .field("table_name", &self.table_name)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
 }
 
 impl DuckDB {
