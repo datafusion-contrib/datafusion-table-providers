@@ -20,7 +20,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
         PlanProperties, SendableRecordBatchStream,
     },
-    sql::TableReference,
+    sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
@@ -51,7 +51,8 @@ impl<T, P> DuckDBTable<T, P> {
             schema,
             table_reference,
             Some(Engine::DuckDB),
-        );
+        )
+        .with_dialect(Arc::new(DuckDBDialect {}));
 
         Self {
             base_table,
