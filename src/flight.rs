@@ -227,13 +227,13 @@ impl FlightProperties {
         self
     }
 
-    /// GRPC headers that to use on subsequent calls.
+    /// gRPC headers to use on subsequent calls.
     pub fn with_grpc_headers(mut self, grpc_headers: HashMap<String, String>) -> Self {
         self.grpc_headers = grpc_headers;
         self
     }
 
-    /// Max sizes in bytes for encoded/decoded GRPC messages.
+    /// Max sizes in bytes for encoded/decoded gRPC messages.
     pub fn with_size_limits(mut self, size_limits: SizeLimits) -> Self {
         self.size_limits = size_limits;
         self
