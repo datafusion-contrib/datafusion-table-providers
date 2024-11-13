@@ -100,7 +100,6 @@ postgres-federation = ["postgres"]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "5af0df83c2cd1d3f82f293b066b401a4dfd4064b" }
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "5b98603705a381ceeb5cc371e4f606b7332b57ce" }
 
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}
 datafusion-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "0bad328656a07fd5ab899186462b09e119e21f90"}

@@ -1,8 +1,8 @@
 use arrow::{
     array::{
         array, timezone::Tz, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray,
+        StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
@@ -230,6 +230,7 @@ impl InsertBuilder {
                     DataType::Float64 => push_value!(row_values, column, row, Float64Array),
                     DataType::Utf8 => push_value!(row_values, column, row, StringArray),
                     DataType::LargeUtf8 => push_value!(row_values, column, row, LargeStringArray),
+                    DataType::Utf8View => push_value!(row_values, column, row, StringViewArray),
                     DataType::Boolean => push_value!(row_values, column, row, BooleanArray),
                     DataType::Decimal128(_, scale) => {
                         let array = column.as_any().downcast_ref::<array::Decimal128Array>();
@@ -691,6 +692,18 @@ impl InsertBuilder {
                             row_values.push(valid_array.value(row).into());
                         }
                     }
+                    DataType::BinaryView => {
+                        let array = column.as_any().downcast_ref::<array::BinaryViewArray>();
+
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            row_values.push(valid_array.value(row).into());
+                        }
+                    }
                     DataType::Interval(interval_unit) => match interval_unit {
                         IntervalUnit::DayTime => {
                             let array = column
@@ -920,6 +933,22 @@ impl InsertBuilder {
                                             param_values.push(valid_string_array.value(row).into());
                                         }
                                     }
+                                    DataType::Utf8View => {
+                                        let view_array =
+                                            col.as_any().downcast_ref::<array::StringViewArray>();
+
+                                        if let Some(valid_view_array) = view_array {
+                                            param_values.push(valid_view_array.value(row).into());
+                                        }
+                                    }
+                                    DataType::BinaryView => {
+                                        let view_array =
+                                            col.as_any().downcast_ref::<array::BinaryViewArray>();
+
+                                        if let Some(valid_view_array) = view_array {
+                                            param_values.push(valid_view_array.value(row).into());
+                                        }
+                                    }
                                     DataType::Float16
                                     | DataType::Timestamp(_, _)
                                     | DataType::Date32
@@ -928,8 +957,6 @@ impl InsertBuilder {
                                     | DataType::Time64(_)
                                     | DataType::Duration(_)
                                     | DataType::Interval(_)
-                                    | DataType::BinaryView
-                                    | DataType::Utf8View
                                     | DataType::List(_)
                                     | DataType::ListView(_)
                                     | DataType::FixedSizeList(_, _)
@@ -1189,6 +1216,17 @@ fn insert_list_into_row_values(
             // We must cast here in case the array is empty which SeaQuery does not handle.
             row_values.push(expr.cast_as(Alias::new("text[]")));
         }
+        DataType::Utf8View => {
+            let mut list_values: Vec<String> = vec![];
+            for i in 0..list_array.len() {
+                let view_array = list_array.as_any().downcast_ref::<array::StringViewArray>();
+                if let Some(valid_view_array) = view_array {
+                    list_values.push(valid_view_array.value(i).to_string());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            row_values.push(expr.cast_as(Alias::new("text[]")));
+        }
         DataType::Boolean => push_list_values!(
             list_type.data_type(),
             list_array,
@@ -1229,7 +1267,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::UInt64 => ColumnType::BigUnsigned,
         DataType::Float32 => ColumnType::Float,
         DataType::Float64 => ColumnType::Double,
-        DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => ColumnType::Text,
         DataType::Boolean => ColumnType::Boolean,
         #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
         DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
@@ -1248,7 +1286,9 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         | DataType::FixedSizeList(list_type, _) => {
             ColumnType::Array(map_data_type_to_column_type(list_type.data_type()).into())
         }
-        DataType::Binary | DataType::LargeBinary => ColumnType::VarBinary(StringLen::Max),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+            ColumnType::VarBinary(StringLen::Max)
+        }
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
         DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
@@ -1292,6 +1332,9 @@ fn insert_list_into_row_values_json(
         DataType::Utf8 => serialize_list_values!(data_type, list_array, StringArray, String),
         DataType::LargeUtf8 => {
             serialize_list_values!(data_type, list_array, LargeStringArray, String)
+        }
+        DataType::Utf8View => {
+            serialize_list_values!(data_type, list_array, StringViewArray, String)
         }
         DataType::Boolean => serialize_list_values!(data_type, list_array, BooleanArray, bool),
         _ => unimplemented!(
