@@ -7,6 +7,7 @@ use async_stream::stream;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::sql::unparser::dialect::{Dialect, MySqlDialect};
 use datafusion::sql::TableReference;
 use futures::lock::Mutex;
 use futures::{stream, StreamExt};
@@ -43,6 +44,30 @@ pub struct MySQLConnection {
     pub conn: Arc<Mutex<Conn>>,
 }
 
+impl MySQLConnection {
+    /// Create a [`TableReference`] in a manner that properly handles the unique quote style of MySQL.
+    ///
+    /// [`TableReference::from`] uses `DefaultDialect` and therefore gets quoting incorrect.
+    fn to_mysql_quoted_string(tbl: &TableReference) -> String {
+        let q = MySqlDialect {}
+            .identifier_quote_style("") // parameter unimportant for `MySqlDialect`.
+            .unwrap_or_default();
+
+        [tbl.catalog(), tbl.schema(), Some(tbl.table())]
+            .into_iter()
+            .flatten()
+            .map(|part| {
+                if part.starts_with(q) && part.ends_with(q) {
+                    part.to_string()
+                } else {
+                    format!("{quote}{part}{quote}", quote = q)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
 impl<'a> DbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     fn as_any(&self) -> &dyn Any {
         self
@@ -75,10 +100,16 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         // we don't use SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}' AND TABLE_SCHEMA = '{}'
         // as table_reference don't always have schema specified so we need to extract schema/db name from connection properties
         // to ensure we are querying information for correct table
-        let columns_meta_query =
-            format!("SHOW COLUMNS FROM {}", table_reference.to_quoted_string());
-
-        let columns_meta: Vec<Row> = match conn.exec(&columns_meta_query, Params::Empty).await {
+        let columns_meta: Vec<Row> = match conn
+            .exec(
+                format!(
+                    "SHOW COLUMNS FROM {table_name}",
+                    table_name = Self::to_mysql_quoted_string(table_reference)
+                ),
+                Params::Empty,
+            )
+            .await
+        {
             Ok(columns_meta) => columns_meta,
             Err(e) => match e {
                 mysql_async::Error::Server(server_error) => {
