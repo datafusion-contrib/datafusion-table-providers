@@ -68,5 +68,13 @@ jobs:
           docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
 
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
       - name: Run tests
         run: make test
