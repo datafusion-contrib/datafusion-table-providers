@@ -45,7 +45,7 @@ pub struct MySQLConnection {
 }
 
 impl MySQLConnection {
-    /// Create a [`TableReference`] in a manner that properly handles the unique quote style for MySQL.
+    /// Create a [`TableReference`] in a manner that properly handles the unique quote style of MySQL.
     ///
     /// [`TableReference::from`] uses `DefaultDialect` and therefore gets quoting incorrect.
     fn to_mysql_quoted_string(tbl: &TableReference) -> String {
