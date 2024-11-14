@@ -93,6 +93,18 @@ struct ContainerManager {
     claimed: bool,
 }
 
+impl Drop for ContainerManager {
+    fn drop(&mut self) {
+        let _ = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(stop_container(self.port));
+    }
+}
+
+async fn stop_container(port: usize) {
+    println!("Stopping Postgres container on port {}", port);
+}
+
 #[fixture]
 #[once]
 fn container_manager() -> Mutex<ContainerManager> {
