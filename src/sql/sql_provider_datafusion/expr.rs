@@ -24,6 +24,7 @@ pub enum Engine {
     DuckDB,
     ODBC,
     Postgres,
+    MySQL,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -111,6 +112,9 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                     } else {
                         Ok(format!("TO_TIMESTAMP({})", *value as f64 / 1_000_000.0))
                     }
+                }
+                Some(Engine::MySQL) => {
+                    Ok(format!("FROM_UNIXTIME({})", *value as f64 / 1_000_000.0))
                 }
                 _ => Ok(format!("TO_TIMESTAMP({})", value / 1_000_000)),
             },
