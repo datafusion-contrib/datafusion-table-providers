@@ -1,4 +1,5 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::MySqlDialect;
@@ -123,7 +124,7 @@ impl<T, P> MySQLSQLExec<T, P> {
             pool,
             filters,
             limit,
-            None,
+            Some(Engine::MySQL),
         )?;
 
         Ok(Self { base_exec })
