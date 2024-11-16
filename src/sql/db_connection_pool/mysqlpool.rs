@@ -187,7 +187,7 @@ impl MySQLConnectionPool {
         let pool = Arc::clone(&self.pool);
         let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
-        // Set MySQL server timezone to UTC and handle all MySQL timestamp types uniformly in UTC.
+        // Set MySQL session default time zone to UTC to match Datafusion
         let _: Vec<Row> = conn
             .exec("SET time_zone = '+00:00'", Params::Empty)
             .await
@@ -253,7 +253,7 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
         let pool = Arc::clone(&self.pool);
         let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
-        // Set MySQL server timezone to UTC and handle all MySQL timestamp types uniformly in UTC.
+        // Set MySQL session default time zone to UTC to match Datafusion
         let _: Vec<Row> = conn
             .exec("SET time_zone = '+00:00'", Params::Empty)
             .await
