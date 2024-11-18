@@ -13,7 +13,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
 use datafusion_table_providers::{
-    postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
+    postgres::{table::PostgresTableProviderFactory, DynPostgresConnectionPool},
     sql::sql_provider_datafusion::SqlTable,
 };
 use rstest::{fixture, rstest};

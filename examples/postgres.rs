@@ -2,8 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
-    postgres::PostgresTableFactory, sql::db_connection_pool::postgrespool::PostgresConnectionPool,
-    util::secrets::to_secret_map,
+    postgres::table::PostgresTableFactory,
+    sql::db_connection_pool::postgrespool::PostgresConnectionPool, util::secrets::to_secret_map,
 };
 
 /// This example demonstrates how to register a table provider into DataFusion that
