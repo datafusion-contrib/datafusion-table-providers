@@ -84,7 +84,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct SqlTable<T: 'static, P: 'static> {
-    name: &'static str,
+    name: String,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     schema: SchemaRef,
     pub table_reference: TableReference,
@@ -104,7 +104,7 @@ impl<T, P> fmt::Debug for SqlTable<T, P> {
 
 impl<T, P> SqlTable<T, P> {
     pub async fn new(
-        name: &'static str,
+        name: &str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         table_reference: impl Into<TableReference>,
         engine: Option<Engine>,
@@ -129,7 +129,7 @@ impl<T, P> SqlTable<T, P> {
     }
 
     pub fn new_with_schema(
-        name: &'static str,
+        name: &str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
@@ -137,7 +137,7 @@ impl<T, P> SqlTable<T, P> {
     ) -> Self {
         let engine = engine.unwrap_or(Engine::Default);
         Self {
-            name,
+            name: name.to_owned(),
             pool: Arc::clone(pool),
             schema: schema.into(),
             table_reference: table_reference.into(),
@@ -195,8 +195,8 @@ impl<T, P> SqlTable<T, P> {
     }
 
     #[must_use]
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     #[must_use]

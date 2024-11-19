@@ -73,6 +73,7 @@ itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 fundu = "2.0.1"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 anyhow = "1.0.86"

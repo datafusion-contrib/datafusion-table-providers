@@ -220,6 +220,54 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         }
     }
 
+    fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let sql = "SELECT table_name FROM information_schema.tables \
+                  WHERE table_schema = ? AND table_type = 'BASE TABLE'";
+
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+        let mut rows = stmt
+            .query([schema])
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+        let mut tables = vec![];
+
+        while let Some(row) = rows.next().boxed().context(super::UnableToGetTablesSnafu)? {
+            tables.push(row.get(0).boxed().context(super::UnableToGetTablesSnafu)?);
+        }
+
+        Ok(tables)
+    }
+
+    fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let sql = "SELECT DISTINCT schema_name FROM information_schema.schemata \
+                  WHERE schema_name NOT IN ('information_schema', 'pg_catalog')";
+
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+        let mut rows = stmt
+            .query([])
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+        let mut schemas = vec![];
+
+        while let Some(row) = rows
+            .next()
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?
+        {
+            schemas.push(row.get(0).boxed().context(super::UnableToGetSchemasSnafu)?);
+        }
+
+        Ok(schemas)
+    }
+
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
         let table_str = if is_table_function(table_reference) {
             table_reference.to_string()

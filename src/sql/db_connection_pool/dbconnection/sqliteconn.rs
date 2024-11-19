@@ -52,6 +52,28 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         SqliteConnection { conn }
     }
 
+    async fn tables(&self, _schema: &str) -> Result<Vec<String>, super::Error> {
+        let tables = self
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                )?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                let tables: Result<Vec<_>, rusqlite::Error> = rows.collect();
+                Ok(tables?)
+            })
+            .await
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+
+        Ok(tables)
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        Ok(vec!["main".to_string()])
+    }
+
     async fn get_schema(
         &self,
         table_reference: &TableReference,

@@ -1,5 +1,6 @@
 pub mod sql;
 pub mod util;
+pub mod common;
 
 #[cfg(feature = "duckdb")]
 pub mod duckdb;

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::prelude::SessionContext;
 use datafusion_table_providers::{
-    mysql::MySQLTableFactory, sql::db_connection_pool::mysqlpool::MySQLConnectionPool,
+    common::DatabaseCatalogProvider, sql::db_connection_pool::mysqlpool::MySQLConnectionPool,
     util::secrets::to_secret_map,
 };
 
@@ -42,21 +42,14 @@ async fn main() {
             .expect("unable to create MySQL connection pool"),
     );
 
-    let table_factory = MySQLTableFactory::new(mysql_pool);
-
-    let companies_table = table_factory
-        .table_provider(TableReference::bare("companies"))
-        .await
-        .expect("to create table provider");
+    let catalog = DatabaseCatalogProvider::try_new(mysql_pool).await.unwrap();
 
     let ctx = SessionContext::new();
 
-    // It's not required that the name registed in DataFusion matches the table name in DuckDB.
-    ctx.register_table("companies", companies_table)
-        .expect("to register table");
+    ctx.register_catalog("mysql", Arc::new(catalog));
 
     let df = ctx
-        .sql("SELECT * FROM companies")
+        .sql("SELECT * FROM mysql.mysql_db.companies")
         .await
         .expect("select failed");
 

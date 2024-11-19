@@ -1,7 +1,7 @@
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::prelude::SessionContext;
 use datafusion_table_providers::{
+    common::DatabaseCatalogProvider,
     sql::db_connection_pool::{sqlitepool::SqliteConnectionPoolFactory, Mode},
-    sqlite::SqliteTableFactory,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,36 +21,20 @@ async fn main() {
         .expect("unable to create Sqlite connection pool"),
     );
 
-    let sqlite_table_factory = SqliteTableFactory::new(sqlite_pool);
-
-    let companies_table = sqlite_table_factory
-        .table_provider(TableReference::bare("companies"))
-        .await
-        .expect("to create table provider");
-
-    let projects_table = sqlite_table_factory
-        .table_provider(TableReference::bare("projects"))
-        .await
-        .expect("to create table provider");
-
+    let catalog = DatabaseCatalogProvider::try_new(sqlite_pool).await.unwrap();
     let ctx = SessionContext::new();
 
-    // It's not required that the name registed in DataFusion matches the table name in DuckDB.
-    ctx.register_table("companies", companies_table)
-        .expect("to register table");
-
-    ctx.register_table("projects", projects_table)
-        .expect("to register table");
+    ctx.register_catalog("sqlite", Arc::new(catalog));
 
     let df = ctx
-        .sql("SELECT * FROM companies")
+        .sql("SELECT * FROM sqlite.main.companies")
         .await
         .expect("select failed");
 
     df.show().await.expect("show failed");
 
     let df = ctx
-        .sql("SELECT * FROM projects")
+        .sql("SELECT * FROM sqlite.main.projects")
         .await
         .expect("select failed");
 

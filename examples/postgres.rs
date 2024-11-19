@@ -1,9 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::prelude::SessionContext;
 use datafusion_table_providers::{
-    postgres::table::PostgresTableFactory,
-    sql::db_connection_pool::postgrespool::PostgresConnectionPool, util::secrets::to_secret_map,
+    common::DatabaseCatalogProvider, sql::db_connection_pool::postgrespool::PostgresConnectionPool,
+    util::secrets::to_secret_map,
 };
 
 /// This example demonstrates how to register a table provider into DataFusion that
@@ -43,21 +43,15 @@ async fn main() {
             .expect("unable to create Postgres connection pool"),
     );
 
-    let table_factory = PostgresTableFactory::new(postgres_pool);
-
-    let companies_table = table_factory
-        .table_provider(TableReference::bare("companies"))
+    let pg_catalog = DatabaseCatalogProvider::try_new(postgres_pool)
         .await
-        .expect("to create table provider");
-
+        .unwrap();
     let ctx = SessionContext::new();
 
-    // It's not required that the name registed in DataFusion matches the table name in DuckDB.
-    ctx.register_table("companies", companies_table)
-        .expect("to register table");
+    ctx.register_catalog("postgres", Arc::new(pg_catalog));
 
     let df = ctx
-        .sql("SELECT * FROM companies")
+        .sql("SELECT * FROM postgres.public.companies")
         .await
         .expect("select failed");
 

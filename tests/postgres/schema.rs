@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::postgres::common;
 use crate::postgres::PostgresTableProviderFactory;
-use datafusion_table_providers::postgres::table::PostgresTableFactory;
+use datafusion_table_providers::postgres::PostgresTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::util::secrets::to_secret_map;
 

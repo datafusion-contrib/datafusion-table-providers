@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::prelude::SessionContext;
 use datafusion_table_providers::{
-    duckdb::DuckDBTableFactory, sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,
+    common::DatabaseCatalogProvider, sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,
 };
 use duckdb::AccessMode;
 
@@ -16,36 +16,21 @@ async fn main() {
             .expect("unable to create DuckDB connection pool"),
     );
 
-    let duckdb_table_factory = DuckDBTableFactory::new(duckdb_pool);
-
-    let companies_table = duckdb_table_factory
-        .table_provider(TableReference::bare("companies"))
-        .await
-        .expect("to create table provider");
-
-    let projects_table = duckdb_table_factory
-        .table_provider(TableReference::bare("projects"))
-        .await
-        .expect("to create table provider");
+    let catalog = DatabaseCatalogProvider::try_new(duckdb_pool).await.unwrap();
 
     let ctx = SessionContext::new();
 
-    // It's not required that the name registed in DataFusion matches the table name in DuckDB.
-    ctx.register_table("companies", companies_table)
-        .expect("to register table");
-
-    ctx.register_table("projects", projects_table)
-        .expect("to register table");
+    ctx.register_catalog("duckdb", Arc::new(catalog));
 
     let df = ctx
-        .sql("SELECT * FROM companies")
+        .sql("SELECT * FROM duckdb.main.companies")
         .await
         .expect("select failed");
 
     df.show().await.expect("show failed");
 
     let df = ctx
-        .sql("SELECT * FROM projects")
+        .sql("SELECT * FROM duckdb.main.projects")
         .await
         .expect("select failed");
 
