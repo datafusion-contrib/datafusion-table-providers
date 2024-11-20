@@ -7,14 +7,13 @@ use datafusion::{
     common::Constraints,
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::Expr,
+    logical_expr::{dml::InsertOp, Expr},
     physical_plan::{
         insert::{DataSink, DataSinkExec},
         metrics::MetricsSet,
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
-use datafusion_expr::dml::InsertOp;
 use futures::StreamExt;
 use snafu::prelude::*;
 

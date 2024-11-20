@@ -10,6 +10,7 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
@@ -21,7 +22,6 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
-use datafusion_expr::dml::InsertOp;
 use duckdb::Transaction;
 use futures::StreamExt;
 use snafu::prelude::*;

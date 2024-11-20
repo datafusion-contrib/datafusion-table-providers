@@ -8,14 +8,13 @@ use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::Expr,
+    logical_expr::{dml::InsertOp, Expr},
     physical_plan::{
         insert::{DataSink, DataSinkExec},
         metrics::MetricsSet,
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
-use datafusion_expr::dml::InsertOp;
 use futures::StreamExt;
 use snafu::prelude::*;
 
@@ -241,10 +240,9 @@ mod tests {
         catalog::TableProviderFactory,
         common::{Constraints, TableReference, ToDFSchema},
         execution::context::SessionContext,
-        logical_expr::CreateExternalTable,
+        logical_expr::{dml::InsertOp, CreateExternalTable},
         physical_plan::collect,
     };
-    use datafusion_expr::dml::InsertOp;
 
     use crate::sqlite::SqliteTableProviderFactory;
     use crate::util::test::MockExec;
