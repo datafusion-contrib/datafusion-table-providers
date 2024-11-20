@@ -44,7 +44,7 @@ impl<T, P> SqlTable<T, P> {
 #[async_trait]
 impl<T, P> SQLExecutor for SqlTable<T, P> {
     fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 
     fn compute_context(&self) -> Option<String> {

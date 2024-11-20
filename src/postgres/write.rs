@@ -21,7 +21,9 @@ use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
 
-use super::{to_datafusion_error, Postgres};
+use crate::postgres::Postgres;
+
+use super::to_datafusion_error;
 
 #[derive(Clone)]
 pub struct PostgresTableWriter {
