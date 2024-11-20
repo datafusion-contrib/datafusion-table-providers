@@ -33,6 +33,7 @@ async fn arrow_duckdb_round_trip(
         options: HashMap::new(),
         constraints: Constraints::empty(),
         column_defaults: HashMap::new(),
+        temporary: false,
     };
     let table_provider = factory
         .create(&ctx.state(), &cmd)
@@ -44,7 +45,11 @@ async fn arrow_duckdb_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), true)
+        .insert_into(
+            &ctx.state(),
+            Arc::new(mem_exec),
+            datafusion_expr::dml::InsertOp::Overwrite,
+        )
         .await
         .expect("insert plan created");
 

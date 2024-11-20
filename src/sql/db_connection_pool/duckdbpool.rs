@@ -42,6 +42,12 @@ pub struct DuckDbConnectionPool {
     mode: Mode,
 }
 
+impl std::fmt::Debug for DuckDbConnectionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDbConnectionPool {}", self.path)
+    }
+}
+
 impl DuckDbConnectionPool {
     /// Create a new `DuckDbConnectionPool` from memory.
     ///

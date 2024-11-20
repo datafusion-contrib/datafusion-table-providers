@@ -116,9 +116,8 @@ pub(crate) mod tests {
 
     use arrow::datatypes::SchemaRef;
     use datafusion::{
-        common::{Constraints, DFSchema},
+        common::{Constraint, Constraints},
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-        sql::sqlparser::ast::{Ident, TableConstraint},
     };
 
     #[tokio::test]
@@ -164,33 +163,30 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn get_unique_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_from_table_constraints(
-            &[TableConstraint::Unique {
-                name: None,
-                index_name: None,
-                index_type_display: datafusion::sql::sqlparser::ast::KeyOrIndexDisplay::None,
-                index_type: None,
-                columns: cols.iter().map(|col| Ident::new(*col)).collect(),
-                index_options: vec![],
-                characteristics: None,
-            }],
-            &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
+        Constraints::new_unverified(
+            cols.into_iter()
+                .map(|col| {
+                    schema.index_of(col).expect(&format!(
+                        "[{col}] not found, validated schema: [{}]",
+                        schema
+                    ))
+                })
+                .map(|i| Constraint::Unique(vec![i]))
+                .collect(),
         )
-        .expect("valid constraints")
     }
 
     pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_from_table_constraints(
-            &[TableConstraint::PrimaryKey {
-                name: None,
-                index_name: None,
-                index_type: None,
-                columns: cols.iter().map(|col| Ident::new(*col)).collect(),
-                index_options: vec![],
-                characteristics: None,
-            }],
-            &Arc::new(DFSchema::try_from(schema).expect("valid schema")),
+        Constraints::new_unverified(
+            cols.iter()
+                .map(|col| {
+                    schema.index_of(col).expect(&format!(
+                        "[{col}] not found, validated schema: [{}]",
+                        schema
+                    ))
+                })
+                .map(|i| Constraint::PrimaryKey(vec![i]))
+                .collect(),
         )
-        .expect("valid constraints")
     }
 }

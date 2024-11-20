@@ -15,6 +15,7 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
+use datafusion_expr::dml::InsertOp;
 use futures::StreamExt;
 use snafu::prelude::*;
 
@@ -26,7 +27,7 @@ use crate::util::{
 
 use super::{to_datafusion_error, Sqlite};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SqliteTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     sqlite: Arc<Sqlite>,
@@ -85,13 +86,13 @@ impl TableProvider for SqliteTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(SqliteDataSink::new(
                 Arc::clone(&self.sqlite),
-                overwrite,
+                op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
             )),
             self.schema(),
@@ -243,6 +244,7 @@ mod tests {
         logical_expr::CreateExternalTable,
         physical_plan::collect,
     };
+    use datafusion_expr::dml::InsertOp;
 
     use crate::sqlite::SqliteTableProviderFactory;
     use crate::util::test::MockExec;
@@ -268,6 +270,7 @@ mod tests {
             options: HashMap::new(),
             constraints: Constraints::empty(),
             column_defaults: HashMap::default(),
+            temporary: true,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -287,7 +290,7 @@ mod tests {
         let exec = MockExec::new(vec![Ok(data)], schema);
 
         let insertion = table
-            .insert_into(&ctx.state(), Arc::new(exec), false)
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
             .await
             .expect("insertion should be successful");
 

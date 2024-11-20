@@ -14,6 +14,7 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
+use datafusion_expr::dml::InsertOp;
 use futures::StreamExt;
 use snafu::prelude::*;
 
@@ -25,7 +26,7 @@ use crate::postgres::Postgres;
 
 use super::to_datafusion_error;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PostgresTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
@@ -84,13 +85,13 @@ impl TableProvider for PostgresTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(PostgresDataSink::new(
                 Arc::clone(&self.postgres),
-                overwrite,
+                op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
             )),
             self.schema(),

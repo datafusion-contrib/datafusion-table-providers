@@ -30,6 +30,12 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) table_functions: Option<HashMap<String, String>>,
 }
 
+impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDBTable {}", self.base_table.name())
+    }
+}
+
 impl<T, P> DuckDBTable<T, P> {
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
