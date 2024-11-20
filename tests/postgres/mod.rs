@@ -3,7 +3,7 @@ use arrow::{
     array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion::catalog::TableProviderFactory;
+use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
@@ -59,7 +59,7 @@ async fn arrow_postgres_round_trip(
         .insert_into(
             &ctx.state(),
             Arc::new(mem_exec),
-            datafusion_expr::dml::InsertOp::Overwrite,
+            InsertOp::Overwrite,
         )
         .await
         .expect("insert plan created");

@@ -4,6 +4,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
@@ -45,11 +46,7 @@ async fn arrow_duckdb_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(
-            &ctx.state(),
-            Arc::new(mem_exec),
-            datafusion_expr::dml::InsertOp::Overwrite,
-        )
+        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
         .await
         .expect("insert plan created");
 
