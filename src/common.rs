@@ -50,7 +50,7 @@ impl CatalogProvider for DatabaseCatalogProvider {
     }
 }
 
-pub struct DatabaseSchemProvider<T, P> {
+pub struct DatabaseSchemaProvider<T, P> {
     name: String,
     tables: Vec<String>,
     pool: Pool<T, P>,
