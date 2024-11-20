@@ -26,7 +26,7 @@ impl DatabaseCatalogProvider {
         let schema_map = DashMap::new();
 
         for schema in schemas {
-            let provider = DatabaseSchemProvider::try_new(schema.clone(), pool.clone()).await?;
+            let provider = DatabaseSchemaProvider::try_new(schema.clone(), pool.clone()).await?;
             schema_map.insert(schema, Arc::new(provider) as Arc<dyn SchemaProvider>);
         }
 
