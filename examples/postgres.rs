@@ -1,33 +1,40 @@
-use std::{collections::HashMap, sync::Arc};
-
+use std::sync::Arc;
+use std::collections::HashMap;
 use datafusion::prelude::SessionContext;
+use datafusion::sql::TableReference;
 use datafusion_table_providers::{
-    common::DatabaseCatalogProvider, sql::db_connection_pool::postgrespool::PostgresConnectionPool,
+    common::DatabaseCatalogProvider,
+    sql::db_connection_pool::postgrespool::PostgresConnectionPool,
+    postgres::PostgresTableFactory,
     util::secrets::to_secret_map,
 };
 
-/// This example demonstrates how to register a table provider into DataFusion that
-/// uses a Postgres table as its source.
+/// This example demonstrates how to:
+/// 1. Create a PostgreSQL connection pool
+/// 2. Create and use PostgresTableFactory to generate TableProvider
+/// 3. Register TableProvider with DataFusion
+/// 4. Use SQL queries to access PostgreSQL table data
 ///
-/// Use docker to start a Postgres server this example can connect to:
-///
+/// Prerequisites:
+/// Start a PostgreSQL server using Docker:
 /// ```bash
 /// docker run --name postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=postgres_db -p 5432:5432 -d postgres:16-alpine
 /// # Wait for the Postgres server to start
 /// sleep 30
 ///
-/// # Create a table in the Postgres server and insert some data
-/// docker exec -i postgres psql -U postgres -d postgres_db <<EOF
+/// # Create a table and insert sample data
+/// docker exec -i postgres psql -U postgres test_db <<EOF
 /// CREATE TABLE companies (
-///    id INT PRIMARY KEY,
-///   name VARCHAR(100)
+///    id SERIAL PRIMARY KEY,
+///    name VARCHAR(100)
 /// );
 ///
-/// INSERT INTO companies (id, name) VALUES (1, 'Acme Corporation');
+/// INSERT INTO companies (name) VALUES ('Example Corp');
 /// EOF
 /// ```
 #[tokio::main]
 async fn main() {
+    // Create PostgreSQL connection parameters
     let postgres_params = to_secret_map(HashMap::from([
         ("host".to_string(), "localhost".to_string()),
         ("user".to_string(), "postgres".to_string()),
@@ -37,23 +44,49 @@ async fn main() {
         ("sslmode".to_string(), "disable".to_string()),
     ]));
 
+    // Create PostgreSQL connection pool
     let postgres_pool = Arc::new(
         PostgresConnectionPool::new(postgres_params)
             .await
-            .expect("unable to create Postgres connection pool"),
+            .expect("unable to create PostgreSQL connection pool"),
     );
 
-    let pg_catalog = DatabaseCatalogProvider::try_new(postgres_pool)
-        .await
-        .unwrap();
+    // Create PostgreSQL table provider factory
+    // Used to generate TableProvider instances that can read PostgreSQL table data
+    let table_factory = PostgresTableFactory::new(postgres_pool.clone());
+    
+    // Create database catalog provider
+    // This allows us to access tables through catalog structure (catalog.schema.table)
+    let catalog = DatabaseCatalogProvider::try_new(postgres_pool).await.unwrap();
+
+    // Create DataFusion session context
     let ctx = SessionContext::new();
+    // Register PostgreSQL catalog, making it accessible via the "postgres" name
+    ctx.register_catalog("postgres", Arc::new(catalog));
 
-    ctx.register_catalog("postgres", Arc::new(pg_catalog));
+    // Demonstrate direct table provider registration
+    // This method registers the table in the default catalog
+    // Here we register the PostgreSQL "companies" table as "companies_v2"
+    ctx.register_table(
+        "companies_v2",
+        table_factory
+            .table_provider(TableReference::bare("companies"))
+            .await
+            .expect("failed to register table provider"),
+    )
+    .expect("failed to register table");
 
+    // Query Example 1: Query the renamed table through default catalog
+    let df = ctx
+        .sql("SELECT * FROM datafusion.public.companies_v2")
+        .await
+        .expect("select failed");
+    df.show().await.expect("show failed");
+
+    // Query Example 2: Query the original table through PostgreSQL catalog
     let df = ctx
         .sql("SELECT * FROM postgres.public.companies")
         .await
         .expect("select failed");
-
     df.show().await.expect("show failed");
 }

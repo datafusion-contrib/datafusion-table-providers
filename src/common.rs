@@ -56,7 +56,7 @@ pub struct DatabaseSchemaProvider<T, P> {
     pool: Pool<T, P>,
 }
 
-impl<T, P: 'static> DatabaseSchemProvider<T, P> {
+impl<T, P: 'static> DatabaseSchemaProvider<T, P> {
     pub async fn try_new(name: String, pool: Pool<T, P>) -> Result<Self> {
         let conn = pool.connect().await?;
         let tables = get_tables(conn, &name).await?;
@@ -66,7 +66,7 @@ impl<T, P: 'static> DatabaseSchemProvider<T, P> {
 }
 
 #[async_trait]
-impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemProvider<T, P> {
+impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
     fn as_any(&self) -> &dyn Any {
         self
     }
