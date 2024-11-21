@@ -131,7 +131,7 @@ where
         }
     }
 
-    async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+    async fn tables(&self, _schema: &str) -> Result<Vec<String>, super::Error> {
         unimplemented!()
     }
 

@@ -19,7 +19,7 @@ pub enum RetriableError {
 #[must_use]
 pub fn is_retriable_error(err: &DataFusionError) -> bool {
     match err {
-        DataFusionError::External(err) => return err.downcast_ref::<RetriableError>().is_some(),
+        DataFusionError::External(err) => err.downcast_ref::<RetriableError>().is_some(),
         DataFusionError::Context(_, err) => is_retriable_error(err.as_ref()),
         _ => false,
     }
