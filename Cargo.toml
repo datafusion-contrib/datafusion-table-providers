@@ -139,9 +139,10 @@ flight = [
   "dep:serde",
   "dep:tonic",
 ]
-odbc = ["dep:odbc-api", "dep:arrow-odbc"]
+odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]
 federation = ["dep:datafusion-federation"]
 duckdb-federation = ["duckdb", "federation"]
 sqlite-federation = ["sqlite", "federation"]
 postgres-federation = ["postgres", "federation"]
 mysql-federation = ["mysql", "federation"]
+odbc-federation = ["odbc", "federation"]
