@@ -163,30 +163,30 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn get_unique_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_unverified(
-            cols.into_iter()
-                .map(|col| {
-                    schema.index_of(col).expect(&format!(
-                        "[{col}] not found, validated schema: [{}]",
-                        schema
-                    ))
-                })
-                .map(|i| Constraint::Unique(vec![i]))
-                .collect(),
-        )
+        let indices = cols
+            .into_iter()
+            .map(|col| {
+                schema.index_of(col).expect(&format!(
+                    "[{col}] not found, validated schema: [{}]",
+                    schema
+                ))
+            })
+            .collect();
+
+        Constraints::new_unverified(vec![Constraint::Unique(indices)])
     }
 
     pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        Constraints::new_unverified(
-            cols.iter()
-                .map(|col| {
-                    schema.index_of(col).expect(&format!(
-                        "[{col}] not found, validated schema: [{}]",
-                        schema
-                    ))
-                })
-                .map(|i| Constraint::PrimaryKey(vec![i]))
-                .collect(),
-        )
+        let indices = cols
+            .into_iter()
+            .map(|col| {
+                schema.index_of(col).expect(&format!(
+                    "[{col}] not found, validated schema: [{}]",
+                    schema
+                ))
+            })
+            .collect();
+
+        Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
     }
 }

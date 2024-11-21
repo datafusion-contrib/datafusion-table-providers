@@ -382,7 +382,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct Sqlite {
     table_name: String,
     schema: SchemaRef,
@@ -700,7 +700,9 @@ pub(crate) mod tests {
         let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
 
         let primary_keys_constraints =
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![schema
+                .index_of("id")
+                .expect("[id] not found")])]);
 
         let external_table = CreateExternalTable {
             schema: df_schema,
