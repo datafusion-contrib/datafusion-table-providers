@@ -146,7 +146,6 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         let params_vec: Vec<_> = params.iter().map(|&p| p.to_value()).collect();
         let sql = sql.replace('"', "");
 
-        println!("{:?}", sql);
         let conn = Arc::clone(&self.conn);
 
         let mut stream = Box::pin(stream! {
