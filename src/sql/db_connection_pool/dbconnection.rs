@@ -25,7 +25,7 @@ pub enum Error {
     #[snafu(display("Unable to downcast connection"))]
     UnableToDowncastConnection {},
 
-    #[snafu(display("Unable to get schema: {source}"))]
+    #[snafu(display("{source}"))]
     UnableToGetSchema { source: GenericError },
 
     #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}"))]
