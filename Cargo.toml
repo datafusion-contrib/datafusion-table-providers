@@ -62,6 +62,7 @@ serde_json = "1.0.124"
 snafu = "0.8.3"
 time = "0.3.36"
 tokio = { version = "1.38.0", features = ["macros", "fs"] }
+tokio-util = "0.7.12"
 tokio-postgres = { version = "0.7.10", features = [
   "with-chrono-0_4",
   "with-uuid-1",
@@ -87,6 +88,9 @@ dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 fundu = "2.0.1"
 dashmap = "6.1.0"
+odbc-api = { version = "9.0.0", optional = true }
+arrow-odbc = { version = "13.0.0", optional = true }
+sha2 = "0.10.8"
 
 [dev-dependencies]
 anyhow = "1.0.86"
@@ -135,6 +139,7 @@ flight = [
   "dep:serde",
   "dep:tonic",
 ]
+odbc = ["dep:odbc-api", "dep:arrow-odbc"]
 federation = ["dep:datafusion-federation"]
 duckdb-federation = ["duckdb", "federation"]
 sqlite-federation = ["sqlite", "federation"]

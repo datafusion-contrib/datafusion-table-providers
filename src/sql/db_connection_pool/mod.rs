@@ -7,6 +7,8 @@ pub mod dbconnection;
 pub mod duckdbpool;
 #[cfg(feature = "mysql")]
 pub mod mysqlpool;
+#[cfg(feature = "odbc")]
+pub mod odbcpool;
 #[cfg(feature = "postgres")]
 pub mod postgrespool;
 #[cfg(feature = "sqlite")]
