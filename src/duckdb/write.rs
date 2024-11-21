@@ -10,6 +10,7 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
@@ -34,6 +35,12 @@ pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     duckdb: Arc<DuckDB>,
     on_conflict: Option<OnConflict>,
+}
+
+impl std::fmt::Debug for DuckDBTableWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDBTableWriter")
+    }
 }
 
 impl DuckDBTableWriter {
@@ -88,13 +95,13 @@ impl TableProvider for DuckDBTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(DuckDBDataSink::new(
                 Arc::clone(&self.duckdb),
-                overwrite,
+                op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
             )),
             self.schema(),

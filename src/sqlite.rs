@@ -106,6 +106,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
 }
@@ -381,7 +382,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Sqlite {
     table_name: String,
     schema: SchemaRef,
@@ -664,7 +665,8 @@ impl Sqlite {
 pub(crate) mod tests {
     use arrow::datatypes::{DataType, Schema};
     use datafusion::{
-        common::ToDFSchema, prelude::SessionContext, sql::sqlparser::ast::TableConstraint,
+        common::{Constraint, ToDFSchema},
+        prelude::SessionContext,
     };
 
     use super::*;
@@ -697,18 +699,10 @@ pub(crate) mod tests {
 
         let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
 
-        let primary_keys_constraints = Constraints::new_from_table_constraints(
-            &[TableConstraint::PrimaryKey {
-                columns: vec!["id"].into_iter().map(Into::into).collect(),
-                name: None,
-                index_name: None,
-                index_options: vec![],
-                characteristics: None,
-                index_type: None,
-            }],
-            &df_schema,
-        )
-        .expect("should create constraints");
+        let primary_keys_constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![schema
+                .index_of("id")
+                .expect("[id] not found")])]);
 
         let external_table = CreateExternalTable {
             schema: df_schema,
@@ -723,6 +717,7 @@ pub(crate) mod tests {
             options,
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
+            temporary: true,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()

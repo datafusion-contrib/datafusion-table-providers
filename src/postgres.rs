@@ -181,7 +181,8 @@ impl PostgresTableFactory {
     }
 }
 
-pub struct PostgresTableProviderFactory {}
+#[derive(Debug)]
+pub struct PostgresTableProviderFactory;
 
 impl PostgresTableProviderFactory {
     #[must_use]
@@ -313,7 +314,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Postgres {
     table_name: String,
     pool: Arc<PostgresConnectionPool>,

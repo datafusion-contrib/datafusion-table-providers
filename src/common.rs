@@ -14,6 +14,7 @@ use datafusion::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Pool<T, P> = Arc<dyn DbConnectionPool<T, P> + Send + Sync>;
 
+#[derive(Debug)]
 pub struct DatabaseCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
@@ -54,6 +55,12 @@ pub struct DatabaseSchemaProvider<T, P> {
     name: String,
     tables: Vec<String>,
     pool: Pool<T, P>,
+}
+
+impl<T, P> std::fmt::Debug for DatabaseSchemaProvider<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DatabaseSchemaProvider {{ name: {:?} }}", self.name)
+    }
 }
 
 impl<T, P: 'static> DatabaseSchemaProvider<T, P> {

@@ -117,6 +117,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,

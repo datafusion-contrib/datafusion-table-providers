@@ -42,6 +42,12 @@ pub struct DuckDbConnectionPool {
     mode: Mode,
 }
 
+impl std::fmt::Debug for DuckDbConnectionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDbConnectionPool {}", self.path)
+    }
+}
+
 impl DuckDbConnectionPool {
     /// Create a new `DuckDbConnectionPool` from memory.
     ///
@@ -325,21 +331,21 @@ mod test {
             .expect("DuckDB connection should be synchronous");
 
         // sleep to let writes clear
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         conn.query_arrow("SELECT * FROM test_one", &[], None)
-            .expect("Query should be successful");
+            .expect("Query test_one should be successful");
 
         conn_attached
             .query_arrow("SELECT * FROM test_two", &[], None)
-            .expect("Query should be successful");
+            .expect("Query test_two(attached) should be successful");
 
         conn_attached
             .query_arrow("SELECT * FROM test_one", &[], None)
-            .expect("Query should be successful");
+            .expect("Query test_one(attached) should be successful");
 
         conn.query_arrow("SELECT * FROM test_two", &[], None)
-            .expect("Query should be successful");
+            .expect("Query test_two should be successful");
 
         std::fs::remove_file(&db_base_name).expect("File should be removed");
         std::fs::remove_file(&db_attached_name).expect("File should be removed");
