@@ -17,15 +17,17 @@ use crate::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to connect to DuckDB: {source}\nFor further information, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    #[snafu(display("Failed to connect to DuckDB: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBConnectionError { source: duckdb::Error },
 
     #[snafu(display(
-        "Failed to connect to DuckDB: {source}\nAdjust the DuckDB connection pool parameters to ensure sufficient capacity for the workload"
+        "Failed to connect to DuckDB: {source}\nAdjust the DuckDB connection pool parameters for sufficient capacity."
     ))]
     ConnectionPoolError { source: r2d2::Error },
 
-    #[snafu(display("Unable to extract database name from database file path\nEnsure the DuckDB file path contains a valid database name"))]
+    #[snafu(display(
+        "Invalid DuckDB file path: {path}. Ensure it contains a valid database name."
+    ))]
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 

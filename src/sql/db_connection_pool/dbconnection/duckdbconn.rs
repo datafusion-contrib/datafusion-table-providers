@@ -27,19 +27,19 @@ use super::SyncDbConnection;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to connect to DuckDB: {source}\nFor further information, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    #[snafu(display("Failed to connect to DuckDB: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBConnectionError { source: duckdb::Error },
 
-    #[snafu(display("Failed to execute query: {source}\nFor further information, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    #[snafu(display("Query execution failed: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBQueryError { source: duckdb::Error },
 
     #[snafu(display(
-        "An unexpected error occurred.\n{message}\nVerify the configuration, and try again."
+        "An unexpected error occurred.\n{message}\nVerify the configuration and try again."
     ))]
     ChannelError { message: String },
 
     #[snafu(display(
-        "Unable to attach DuckDB database {path}: {source}\nEnsure the DuckDB file path is valid"
+        "Unable to attach DuckDB database {path}: {source}\nEnsure the DuckDB file path is valid."
     ))]
     UnableToAttachDatabase {
         path: Arc<str>,
