@@ -21,20 +21,20 @@ use crate::sql::db_connection_pool::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("ConnectionPoolError: {source}"))]
+    #[snafu(display("Failed to connect to PostgreSQL: {source}\nFor further information, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"))]
     ConnectionPoolError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("ConnectionPoolRunError: {source}"))]
+    #[snafu(display("Failed to connect to PostgreSQL: {source}\nAdjust the Postgres connection pool parameters to ensure sufficient capacity for the workload"))]
     ConnectionPoolRunError {
         source: bb8::RunError<bb8_postgres::tokio_postgres::Error>,
     },
 
-    #[snafu(display("Invalid parameter: {parameter_name}"))]
+    #[snafu(display("Invalid parameter: {parameter_name}\nEnsure the parameter name is correct"))]
     InvalidParameterError { parameter_name: String },
 
-    #[snafu(display("Could not parse {parameter_name} into a valid integer"))]
+    #[snafu(display("Could not parse {parameter_name} into a valid integer\nEnsure the {parameter_name} parameter is configured with a valid value."))]
     InvalidIntegerParameterError {
         parameter_name: String,
         source: std::num::ParseIntError,
@@ -47,19 +47,23 @@ pub enum Error {
         port: u16,
     },
 
-    #[snafu(display("Invalid root cert path: {path}"))]
+    #[snafu(display("Invalid root certificate path: {path}\nEnsure the root certificate path points to a valid root certificate."))]
     InvalidRootCertPathError { path: String },
 
-    #[snafu(display("Failed to read cert : {source}"))]
+    #[snafu(display(
+        "Failed to read certificate : {source}\nEnsure the root certificate path points to a valid root certificate."
+    ))]
     FailedToReadCertError { source: std::io::Error },
 
-    #[snafu(display("Failed to load cert : {source}"))]
+    #[snafu(display(
+        "Failed to load certificate : {source}\nEnsure the root certificate path points to a valid root certificate."
+    ))]
     FailedToLoadCertError { source: native_tls::Error },
 
-    #[snafu(display("Failed to build tls connector : {source}"))]
+    #[snafu(display("Failed to build tls connector : {source}\nEnsure the ssl mode is correctly configured and root certificate is valid."))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
-    #[snafu(display("Postgres connection error: {source}"))]
+    #[snafu(display("Failed to connect to PostgreSQL: {source}\nFor further information, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"))]
     PostgresConnectionError { source: tokio_postgres::Error },
 
     #[snafu(display(
