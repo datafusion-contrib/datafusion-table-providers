@@ -157,6 +157,7 @@ impl MySQLTableFactory {
     }
 }
 
+#[derive(Debug)]
 pub struct MySQLTableProviderFactory {}
 
 impl MySQLTableProviderFactory {
@@ -286,6 +287,7 @@ impl TableProviderFactory for MySQLTableProviderFactory {
     }
 }
 
+#[derive(Debug)]
 pub struct MySQL {
     table_name: String,
     pool: Arc<MySQLConnectionPool>,

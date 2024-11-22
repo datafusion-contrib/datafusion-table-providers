@@ -26,6 +26,12 @@ pub struct SQLiteTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
 }
 
+impl<T, P> fmt::Debug for SQLiteTable<T, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SQLiteTable {}", self.base_table.name())
+    }
+}
+
 impl<T, P> SQLiteTable<T, P> {
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,

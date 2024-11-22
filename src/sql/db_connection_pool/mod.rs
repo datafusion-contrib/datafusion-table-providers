@@ -7,6 +7,8 @@ pub mod dbconnection;
 pub mod duckdbpool;
 #[cfg(feature = "mysql")]
 pub mod mysqlpool;
+#[cfg(feature = "odbc")]
+pub mod odbcpool;
 #[cfg(feature = "postgres")]
 pub mod postgrespool;
 #[cfg(feature = "sqlite")]
@@ -33,7 +35,7 @@ pub trait DbConnectionPool<T, P: 'static> {
     fn join_push_down(&self) -> JoinPushDown;
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     #[default]
     Memory,

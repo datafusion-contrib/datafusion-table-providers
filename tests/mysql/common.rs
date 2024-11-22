@@ -58,9 +58,11 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
         .healthcheck(HealthConfig {
             test: Some(vec![
                 "CMD-SHELL".to_string(),
-                format!("mysqladmin ping --password={MYSQL_ROOT_PASSWORD}"),
+                format!(
+                    "mysqladmin ping --host=127.0.0.1 --port=3306 --password={MYSQL_ROOT_PASSWORD}"
+                ),
             ]),
-            interval: Some(250_000_000), // 250ms
+            interval: Some(500_000_000), // 250ms
             timeout: Some(100_000_000),  // 100ms
             retries: Some(5),
             start_period: Some(500_000_000), // 100ms
@@ -70,7 +72,7 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
         .run()
         .await?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     Ok(running_container)
 }
 

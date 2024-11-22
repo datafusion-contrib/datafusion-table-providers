@@ -1,5 +1,6 @@
 pub mod sql;
 pub mod util;
+pub mod common;
 
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
@@ -7,6 +8,8 @@ pub mod duckdb;
 pub mod flight;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "odbc")]
+pub mod odbc;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]

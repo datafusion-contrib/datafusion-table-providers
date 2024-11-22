@@ -8,7 +8,7 @@ use datafusion::{
     catalog::Session,
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::Expr,
+    logical_expr::{dml::InsertOp, Expr},
     physical_plan::{
         insert::{DataSink, DataSinkExec},
         metrics::MetricsSet,
@@ -22,7 +22,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MySQLTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     mysql: Arc<MySQL>,
@@ -77,13 +77,13 @@ impl TableProvider for MySQLTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        op: InsertOp,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(MySQLDataSink::new(
                 Arc::clone(&self.mysql),
-                overwrite,
+                op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
             )),
             self.schema(),
@@ -113,7 +113,7 @@ impl DataSink for MySQLDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let mut num_rows = 0;
+        let mut num_rows = 0u64;
 
         let mut db_conn = self.mysql.connect().await.map_err(to_datafusion_error)?;
         let mysql_conn = MySQL::mysql_conn(&mut db_conn).map_err(to_datafusion_error)?;

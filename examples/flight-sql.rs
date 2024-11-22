@@ -29,7 +29,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
-    let flight_sql = FlightTableFactory::new(Arc::new(FlightSqlDriver::default()));
+    let flight_sql = FlightTableFactory::new(Arc::new(FlightSqlDriver::new()));
     let table = flight_sql
         .open_table(
             "http://localhost:32010",

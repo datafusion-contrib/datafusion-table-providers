@@ -109,6 +109,19 @@ ORDER BY
 c.ordinal_position;
 "#;
 
+const SCHEMAS_QUERY: &str = r#"
+SELECT nspname AS schema_name
+FROM pg_namespace
+WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+  AND nspname !~ '^pg_toast';
+"#;
+
+const TABLES_QUERY: &str = r#"
+SELECT tablename
+FROM pg_tables
+WHERE schemaname = $1;
+"#;
+
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
     #[snafu(display("{source}"))]
@@ -168,6 +181,28 @@ impl<'a>
         conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
     ) -> Self {
         PostgresConnection { conn }
+    }
+
+    async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let rows = self
+            .conn
+            .query(TABLES_QUERY, &[&schema])
+            .await
+            .map_err(|e| super::Error::UnableToGetTables {
+                source: Box::new(e),
+            })?;
+
+        Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let rows = self.conn.query(SCHEMAS_QUERY, &[]).await.map_err(|e| {
+            super::Error::UnableToGetSchemas {
+                source: Box::new(e),
+            }
+        })?;
+
+        Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
     }
 
     async fn get_schema(

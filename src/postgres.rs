@@ -182,7 +182,8 @@ impl PostgresTableFactory {
     }
 }
 
-pub struct PostgresTableProviderFactory {}
+#[derive(Debug)]
+pub struct PostgresTableProviderFactory;
 
 impl PostgresTableProviderFactory {
     #[must_use]
@@ -310,7 +311,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Postgres {
     table_name: String,
     pool: Arc<PostgresConnectionPool>,

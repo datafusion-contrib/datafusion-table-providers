@@ -65,6 +65,47 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         }
     }
 
+    async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let mut conn = self.conn.lock().await;
+        let conn = &mut *conn;
+
+        let query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ?";
+        let tables: Vec<Row> = conn
+            .exec(query, (schema,))
+            .await
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+
+        let table_names = tables
+            .iter()
+            .filter_map(|row| row.get::<String, _>("TABLE_NAME"))
+            .collect();
+
+        Ok(table_names)
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let mut conn = self.conn.lock().await;
+        let conn = &mut *conn;
+
+        let query = "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA \
+                    WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', \
+                    'performance_schema', 'sys')";
+
+        let schemas: Vec<Row> = conn
+            .exec(query, ())
+            .await
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+
+        let schema_names = schemas
+            .iter()
+            .filter_map(|row| row.get::<String, _>("SCHEMA_NAME"))
+            .collect();
+
+        Ok(schema_names)
+    }
+
     async fn get_schema(
         &self,
         table_reference: &TableReference,

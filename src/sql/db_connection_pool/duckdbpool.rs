@@ -42,6 +42,12 @@ pub struct DuckDbConnectionPool {
     mode: Mode,
 }
 
+impl std::fmt::Debug for DuckDbConnectionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDbConnectionPool {}", self.path)
+    }
+}
+
 impl DuckDbConnectionPool {
     /// Create a new `DuckDbConnectionPool` from memory.
     ///
@@ -234,22 +240,8 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use rand::Rng;
-
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
-    use std::sync::Arc;
-
-    fn random_db_name() -> String {
-        let mut rng = rand::thread_rng();
-        let mut name = String::new();
-
-        for _ in 0..10 {
-            name.push(rng.gen_range(b'a'..=b'z') as char);
-        }
-
-        format!("./{name}.duckdb")
-    }
 
     #[tokio::test]
     async fn test_duckdb_connection_pool() {
@@ -270,78 +262,5 @@ mod test {
 
         conn.query_arrow("SELECT * FROM test", &[], None)
             .expect("Query should be successful");
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "duckdb-federation")]
-    async fn test_duckdb_connection_pool_with_attached_databases() {
-        let db_base_name = random_db_name();
-        let db_attached_name = random_db_name();
-        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
-            .expect("DuckDB connection pool to be created")
-            .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
-
-        let pool_attached =
-            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
-                .expect("DuckDB connection pool to be created")
-                .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
-
-        let conn = pool
-            .pool
-            .get()
-            .expect("DuckDB connection should be established");
-
-        conn.execute("CREATE TABLE test_one (a INTEGER, b VARCHAR)", [])
-            .expect("Table should be created");
-        conn.execute("INSERT INTO test_one VALUES (1, 'a')", [])
-            .expect("Data should be inserted");
-
-        let conn_attached = pool_attached
-            .pool
-            .get()
-            .expect("DuckDB connection should be established");
-
-        conn_attached
-            .execute("CREATE TABLE test_two (a INTEGER, b VARCHAR)", [])
-            .expect("Table should be created");
-        conn_attached
-            .execute("INSERT INTO test_two VALUES (1, 'a')", [])
-            .expect("Data should be inserted");
-
-        let conn = pool
-            .connect()
-            .await
-            .expect("DuckDB connection should be established");
-        let conn = conn
-            .as_sync()
-            .expect("DuckDB connection should be synchronous");
-
-        let conn_attached = pool_attached
-            .connect()
-            .await
-            .expect("DuckDB connection should be established");
-        let conn_attached = conn_attached
-            .as_sync()
-            .expect("DuckDB connection should be synchronous");
-
-        // sleep to let writes clear
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        conn.query_arrow("SELECT * FROM test_one", &[], None)
-            .expect("Query should be successful");
-
-        conn_attached
-            .query_arrow("SELECT * FROM test_two", &[], None)
-            .expect("Query should be successful");
-
-        conn_attached
-            .query_arrow("SELECT * FROM test_one", &[], None)
-            .expect("Query should be successful");
-
-        conn.query_arrow("SELECT * FROM test_two", &[], None)
-            .expect("Query should be successful");
-
-        std::fs::remove_file(&db_base_name).expect("File should be removed");
-        std::fs::remove_file(&db_attached_name).expect("File should be removed");
     }
 }

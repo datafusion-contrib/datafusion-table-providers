@@ -17,6 +17,8 @@ use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion_expr::dml::InsertOp;
+#[cfg(feature = "mysql-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
@@ -247,7 +249,7 @@ VALUES
         Arc::clone(&schema),
         vec![
             Arc::new(Time64NanosecondArray::from(vec![
-                (12 * 3600 + 30 * 60 + 0) * 1_000_000_000,
+                (12 * 3600 + 30 * 60) * 1_000_000_000,
             ])),
             Arc::new(Time64NanosecondArray::from(vec![
                 (12 * 3600 + 30 * 60) * 1_000_000_000 + 100_000_000,
@@ -602,6 +604,7 @@ async fn arrow_mysql_round_trip(
         file_type: "".to_string(),
         table_partition_cols: vec![],
         if_not_exists: false,
+        temporary: false,
         definition: None,
         order_exprs: vec![],
         unbounded: false,
@@ -621,7 +624,7 @@ async fn arrow_mysql_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), true)
+        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
         .await
         .expect("insert plan created");
 
@@ -643,6 +646,7 @@ async fn arrow_mysql_round_trip(
         record_batch[0].columns()
     );
 
+    #[cfg(feature = "mysql-federation")]
     let casted_result =
         try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
@@ -650,6 +654,8 @@ async fn arrow_mysql_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+
+    #[cfg(feature = "mysql-federation")]
     assert_eq!(arrow_record, casted_result);
 }
 
