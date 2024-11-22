@@ -30,7 +30,7 @@ pub enum Error {
     #[snafu(display("Unable to get MySQL query result stream"))]
     QueryResultStreamError {},
 
-    #[snafu(display("The field '{column_name}' contains unsupported data type: {data_type}. \n Please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
+    #[snafu(display("The field '{column_name}' has an unsupported data type: {data_type}.\nReport a bug to request support for this data type: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     UnsupportedDataTypeError {
         column_name: String,
         data_type: String,
