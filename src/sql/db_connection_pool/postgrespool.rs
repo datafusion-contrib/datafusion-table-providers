@@ -21,54 +21,56 @@ use crate::sql::db_connection_pool::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to connect to PostgreSQL: {source}\nFor further information, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"))]
+    #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     ConnectionPoolError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("Failed to connect to PostgreSQL: {source}\nAdjust the Postgres connection pool parameters to ensure sufficient capacity for the workload"))]
+    #[snafu(display("PostgreSQL connection failed: {source}\nAdjust the connection pool parameters for sufficient capacity."))]
     ConnectionPoolRunError {
         source: bb8::RunError<bb8_postgres::tokio_postgres::Error>,
     },
 
-    #[snafu(display("Invalid parameter: {parameter_name}\nEnsure the parameter name is correct"))]
+    #[snafu(display(
+        "Invalid parameter: {parameter_name}. Ensure the parameter name is correct."
+    ))]
     InvalidParameterError { parameter_name: String },
 
-    #[snafu(display("Could not parse {parameter_name} into a valid integer\nEnsure the {parameter_name} parameter is configured with a valid value."))]
+    #[snafu(display("Could not parse {parameter_name} into a valid integer. Ensure it is configured with a valid value."))]
     InvalidIntegerParameterError {
         parameter_name: String,
         source: std::num::ParseIntError,
     },
 
-    #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
+    #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure the host and port are correct and reachable."))]
     InvalidHostOrPortError {
         source: crate::util::ns_lookup::Error,
         host: String,
         port: u16,
     },
 
-    #[snafu(display("Invalid root certificate path: {path}\nEnsure the root certificate path points to a valid root certificate."))]
+    #[snafu(display(
+        "Invalid root certificate path: {path}. Ensure it points to a valid root certificate."
+    ))]
     InvalidRootCertPathError { path: String },
 
     #[snafu(display(
-        "Failed to read certificate : {source}\nEnsure the root certificate path points to a valid root certificate."
+        "Failed to read certificate : {source}\nEnsure the root certificate path points to a valid certificate."
     ))]
     FailedToReadCertError { source: std::io::Error },
 
     #[snafu(display(
-        "Certificate loading failed: {source}\nEnsure the root certificate path is correct and points to a valid certificate."
+        "Certificate loading failed: {source}\nEnsure the root certificate path points to a valid certificate."
     ))]
     FailedToLoadCertError { source: native_tls::Error },
 
-    #[snafu(display("TLS connector initialization failed: {source}\nVerify that the SSL mode is configured correctly and the root certificate is valid."))]
+    #[snafu(display("TLS connector initialization failed: {source}\nVerify SSL mode and root certificate validity"))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
     #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     PostgresConnectionError { source: tokio_postgres::Error },
 
-    #[snafu(display(
-        "Authentication failed. Ensure that the username and password are correctly configured."
-    ))]
+    #[snafu(display("Authentication failed. Verify username and password."))]
     InvalidUsernameOrPassword { source: tokio_postgres::Error },
 }
 

@@ -112,7 +112,7 @@ c.ordinal_position;
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
     #[snafu(display(
-        "Failed to execute query: {source}\nFor further information, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
+        "Query execution failed: {source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
     ))]
     QueryError {
         source: bb8_postgres::tokio_postgres::Error,
