@@ -25,10 +25,10 @@ pub enum Error {
     #[snafu(display("Unable to downcast connection"))]
     UnableToDowncastConnection {},
 
-    #[snafu(display("Unable to get schema: {source}"))]
+    #[snafu(display("{source}"))]
     UnableToGetSchema { source: GenericError },
 
-    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}"))]
+    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}.\nReport a bug to request support for this data type: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     #[cfg(feature = "duckdb")]
     UnsupportedDataType {
         data_type: DataType,
