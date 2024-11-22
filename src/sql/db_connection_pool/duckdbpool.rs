@@ -240,22 +240,8 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use rand::Rng;
-
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
-    use std::sync::Arc;
-
-    fn random_db_name() -> String {
-        let mut rng = rand::thread_rng();
-        let mut name = String::new();
-
-        for _ in 0..10 {
-            name.push(rng.gen_range(b'a'..=b'z') as char);
-        }
-
-        format!("./{name}.duckdb")
-    }
 
     #[tokio::test]
     async fn test_duckdb_connection_pool() {

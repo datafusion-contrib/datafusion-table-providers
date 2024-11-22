@@ -164,12 +164,11 @@ pub(crate) mod tests {
 
     pub(crate) fn get_unique_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
         let indices = cols
-            .into_iter()
+            .iter()
             .map(|col| {
-                schema.index_of(col).expect(&format!(
-                    "[{col}] not found, validated schema: [{}]",
-                    schema
-                ))
+                schema
+                    .index_of(col)
+                    .unwrap_or_else(|_| panic!("[{col}] not found, validated schema: [{}]", schema))
             })
             .collect();
 
@@ -178,12 +177,11 @@ pub(crate) mod tests {
 
     pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
         let indices = cols
-            .into_iter()
+            .iter()
             .map(|col| {
-                schema.index_of(col).expect(&format!(
-                    "[{col}] not found, validated schema: [{}]",
-                    schema
-                ))
+                schema
+                    .index_of(col)
+                    .unwrap_or_else(|_| panic!("[{col}] not found, validated schema: [{}]", schema))
             })
             .collect();
 

@@ -115,7 +115,7 @@ pub struct ContainerRunner<'a> {
     healthcheck: Option<HealthConfig>,
 }
 
-impl<'a> ContainerRunner<'a> {
+impl ContainerRunner<'_> {
     pub async fn run(self) -> Result<RunningContainer, anyhow::Error> {
         if self.is_container_running().await? {
             remove(&self.docker, &self.name).await?;
