@@ -17,11 +17,11 @@ use crate::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to connect to DuckDB: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    #[snafu(display("DuckDB connection failed: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBConnectionError { source: duckdb::Error },
 
     #[snafu(display(
-        "Failed to connect to DuckDB: {source}\nAdjust the DuckDB connection pool parameters for sufficient capacity."
+        "DuckDB connection failed: {source}\nAdjust the DuckDB connection pool parameters for sufficient capacity."
     ))]
     ConnectionPoolError { source: r2d2::Error },
 

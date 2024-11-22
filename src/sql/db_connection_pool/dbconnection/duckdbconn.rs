@@ -27,7 +27,7 @@ use super::SyncDbConnection;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to connect to DuckDB: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    #[snafu(display("DuckDB connection failed: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBConnectionError { source: duckdb::Error },
 
     #[snafu(display("Query execution failed: {source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
