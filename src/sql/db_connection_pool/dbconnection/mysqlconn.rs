@@ -27,7 +27,7 @@ pub enum Error {
     #[snafu(display("Failed to convert query result to Arrow: {source}.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: arrow_sql_gen::mysql::Error },
 
-    #[snafu(display("Unable to get MySQL query result stream"))]
+    #[snafu(display("Unable to get MySQL query result stream.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     QueryResultStreamError {},
 
     #[snafu(display("The field '{column_name}' has an unsupported data type: {data_type}.\nReport a bug to request support for this data type: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
