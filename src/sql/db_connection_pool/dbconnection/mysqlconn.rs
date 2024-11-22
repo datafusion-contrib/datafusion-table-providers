@@ -21,25 +21,25 @@ use super::{AsyncDbConnection, DbConnection};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("{source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
+    #[snafu(display("Query execution failed: {source}\nFor details, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     QueryError { source: mysql_async::Error },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Failed to convert query result to Arrow: {source}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: arrow_sql_gen::mysql::Error },
 
-    #[snafu(display("Unable to get MySQL query result stream.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("An unexpected error occurred. Verify the configuration and try again."))]
     QueryResultStreamError {},
 
-    #[snafu(display("The field '{column_name}' has an unsupported data type: {data_type}.\nReport a bug to request support for this data type: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Unsupported data type '{data_type}' for field '{column_name}'.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     UnsupportedDataTypeError {
         column_name: String,
         data_type: String,
     },
 
-    #[snafu(display("Unable to extract precision and scale from type: {data_type}.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Unable to extract precision and scale from type: {data_type}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     UnableToGetDecimalPrecisionAndScale { data_type: String },
 
-    #[snafu(display("Failed to find the field '{field}'.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Failed to find the field '{field}'.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     MissingField { field: String },
 }
 
