@@ -30,7 +30,7 @@ pub enum Error {
     #[snafu(display("DuckDBError: {source}\nFor further information, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBError { source: duckdb::Error },
 
-    #[snafu(display("ChannelError: {message}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("An unexpected error occurred.\n{message}\nVerify the configuration, and try again."))]
     ChannelError { message: String },
 
     #[snafu(display(
