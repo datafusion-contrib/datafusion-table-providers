@@ -46,7 +46,7 @@ pub enum Error {
     #[snafu(display("Authentication failed. Verify username and password."))]
     InvalidUsernameOrPassword,
 
-    #[snafu(display("{message}\nEnsure the MySQL database name provided exists"))]
+    #[snafu(display("{message}\nEnsure the given MySQL database exists"))]
     UnknownMySQLDatabase { message: String },
 }
 
