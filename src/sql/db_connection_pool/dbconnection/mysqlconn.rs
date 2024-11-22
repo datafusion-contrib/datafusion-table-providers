@@ -30,16 +30,16 @@ pub enum Error {
     #[snafu(display("Unable to get MySQL query result stream"))]
     QueryResultStreamError {},
 
-    #[snafu(display("The field '{column_name}' contains unsupported data type: {data_type}"))]
+    #[snafu(display("The field '{column_name}' contains unsupported data type: {data_type}. \n Please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
     UnsupportedDataTypeError {
         column_name: String,
         data_type: String,
     },
 
-    #[snafu(display("Unable to extract precision and scale from type: {data_type}"))]
+    #[snafu(display("Unable to extract precision and scale from type: {data_type}. \n This was likely caused by a bug in DataFusion Table Providers code, please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
     UnableToGetDecimalPrecisionAndScale { data_type: String },
 
-    #[snafu(display("Field '{field}' is missing"))]
+    #[snafu(display("Field '{field}' is missing. \n This was likely caused by a bug in DataFusion Table Providers code, please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
     MissingField { field: String },
 }
 
