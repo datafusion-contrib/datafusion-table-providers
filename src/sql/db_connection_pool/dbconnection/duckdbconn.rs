@@ -27,20 +27,19 @@ use super::SyncDbConnection;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("DuckDBError: {source}"))]
+    #[snafu(display("DuckDBError: {source}\nFor further information, refer to the DuckDB manual: https://duckdb.org/docs/"))]
     DuckDBError { source: duckdb::Error },
 
-    #[snafu(display("ChannelError: {message}"))]
+    #[snafu(display("ChannelError: {message}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ChannelError { message: String },
 
-    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    #[snafu(display(
+        "Unable to attach DuckDB database {path}: {source}\nEnsure all DuckDB file path is valid"
+    ))]
     UnableToAttachDatabase {
         path: Arc<str>,
         source: std::io::Error,
     },
-
-    #[snafu(display("Unable to extract database name from database file path"))]
-    UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
 pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
