@@ -28,7 +28,7 @@ pub enum Error {
     #[snafu(display("{source}"))]
     UnableToGetSchema { source: GenericError },
 
-    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}"))]
+    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}.\n Please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
     #[cfg(feature = "duckdb")]
     UnsupportedDataType {
         data_type: DataType,
