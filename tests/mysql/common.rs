@@ -70,7 +70,7 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
         .run()
         .await?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     Ok(running_container)
 }
 
