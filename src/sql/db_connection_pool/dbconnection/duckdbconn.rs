@@ -34,7 +34,7 @@ pub enum Error {
     ChannelError { message: String },
 
     #[snafu(display(
-        "Unable to attach DuckDB database {path}: {source}\nEnsure all DuckDB file path is valid"
+        "Unable to attach DuckDB database {path}: {source}\nEnsure the DuckDB file path is valid"
     ))]
     UnableToAttachDatabase {
         path: Arc<str>,
