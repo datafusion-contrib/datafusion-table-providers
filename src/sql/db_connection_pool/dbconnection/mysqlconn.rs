@@ -39,7 +39,7 @@ pub enum Error {
     #[snafu(display("Unable to extract precision and scale from type: {data_type}. \n This was likely caused by a bug in DataFusion Table Providers code, please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
     UnableToGetDecimalPrecisionAndScale { data_type: String },
 
-    #[snafu(display("Field '{field}' is missing. \n This was likely caused by a bug in DataFusion Table Providers code, please file an issue https://github.com/datafusion-contrib/datafusion-table-providers"))]
+    #[snafu(display("Failed to find the field '{field}'.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     MissingField { field: String },
 }
 
