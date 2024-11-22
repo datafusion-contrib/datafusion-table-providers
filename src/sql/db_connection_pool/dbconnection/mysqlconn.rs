@@ -21,7 +21,7 @@ use super::{AsyncDbConnection, DbConnection};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("{source}"))]
+    #[snafu(display("{source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     QueryError { source: mysql_async::Error },
 
     #[snafu(display("Failed to convert query result to Arrow: {source}"))]
