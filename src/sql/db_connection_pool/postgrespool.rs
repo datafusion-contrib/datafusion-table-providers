@@ -56,7 +56,7 @@ pub enum Error {
     FailedToReadCertError { source: std::io::Error },
 
     #[snafu(display(
-        "Failed to load certificate : {source}\nEnsure the root certificate path points to a valid root certificate."
+        "Certificate loading failed: {source}\nEnsure the root certificate path is correct and points to a valid certificate."
     ))]
     FailedToLoadCertError { source: native_tls::Error },
 
