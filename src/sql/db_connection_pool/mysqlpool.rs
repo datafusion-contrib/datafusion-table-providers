@@ -22,16 +22,18 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("MySQL connection error: {source}"))]
+    #[snafu(display("MySQL connection error: {source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     MySQLConnectionError { source: mysql_async::Error },
 
-    #[snafu(display("Invalid MySQL connection string: {source} "))]
+    #[snafu(display(
+        "Invalid MySQL connection string: {source}\nEnsure the MySQL connection string is valid"
+    ))]
     InvalidConnectionString { source: mysql_async::UrlError },
 
-    #[snafu(display("Invalid parameter: {parameter_name}"))]
+    #[snafu(display("Invalid value for parameter {parameter_name}\nEnsure the parameter value is valid for {parameter_name}"))]
     InvalidParameterError { parameter_name: String },
 
-    #[snafu(display("Invalid root cert path: {path}"))]
+    #[snafu(display("Invalid root cert path: {path}\nEnsure the root cert path is valid"))]
     InvalidRootCertPathError { path: String },
 
     #[snafu(display("Cannot connect to MySQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
@@ -46,7 +48,7 @@ pub enum Error {
     ))]
     InvalidUsernameOrPassword,
 
-    #[snafu(display("{message}"))]
+    #[snafu(display("{message}\nEnsure that the MySQL database name provided exists"))]
     UnknownMySQLDatabase { message: String },
 }
 
