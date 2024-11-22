@@ -63,7 +63,7 @@ pub enum Error {
     #[snafu(display("TLS connector initialization failed: {source}\nVerify that the SSL mode is configured correctly and the root certificate is valid."))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
-    #[snafu(display("Failed to connect to PostgreSQL: {source}\nFor further information, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"))]
+    #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     PostgresConnectionError { source: tokio_postgres::Error },
 
     #[snafu(display(
