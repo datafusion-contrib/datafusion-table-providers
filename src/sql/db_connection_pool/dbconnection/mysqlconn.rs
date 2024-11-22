@@ -24,7 +24,7 @@ pub enum Error {
     #[snafu(display("{source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     QueryError { source: mysql_async::Error },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}"))]
+    #[snafu(display("Failed to convert query result to Arrow: {source}.\nThis was likely caused by a bug in the DataFusion Table Providers code, which you can report here: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: arrow_sql_gen::mysql::Error },
 
     #[snafu(display("Unable to get MySQL query result stream"))]
