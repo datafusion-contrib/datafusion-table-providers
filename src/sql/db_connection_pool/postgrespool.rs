@@ -55,7 +55,7 @@ pub enum Error {
     InvalidRootCertPathError { path: String },
 
     #[snafu(display(
-        "Failed to read certificate : {source}\nEnsure the root certificate path points to a valid certificate."
+        "Failed to read certificate: {source}\nEnsure the root certificate path points to a valid certificate."
     ))]
     FailedToReadCertError { source: std::io::Error },
 
@@ -64,7 +64,7 @@ pub enum Error {
     ))]
     FailedToLoadCertError { source: native_tls::Error },
 
-    #[snafu(display("TLS connector initialization failed: {source}\nVerify SSL mode and root certificate validity"))]
+    #[snafu(display("TLS connector initialization failed: {source}\nVerify SSL mode and root certificate validity."))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
     #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
