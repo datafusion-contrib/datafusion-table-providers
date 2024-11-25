@@ -50,6 +50,7 @@ pub enum Error {
     UnknownMySQLDatabase { message: String },
 }
 
+#[derive(Debug)]
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
     join_push_down: JoinPushDown,

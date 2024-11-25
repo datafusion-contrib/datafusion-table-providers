@@ -39,6 +39,7 @@ use crate::util::{
     indexes::IndexType,
     on_conflict::{self, OnConflict},
     secrets::to_secret_map,
+    to_datafusion_error,
 };
 
 use self::write::PostgresTableWriter;
@@ -308,10 +309,6 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             on_conflict,
         ))
     }
-}
-
-fn to_datafusion_error(error: Error) -> DataFusionError {
-    DataFusionError::External(Box::new(error))
 }
 
 #[derive(Debug, Clone)]

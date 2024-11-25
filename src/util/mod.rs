@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::sql::sql_provider_datafusion::Engine;
+use datafusion::common::DataFusionError;
 use datafusion::{
     error::Result as DataFusionResult,
     sql::unparser::{dialect::DefaultDialect, Unparser},
 };
-
-use crate::sql::sql_provider_datafusion::Engine;
 
 pub mod column_reference;
 pub mod constraints;
@@ -77,6 +77,14 @@ pub fn remove_prefix_from_hashmap_keys<V>(
             (new_key, value)
         })
         .collect()
+}
+
+#[must_use]
+pub fn to_datafusion_error<E>(error: E) -> DataFusionError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    DataFusionError::External(Box::new(error))
 }
 
 #[cfg(test)]
