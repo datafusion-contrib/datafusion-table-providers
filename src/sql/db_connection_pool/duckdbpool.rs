@@ -17,22 +17,17 @@ use crate::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("DuckDBError: {source}"))]
-    DuckDBError { source: duckdb::Error },
+    #[snafu(display("DuckDB connection failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBConnectionError { source: duckdb::Error },
 
-    #[snafu(display("ConnectionPoolError: {source}"))]
+    #[snafu(display(
+        "DuckDB connection failed.\n{source}\nAdjust the DuckDB connection pool parameters for sufficient capacity."
+    ))]
     ConnectionPoolError { source: r2d2::Error },
 
-    #[snafu(display("Unable to connect to DuckDB: {source}"))]
-    UnableToConnect { source: duckdb::Error },
-
-    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
-    UnableToAttachDatabase {
-        path: Arc<str>,
-        source: std::io::Error,
-    },
-
-    #[snafu(display("Unable to extract database name from database file path"))]
+    #[snafu(display(
+        "Invalid DuckDB file path: {path}. Ensure it contains a valid database name."
+    ))]
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
@@ -71,17 +66,17 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    /// * `UnableToConnectSnafu` - If there is an error connecting to the database
     pub fn new_memory() -> Result<Self> {
         let config = get_config(&AccessMode::ReadWrite)?;
-        let manager = DuckdbConnectionManager::memory_with_flags(config).context(DuckDBSnafu)?;
+        let manager =
+            DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
         let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
 
         test_connection(&conn)?;
 
@@ -108,18 +103,17 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    /// * `UnableToConnectSnafu` - If there is an error connecting to the database
     pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
         let config = get_config(access_mode)?;
-        let manager =
-            DuckdbConnectionManager::file_with_flags(path, config).context(DuckDBSnafu)?;
+        let manager = DuckdbConnectionManager::file_with_flags(path, config)
+            .context(DuckDBConnectionSnafu)?;
         let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
 
         test_connection(&conn)?;
 
@@ -159,7 +153,7 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     pub fn connect_sync(
         self: Arc<Self>,
     ) -> Result<
@@ -227,7 +221,8 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 }
 
 fn test_connection(conn: &r2d2::PooledConnection<DuckdbConnectionManager>) -> Result<()> {
-    conn.execute("SELECT 1", []).context(UnableToConnectSnafu)?;
+    conn.execute("SELECT 1", [])
+        .context(DuckDBConnectionSnafu)?;
     Ok(())
 }
 
@@ -238,7 +233,7 @@ fn get_config(access_mode: &AccessMode) -> Result<duckdb::Config> {
             AccessMode::ReadWrite => duckdb::AccessMode::ReadWrite,
             AccessMode::Automatic => duckdb::AccessMode::Automatic,
         })
-        .context(DuckDBSnafu)?;
+        .context(DuckDBConnectionSnafu)?;
 
     Ok(config)
 }
