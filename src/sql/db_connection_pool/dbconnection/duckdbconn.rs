@@ -27,20 +27,24 @@ use super::SyncDbConnection;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("DuckDBError: {source}"))]
-    DuckDBError { source: duckdb::Error },
+    #[snafu(display("DuckDB connection failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBConnectionError { source: duckdb::Error },
 
-    #[snafu(display("ChannelError: {message}"))]
+    #[snafu(display("Query execution failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBQueryError { source: duckdb::Error },
+
+    #[snafu(display(
+        "An unexpected error occurred.\n{message}\nVerify the configuration and try again."
+    ))]
     ChannelError { message: String },
 
-    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    #[snafu(display(
+        "Unable to attach DuckDB database {path}.\n{source}\nEnsure the DuckDB file path is valid."
+    ))]
     UnableToAttachDatabase {
         path: Arc<str>,
         source: std::io::Error,
     },
-
-    #[snafu(display("Unable to extract database name from database file path"))]
-    UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
 pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
@@ -96,7 +100,7 @@ impl DuckDBAttachments {
     /// Returns an error if the search path cannot be set or the connection fails.
     pub fn set_search_path(&self, conn: &Connection) -> Result<()> {
         conn.execute(&format!("SET search_path ='{}'", self.search_path), [])
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
         Ok(())
     }
 
@@ -106,7 +110,8 @@ impl DuckDBAttachments {
     ///
     /// Returns an error if the search path cannot be set or the connection fails.
     pub fn reset_search_path(&self, conn: &Connection) -> Result<()> {
-        conn.execute("RESET search_path", []).context(DuckDBSnafu)?;
+        conn.execute("RESET search_path", [])
+            .context(DuckDBConnectionSnafu)?;
         Ok(())
     }
 
@@ -126,7 +131,7 @@ impl DuckDBAttachments {
                 &format!("ATTACH IF NOT EXISTS '{db}' AS attachment_{i} (READ_ONLY)"),
                 [],
             )
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
         }
 
         self.set_search_path(conn)?;
@@ -142,7 +147,7 @@ impl DuckDBAttachments {
     pub fn detach(&self, conn: &Connection) -> Result<()> {
         for (i, _) in self.attachments.iter().enumerate() {
             conn.execute(&format!("DETACH attachment_{i}"), [])
-                .context(DuckDBSnafu)?;
+                .context(DuckDBConnectionSnafu)?;
         }
 
         self.reset_search_path(conn)?;
@@ -375,14 +380,14 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let join_handle = tokio::task::spawn_blocking(move || {
             Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
-            let mut stmt = conn.prepare(&sql).context(DuckDBSnafu)?;
+            let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
             let params: &[&dyn ToSql] = &params
                 .iter()
                 .map(|f| f.as_input_parameter())
                 .collect::<Vec<_>>();
             let result: duckdb::ArrowStream<'_> = stmt
                 .stream_arrow(params, cloned_schema)
-                .context(DuckDBSnafu)?;
+                .context(DuckDBQuerySnafu)?;
             for i in result {
                 blocking_channel_send(&batch_tx, i)?;
             }
@@ -423,7 +428,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .map(|f| f.as_input_parameter())
             .collect::<Vec<_>>();
 
-        let rows_modified = self.conn.execute(sql, params).context(DuckDBSnafu)?;
+        let rows_modified = self.conn.execute(sql, params).context(DuckDBQuerySnafu)?;
         Ok(rows_modified as u64)
     }
 }
