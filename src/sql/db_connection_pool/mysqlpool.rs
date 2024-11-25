@@ -22,11 +22,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("MySQL connection failed: {source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
+    #[snafu(display("MySQL connection failed.\n{source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     MySQLConnectionError { source: mysql_async::Error },
 
     #[snafu(display(
-        "Invalid MySQL connection string: {source}\nEnsure the MySQL connection string is valid"
+        "Invalid MySQL connection string.\n{source}\nEnsure the MySQL connection string is valid"
     ))]
     InvalidConnectionString { source: mysql_async::UrlError },
 
