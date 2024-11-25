@@ -21,10 +21,10 @@ use super::{AsyncDbConnection, DbConnection};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Query execution failed: {source}\nFor details, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
+    #[snafu(display("Query execution failed.\n{source}\nFor details, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     QueryError { source: mysql_async::Error },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Failed to convert query result to Arrow.\n{source}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: arrow_sql_gen::mysql::Error },
 
     #[snafu(display("An unexpected error occurred. Verify the configuration and try again."))]
