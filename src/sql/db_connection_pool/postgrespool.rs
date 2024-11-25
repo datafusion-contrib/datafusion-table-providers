@@ -21,12 +21,12 @@ use crate::sql::db_connection_pool::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     ConnectionPoolError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("PostgreSQL connection failed: {source}\nAdjust the connection pool parameters for sufficient capacity."))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nAdjust the connection pool parameters for sufficient capacity."))]
     ConnectionPoolRunError {
         source: bb8::RunError<bb8_postgres::tokio_postgres::Error>,
     },
@@ -55,19 +55,19 @@ pub enum Error {
     InvalidRootCertPathError { path: String },
 
     #[snafu(display(
-        "Failed to read certificate : {source}\nEnsure the root certificate path points to a valid certificate."
+        "Failed to read certificate.\n{source}\nEnsure the root certificate path points to a valid certificate."
     ))]
     FailedToReadCertError { source: std::io::Error },
 
     #[snafu(display(
-        "Certificate loading failed: {source}\nEnsure the root certificate path points to a valid certificate."
+        "Certificate loading failed.\n{source}\nEnsure the root certificate path points to a valid certificate."
     ))]
     FailedToLoadCertError { source: native_tls::Error },
 
-    #[snafu(display("TLS connector initialization failed: {source}\nVerify SSL mode and root certificate validity"))]
+    #[snafu(display("TLS connector initialization failed.\n{source}\nVerify SSL mode and root certificate validity"))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
-    #[snafu(display("PostgreSQL connection failed: {source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     PostgresConnectionError { source: tokio_postgres::Error },
 
     #[snafu(display("Authentication failed. Verify username and password."))]

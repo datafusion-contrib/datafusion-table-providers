@@ -112,13 +112,13 @@ c.ordinal_position;
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
     #[snafu(display(
-        "Query execution failed: {source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
+        "Query execution failed.\n{source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
     ))]
     QueryError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    #[snafu(display("Failed to convert query result to Arrow.\n{source}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError {
         source: crate::sql::arrow_sql_gen::postgres::Error,
     },
