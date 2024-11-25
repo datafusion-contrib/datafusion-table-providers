@@ -21,22 +21,25 @@ use super::{AsyncDbConnection, DbConnection};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("{source}"))]
+    #[snafu(display("Query execution failed: {source}\nFor details, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     QueryError { source: mysql_async::Error },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}"))]
+    #[snafu(display("Failed to convert query result to Arrow: {source}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: arrow_sql_gen::mysql::Error },
 
-    #[snafu(display("Unable to get MySQL query result stream"))]
+    #[snafu(display("An unexpected error occurred. Verify the configuration and try again."))]
     QueryResultStreamError {},
 
-    #[snafu(display("Unsupported column data type: {data_type}"))]
-    UnsupportedDataTypeError { data_type: String },
+    #[snafu(display("Unsupported data type '{data_type}' for field '{column_name}'.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
+    UnsupportedDataTypeError {
+        column_name: String,
+        data_type: String,
+    },
 
-    #[snafu(display("Unable to extract precision and scale from type: {data_type}"))]
+    #[snafu(display("Unable to extract precision and scale from type: {data_type}.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     UnableToGetDecimalPrecisionAndScale { data_type: String },
 
-    #[snafu(display("Field '{field}' is missing"))]
+    #[snafu(display("Failed to find the field '{field}'.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     MissingField { field: String },
 }
 
@@ -142,6 +145,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     ) -> Result<SendableRecordBatchStream> {
         let params_vec: Vec<_> = params.iter().map(|&p| p.to_value()).collect();
         let sql = sql.replace('"', "");
+
         let conn = Arc::clone(&self.conn);
 
         let mut stream = Box::pin(stream! {
@@ -214,7 +218,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             field: "Type".to_string(),
         })?;
 
-        let column_type = map_str_type_to_column_type(&data_type)?;
+        let column_type = map_str_type_to_column_type(&column_name, &data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
         let column_is_enum = map_str_type_to_is_enum(&data_type);
         let column_use_large_str_or_blob = map_str_type_to_use_large_str_or_blob(&data_type);
@@ -236,14 +240,17 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             precision,
             scale,
         )
-        .context(UnsupportedDataTypeSnafu { data_type })?;
+        .context(UnsupportedDataTypeSnafu {
+            column_name: column_name.clone(),
+            data_type,
+        })?;
 
         fields.push(Field::new(&column_name, arrow_data_type, true));
     }
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
+fn map_str_type_to_column_type(column_name: &str, data_type: &str) -> Result<ColumnType> {
     let data_type = data_type.to_lowercase();
     let column_type = match data_type.as_str() {
         _ if data_type.starts_with("decimal") || data_type.starts_with("numeric") => {
@@ -284,7 +291,11 @@ fn map_str_type_to_column_type(data_type: &str) -> Result<ColumnType> {
         _ if data_type.starts_with("char") => ColumnType::MYSQL_TYPE_STRING,
         _ if data_type.starts_with("binary") => ColumnType::MYSQL_TYPE_STRING,
         _ if data_type.starts_with("geometry") => ColumnType::MYSQL_TYPE_GEOMETRY,
-        _ => UnsupportedDataTypeSnafu { data_type }.fail()?,
+        _ => UnsupportedDataTypeSnafu {
+            column_name,
+            data_type,
+        }
+        .fail()?,
     };
 
     Ok(column_type)
