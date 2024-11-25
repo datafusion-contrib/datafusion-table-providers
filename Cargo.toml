@@ -88,7 +88,7 @@ dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 fundu = "2.0.1"
 dashmap = "6.1.0"
-odbc-api = { version = "9.0.0", optional = true }
+odbc-api = { version = "10.0.0", optional = true }
 arrow-odbc = { version = "13.0.0", optional = true }
 sha2 = "0.10.8"
 
