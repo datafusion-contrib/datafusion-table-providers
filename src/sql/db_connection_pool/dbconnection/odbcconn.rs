@@ -22,14 +22,14 @@ use crate::sql::db_connection_pool::{
     dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
     DbConnectionPool,
 };
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
 use arrow_odbc::arrow_schema_from;
 use arrow_odbc::OdbcReader;
 use arrow_odbc::OdbcReaderBuilder;
 use async_stream::stream;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -72,7 +72,9 @@ pub type ODBCDbConnectionPool<'a> =
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to convert query result to Arrow: {source}"))]
-    ArrowError { source: arrow::error::ArrowError },
+    ArrowError {
+        source: datafusion::arrow::error::ArrowError,
+    },
     #[snafu(display("arrow_odbc error: {source}"))]
     ArrowODBCError { source: arrow_odbc::Error },
     #[snafu(display("odbc_api Error: {source}"))]

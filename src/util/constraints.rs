@@ -1,4 +1,4 @@
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::{
     common::{Constraint, Constraints},
     execution::context::SessionContext,
@@ -114,7 +114,7 @@ pub fn get_primary_keys_from_constraints(
 pub(crate) mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::SchemaRef;
+    use datafusion::arrow::datatypes::SchemaRef;
     use datafusion::{
         common::{Constraint, Constraints},
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
@@ -129,7 +129,8 @@ pub(crate) mod tests {
 
         let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)?.build()?;
 
-        let records = parquet_reader.collect::<Result<Vec<_>, arrow::error::ArrowError>>()?;
+        let records =
+            parquet_reader.collect::<Result<Vec<_>, datafusion::arrow::error::ArrowError>>()?;
         let schema = records[0].schema();
 
         let constraints =

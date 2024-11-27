@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
 use bb8_postgres::PostgresConnectionManager;
+use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;

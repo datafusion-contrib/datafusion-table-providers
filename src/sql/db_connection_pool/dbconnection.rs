@@ -193,7 +193,7 @@ pub async fn get_schemas<T, P>(conn: Box<dyn DbConnection<T, P>>) -> Result<Vec<
 pub async fn get_schema<T, P>(
     conn: Box<dyn DbConnection<T, P>>,
     table_reference: &datafusion::sql::TableReference,
-) -> Result<Arc<arrow::datatypes::Schema>, Error> {
+) -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
     let schema = if let Some(conn) = conn.as_sync() {
         conn.get_schema(table_reference)?
     } else if let Some(conn) = conn.as_async() {

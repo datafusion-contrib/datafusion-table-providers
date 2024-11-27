@@ -17,8 +17,7 @@ async fn main() {
     // Create SQLite ODBC connection pool
     let params = to_secret_map(HashMap::from([(
         "connection_string".to_owned(),
-        "driver=SQLite3;database=examples/sqlite_example.db;"
-            .to_owned(),
+        "driver=SQLite3;database=examples/sqlite_example.db;".to_owned(),
     )]));
     let odbc_pool =
         Arc::new(ODBCPool::new(params).expect("unable to create SQLite ODBC connection pool"));

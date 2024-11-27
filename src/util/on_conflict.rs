@@ -1,4 +1,4 @@
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use itertools::Itertools;
 use sea_query::{self, Alias};
 use snafu::prelude::*;
@@ -138,7 +138,7 @@ impl TryFrom<&str> for OnConflict {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
     use crate::util::{column_reference::ColumnReference, on_conflict::OnConflict};
 

@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
 use async_stream::stream;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;

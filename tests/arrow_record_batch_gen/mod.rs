@@ -1,12 +1,12 @@
-use arrow::array::RecordBatch;
-use arrow::{
+use chrono::NaiveDate;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::{
     array::*,
     datatypes::{
         i256, DataType, Date32Type, Date64Type, Field, Int8Type, IntervalDayTime,
         IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
     },
 };
-use chrono::NaiveDate;
 use std::sync::Arc;
 
 // Helper functions to create arrow record batches of different types

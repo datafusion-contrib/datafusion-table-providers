@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow_array::{Array, Float32Array, Int64Array, Int8Array, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
 use arrow_flight::sql::server::FlightSqlService;
@@ -12,8 +11,9 @@ use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, SqlInfo, TicketS
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
-use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, Float32Array, Int64Array, Int8Array, RecordBatch};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, TryStreamExt};
 use prost::Message;

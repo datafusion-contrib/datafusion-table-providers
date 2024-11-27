@@ -1,6 +1,6 @@
 use crate::sql::arrow_sql_gen::statement::IndexBuilder;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::Constraints;
 use duckdb::{vtab::arrow_recordbatch_to_query_params, ToSql, Transaction};
 use snafu::prelude::*;
@@ -322,7 +322,7 @@ pub(crate) mod tests {
     use crate::sql::db_connection_pool::{
         dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
     };
-    use arrow::array::RecordBatch;
+    use datafusion::arrow::array::RecordBatch;
     use datafusion::{
         execution::{SendableRecordBatchStream, TaskContext},
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
@@ -358,7 +358,7 @@ pub(crate) mod tests {
             .expect("to build parquet reader");
 
         parquet_reader
-            .collect::<Result<Vec<_>, arrow::error::ArrowError>>()
+            .collect::<Result<Vec<_>, datafusion::arrow::error::ArrowError>>()
             .expect("to get records")
     }
 

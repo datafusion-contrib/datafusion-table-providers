@@ -24,19 +24,20 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::flight::{flight_channel, to_df_err, FlightMetadata, FlightProperties, SizeLimits};
-use arrow_array::{new_null_array, ArrayRef, RecordBatch};
-use arrow_cast::cast;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
-use arrow_schema::{ArrowError, Field, SchemaRef};
+use datafusion::arrow::array::{new_null_array, ArrayRef, RecordBatch};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::ToByteSlice;
+use datafusion::arrow::datatypes::{Field, SchemaRef};
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::Result;
 use datafusion::common::{project_schema, DataFusionError};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::{
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
 };
 use futures::{StreamExt, TryStreamExt};
@@ -222,7 +223,7 @@ async fn try_fetch_stream(
 pub fn enforce_schema(
     batch: RecordBatch,
     target_schema: &SchemaRef,
-) -> arrow::error::Result<RecordBatch> {
+) -> datafusion::arrow::error::Result<RecordBatch> {
     if target_schema.fields.is_empty() || batch.schema() == *target_schema {
         Ok(batch)
     } else if target_schema.contains(batch.schema_ref()) {
@@ -232,7 +233,7 @@ pub fn enforce_schema(
             .fields
             .iter()
             .map(|field| find_matching_column(&batch, field.as_ref()))
-            .collect::<arrow::error::Result<_>>()?;
+            .collect::<datafusion::arrow::error::Result<_>>()?;
         RecordBatch::try_new(target_schema.to_owned(), columns)
     }
 }
@@ -240,7 +241,10 @@ pub fn enforce_schema(
 /// For a target schema field, extract the column with the same name if present in the
 /// record batch and cast it to the desired data type if needed. If the column is missing
 /// but the target schema field is nullable, generates a null-array column.
-fn find_matching_column(batch: &RecordBatch, field: &Field) -> arrow::error::Result<ArrayRef> {
+fn find_matching_column(
+    batch: &RecordBatch,
+    field: &Field,
+) -> datafusion::arrow::error::Result<ArrayRef> {
     if let Some(column) = batch.column_by_name(field.name()) {
         if column.data_type() == field.data_type() {
             Ok(column.to_owned())
@@ -322,10 +326,10 @@ impl ExecutionPlan for FlightExec {
 mod tests {
     use crate::flight::exec::{enforce_schema, FlightConfig, FlightPartition, FlightTicket};
     use crate::flight::{FlightProperties, SizeLimits};
-    use arrow_array::{
+    use datafusion::arrow::array::{
         BooleanArray, Float32Array, Int32Array, RecordBatch, StringArray, StructArray,
     };
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
     use std::collections::HashMap;
     use std::sync::Arc;
 

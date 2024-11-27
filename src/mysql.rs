@@ -30,9 +30,9 @@ use crate::util::indexes::IndexType;
 use crate::util::on_conflict::OnConflict;
 use crate::util::secrets::to_secret_map;
 use crate::util::{column_reference, constraints, on_conflict, to_datafusion_error};
-use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::{
     catalog::TableProviderFactory, common::Constraints, datasource::TableProvider,

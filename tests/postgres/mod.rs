@@ -1,14 +1,14 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::{
+use datafusion::arrow::{
     array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 #[cfg(feature = "postgres-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
@@ -56,11 +56,7 @@ async fn arrow_postgres_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(
-            &ctx.state(),
-            Arc::new(mem_exec),
-            InsertOp::Overwrite,
-        )
+        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
         .await
         .expect("insert plan created");
 
@@ -103,7 +99,7 @@ struct ContainerManager {
 
 impl Drop for ContainerManager {
     fn drop(&mut self) {
-        let _ = tokio::runtime::Runtime::new()
+        tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(stop_container(self.port));
     }

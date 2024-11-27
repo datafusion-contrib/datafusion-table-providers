@@ -27,14 +27,14 @@ use std::sync::Arc;
 use crate::flight::exec::FlightExec;
 use arrow_flight::error::FlightError;
 use arrow_flight::FlightInfo;
-use arrow_schema::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Statistics};
 use datafusion::datasource::TableProvider;
+use datafusion::logical_expr::{CreateExternalTable, Expr, TableType};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Channel, ClientTlsConfig};
 

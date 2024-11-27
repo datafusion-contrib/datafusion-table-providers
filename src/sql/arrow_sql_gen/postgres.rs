@@ -4,17 +4,6 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
-use arrow::array::{
-    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
-    Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
-    RecordBatch, RecordBatchOptions, StringBuilder, StringDictionaryBuilder, StructBuilder,
-    Time64NanosecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
-};
-use arrow::datatypes::{
-    DataType, Date32Type, Field, Int8Type, IntervalMonthDayNanoType, IntervalUnit, Schema,
-    SchemaRef, TimeUnit,
-};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
@@ -22,6 +11,17 @@ use bigdecimal::ToPrimitive;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, Offset, Timelike, Utc};
 use composite::CompositeType;
+use datafusion::arrow::array::{
+    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
+    FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+    Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder,
+    RecordBatch, RecordBatchOptions, StringBuilder, StringDictionaryBuilder, StructBuilder,
+    Time64NanosecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
+};
+use datafusion::arrow::datatypes::{
+    DataType, Date32Type, Field, Int8Type, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    SchemaRef, TimeUnit,
+};
 use geo_types::geometry::Point;
 use sea_query::{Alias, ColumnType, SeaRc};
 use serde_json::Value;
@@ -38,7 +38,9 @@ pub mod schema;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },
@@ -1131,8 +1133,8 @@ fn get_decimal_column_precision_and_scale(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use chrono::NaiveTime;
+    use datafusion::arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use geo_types::{point, polygon, Geometry};
     use geozero::{CoordDimensions, ToWkb};
     use std::str::FromStr;

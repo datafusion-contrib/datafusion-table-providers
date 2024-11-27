@@ -2,8 +2,8 @@ use std::{any::Any, sync::Arc};
 
 use crate::sql::arrow_sql_gen::mysql::map_column_to_data_type;
 use crate::sql::arrow_sql_gen::{self, mysql::rows_to_arrow};
-use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_stream::stream;
+use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;

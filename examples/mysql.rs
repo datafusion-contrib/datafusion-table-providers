@@ -3,10 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers::{
-    common::DatabaseCatalogProvider, 
-    sql::db_connection_pool::mysqlpool::MySQLConnectionPool,
-    mysql::MySQLTableFactory,
-    util::secrets::to_secret_map,
+    common::DatabaseCatalogProvider, mysql::MySQLTableFactory,
+    sql::db_connection_pool::mysqlpool::MySQLConnectionPool, util::secrets::to_secret_map,
 };
 
 /// This example demonstrates how to:
@@ -54,7 +52,7 @@ async fn main() {
     // Create MySQL table provider factory
     // Used to generate TableProvider instances that can read MySQL table data
     let table_factory = MySQLTableFactory::new(mysql_pool.clone());
-    
+
     // Create database catalog provider
     // This allows us to access tables through catalog structure (catalog.schema.table)
     let catalog = DatabaseCatalogProvider::try_new(mysql_pool).await.unwrap();

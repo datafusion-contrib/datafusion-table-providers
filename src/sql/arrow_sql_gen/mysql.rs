@@ -1,5 +1,8 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
-use arrow::{
+use bigdecimal::BigDecimal;
+use bigdecimal::ToPrimitive;
+use chrono::{NaiveDate, NaiveTime, Timelike};
+use datafusion::arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Decimal256Builder,
         Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
@@ -9,9 +12,6 @@ use arrow::{
     },
     datatypes::{i256, DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit, UInt16Type},
 };
-use bigdecimal::BigDecimal;
-use bigdecimal::ToPrimitive;
-use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
@@ -20,7 +20,9 @@ use time::PrimitiveDateTime;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },

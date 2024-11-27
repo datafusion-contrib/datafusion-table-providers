@@ -7,17 +7,17 @@ use rstest::{fixture, rstest};
 use std::sync::Arc;
 
 use crate::docker::RunningContainer;
-use arrow::{
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::{
     array::*,
     datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
 };
-use arrow_schema::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion_expr::dml::InsertOp;
 #[cfg(feature = "mysql-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;

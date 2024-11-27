@@ -410,8 +410,8 @@ mod tests {
     mod sql_table_plan_to_sql_tests {
         use std::any::Any;
 
-        use arrow_schema::{DataType, Field, Schema, TimeUnit};
         use async_trait::async_trait;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
         use datafusion::{
             logical_expr::{col, lit},
             sql::TableReference,

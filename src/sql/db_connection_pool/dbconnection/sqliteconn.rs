@@ -1,8 +1,8 @@
 use std::any::Any;
 
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::sql::TableReference;

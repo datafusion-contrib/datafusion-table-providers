@@ -1,7 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::{
     catalog::Session,
     common::Constraints,
@@ -232,7 +232,7 @@ impl DisplayAs for SqliteDataSink {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::{
+    use datafusion::arrow::{
         array::{Int64Array, RecordBatch, StringArray},
         datatypes::{DataType, Schema},
     };
@@ -251,8 +251,8 @@ mod tests {
     #[allow(clippy::unreadable_literal)]
     async fn test_round_trip_sqlite() {
         let schema = Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("time_in_string", DataType::Utf8, false),
-            arrow::datatypes::Field::new("time_int", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("time_in_string", DataType::Utf8, false),
+            datafusion::arrow::datatypes::Field::new("time_int", DataType::Int64, false),
         ]));
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
         let external_table = CreateExternalTable {
