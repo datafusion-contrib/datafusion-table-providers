@@ -22,7 +22,7 @@ type Result<T, E = GenericError> = std::result::Result<T, E>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Unable to downcast connection"))]
+    #[snafu(display("Unable to downcast connection.\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     UnableToDowncastConnection {},
 
     #[snafu(display("{source}"))]
@@ -35,10 +35,12 @@ pub enum Error {
         field_name: String,
     },
 
-    #[snafu(display("Unable to query arrow: {source}"))]
+    #[snafu(display("Failed to execute query.\n{source}"))]
     UnableToQueryArrow { source: GenericError },
 
-    #[snafu(display("Table {table_name} not found. Ensure the table name is correctly spelled."))]
+    #[snafu(display(
+        "Table '{table_name}' not found. Ensure the table name is correctly spelled."
+    ))]
     UndefinedTable {
         table_name: String,
         source: GenericError,
