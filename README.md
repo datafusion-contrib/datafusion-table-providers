@@ -25,6 +25,7 @@ let ctx = SessionContext::with_state(state);
 - SQLite
 - DuckDB
 - Flight SQL
+- ODBC
 
 ## Examples
 
@@ -100,8 +101,19 @@ cargo run --example mysql --features mysql
 ```bash
 brew install roapi
 # or
-#cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
+# cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
 roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet &
 
 cargo run --example flight-sql --features flight
+```
+
+### ODBC
+
+```bash
+apt-get install unixodbc-dev libsqliteodbc
+# or
+# brew install unixodbc & brew install sqliteodbc
+# If you use ARM Mac, please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1
+
+cargo run --example odbc_sqlite --features odbc
 ```
