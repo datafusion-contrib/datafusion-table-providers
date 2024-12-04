@@ -19,6 +19,8 @@ use futures::StreamExt;
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 
+use crate::InvalidTypeAction;
+
 use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
@@ -126,6 +128,7 @@ pub enum PostgresError {
 
 pub struct PostgresConnection {
     pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
+    invalid_type_action: InvalidTypeAction,
 }
 
 impl<'a>
@@ -164,7 +167,10 @@ impl<'a>
     fn new(
         conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
     ) -> Self {
-        PostgresConnection { conn }
+        PostgresConnection {
+            conn,
+            invalid_type_action: InvalidTypeAction::default(),
+        }
     }
 
     async fn get_schema(
@@ -206,9 +212,13 @@ impl<'a>
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
             let type_details = row.get::<usize, Option<serde_json::Value>>(3);
-            let arrow_type = pg_data_type_to_arrow_type(&pg_type, type_details)
-                .boxed()
-                .context(super::UnableToGetSchemaSnafu)?;
+            let arrow_type = match pg_data_type_to_arrow_type(&pg_type, type_details) {
+                Ok(arrow_type) => arrow_type,
+                Err(_) => {
+                    handle_unsupported_data_type(&pg_type, &column_name, self.invalid_type_action)?;
+                    continue;
+                }
+            };
             fields.push(Field::new(column_name, arrow_type, nullable));
         }
 
@@ -273,4 +283,33 @@ impl<'a>
     async fn execute(&self, sql: &str, params: &[&'a (dyn ToSql + Sync)]) -> Result<u64> {
         Ok(self.conn.execute(sql, params).await?)
     }
+}
+
+impl PostgresConnection {
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = action;
+        self
+    }
+}
+
+fn handle_unsupported_data_type(
+    data_type: &str,
+    field_name: &str,
+    invalid_type_action: InvalidTypeAction,
+) -> Result<(), super::Error> {
+    let error = super::Error::UnsupportedDataType {
+        data_type: data_type.to_string(),
+        field_name: field_name.to_string(),
+    };
+    match invalid_type_action {
+        InvalidTypeAction::Error => {
+            return Err(error);
+        }
+        InvalidTypeAction::Warn => {
+            tracing::warn!("{error}");
+        }
+        InvalidTypeAction::Ignore => {}
+    }
+    Ok(())
 }

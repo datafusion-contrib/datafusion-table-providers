@@ -80,7 +80,7 @@ fn composite_type_fields(type_: &Type) -> &[Field] {
     }
 }
 
-impl<'a> CompositeType<'a> {
+impl CompositeType<'_> {
     /// Returns information about the fields of the composite type.
     #[must_use]
     pub fn fields(&self) -> &[Field] {
@@ -180,7 +180,7 @@ impl<'a> CompositeTypeRanges<'a> {
 }
 
 #[allow(clippy::cast_sign_loss)]
-impl<'a> FallibleIterator for CompositeTypeRanges<'a> {
+impl FallibleIterator for CompositeTypeRanges<'_> {
     type Item = Option<std::ops::Range<usize>>;
     type Error = std::io::Error;
 

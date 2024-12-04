@@ -1,8 +1,5 @@
 use std::{any::Any, sync::Arc};
 
-#[cfg(feature = "duckdb")]
-use arrow_schema::DataType;
-
 use datafusion::{
     arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream, sql::TableReference,
 };
@@ -28,10 +25,9 @@ pub enum Error {
     #[snafu(display("{source}"))]
     UnableToGetSchema { source: GenericError },
 
-    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}.\nReport a bug to request support for this data type: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
-    #[cfg(feature = "duckdb")]
+    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}."))]
     UnsupportedDataType {
-        data_type: DataType,
+        data_type: String,
         field_name: String,
     },
 

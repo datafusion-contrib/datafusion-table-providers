@@ -43,16 +43,8 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
         )),
-        "line" | "lseg" | "box" | "path" | "polygon" | "circle" => Ok(DataType::Binary),
-        "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
-        "bit" | "bit varying" => Ok(DataType::Binary),
-        "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
-        "xml" | "json" | "jsonb" => Ok(DataType::LargeUtf8),
+        "xml" | "json" => Ok(DataType::LargeUtf8),
         "array" => parse_array_type(type_details),
-        "int4range" => Ok(DataType::Struct(Fields::from(vec![
-            Field::new("lower", DataType::Int32, true),
-            Field::new("upper", DataType::Int32, true),
-        ]))),
         "composite" => parse_composite_type(type_details),
         "geometry" | "geography" => Ok(DataType::Binary),
         _ => Err(ArrowError::ParseError(format!(
@@ -352,15 +344,6 @@ mod tests {
                 .expect("Failed to convert numeric(10,2)"),
             DataType::Decimal128(10, 2)
         );
-        assert_eq!(
-            pg_data_type_to_arrow_type("bit(8)", None).expect("Failed to convert bit(8)"),
-            DataType::Binary
-        );
-        assert_eq!(
-            pg_data_type_to_arrow_type("bit varying(64)", None)
-                .expect("Failed to convert bit varying(64)"),
-            DataType::Binary
-        );
     }
 
     #[test]
@@ -404,42 +387,9 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8))
         );
 
-        // Test geometric types
-        assert_eq!(
-            pg_data_type_to_arrow_type("point", None).expect("Failed to convert point"),
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 2)
-        );
-        assert_eq!(
-            pg_data_type_to_arrow_type("line", None).expect("Failed to convert line"),
-            DataType::Binary
-        );
-
-        // Test network address types
-        assert_eq!(
-            pg_data_type_to_arrow_type("inet", None).expect("Failed to convert inet"),
-            DataType::Utf8
-        );
-        assert_eq!(
-            pg_data_type_to_arrow_type("cidr", None).expect("Failed to convert cidr"),
-            DataType::Utf8
-        );
-
-        // Test range types
-        assert_eq!(
-            pg_data_type_to_arrow_type("int4range", None).expect("Failed to convert int4range"),
-            DataType::Struct(Fields::from(vec![
-                Field::new("lower", DataType::Int32, true),
-                Field::new("upper", DataType::Int32, true),
-            ]))
-        );
-
         // Test JSON types
         assert_eq!(
             pg_data_type_to_arrow_type("json", None).expect("Failed to convert json"),
-            DataType::LargeUtf8
-        );
-        assert_eq!(
-            pg_data_type_to_arrow_type("jsonb", None).expect("Failed to convert jsonb"),
             DataType::LargeUtf8
         );
 
@@ -447,16 +397,6 @@ mod tests {
         assert_eq!(
             pg_data_type_to_arrow_type("uuid", None).expect("Failed to convert uuid"),
             DataType::Utf8
-        );
-
-        // Test text search types
-        assert_eq!(
-            pg_data_type_to_arrow_type("tsvector", None).expect("Failed to convert tsvector"),
-            DataType::LargeUtf8
-        );
-        assert_eq!(
-            pg_data_type_to_arrow_type("tsquery", None).expect("Failed to convert tsquery"),
-            DataType::LargeUtf8
         );
 
         // Test bpchar type
