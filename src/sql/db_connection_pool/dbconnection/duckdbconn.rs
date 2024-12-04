@@ -222,7 +222,7 @@ impl DuckDbConnection {
 
             if unsupported {
                 let error = super::Error::UnsupportedDataType {
-                    data_type: field.data_type().clone(),
+                    data_type: field.data_type().to_string(),
                     field_name: field.name().clone(),
                 };
 
@@ -319,7 +319,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         DuckDbConnection {
             conn,
             attachments: None,
-            invalid_type_action: InvalidTypeAction::Error,
+            invalid_type_action: InvalidTypeAction::default(),
         }
     }
 

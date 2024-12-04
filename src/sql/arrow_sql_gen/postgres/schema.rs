@@ -43,16 +43,8 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
         )),
-        "line" | "lseg" | "box" | "path" | "polygon" | "circle" => Ok(DataType::Binary),
-        "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
-        "bit" | "bit varying" => Ok(DataType::Binary),
-        "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
-        "xml" | "json" | "jsonb" => Ok(DataType::LargeUtf8),
+        "xml" | "json" => Ok(DataType::LargeUtf8),
         "array" => parse_array_type(type_details),
-        "int4range" => Ok(DataType::Struct(Fields::from(vec![
-            Field::new("lower", DataType::Int32, true),
-            Field::new("upper", DataType::Int32, true),
-        ]))),
         "composite" => parse_composite_type(type_details),
         "geometry" | "geography" => Ok(DataType::Binary),
         _ => Err(ArrowError::ParseError(format!(

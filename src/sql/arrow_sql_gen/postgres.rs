@@ -85,6 +85,12 @@ pub enum Error {
 
     #[snafu(display("No column name for index: {index}"))]
     NoColumnNameForIndex { index: usize },
+
+    #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}."))]
+    UnsupportedDataType {
+        data_type: String,
+        field_name: String,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -212,7 +218,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     None
                 }
             } else {
-                map_column_type_to_data_type(column_type)
+                map_column_type_to_data_type(column_type, column_name)?
             };
 
             match &data_type {
@@ -746,7 +752,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         let fields = composite_type.fields();
                         for (idx, field) in fields.iter().enumerate() {
                             let field_name = field.name();
-                            let Some(field_type) = map_column_type_to_data_type(field.type_())
+                            let Some(field_type) =
+                                map_column_type_to_data_type(field.type_(), field_name)?
                             else {
                                 return FailedToDowncastBuilderSnafu {
                                     postgres_type: format!("{}", field.type_()),
@@ -802,7 +809,11 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                     }
                     _ => {
-                        unimplemented!("Unsupported type {:?} for column index {i}", postgres_type,)
+                        return UnsupportedDataTypeSnafu {
+                            data_type: postgres_type.to_string(),
+                            field_name: column_names[i].clone(),
+                        }
+                        .fail();
                     }
                 },
             }
@@ -822,99 +833,106 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     }
 }
 
-fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
+fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<Option<DataType>> {
     match *column_type {
-        Type::INT2 => Some(DataType::Int16),
-        Type::INT4 => Some(DataType::Int32),
-        Type::INT8 | Type::MONEY => Some(DataType::Int64),
-        Type::FLOAT4 => Some(DataType::Float32),
-        Type::FLOAT8 => Some(DataType::Float64),
-        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Some(DataType::Utf8),
-        Type::BYTEA => Some(DataType::Binary),
-        Type::BOOL => Some(DataType::Boolean),
-        Type::JSON => Some(DataType::LargeUtf8),
+        Type::INT2 => Ok(Some(DataType::Int16)),
+        Type::INT4 => Ok(Some(DataType::Int32)),
+        Type::INT8 | Type::MONEY => Ok(Some(DataType::Int64)),
+        Type::FLOAT4 => Ok(Some(DataType::Float32)),
+        Type::FLOAT8 => Ok(Some(DataType::Float64)),
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Ok(Some(DataType::Utf8)),
+        Type::BYTEA => Ok(Some(DataType::Binary)),
+        Type::BOOL => Ok(Some(DataType::Boolean)),
+        Type::JSON => Ok(Some(DataType::LargeUtf8)),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
-        Type::NUMERIC => None,
-        Type::TIMESTAMPTZ => Some(DataType::Timestamp(
+        Type::NUMERIC => Ok(None),
+        Type::TIMESTAMPTZ => Ok(Some(DataType::Timestamp(
             TimeUnit::Nanosecond,
             Some(Arc::from("UTC")),
-        )),
+        ))),
         // We get a SystemTime that we can always convert into milliseconds
-        Type::TIMESTAMP => Some(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        Type::DATE => Some(DataType::Date32),
-        Type::TIME => Some(DataType::Time64(TimeUnit::Nanosecond)),
-        Type::INTERVAL => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
-        Type::POINT => Some(DataType::FixedSizeList(
+        Type::TIMESTAMP => Ok(Some(DataType::Timestamp(TimeUnit::Nanosecond, None))),
+        Type::DATE => Ok(Some(DataType::Date32)),
+        Type::TIME => Ok(Some(DataType::Time64(TimeUnit::Nanosecond))),
+        Type::INTERVAL => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+        Type::POINT => Ok(Some(DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
-        )),
-        Type::INT2_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))),
+        Type::INT2_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
             true,
-        )))),
-        Type::INT4_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::INT4_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int32,
             true,
-        )))),
-        Type::INT8_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::INT8_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int64,
             true,
-        )))),
-        Type::FLOAT4_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::FLOAT4_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Float32,
             true,
-        )))),
-        Type::FLOAT8_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::FLOAT8_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Float64,
             true,
-        )))),
-        Type::TEXT_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::TEXT_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Utf8,
             true,
-        )))),
-        Type::BOOL_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::BOOL_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Boolean,
             true,
-        )))),
-        Type::BYTEA_ARRAY => Some(DataType::List(Arc::new(Field::new(
+        ))))),
+        Type::BYTEA_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Binary,
             true,
-        )))),
-        _ if matches!(column_type.name(), "geometry" | "geography") => Some(DataType::Binary),
-        _ if matches!(column_type.name(), "_geometry" | "_geography") => Some(DataType::List(
+        ))))),
+        _ if matches!(column_type.name(), "geometry" | "geography") => Ok(Some(DataType::Binary)),
+        _ if matches!(column_type.name(), "_geometry" | "_geography") => Ok(Some(DataType::List(
             Arc::new(Field::new("item", DataType::Binary, true)),
-        )),
+        ))),
         _ => match *column_type.kind() {
             Kind::Composite(ref fields) => {
                 let mut arrow_fields = Vec::new();
                 for field in fields {
                     let field_name = field.name();
-                    let field_type = map_column_type_to_data_type(field.type_());
+                    let field_type = map_column_type_to_data_type(field.type_(), field_name)?;
                     match field_type {
                         Some(field_type) => {
                             arrow_fields.push(Field::new(field_name, field_type, true));
                         }
-                        None => unimplemented!(
-                            "Unsupported column type in nested struct {:?}",
-                            field_type
-                        ),
+                        None => {
+                            return UnsupportedDataTypeSnafu {
+                                data_type: field.type_().to_string(),
+                                field_name: field_name.to_string(),
+                            }
+                            .fail();
+                        }
                     }
                 }
-                Some(DataType::Struct(arrow_fields.into()))
+                Ok(Some(DataType::Struct(arrow_fields.into())))
             }
-            Kind::Enum(_) => Some(DataType::Dictionary(
+            Kind::Enum(_) => Ok(Some(DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Utf8),
-            )),
-            _ => unimplemented!("Unsupported column type {:?}", column_type),
+            ))),
+            _ => UnsupportedDataTypeSnafu {
+                data_type: column_type.to_string(),
+                field_name: field_name.to_string(),
+            }
+            .fail(),
         },
     }
 }
