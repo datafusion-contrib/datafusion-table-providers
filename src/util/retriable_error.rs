@@ -12,14 +12,14 @@ pub enum RetriableError {
 
     #[snafu(display("{source}"))]
     DataWriteError {
-        source: Box<dyn Error + Send + Sync>
+        source: Box<dyn Error + Send + Sync>,
     },
 }
 
 #[must_use]
 pub fn is_retriable_error(err: &DataFusionError) -> bool {
     match err {
-        DataFusionError::External(err) => return err.downcast_ref::<RetriableError>().is_some(),
+        DataFusionError::External(err) => err.downcast_ref::<RetriableError>().is_some(),
         DataFusionError::Context(_, err) => is_retriable_error(err.as_ref()),
         _ => false,
     }
@@ -49,7 +49,9 @@ pub fn to_retriable_data_write_error<E>(error: E) -> DataFusionError
 where
     E: Error + Send + Sync + 'static,
 {
-    DataFusionError::External(Box::new(RetriableError::DataWriteError { source: error.into() }))
+    DataFusionError::External(Box::new(RetriableError::DataWriteError {
+        source: error.into(),
+    }))
 }
 
 fn is_invalid_query_error(error: &DataFusionError) -> bool {
