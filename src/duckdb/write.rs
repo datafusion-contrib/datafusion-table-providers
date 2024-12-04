@@ -6,8 +6,8 @@ use crate::util::{
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
 use datafusion::logical_expr::dml::InsertOp;

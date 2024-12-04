@@ -22,8 +22,8 @@ use std::sync::Arc;
 use crate::flight::exec::{FlightConfig, FlightExec};
 use crate::flight::to_df_err;
 use datafusion::common::DataFusionError;
-use datafusion_expr::registry::FunctionRegistry;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion::logical_expr::registry::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 /// Physical extension codec for FlightExec

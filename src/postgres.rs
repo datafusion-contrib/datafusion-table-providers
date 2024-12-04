@@ -10,14 +10,14 @@ use crate::sql::db_connection_pool::{
 
 use crate::sql::sql_provider_datafusion::{Engine, SqlTable};
 
-use arrow::{
-    array::RecordBatch,
-    datatypes::{Schema, SchemaRef},
-};
 use async_trait::async_trait;
 use bb8_postgres::{
     tokio_postgres::{types::ToSql, Transaction},
     PostgresConnectionManager,
+};
+use datafusion::arrow::{
+    array::RecordBatch,
+    datatypes::{Schema, SchemaRef},
 };
 use datafusion::catalog::Session;
 use datafusion::{

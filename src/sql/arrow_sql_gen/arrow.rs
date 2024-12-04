@@ -1,4 +1,4 @@
-use arrow::{
+use datafusion::arrow::{
     array::{
         types::Int8Type, ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
         Decimal128Builder, Decimal256Builder, FixedSizeBinaryBuilder, FixedSizeListBuilder,

@@ -1,6 +1,6 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
 #[cfg(feature = "sqlite-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;

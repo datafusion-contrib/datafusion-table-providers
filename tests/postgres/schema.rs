@@ -1,4 +1,4 @@
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::Constraints;
 use datafusion::common::ToDFSchema;

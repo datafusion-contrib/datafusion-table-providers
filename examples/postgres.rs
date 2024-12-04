@@ -1,13 +1,11 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers::{
-    common::DatabaseCatalogProvider,
-    sql::db_connection_pool::postgrespool::PostgresConnectionPool,
-    postgres::PostgresTableFactory,
-    util::secrets::to_secret_map,
+    common::DatabaseCatalogProvider, postgres::PostgresTableFactory,
+    sql::db_connection_pool::postgrespool::PostgresConnectionPool, util::secrets::to_secret_map,
 };
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// This example demonstrates how to:
 /// 1. Create a PostgreSQL connection pool
@@ -54,10 +52,12 @@ async fn main() {
     // Create PostgreSQL table provider factory
     // Used to generate TableProvider instances that can read PostgreSQL table data
     let table_factory = PostgresTableFactory::new(postgres_pool.clone());
-    
+
     // Create database catalog provider
     // This allows us to access tables through catalog structure (catalog.schema.table)
-    let catalog = DatabaseCatalogProvider::try_new(postgres_pool).await.unwrap();
+    let catalog = DatabaseCatalogProvider::try_new(postgres_pool)
+        .await
+        .unwrap();
 
     // Create DataFusion session context
     let ctx = SessionContext::new();

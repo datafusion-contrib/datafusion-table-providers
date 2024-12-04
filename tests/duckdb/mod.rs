@@ -1,6 +1,6 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;

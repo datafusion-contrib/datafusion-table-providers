@@ -9,9 +9,9 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
-use arrow::array::{Int64Array, StringArray};
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::array::{Int64Array, StringArray};
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::{
     catalog::TableProviderFactory,
@@ -663,7 +663,7 @@ impl Sqlite {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use arrow::datatypes::{DataType, Schema};
+    use datafusion::arrow::datatypes::{DataType, Schema};
     use datafusion::{
         common::{Constraint, ToDFSchema},
         prelude::SessionContext,
@@ -674,9 +674,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_sqlite_table_creation_with_indexes() {
         let schema = Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
-            arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
-            arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
+            datafusion::arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
         ]));
 
         let options: HashMap<String, String> = [(

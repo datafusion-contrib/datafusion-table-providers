@@ -32,7 +32,7 @@ async fn main() {
     // Create SQLite table provider factory
     // Used to generate TableProvider instances that can read SQLite table data
     let table_factory = SqliteTableFactory::new(sqlite_pool.clone());
-    
+
     // Create database catalog provider
     // This allows us to access tables through catalog structure (catalog.schema.table)
     let catalog_provider = DatabaseCatalogProvider::try_new(sqlite_pool).await.unwrap();

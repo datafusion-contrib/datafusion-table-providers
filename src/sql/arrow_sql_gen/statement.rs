@@ -1,4 +1,6 @@
-use arrow::{
+use bigdecimal::BigDecimal;
+use chrono::{DateTime, FixedOffset};
+use datafusion::arrow::{
     array::{
         array, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
@@ -7,8 +9,6 @@ use arrow::{
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
-use bigdecimal::BigDecimal;
-use chrono::{DateTime, FixedOffset};
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
@@ -1358,7 +1358,7 @@ fn insert_struct_into_row_values_json(
             source: Box::new(e),
         })?;
 
-    let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
+    let mut writer = datafusion::arrow::json::LineDelimitedWriter::new(Vec::new());
     writer
         .write(&batch)
         .map_err(|e| Error::FailedToCreateInsertStatement {
@@ -1386,7 +1386,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
 
     #[test]
     fn test_basic_table_creation() {

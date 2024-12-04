@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datafusion_table_providers::{
-    common::DatabaseCatalogProvider, 
-    sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,
-    duckdb::DuckDBTableFactory,
-};
 use datafusion::sql::TableReference;
+use datafusion_table_providers::{
+    common::DatabaseCatalogProvider, duckdb::DuckDBTableFactory,
+    sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,
+};
 use duckdb::AccessMode;
 
 /// This example demonstrates how to:
@@ -17,7 +16,7 @@ use duckdb::AccessMode;
 #[tokio::main]
 async fn main() {
     // Create DuckDB connection pool
-    // Opening in ReadOnly mode allows multiple reader processes to access 
+    // Opening in ReadOnly mode allows multiple reader processes to access
     // the database at the same time
     let duckdb_pool = Arc::new(
         DuckDbConnectionPool::new_file("examples/duckdb_example.db", &AccessMode::ReadOnly)
@@ -27,7 +26,7 @@ async fn main() {
     // Create DuckDB table provider factory
     // Used to generate TableProvider instances that can read DuckDB table data
     let table_factory = DuckDBTableFactory::new(duckdb_pool.clone());
-    
+
     // Create database catalog provider
     // This allows us to access tables through catalog structure (catalog.schema.table)
     let catalog = DatabaseCatalogProvider::try_new(duckdb_pool).await.unwrap();

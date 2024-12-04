@@ -1,5 +1,5 @@
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use arrow::error::ArrowError;
+use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion::arrow::error::ArrowError;
 use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;

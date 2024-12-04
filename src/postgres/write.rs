@@ -1,7 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::{
     catalog::Session,
     common::Constraints,

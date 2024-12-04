@@ -17,19 +17,19 @@ limitations under the License.
 use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
-use arrow::array::ArrayBuilder;
-use arrow::array::ArrayRef;
-use arrow::array::BinaryBuilder;
-use arrow::array::Float64Builder;
-use arrow::array::Int64Builder;
-use arrow::array::NullBuilder;
-use arrow::array::RecordBatch;
-use arrow::array::RecordBatchOptions;
-use arrow::array::StringBuilder;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::ArrayBuilder;
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::array::BinaryBuilder;
+use datafusion::arrow::array::Float64Builder;
+use datafusion::arrow::array::Int64Builder;
+use datafusion::arrow::array::NullBuilder;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::RecordBatchOptions;
+use datafusion::arrow::array::StringBuilder;
+use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use rusqlite::types::Type;
 use rusqlite::Row;
 use rusqlite::Rows;
@@ -38,7 +38,9 @@ use snafu::prelude::*;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },

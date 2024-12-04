@@ -2,8 +2,8 @@ use crate::mysql::MySQL;
 use crate::util::on_conflict::OnConflict;
 use crate::util::retriable_error::check_and_mark_retriable_error;
 use crate::util::{constraints, to_datafusion_error};
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::{
     catalog::Session,
     datasource::{TableProvider, TableType},

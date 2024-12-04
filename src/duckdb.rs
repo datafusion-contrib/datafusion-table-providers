@@ -17,8 +17,8 @@ use crate::util::{
     indexes::IndexType,
     on_conflict::{self, OnConflict},
 };
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
     common::Constraints,

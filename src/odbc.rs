@@ -19,7 +19,7 @@ use crate::sql::{
     db_connection_pool as db_connection_pool_datafusion,
     sql_provider_datafusion::{Engine, SqlTable},
 };
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::{datasource::TableProvider, sql::TableReference};
 use snafu::prelude::*;

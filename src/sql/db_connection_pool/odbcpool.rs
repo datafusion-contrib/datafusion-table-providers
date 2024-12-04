@@ -16,8 +16,8 @@ limitations under the License.
 
 use crate::sql::db_connection_pool::dbconnection::odbcconn::ODBCConnection;
 use crate::sql::db_connection_pool::dbconnection::odbcconn::{ODBCDbConnection, ODBCParameter};
-use async_trait::async_trait;
 use crate::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
+use async_trait::async_trait;
 use odbc_api::{sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment};
 use secrecy::{ExposeSecret, Secret, SecretString};
 use sha2::{Digest, Sha256};
