@@ -18,7 +18,8 @@ impl RawTableProvider {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
-        let provider = FFI_TableProvider::new(Arc::clone(&self.table), self.supports_pushdown_filters);
+        let provider =
+            FFI_TableProvider::new(Arc::clone(&self.table), self.supports_pushdown_filters);
 
         PyCapsule::new_bound(py, provider, Some(name.clone()))
     }

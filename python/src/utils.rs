@@ -1,5 +1,5 @@
-use std::{future::Future, sync::OnceLock};
 use pyo3::{exceptions::PyException, prelude::*};
+use std::{future::Future, sync::OnceLock};
 
 pub(crate) struct TokioRuntime(tokio::runtime::Runtime);
 
