@@ -18,6 +18,7 @@
 [workspace]
 members = [
     "core",
+    "python",
 ]
 resolver = "2"
 
@@ -31,5 +32,6 @@ description = "Extend the capabilities of DataFusion to support additional data 
 
 [workspace.dependencies]
 datafusion = { version = "43", default-features = false }
+datafusion-ffi = { version = "43" }
 datafusion-proto = { version = "43" }
 datafusion-table-providers = { path = "core" }
