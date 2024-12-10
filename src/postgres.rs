@@ -170,8 +170,9 @@ impl PostgresTableFactory {
         let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
+        let table_name = table_reference.to_string();
         let postgres = Postgres::new(
-            table_reference,
+            table_name,
             Arc::clone(&self.pool),
             schema,
             Constraints::empty(),
@@ -204,7 +205,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-        let name = cmd.name.clone();
+        let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
         let schema: Schema = cmd.schema.as_ref().into();
 
@@ -296,7 +297,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
                 "postgres",
                 &dyn_pool,
                 Arc::clone(&schema),
-                name,
+                TableReference::bare(name.clone()),
                 Some(Engine::Postgres),
             )
             .with_dialect(Arc::new(PostgreSqlDialect {})),
@@ -319,7 +320,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
 
 #[derive(Clone)]
 pub struct Postgres {
-    table: TableReference,
+    table_name: String,
     pool: Arc<PostgresConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
@@ -328,7 +329,7 @@ pub struct Postgres {
 impl std::fmt::Debug for Postgres {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Postgres")
-            .field("table_name", &self.table)
+            .field("table_name", &self.table_name)
             .field("schema", &self.schema)
             .field("constraints", &self.constraints)
             .finish()
@@ -338,13 +339,13 @@ impl std::fmt::Debug for Postgres {
 impl Postgres {
     #[must_use]
     pub fn new(
-        table: TableReference,
+        table_name: String,
         pool: Arc<PostgresConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
     ) -> Self {
         Self {
-            table,
+            table_name,
             pool,
             schema,
             constraints,
@@ -353,7 +354,7 @@ impl Postgres {
 
     #[must_use]
     pub fn table_name(&self) -> &str {
-        self.table.table()
+        &self.table_name
     }
 
     #[must_use]
@@ -368,7 +369,7 @@ impl Postgres {
 
         if !self.table_exists(pg_conn).await {
             TableDoesntExistSnafu {
-                table_name: self.table.to_string(),
+                table_name: self.table_name.clone(),
             }
             .fail()?;
         }
@@ -386,18 +387,14 @@ impl Postgres {
     }
 
     async fn table_exists(&self, postgres_conn: &PostgresConnection) -> bool {
-        let sql = match self.table.schema() {
-            Some(schema) => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')"#,
-                name = self.table.table(),
-                schema = schema
-            ),
-            None => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')"#,
-                name = self.table.table()
-            ),
-        };
-
+        let sql = format!(
+            r#"SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.tables
+          WHERE table_name = '{name}'
+        )"#,
+            name = self.table_name
+        );
         tracing::trace!("{sql}");
 
         let Ok(row) = postgres_conn.conn.query_one(&sql, &[]).await else {
@@ -413,8 +410,7 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder =
-            InsertBuilder::new(&self.table, vec![batch]);
+        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -434,7 +430,7 @@ impl Postgres {
     async fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> Result<()> {
         transaction
             .execute(
-                format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+                format!(r#"DELETE FROM "{}""#, self.table_name).as_str(),
                 &[],
             )
             .await
@@ -449,8 +445,8 @@ impl Postgres {
         transaction: &Transaction<'_>,
         primary_keys: Vec<String>,
     ) -> Result<()> {
-        let create_table_statement = CreateTableBuilder::new(schema, self.table.table())
-            .primary_keys(primary_keys);
+        let create_table_statement =
+            CreateTableBuilder::new(schema, &self.table_name).primary_keys(primary_keys);
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {
@@ -469,7 +465,7 @@ impl Postgres {
         columns: Vec<&str>,
         unique: bool,
     ) -> Result<()> {
-        let mut index_builder = IndexBuilder::new(self.table.table(), columns);
+        let mut index_builder = IndexBuilder::new(&self.table_name, columns);
         if unique {
             index_builder = index_builder.unique();
         }

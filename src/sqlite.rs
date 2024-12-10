@@ -216,7 +216,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-        let name = cmd.name.clone();
+        let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
         let mode = options.remove("mode").unwrap_or_default();
         let mode: Mode = mode.as_str().into();
@@ -256,7 +256,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .sqlite_busy_timeout(&cmd.options)
             .map_err(to_datafusion_error)?;
         let db_path: Arc<str> = self
-            .sqlite_file_path(name.table(), &cmd.options)
+            .sqlite_file_path(&name, &cmd.options)
             .map_err(to_datafusion_error)?
             .into();
 
@@ -334,7 +334,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let read_provider = Arc::new(SQLiteTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
-            name,
+            TableReference::bare(name.clone()),
         ));
 
         let sqlite = Arc::into_inner(sqlite)
@@ -392,7 +392,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
 
 #[derive(Clone)]
 pub struct Sqlite {
-    table: TableReference,
+    table_name: String,
     schema: SchemaRef,
     pool: Arc<SqliteConnectionPool>,
     constraints: Constraints,
@@ -401,7 +401,7 @@ pub struct Sqlite {
 impl std::fmt::Debug for Sqlite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sqlite")
-            .field("table_name", &self.table)
+            .field("table_name", &self.table_name)
             .field("schema", &self.schema)
             .field("constraints", &self.constraints)
             .finish()
@@ -411,13 +411,13 @@ impl std::fmt::Debug for Sqlite {
 impl Sqlite {
     #[must_use]
     pub fn new(
-        table: TableReference,
+        table_name: String,
         schema: SchemaRef,
         pool: Arc<SqliteConnectionPool>,
         constraints: Constraints,
     ) -> Self {
         Self {
-            table,
+            table_name,
             schema,
             pool,
             constraints,
@@ -426,7 +426,7 @@ impl Sqlite {
 
     #[must_use]
     pub fn table_name(&self) -> &str {
-        self.table.table()
+        &self.table_name
     }
 
     #[must_use]
@@ -457,7 +457,7 @@ impl Sqlite {
           WHERE type='table'
           AND name = '{name}'
         )"#,
-            name = self.table
+            name = self.table_name
         );
         tracing::trace!("{sql}");
 
@@ -478,7 +478,7 @@ impl Sqlite {
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
     ) -> rusqlite::Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
+        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -493,7 +493,7 @@ impl Sqlite {
     }
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-        transaction.execute(format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(), [])?;
+        transaction.execute(format!(r#"DELETE FROM "{}""#, self.table_name).as_str(), [])?;
 
         Ok(())
     }
@@ -504,7 +504,7 @@ impl Sqlite {
         primary_keys: Vec<String>,
     ) -> rusqlite::Result<()> {
         let create_table_statement =
-            CreateTableBuilder::new(Arc::clone(&self.schema), self.table.table())
+            CreateTableBuilder::new(Arc::clone(&self.schema), &self.table_name)
                 .primary_keys(primary_keys);
         let sql = create_table_statement.build_sqlite();
 
@@ -519,7 +519,7 @@ impl Sqlite {
         columns: Vec<&str>,
         unique: bool,
     ) -> rusqlite::Result<()> {
-        let mut index_builder = IndexBuilder::new(self.table.table(), columns);
+        let mut index_builder = IndexBuilder::new(&self.table_name, columns);
         if unique {
             index_builder = index_builder.unique();
         }
@@ -536,7 +536,7 @@ impl Sqlite {
     ) -> DataFusionResult<HashSet<String>> {
         let query_result = sqlite_conn
             .query_arrow(
-                format!("PRAGMA index_list({name})", name = self.table).as_str(),
+                format!("PRAGMA index_list({name})", name = self.table_name).as_str(),
                 &[],
                 None,
             )
@@ -572,7 +572,7 @@ impl Sqlite {
     ) -> DataFusionResult<HashSet<String>> {
         let query_result = sqlite_conn
             .query_arrow(
-                format!("PRAGMA table_info({name})", name = self.table).as_str(),
+                format!("PRAGMA table_info({name})", name = self.table_name).as_str(),
                 &[],
                 None,
             )
@@ -614,7 +614,7 @@ impl Sqlite {
     ) -> DataFusionResult<bool> {
         let expected_indexes_str_map: HashSet<String> = indexes
             .iter()
-            .map(|(col, _)| IndexBuilder::new(self.table.table(), col.iter().collect()).index_name())
+            .map(|(col, _)| IndexBuilder::new(&self.table_name, col.iter().collect()).index_name())
             .collect();
 
         let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;
@@ -630,14 +630,14 @@ impl Sqlite {
             tracing::warn!(
                 "Missing indexes detected for the table '{name}': {:?}.",
                 missing_in_actual,
-                name = self.table
+                name = self.table_name
             );
         }
         if !extra_in_actual.is_empty() {
             tracing::warn!(
                 "The table '{name}' contains unexpected indexes not presented in the configuration: {:?}.",
                 extra_in_actual,
-                name = self.table
+                name = self.table_name
             );
         }
 
@@ -664,14 +664,14 @@ impl Sqlite {
             tracing::warn!(
                 "Missing primary keys detected for the table '{name}': {:?}.",
                 missing_in_actual,
-                name = self.table
+                name = self.table_name
             );
         }
         if !extra_in_actual.is_empty() {
             tracing::warn!(
                 "The table '{name}' contains unexpected primary keys not presented in the configuration: {:?}.",
                 extra_in_actual,
-                name = self.table
+                name = self.table_name
             );
         }
 
