@@ -2,6 +2,7 @@ use crate::arrow_record_batch_gen::*;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::context::SessionContext;
+use datafusion::sql::TableReference;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
@@ -39,7 +40,7 @@ async fn arrow_sqlite_round_trip(
     // Create sqlite table from arrow records and insert arrow records
     let schema = Arc::clone(&arrow_record.schema());
     let create_table_stmts = CreateTableBuilder::new(schema, table_name).build_sqlite();
-    let insert_table_stmt = InsertBuilder::new(table_name, vec![arrow_record.clone()])
+    let insert_table_stmt = InsertBuilder::new(&TableReference::from(table_name), vec![arrow_record.clone()])
         .build_sqlite(None)
         .expect("SQLite insert statement should be constructed");
 

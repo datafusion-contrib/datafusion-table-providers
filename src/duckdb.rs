@@ -116,6 +116,9 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
+
+    #[snafu(display("Failed to create '{table_name}': creating a table with a schema is not supported"))]
+    TableWithSchemaCreationNotSupported { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -235,6 +238,14 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
+
+        if cmd.name.schema().is_some() {
+            TableWithSchemaCreationNotSupportedSnafu {
+                table_name: cmd.name.to_string(),
+            }
+            .fail().map_err(to_datafusion_error)?;
+        }
+
         let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
         let mode = remove_option(&mut options, "mode").unwrap_or_default();
