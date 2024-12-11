@@ -9,11 +9,10 @@ use arrow::{
 };
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Offset, TimeZone};
+use datafusion::sql::TableReference;
 use num_bigint::BigInt;
 use sea_query::{
-    Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
-    IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SimpleExpr, SqliteQueryBuilder, StringLen, Table,
+    Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden, IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef
 };
 use snafu::Snafu;
 use std::{any::Any, str::FromStr, sync::Arc};
@@ -172,7 +171,7 @@ macro_rules! push_list_values {
 }
 
 pub struct InsertBuilder {
-    table_name: String,
+    table: TableReference,
     record_batches: Vec<RecordBatch>,
 }
 
@@ -192,9 +191,9 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
 
 impl InsertBuilder {
     #[must_use]
-    pub fn new(table_name: &str, record_batches: Vec<RecordBatch>) -> Self {
+    pub fn new(table: &TableReference, record_batches: Vec<RecordBatch>) -> Self {
         Self {
-            table_name: table_name.to_string(),
+            table: table.clone(),
             record_batches,
         }
     }
@@ -1048,7 +1047,7 @@ impl InsertBuilder {
             .collect();
 
         let mut insert_stmt = Query::insert()
-            .into_table(Alias::new(&self.table_name))
+            .into_table(table_reference_to_sea_table_ref(&self.table))
             .columns(columns)
             .to_owned();
 
@@ -1059,6 +1058,21 @@ impl InsertBuilder {
             insert_stmt.on_conflict(on_conflict);
         }
         Ok(insert_stmt.to_string(query_builder))
+    }
+}
+
+fn table_reference_to_sea_table_ref(table: &TableReference ) -> TableRef {
+    match table {
+        TableReference::Bare{table} => TableRef::Table(SeaRc::new(Alias::new(table.to_string()))),
+        TableReference::Partial{schema, table} => TableRef::SchemaTable(
+            SeaRc::new(Alias::new(schema.to_string())),
+            SeaRc::new(Alias::new(table.to_string())),
+        ),
+        TableReference::Full { catalog, schema, table } => TableRef::DatabaseSchemaTable(
+            SeaRc::new(Alias::new(catalog.to_string())),
+            SeaRc::new(Alias::new(schema.to_string())),
+            SeaRc::new(Alias::new(table.to_string())),
+        ),
     }
 }
 
@@ -1447,10 +1461,55 @@ mod tests {
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new("users", record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("users"), record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
+    }
+
+
+    #[test]
+    fn test_table_insertion_with_schema() {
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ]);
+        let id_array = array::Int32Array::from(vec![1, 2, 3]);
+        let name_array = array::StringArray::from(vec!["a", "b", "c"]);
+        let age_array = array::Int32Array::from(vec![10, 20, 30]);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema1.clone()),
+            vec![
+                Arc::new(id_array.clone()),
+                Arc::new(name_array.clone()),
+                Arc::new(age_array.clone()),
+            ],
+        )
+        .expect("Unable to build record batch");
+
+        let schema2 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("blah", DataType::Int32, true),
+        ]);
+
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema2),
+            vec![
+                Arc::new(id_array),
+                Arc::new(name_array),
+                Arc::new(age_array),
+            ],
+        )
+        .expect("Unable to build record batch");
+        let record_batches = vec![batch1, batch2];
+
+        let sql = InsertBuilder::new(&TableReference::from("schema.users"), record_batches)
+            .build_postgres(None)
+            .expect("Failed to build insert statement");
+        assert_eq!(sql, "INSERT INTO \"schema\".\"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
     }
 
     #[test]
@@ -1484,7 +1543,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema1.clone()), vec![Arc::new(list_array)])
             .expect("Unable to build record batch");
 
-        let sql = InsertBuilder::new("arrays", vec![batch])
+        let sql = InsertBuilder::new(&TableReference::from("arrays"), vec![batch])
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(
