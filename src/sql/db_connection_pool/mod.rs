@@ -1,6 +1,9 @@
+use arrow_schema::{DataType, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
-use dbconnection::DbConnection;
+use dbconnection::{duckdbconn::data_type_is_unsupported, DbConnection};
 use std::sync::Arc;
+
+use crate::InvalidTypeAction;
 
 pub mod dbconnection;
 #[cfg(feature = "duckdb")]
@@ -67,4 +70,48 @@ impl DbInstanceKey {
     pub fn file(path: Arc<str>) -> Self {
         DbInstanceKey::File(path)
     }
+}
+
+pub(crate) fn handle_unsupported_data_type(
+    data_type: &str,
+    field_name: &str,
+    invalid_type_action: InvalidTypeAction,
+) -> Result<(), dbconnection::Error> {
+    let error = dbconnection::Error::UnsupportedDataType {
+        data_type: data_type.to_string(),
+        field_name: field_name.to_string(),
+    };
+    match invalid_type_action {
+        InvalidTypeAction::Error => {
+            return Err(error);
+        }
+        InvalidTypeAction::Warn => {
+            tracing::warn!("{error}");
+        }
+        InvalidTypeAction::Ignore => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_schema_for_unsupported_types(
+    schema: &SchemaRef,
+    invalid_type_action: InvalidTypeAction,
+    is_unsupported_fn: impl Fn(&DataType) -> bool,
+) -> Result<SchemaRef, dbconnection::Error> {
+    let mut schema_builder = SchemaBuilder::new();
+    for field in &schema.fields {
+        let unsupported = is_unsupported_fn(field.data_type());
+
+        if unsupported {
+            handle_unsupported_data_type(
+                &field.data_type().to_string(),
+                field.name(),
+                invalid_type_action,
+            )?;
+        } else {
+            schema_builder.push(Arc::clone(field));
+        }
+    }
+
+    Ok(Arc::new(schema_builder.finish()))
 }

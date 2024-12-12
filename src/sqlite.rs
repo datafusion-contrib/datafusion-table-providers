@@ -1,14 +1,16 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
+use crate::sql::db_connection_pool::dbconnection::duckdbconn::data_type_is_unsupported;
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
-use crate::sql::db_connection_pool::DbInstanceKey;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{sqliteconn::SqliteConnection, DbConnection},
     sqlitepool::SqliteConnectionPool,
     DbConnectionPool, Mode,
 };
+use crate::sql::db_connection_pool::{parse_schema_for_unsupported_types, DbInstanceKey};
 use crate::sql::sql_provider_datafusion;
+use crate::InvalidTypeAction;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -103,8 +105,13 @@ pub enum Error {
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 
-    #[snafu(display("Failed to create '{table_name}': creating a table with a schema is not supported"))]
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
     TableWithSchemaCreationNotSupported { table_name: String },
+
+    #[snafu(display("{source}"))]
+    UnsupportedSchemaType { source: dbconnection::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -112,6 +119,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
+    invalid_type_action: InvalidTypeAction,
 }
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
@@ -124,7 +132,14 @@ impl SqliteTableProviderFactory {
     pub fn new() -> Self {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
+            invalid_type_action: InvalidTypeAction::Error,
         }
+    }
+
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = invalid_type_action;
+        self
     }
 
     #[must_use]
@@ -192,6 +207,7 @@ impl SqliteTableProviderFactory {
         }
 
         let pool = SqliteConnectionPoolFactory::new(&db_path, mode, busy_timeout)
+            .with_invalid_type_action(self.invalid_type_action)
             .build()
             .await
             .context(DbConnectionPoolSnafu)?;
@@ -219,12 +235,12 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
                 table_name: cmd.name.to_string(),
             }
-            .fail().map_err(to_datafusion_error)?;
+            .fail()
+            .map_err(to_datafusion_error)?;
         }
 
         let name = cmd.name.clone();
@@ -291,6 +307,16 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        println!("Before schema parsing");
+        let schema: SchemaRef = parse_schema_for_unsupported_types(
+            &schema,
+            self.invalid_type_action,
+            data_type_is_unsupported,
+        )
+        .map_err(|e| Error::UnsupportedSchemaType { source: e })
+        .map_err(to_datafusion_error)?;
+        println!("After schema parsing");
+
         let sqlite = Arc::new(Sqlite::new(
             name.clone(),
             Arc::clone(&schema),
@@ -504,7 +530,10 @@ impl Sqlite {
     }
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-        transaction.execute(format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(), [])?;
+        transaction.execute(
+            format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+            [],
+        )?;
 
         Ok(())
     }
@@ -625,7 +654,9 @@ impl Sqlite {
     ) -> DataFusionResult<bool> {
         let expected_indexes_str_map: HashSet<String> = indexes
             .iter()
-            .map(|(col, _)| IndexBuilder::new(self.table.table(), col.iter().collect()).index_name())
+            .map(|(col, _)| {
+                IndexBuilder::new(self.table.table(), col.iter().collect()).index_name()
+            })
             .collect();
 
         let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;

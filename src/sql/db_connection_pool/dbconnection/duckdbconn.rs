@@ -19,6 +19,7 @@ use dyn_clone::DynClone;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
+use crate::sql::db_connection_pool::handle_unsupported_data_type;
 use crate::InvalidTypeAction;
 
 use super::DbConnection;
@@ -221,18 +222,11 @@ impl DuckDbConnection {
                 data_type_is_unsupported(field.data_type()) || duckdb_type_id.is_err();
 
             if unsupported {
-                let error = super::Error::UnsupportedDataType {
-                    data_type: field.data_type().to_string(),
-                    field_name: field.name().clone(),
-                };
-
-                match self.invalid_type_action {
-                    InvalidTypeAction::Error => return Err(error),
-                    InvalidTypeAction::Warn => {
-                        tracing::warn!("{error}");
-                    }
-                    InvalidTypeAction::Ignore => {}
-                }
+                handle_unsupported_data_type(
+                    &field.data_type().to_string(),
+                    field.name(),
+                    self.invalid_type_action,
+                )?;
             } else {
                 schema_builder.push(Arc::clone(field));
             }
@@ -262,7 +256,7 @@ impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParamet
     }
 }
 
-fn struct_type_is_unsupported(fields: &Fields) -> bool {
+pub(crate) fn struct_type_is_unsupported(fields: &Fields) -> bool {
     let mut any_unsupported = false;
     for field in fields {
         match field.data_type() {
@@ -292,7 +286,7 @@ fn struct_type_is_unsupported(fields: &Fields) -> bool {
 }
 
 /// Returns true if the given `DataType` is not supported by the `DuckDB` `TableProvider`
-fn data_type_is_unsupported(data_type: &DataType) -> bool {
+pub(crate) fn data_type_is_unsupported(data_type: &DataType) -> bool {
     match data_type {
         DataType::List(inner_field)
         | DataType::FixedSizeList(inner_field, _)
@@ -308,6 +302,7 @@ fn data_type_is_unsupported(data_type: &DataType) -> bool {
             }
         }
         DataType::Struct(inner_fields) => struct_type_is_unsupported(inner_fields),
+        DataType::Dictionary(_, _) => true,
         _ => false,
     }
 }

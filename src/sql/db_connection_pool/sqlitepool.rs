@@ -1,13 +1,17 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use rusqlite::TransactionBehavior;
 use snafu::{prelude::*, ResultExt};
 use tokio_rusqlite::{Connection, ToSql};
 
 use super::{DbConnectionPool, Result};
-use crate::sql::db_connection_pool::{
-    dbconnection::{sqliteconn::SqliteConnection, AsyncDbConnection, DbConnection},
-    JoinPushDown, Mode,
+use crate::{
+    sql::db_connection_pool::{
+        dbconnection::{sqliteconn::SqliteConnection, AsyncDbConnection, DbConnection},
+        JoinPushDown, Mode,
+    },
+    InvalidTypeAction,
 };
 
 #[derive(Debug, Snafu)]
@@ -27,6 +31,7 @@ pub struct SqliteConnectionPoolFactory {
     mode: Mode,
     attach_databases: Option<Vec<Arc<str>>>,
     busy_timeout: Duration,
+    invalid_type_action: InvalidTypeAction,
 }
 
 impl SqliteConnectionPoolFactory {
@@ -36,12 +41,19 @@ impl SqliteConnectionPoolFactory {
             mode,
             attach_databases: None,
             busy_timeout,
+            invalid_type_action: InvalidTypeAction::Error,
         }
     }
 
     #[must_use]
     pub fn with_databases(mut self, attach_databases: Option<Vec<Arc<str>>>) -> Self {
         self.attach_databases = attach_databases;
+        self
+    }
+
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = invalid_type_action;
         self
     }
 
@@ -88,6 +100,7 @@ impl SqliteConnectionPoolFactory {
             join_push_down,
             attach_databases,
             self.busy_timeout,
+            self.invalid_type_action,
         )
         .await?;
 
@@ -105,6 +118,7 @@ pub struct SqliteConnectionPool {
     path: Arc<str>,
     attach_databases: Vec<Arc<str>>,
     busy_timeout: Duration,
+    invalid_type_action: InvalidTypeAction,
 }
 
 impl SqliteConnectionPool {
@@ -123,6 +137,7 @@ impl SqliteConnectionPool {
         join_push_down: JoinPushDown,
         attach_databases: Vec<Arc<str>>,
         busy_timeout: Duration,
+        invalid_type_action: InvalidTypeAction,
     ) -> Result<Self> {
         let conn = match mode {
             Mode::Memory => Connection::open_in_memory()
@@ -141,6 +156,7 @@ impl SqliteConnectionPool {
             attach_databases,
             path: path.into(),
             busy_timeout,
+            invalid_type_action,
         })
     }
 
@@ -170,7 +186,7 @@ impl SqliteConnectionPool {
                 conn.pragma_update(None, "cache_size", "-20000")?;
                 conn.pragma_update(None, "foreign_keys", "true")?;
                 conn.pragma_update(None, "temp_store", "memory")?;
-                // conn.set_transaction_behavior(TransactionBehavior::Immediate); introduced in rustqlite 0.32.1, but tokio-rusqlite is still on 0.31.0
+                // conn.set_transaction_behavior(TransactionBehavior::Immediate);
 
                 // Set user configurable connection timeout
                 conn.busy_timeout(busy_timeout)?;
@@ -211,7 +227,10 @@ impl SqliteConnectionPool {
 
     #[must_use]
     pub fn connect_sync(&self) -> Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>> {
-        Box::new(SqliteConnection::new(self.conn.clone()))
+        Box::new(
+            SqliteConnection::new(self.conn.clone())
+                .with_invalid_type_action(self.invalid_type_action),
+        )
     }
 
     /// Will attempt to clone the connection pool. This will always succeed for in-memory mode.
@@ -228,6 +247,7 @@ impl SqliteConnectionPool {
                 path: Arc::clone(&self.path),
                 attach_databases: self.attach_databases.clone(),
                 busy_timeout: self.busy_timeout,
+                invalid_type_action: self.invalid_type_action,
             }),
             Mode::File => {
                 let attach_databases = if self.attach_databases.is_empty() {
@@ -238,6 +258,7 @@ impl SqliteConnectionPool {
 
                 SqliteConnectionPoolFactory::new(&self.path, self.mode, self.busy_timeout)
                     .with_databases(attach_databases)
+                    .with_invalid_type_action(self.invalid_type_action)
                     .build()
                     .await
             }
@@ -252,7 +273,9 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
     ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
         let conn = self.conn.clone();
 
-        Ok(Box::new(SqliteConnection::new(conn)))
+        Ok(Box::new(
+            SqliteConnection::new(conn).with_invalid_type_action(self.invalid_type_action),
+        ))
     }
 
     fn join_push_down(&self) -> JoinPushDown {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
+use crate::sql::db_connection_pool::handle_unsupported_data_type;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -291,25 +292,4 @@ impl PostgresConnection {
         self.invalid_type_action = action;
         self
     }
-}
-
-fn handle_unsupported_data_type(
-    data_type: &str,
-    field_name: &str,
-    invalid_type_action: InvalidTypeAction,
-) -> Result<(), super::Error> {
-    let error = super::Error::UnsupportedDataType {
-        data_type: data_type.to_string(),
-        field_name: field_name.to_string(),
-    };
-    match invalid_type_action {
-        InvalidTypeAction::Error => {
-            return Err(error);
-        }
-        InvalidTypeAction::Warn => {
-            tracing::warn!("{error}");
-        }
-        InvalidTypeAction::Ignore => {}
-    }
-    Ok(())
 }

@@ -1,7 +1,12 @@
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
+use crate::sql::db_connection_pool::handle_unsupported_data_type;
+use crate::sql::db_connection_pool::parse_schema_for_unsupported_types;
+use crate::InvalidTypeAction;
 use arrow::datatypes::SchemaRef;
+use arrow_schema::SchemaBuilder;
 use async_trait::async_trait;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -10,6 +15,7 @@ use rusqlite::ToSql;
 use snafu::prelude::*;
 use tokio_rusqlite::Connection;
 
+use super::duckdbconn::data_type_is_unsupported;
 use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
@@ -30,6 +36,23 @@ pub enum Error {
 
 pub struct SqliteConnection {
     pub conn: Connection,
+    invalid_type_action: InvalidTypeAction,
+}
+
+impl SqliteConnection {
+    #[must_use]
+    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
+        self.invalid_type_action = invalid_type_action;
+        self
+    }
+
+    fn rebuild_schema(&self, input_schema: &SchemaRef) -> Result<SchemaRef, super::Error> {
+        parse_schema_for_unsupported_types(
+            input_schema,
+            self.invalid_type_action,
+            data_type_is_unsupported,
+        )
+    }
 }
 
 impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
@@ -49,7 +72,10 @@ impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection 
 #[async_trait]
 impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
     fn new(conn: Connection) -> Self {
-        SqliteConnection { conn }
+        SqliteConnection {
+            conn,
+            invalid_type_action: InvalidTypeAction::Error,
+        }
     }
 
     async fn get_schema(
@@ -73,7 +99,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Ok(schema)
+        self.rebuild_schema(&schema)
     }
 
     async fn query_arrow(
