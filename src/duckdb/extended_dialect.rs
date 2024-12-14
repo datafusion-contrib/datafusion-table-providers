@@ -78,7 +78,7 @@ fn cosine_distance_to_sql(
                     named: false,
                 });
 
-                // Apply required ::FLOAT[] casting
+                // Apply required ::FLOAT[] casting. Only FLOAT emneddings are curently supported
                 Ok(ast::Expr::Cast {
                     expr: Box::new(array),
                     data_type: ast::DataType::Array(ast::ArrayElemTypeDef::SquareBracket(
@@ -115,4 +115,71 @@ fn cosine_distance_to_sql(
     });
 
     Ok(Some(ast_fn))
+}
+#[cfg(test)]
+mod tests {
+    use datafusion::{
+        common::Column,
+        functions_array::make_array::make_array_udf,
+        logical_expr::expr::ScalarFunction,
+        prelude::lit,
+        scalar::ScalarValue,
+        sql::{unparser::Unparser, TableReference},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_cosine_distance_to_sql_scalars() {
+        let dialect = ExtendedDuckDBDialect::new();
+        let unparser = Unparser::new(&dialect);
+        let args = vec![
+            // raw values
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                make_array_udf(),
+                vec![lit(1.0), lit(2.0), lit(3.0)],
+            )),
+            // values wrapped as literals
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                make_array_udf(),
+                vec![
+                    Expr::Literal(ScalarValue::Float32(Some(4.0))),
+                    Expr::Literal(ScalarValue::Float32(Some(5.0))),
+                    Expr::Literal(ScalarValue::Float32(Some(6.0))),
+                ],
+            )),
+        ];
+
+        let result = cosine_distance_to_sql(&unparser, &args).unwrap();
+        let expected =
+            "array_cosine_distance([1.0, 2.0, 3.0]::FLOAT[3], [4.0, 5.0, 6.0]::FLOAT[3])";
+
+        assert_eq!(result.unwrap().to_string(), expected);
+    }
+
+    #[test]
+    fn test_cosine_distance_to_sql_column_and_scalar() {
+        let dialect = ExtendedDuckDBDialect::new();
+        let unparser = Unparser::new(&dialect);
+        let args = vec![
+            Expr::Column(Column {
+                relation: Some(TableReference::from("table_name")),
+                name: "column_name".to_string(),
+            }),
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                make_array_udf(),
+                vec![
+                    Expr::Literal(ScalarValue::Float32(Some(4.0))),
+                    Expr::Literal(ScalarValue::Float32(Some(5.0))),
+                    Expr::Literal(ScalarValue::Float32(Some(6.0))),
+                ],
+            )),
+        ];
+
+        let result = cosine_distance_to_sql(&unparser, &args).unwrap();
+        let expected =
+            r#"array_cosine_distance("table_name"."column_name", [4.0, 5.0, 6.0]::FLOAT[3])"#;
+
+        assert_eq!(result.unwrap().to_string(), expected);
+    }
 }
