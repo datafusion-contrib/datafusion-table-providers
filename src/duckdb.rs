@@ -155,7 +155,7 @@ impl DuckDBTableProviderFactory {
             access_mode,
             instances: Arc::new(Mutex::new(HashMap::new())),
             invalid_type_action: InvalidTypeAction::Error,
-            dialect: Arc::new(DuckDBDialect {}),
+            dialect: Arc::new(DuckDBDialect::new()),
         }
     }
 
@@ -509,7 +509,7 @@ impl DuckDBTableFactory {
     pub fn new(pool: Arc<DuckDbConnectionPool>) -> Self {
         Self {
             pool,
-            dialect: Arc::new(DuckDBDialect {}),
+            dialect: Arc::new(DuckDBDialect::new()),
         }
     }
 
