@@ -57,7 +57,7 @@ pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 tonic = { version = "0.12.2", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "e03312239ebd46eaa0017c94e87473d822691791" }
+datafusion-federation-sql = { path = "../datafusion-federation/sources/sql" }
 itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
@@ -99,8 +99,8 @@ sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "e03312239ebd46eaa0017c94e87473d822691791" }
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "d6f8c3e0dc1ba073a86756eba4dacf044dfa892d" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "edbab0ae3b423a115ce63fd172bbbe29fdb43b2f" }
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "edbab0ae3b423a115ce63fd172bbbe29fdb43b2f" }
 
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "aaa46be22cff778e0e618b5eaeee3c2830d4e7ee"}
 datafusion-expr =  { git = "https://github.com/spiceai/datafusion.git", rev = "aaa46be22cff778e0e618b5eaeee3c2830d4e7ee"}
