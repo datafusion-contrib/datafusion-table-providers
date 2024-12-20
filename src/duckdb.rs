@@ -22,6 +22,7 @@ use crate::{
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
     common::Constraints,
@@ -117,17 +118,30 @@ pub enum Error {
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
 
-    #[snafu(display("Failed to create '{table_name}': creating a table with a schema is not supported"))]
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
     TableWithSchemaCreationNotSupported { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug)]
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
     invalid_type_action: InvalidTypeAction,
+    dialect: Arc<dyn Dialect>,
+}
+
+// Dialect trait does not implement Debug so we implement Debug manually
+impl std::fmt::Debug for DuckDBTableProviderFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDBTableProviderFactory")
+            .field("access_mode", &self.access_mode)
+            .field("instances", &self.instances)
+            .field("invalid_type_action", &self.invalid_type_action)
+            .finish()
+    }
 }
 
 const DUCKDB_DB_PATH_PARAM: &str = "open";
@@ -141,12 +155,19 @@ impl DuckDBTableProviderFactory {
             access_mode,
             instances: Arc::new(Mutex::new(HashMap::new())),
             invalid_type_action: InvalidTypeAction::Error,
+            dialect: Arc::new(DuckDBDialect {}),
         }
     }
 
     #[must_use]
     pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
         self.invalid_type_action = invalid_type_action;
+        self
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.dialect = dialect;
         self
     }
 
@@ -243,7 +264,8 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             TableWithSchemaCreationNotSupportedSnafu {
                 table_name: cmd.name.to_string(),
             }
-            .fail().map_err(to_datafusion_error)?;
+            .fail()
+            .map_err(to_datafusion_error)?;
         }
 
         let name = cmd.name.to_string();
@@ -323,6 +345,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Arc::clone(&schema),
             TableReference::bare(name.clone()),
             None,
+            Some(self.dialect.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -478,12 +501,22 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
+    dialect: Arc<dyn Dialect>,
 }
 
 impl DuckDBTableFactory {
     #[must_use]
     pub fn new(pool: Arc<DuckDbConnectionPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            dialect: Arc::new(DuckDBDialect {}),
+        }
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub async fn table_provider(
@@ -509,7 +542,11 @@ impl DuckDBTableFactory {
         };
 
         let table_provider = Arc::new(DuckDBTable::new_with_schema(
-            &dyn_pool, schema, tbl_ref, cte,
+            &dyn_pool,
+            schema,
+            tbl_ref,
+            cte,
+            Some(self.dialect.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
