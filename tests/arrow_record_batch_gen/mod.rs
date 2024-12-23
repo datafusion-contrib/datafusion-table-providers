@@ -504,6 +504,139 @@ pub(crate) fn get_arrow_list_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
+pub(crate) fn get_arrow_list_of_structs_record_batch() -> (RecordBatch, SchemaRef) {
+    let input_batch_json_data = r#"
+            {"labels": [{"id": 1}, {"id": 2}]}
+            {"labels": null}
+            {"labels": null}
+            {"labels": null}
+            {"labels": [{"id": 3}, {"id": null}]}
+            {"labels": [{"id": 4,"name":"test"}, {"id": null,"name":null}]}
+            {"labels": null}
+            "#;
+
+    let record_batch = parse_json_to_batch(
+        input_batch_json_data,
+        Arc::new(Schema::new(vec![Field::new(
+            "labels",
+            DataType::List(Arc::new(Field::new(
+                "struct",
+                DataType::Struct(
+                    vec![
+                        Field::new("id", DataType::Int32, true),
+                        Field::new("name", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ))),
+            true,
+        )])),
+    );
+
+    let schema = record_batch.schema();
+
+    (record_batch, schema)
+}
+
+pub(crate) fn get_arrow_list_of_lists_record_batch() -> (RecordBatch, Arc<Schema>) {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "list",
+        DataType::List(
+            Field::new(
+                "item",
+                DataType::List(Field::new("item", DataType::Int32, true).into()),
+                true,
+            )
+            .into(),
+        ),
+        true,
+    )]));
+
+    let mut list_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+    // Append first list of items
+    {
+        let list_item_builder = list_builder.values();
+        list_item_builder.append_value(vec![Some(1), Some(2)].into_iter());
+        // Append NULL list item
+        list_item_builder.append_null();
+        list_item_builder.append_value(vec![Some(3), None, Some(5)].into_iter());
+        list_builder.append(true);
+    }
+    // Append NULL list
+    list_builder.append_null();
+
+    let list_array = list_builder.finish();
+
+    let record_batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(list_array) as ArrayRef])
+            .expect("Failed to create RecordBatch");
+
+    (record_batch, schema)
+}
+
+pub(crate) fn get_arrow_list_of_fixed_size_lists_record_batch() -> (RecordBatch, Arc<Schema>) {
+    // Define FixedSizeList field schema
+    let fixed_size_list_field = Field::new(
+        "item", // Match the internal field name of FixedSizeListBuilder
+        DataType::FixedSizeList(Field::new("item", DataType::Int32, true).into(), 3),
+        true,
+    );
+
+    // Define List<FixedSizeList> schema
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "list",
+        DataType::List(fixed_size_list_field.into()),
+        true,
+    )]));
+
+    let mut list_builder = ListBuilder::new(FixedSizeListBuilder::new(Int32Builder::new(), 3));
+
+    // Append first list of FixedSizeList items
+    {
+        let fixed_size_list_builder = list_builder.values();
+        fixed_size_list_builder.values().append_value(1);
+        fixed_size_list_builder.values().append_value(2);
+        fixed_size_list_builder.values().append_value(3);
+        fixed_size_list_builder.append(true);
+
+        // Append NULL fixed-size list item
+        fixed_size_list_builder.values().append_null();
+        fixed_size_list_builder.values().append_null();
+        fixed_size_list_builder.values().append_null();
+        fixed_size_list_builder.append(false);
+
+        fixed_size_list_builder.values().append_value(4);
+        fixed_size_list_builder.values().append_value(5);
+        fixed_size_list_builder.values().append_value(6);
+        fixed_size_list_builder.append(true);
+
+        list_builder.append(true);
+    }
+
+    // Append NULL list
+    list_builder.append_null();
+
+    // Append third list of FixedSizeList items
+    {
+        let fixed_size_list_builder = list_builder.values();
+        fixed_size_list_builder.values().append_value(10);
+        fixed_size_list_builder.values().append_value(11);
+        fixed_size_list_builder.values().append_value(12);
+        fixed_size_list_builder.append(true);
+
+        list_builder.append(true);
+    }
+
+    let list_array = list_builder.finish();
+
+    let record_batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(list_array) as ArrayRef])
+            .expect("Failed to create RecordBatch");
+
+    (record_batch, schema)
+}
+
 // Null
 pub(crate) fn get_arrow_null_record_batch() -> (RecordBatch, SchemaRef) {
     let null_arr = Int8Array::from(vec![Some(1), None, Some(3)]);
@@ -578,4 +711,16 @@ pub(crate) fn get_sqlite_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef
     .expect("Failed to created arrow decimal record batch");
 
     (record_batch, schema)
+}
+
+fn parse_json_to_batch(json_data: &str, schema: SchemaRef) -> RecordBatch {
+    let reader = arrow_json::ReaderBuilder::new(schema)
+        .build(std::io::Cursor::new(json_data))
+        .expect("Failed to create JSON reader");
+
+    reader
+        .into_iter()
+        .next()
+        .expect("Expected a record batch")
+        .expect("Failed to read record batch")
 }
