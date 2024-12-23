@@ -14,15 +14,15 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "smallint" => Ok(DataType::Int16),
         "integer" | "int" | "int4" => Ok(DataType::Int32),
         "bigint" | "int8" | "money" => Ok(DataType::Int64),
+        "oid" => Ok(DataType::UInt32),
         "numeric" | "decimal" => {
             let (precision, scale) = parse_numeric_type(pg_type)?;
             Ok(DataType::Decimal128(precision, scale))
         }
         "real" | "float4" => Ok(DataType::Float32),
         "double precision" | "float8" => Ok(DataType::Float64),
-        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid" => {
-            Ok(DataType::Utf8)
-        }
+        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid"
+        | "name" => Ok(DataType::Utf8),
         "bytea" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
         "time" | "time without time zone" => Ok(DataType::Time64(TimeUnit::Nanosecond)),
@@ -197,6 +197,10 @@ mod tests {
             DataType::Int64
         );
         assert_eq!(
+            pg_data_type_to_arrow_type("oid", None).expect("Failed to convert oid"),
+            DataType::UInt32
+        );
+        assert_eq!(
             pg_data_type_to_arrow_type("real", None).expect("Failed to convert real"),
             DataType::Float32
         );
@@ -222,6 +226,10 @@ mod tests {
         );
         assert_eq!(
             pg_data_type_to_arrow_type("text", None).expect("Failed to convert text"),
+            DataType::Utf8
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("name", None).expect("Failed to convert name"),
             DataType::Utf8
         );
 
