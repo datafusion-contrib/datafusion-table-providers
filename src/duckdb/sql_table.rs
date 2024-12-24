@@ -2,6 +2,7 @@ use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -44,6 +45,7 @@ impl<T, P> DuckDBTable<T, P> {
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
+        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
             "duckdb",
@@ -52,7 +54,7 @@ impl<T, P> DuckDBTable<T, P> {
             table_reference,
             Some(Engine::DuckDB),
         )
-        .with_dialect(Arc::new(DuckDBDialect {}));
+        .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
 
         Self {
             base_table,
