@@ -255,6 +255,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 Type::INT8 => {
                     handle_primitive_type!(builder, Type::INT8, Int64Builder, i64, row, i);
                 }
+                Type::OID => {
+                    handle_primitive_type!(builder, Type::OID, UInt32Builder, u32, row, i);
+                }
                 Type::FLOAT4 => {
                     handle_primitive_type!(builder, Type::FLOAT4, Float32Builder, f32, row, i);
                 }
@@ -266,6 +269,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 }
                 Type::VARCHAR => {
                     handle_primitive_type!(builder, Type::VARCHAR, StringBuilder, &str, row, i);
+                }
+                Type::NAME => {
+                    handle_primitive_type!(builder, Type::NAME, StringBuilder, &str, row, i);
                 }
                 Type::BYTEA => {
                     handle_primitive_type!(builder, Type::BYTEA, BinaryBuilder, Vec<u8>, row, i);
@@ -835,9 +841,10 @@ fn map_column_type_to_data_type(column_type: &Type) -> Option<DataType> {
         Type::INT2 => Some(DataType::Int16),
         Type::INT4 => Some(DataType::Int32),
         Type::INT8 | Type::MONEY => Some(DataType::Int64),
+        Type::OID => Some(DataType::UInt32),
         Type::FLOAT4 => Some(DataType::Float32),
         Type::FLOAT8 => Some(DataType::Float64),
-        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Some(DataType::Utf8),
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID | Type::NAME => Some(DataType::Utf8),
         Type::BYTEA => Some(DataType::Binary),
         Type::BOOL => Some(DataType::Boolean),
         Type::JSON => Some(DataType::LargeUtf8),
