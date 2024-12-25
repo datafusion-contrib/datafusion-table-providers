@@ -16,6 +16,7 @@ use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
+use rand::distributions::{Alphanumeric, DistString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
@@ -63,23 +64,26 @@ pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 pub struct DuckDBAttachments {
     attachments: Vec<Arc<str>>,
     search_path: Arc<str>,
+    random_id: String,
 }
 
 impl DuckDBAttachments {
     /// Creates a new instance of a `DuckDBAttachments`, which instructs DuckDB connections to attach other DuckDB databases for queries.
     #[must_use]
     pub fn new(id: &str, attachments: &[Arc<str>]) -> Self {
-        let search_path = Self::get_search_path(id, attachments);
+        let random_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 8);
+        let search_path = Self::get_search_path(id, &random_id, attachments);
         Self {
             attachments: attachments.to_owned(),
             search_path,
+            random_id,
         }
     }
 
     /// Returns the search path for the given database and attachments.
     /// The given database needs to be included separately, as search path by default do not include the main database.
     #[must_use]
-    pub fn get_search_path(id: &str, attachments: &[Arc<str>]) -> Arc<str> {
+    pub fn get_search_path(id: &str, random_id: &str, attachments: &[Arc<str>]) -> Arc<str> {
         // search path includes the main database and all attached databases
         let mut search_path: Vec<Arc<str>> = vec![id.into()];
 
@@ -87,7 +91,7 @@ impl DuckDBAttachments {
             attachments
                 .iter()
                 .enumerate()
-                .map(|(i, _)| format!("attachment_{i}").into()),
+                .map(|(i, _)| Self::get_attachment_name(random_id, i).into()),
         );
 
         search_path.join(",").into()
@@ -128,14 +132,16 @@ impl DuckDBAttachments {
             })?;
 
             conn.execute(
-                &format!("ATTACH IF NOT EXISTS '{db}' AS attachment_{i} (READ_ONLY)"),
+                &format!(
+                    "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
+                    Self::get_attachment_name(&self.random_id, i)
+                ),
                 [],
             )
             .context(DuckDBConnectionSnafu)?;
         }
 
         self.set_search_path(conn)?;
-
         Ok(())
     }
 
@@ -146,13 +152,20 @@ impl DuckDBAttachments {
     /// Returns an error if an attachment cannot be detached, search path cannot be set or the connection fails.
     pub fn detach(&self, conn: &Connection) -> Result<()> {
         for (i, _) in self.attachments.iter().enumerate() {
-            conn.execute(&format!("DETACH attachment_{i}"), [])
-                .context(DuckDBConnectionSnafu)?;
+            conn.execute(
+                &format!("DETACH {}", Self::get_attachment_name(&self.random_id, i)),
+                [],
+            )
+            .context(DuckDBConnectionSnafu)?;
         }
 
         self.reset_search_path(conn)?;
-
         Ok(())
+    }
+
+    #[must_use]
+    fn get_attachment_name(random_id: &str, index: usize) -> String {
+        format!("attachment_{random_id}_{index}")
     }
 }
 
