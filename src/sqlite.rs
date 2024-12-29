@@ -77,6 +77,9 @@ pub enum Error {
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error },
 
+    #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
+    DiskFull {},
+
     #[snafu(display("Unable to deleta all table data in Sqlite: {source}"))]
     UnableToDeleteAllTableData { source: rusqlite::Error },
 
@@ -103,7 +106,9 @@ pub enum Error {
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
 
-    #[snafu(display("Failed to create '{table_name}': creating a table with a schema is not supported"))]
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
     TableWithSchemaCreationNotSupported { table_name: String },
 }
 
@@ -219,12 +224,12 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
                 table_name: cmd.name.to_string(),
             }
-            .fail().map_err(to_datafusion_error)?;
+            .fail()
+            .map_err(to_datafusion_error)?;
         }
 
         let name = cmd.name.clone();
@@ -504,7 +509,10 @@ impl Sqlite {
     }
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-        transaction.execute(format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(), [])?;
+        transaction.execute(
+            format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+            [],
+        )?;
 
         Ok(())
     }
@@ -625,7 +633,9 @@ impl Sqlite {
     ) -> DataFusionResult<bool> {
         let expected_indexes_str_map: HashSet<String> = indexes
             .iter()
-            .map(|(col, _)| IndexBuilder::new(self.table.table(), col.iter().collect()).index_name())
+            .map(|(col, _)| {
+                IndexBuilder::new(self.table.table(), col.iter().collect()).index_name()
+            })
             .collect();
 
         let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;

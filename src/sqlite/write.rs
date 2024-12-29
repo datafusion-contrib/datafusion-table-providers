@@ -198,7 +198,24 @@ impl DataSink for SqliteDataSink {
             })
             .await
             .context(super::UnableToInsertIntoTableAsyncSnafu)
-            .map_err(to_retriable_data_write_error)?;
+            .map_err(|e| {
+                if let super::Error::UnableToInsertIntoTableAsync {
+                    source:
+                        tokio_rusqlite::Error::Rusqlite(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error {
+                                code: rusqlite::ffi::ErrorCode::DiskFull,
+                                ..
+                            },
+                            _,
+                        )),
+                } = e
+                {
+                    DataFusionError::External(super::Error::DiskFull {}.into())
+                } else {
+                    to_retriable_data_write_error(e)
+                }
+            })?;
+        // .map_err(to_retriable_data_write_error)?;
 
         let num_rows = task.await.map_err(to_retriable_data_write_error)??;
 
