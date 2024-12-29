@@ -215,7 +215,6 @@ impl DataSink for SqliteDataSink {
                     to_retriable_data_write_error(e)
                 }
             })?;
-        // .map_err(to_retriable_data_write_error)?;
 
         let num_rows = task.await.map_err(to_retriable_data_write_error)??;
 
