@@ -80,7 +80,7 @@ insta = { version = "1.40.0", features = ["filters"] }
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream"]
-sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
+sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream", "dep:arrow-schema"]
 flight = [
   "dep:arrow-array",
