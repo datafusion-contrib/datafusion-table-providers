@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow_schema::{DataType, Field};
 use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
@@ -11,6 +12,7 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
+use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
@@ -172,6 +174,44 @@ pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
     attachments: Option<Arc<DuckDBAttachments>>,
     invalid_type_action: InvalidTypeAction,
+}
+
+impl SchemaValidator for DuckDbConnection {
+    type Error = super::Error;
+
+    fn is_data_type_valid(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::List(inner_field)
+            | DataType::FixedSizeList(inner_field, _)
+            | DataType::LargeList(inner_field) => {
+                match inner_field.data_type() {
+                    dt if dt.is_primitive() => true,
+                    DataType::Utf8
+                    | DataType::Binary
+                    | DataType::Utf8View
+                    | DataType::BinaryView
+                    | DataType::Boolean => true,
+                    _ => false, // nested lists don't support anything else yet
+                }
+            }
+            DataType::Struct(inner_fields) => inner_fields
+                .iter()
+                .all(|field| Self::is_data_type_valid(field.data_type())),
+            _ => true,
+        }
+    }
+
+    fn is_field_valid(field: &Arc<Field>) -> bool {
+        let duckdb_type_id = to_duckdb_type_id(field.data_type());
+        Self::is_data_type_valid(field.data_type()) && duckdb_type_id.is_ok()
+    }
+
+    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl DuckDbConnection {
@@ -409,7 +449,7 @@ pub fn is_table_function(table_reference: &TableReference) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::Field;
+    use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 
     use super::*;
 
@@ -445,7 +485,7 @@ mod tests {
         );
 
         assert!(
-            data_type_is_unsupported(field.data_type()),
+            !DuckDbConnection::is_data_type_valid(field.data_type()),
             "list with struct should be unsupported"
         );
     }
@@ -463,7 +503,7 @@ mod tests {
 
         for field in fields {
             assert!(
-                !data_type_is_unsupported(field.data_type()),
+                DuckDbConnection::is_data_type_valid(field.data_type()),
                 "field should be supported"
             );
         }
@@ -481,20 +521,9 @@ mod tests {
 
         let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
 
-        let conn = DuckDbConnection {
-            conn: r2d2::Pool::new(
-                DuckdbConnectionManager::memory().expect("should have a memory connection"),
-            )
-            .expect("should have pool")
-            .get()
-            .expect("should have connection"),
-            attachments: None,
-            invalid_type_action: InvalidTypeAction::Error,
-        };
-
-        let rebuilt_schema = conn
-            .rebuild_schema(&schema)
-            .expect("should rebuild schema successfully");
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Error)
+                .expect("should rebuild schema successfully");
 
         assert_eq!(schema, rebuilt_schema);
     }
@@ -544,50 +573,19 @@ mod tests {
         let expected_rebuilt_schema =
             Arc::new(SchemaBuilder::from(Fields::from(rebuilt_fields)).finish());
 
-        let conn = DuckDbConnection {
-            conn: r2d2::Pool::new(
-                DuckdbConnectionManager::memory().expect("should have a memory connection"),
-            )
-            .expect("should have pool")
-            .get()
-            .expect("should have connection"),
-            attachments: None,
-            invalid_type_action: InvalidTypeAction::Error,
-        };
+        assert!(
+            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Error).is_err()
+        );
 
-        assert!(conn.rebuild_schema(&schema).is_err());
-
-        let conn = DuckDbConnection {
-            conn: r2d2::Pool::new(
-                DuckdbConnectionManager::memory().expect("should have a memory connection"),
-            )
-            .expect("should have pool")
-            .get()
-            .expect("should have connection"),
-            attachments: None,
-            invalid_type_action: InvalidTypeAction::Warn,
-        };
-
-        let rebuilt_schema = conn
-            .rebuild_schema(&schema)
-            .expect("should rebuild schema successfully");
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Warn)
+                .expect("should rebuild schema successfully");
 
         assert_eq!(rebuilt_schema, expected_rebuilt_schema);
 
-        let conn = DuckDbConnection {
-            conn: r2d2::Pool::new(
-                DuckdbConnectionManager::memory().expect("should have a memory connection"),
-            )
-            .expect("should have pool")
-            .get()
-            .expect("should have connection"),
-            attachments: None,
-            invalid_type_action: InvalidTypeAction::Ignore,
-        };
-
-        let rebuilt_schema = conn
-            .rebuild_schema(&schema)
-            .expect("should rebuild schema successfully");
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Ignore)
+                .expect("should rebuild schema successfully");
 
         assert_eq!(rebuilt_schema, expected_rebuilt_schema);
     }

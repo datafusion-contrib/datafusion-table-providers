@@ -4,6 +4,7 @@ use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
 use crate::util::schema::SchemaValidator;
 use crate::InvalidTypeAction;
 use arrow::datatypes::SchemaRef;
+use arrow_schema::DataType;
 use async_trait::async_trait;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -32,6 +33,40 @@ pub enum Error {
 
 pub struct SqliteConnection {
     pub conn: Connection,
+}
+
+impl SchemaValidator for SqliteConnection {
+    type Error = super::Error;
+
+    fn is_data_type_valid(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Dictionary(_, _) | DataType::Interval(_) | DataType::Map(_, _) => false,
+            DataType::List(inner_field)
+            | DataType::FixedSizeList(inner_field, _)
+            | DataType::LargeList(inner_field) => {
+                match inner_field.data_type() {
+                    dt if dt.is_primitive() => true,
+                    DataType::Utf8
+                    | DataType::Binary
+                    | DataType::Utf8View
+                    | DataType::BinaryView
+                    | DataType::Boolean => true,
+                    _ => false, // nested lists don't support anything else yet
+                }
+            }
+            DataType::Struct(inner_fields) => inner_fields
+                .iter()
+                .all(|field| Self::is_data_type_valid(field.data_type())),
+            _ => true,
+        }
+    }
+
+    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
