@@ -119,7 +119,7 @@ impl SchemaValidator for SqliteConnection {
 
     fn is_data_type_valid(data_type: &DataType) -> bool {
         match data_type {
-            DataType::Dictionary(_, _) | DataType::Interval(_) => false,
+            DataType::Dictionary(_, _) | DataType::Interval(_) | DataType::Map(_, _) => false,
             DataType::List(inner_field)
             | DataType::FixedSizeList(inner_field, _)
             | DataType::LargeList(inner_field) => {
