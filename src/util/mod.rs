@@ -3,7 +3,10 @@ use snafu::prelude::*;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::sql::sql_provider_datafusion::expr::{self, Engine};
+use crate::{
+    sql::sql_provider_datafusion::expr::{self, Engine},
+    InvalidTypeAction,
+};
 
 pub mod column_reference;
 pub mod constraints;
@@ -11,6 +14,7 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
+pub mod schema;
 pub mod secrets;
 pub mod test;
 
@@ -62,6 +66,33 @@ pub fn remove_prefix_from_hashmap_keys<V>(
             (new_key, value)
         })
         .collect()
+}
+
+/// If the `InvalidTypeAction` is `Error`, the function will return an error.
+/// If the `InvalidTypeAction` is `Warn`, the function will log a warning.
+/// If the `InvalidTypeAction` is `Ignore`, the function will do nothing.
+///
+/// Used in the handling of unsupported schemas to determine if columns are removed or if the function should return an error.
+///
+/// # Errors
+///
+/// If the `InvalidTypeAction` is `Error` the function will return an error.
+pub fn handle_invalid_type_error<E>(
+    invalid_type_action: InvalidTypeAction,
+    error: E,
+) -> Result<(), E>
+where
+    E: std::error::Error + Send + Sync,
+{
+    match invalid_type_action {
+        InvalidTypeAction::Error => return Err(error),
+        InvalidTypeAction::Warn => {
+            tracing::warn!("{error}");
+        }
+        InvalidTypeAction::Ignore => {}
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ use rand::distributions::{Alphanumeric, DistString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
+use crate::util::schema::SchemaValidator;
 use crate::InvalidTypeAction;
 
 use super::DbConnection;
@@ -217,42 +218,6 @@ impl DuckDbConnection {
         }
         Ok(())
     }
-
-    /// For a given input schema, rebuild it according to the `InvalidTypeAction` set in the connection.
-    /// If the `InvalidTypeAction` is `Error`, the function will return an error if the schema contains an unsupported data type.
-    /// If the `InvalidTypeAction` is `Warn`, the function will log a warning if the schema contains an unsupported data type and remove the column.
-    /// If the `InvalidTypeAction` is `Ignore`, the function will remove the column silently.
-    ///
-    /// # Errors
-    ///
-    /// If the `InvalidTypeAction` is `Error` and the schema contains an unsupported data type, the function will return an error.
-    fn rebuild_schema(&self, input_schema: &SchemaRef) -> Result<SchemaRef, super::Error> {
-        let mut schema_builder = SchemaBuilder::new();
-        for field in &input_schema.fields {
-            let duckdb_type_id = to_duckdb_type_id(field.data_type());
-            let unsupported =
-                data_type_is_unsupported(field.data_type()) || duckdb_type_id.is_err();
-
-            if unsupported {
-                let error = super::Error::UnsupportedDataType {
-                    data_type: field.data_type().to_string(),
-                    field_name: field.name().clone(),
-                };
-
-                match self.invalid_type_action {
-                    InvalidTypeAction::Error => return Err(error),
-                    InvalidTypeAction::Warn => {
-                        tracing::warn!("{error}");
-                    }
-                    InvalidTypeAction::Ignore => {}
-                }
-            } else {
-                schema_builder.push(Arc::clone(field));
-            }
-        }
-
-        Ok(Arc::new(schema_builder.finish()))
-    }
 }
 
 impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
@@ -272,56 +237,6 @@ impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParamet
         &dyn SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
     > {
         Some(self)
-    }
-}
-
-fn struct_type_is_unsupported(fields: &Fields) -> bool {
-    let mut any_unsupported = false;
-    for field in fields {
-        match field.data_type() {
-            dt if dt.is_primitive() => continue,
-            DataType::Utf8 | DataType::Binary => continue,
-            DataType::List(inner_field)
-            | DataType::LargeList(inner_field)
-            | DataType::FixedSizeList(inner_field, _) => {
-                any_unsupported = data_type_is_unsupported(inner_field.data_type());
-                if any_unsupported {
-                    break;
-                }
-            }
-            DataType::Struct(inner_fields) => {
-                any_unsupported = struct_type_is_unsupported(inner_fields);
-                if any_unsupported {
-                    break;
-                }
-            }
-            _ => {
-                any_unsupported = true;
-                break;
-            }
-        }
-    }
-    any_unsupported
-}
-
-/// Returns true if the given `DataType` is not supported by the `DuckDB` `TableProvider`
-fn data_type_is_unsupported(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::List(inner_field)
-        | DataType::FixedSizeList(inner_field, _)
-        | DataType::LargeList(inner_field) => {
-            match inner_field.data_type() {
-                dt if dt.is_primitive() => false,
-                DataType::Utf8
-                | DataType::Binary
-                | DataType::Utf8View
-                | DataType::BinaryView
-                | DataType::Boolean => false,
-                _ => true, // nested lists don't support anything else yet
-            }
-        }
-        DataType::Struct(inner_fields) => struct_type_is_unsupported(inner_fields),
-        _ => false,
     }
 }
 
@@ -353,7 +268,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        self.rebuild_schema(&result.get_schema())
+        Self::handle_unsupported_schema(&result.get_schema(), self.invalid_type_action)
     }
 
     fn query_arrow(

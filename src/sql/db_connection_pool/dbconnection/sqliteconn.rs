@@ -1,6 +1,8 @@
 use std::any::Any;
 
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
+use crate::util::schema::SchemaValidator;
+use crate::InvalidTypeAction;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::execution::SendableRecordBatchStream;
@@ -57,7 +59,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
         let table_reference = table_reference.to_quoted_string();
-        let schema = self
+        let schema: SchemaRef = self
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(&format!("SELECT * FROM {table_reference} LIMIT 1"))?;
@@ -73,7 +75,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Ok(schema)
+        Self::handle_unsupported_schema(&schema, InvalidTypeAction::Error)
     }
 
     async fn query_arrow(
