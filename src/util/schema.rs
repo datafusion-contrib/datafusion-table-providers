@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::handle_invalid_type_error;
 use crate::sql::db_connection_pool::dbconnection::Error as DbConnectionError;
 use crate::InvalidTypeAction;
-#[cfg(any(feature = "sqlite", feature = "duckdb"))]
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion::arrow::datatypes::SchemaRef;
 
