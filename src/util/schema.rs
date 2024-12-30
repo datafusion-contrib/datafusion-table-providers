@@ -1,30 +1,18 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use crate::sql::db_connection_pool::dbconnection::sqliteconn::SqliteConnection;
+use super::handle_invalid_type_error;
 use crate::sql::db_connection_pool::dbconnection::Error as DbConnectionError;
-use arrow::array::RecordBatch;
-use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
-use async_stream::stream;
+use crate::InvalidTypeAction;
+use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::error::DataFusionError;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::sql::sqlparser::ast::TableFactor;
-use datafusion::sql::sqlparser::parser::Parser;
-use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
-use datafusion::sql::TableReference;
 
-#[cfg(feature = "duckdb")]
-use duckdb::vtab::to_duckdb_type_id;
+#[cfg(feature = "sqlite")]
+use crate::sql::db_connection_pool::dbconnection::sqliteconn::SqliteConnection;
 
 #[cfg(feature = "duckdb")]
 use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
-
-use crate::duckdb::DuckDBTableFactory;
-use crate::InvalidTypeAction;
-
-use super::handle_invalid_type_error;
+#[cfg(feature = "duckdb")]
+use duckdb::vtab::to_duckdb_type_id;
 
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T, E = GenericError> = std::result::Result<T, E>;
