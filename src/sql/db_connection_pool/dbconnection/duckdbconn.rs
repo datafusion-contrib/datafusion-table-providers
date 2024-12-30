@@ -2,7 +2,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow_schema::{DataType, Fields, SchemaBuilder};
 use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
@@ -12,7 +11,6 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
-use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
