@@ -4,9 +4,12 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
+use crate::util::handle_invalid_type_error;
+use crate::util::schema::SchemaValidator;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow_schema::DataType;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
 use bb8_postgres::PostgresConnectionManager;
@@ -25,7 +28,7 @@ use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
 
-const SCHEMA_QUERY: &str = r#"
+const SCHEMA_QUERY: &str = r"
 WITH custom_type_details AS (
 SELECT 
 t.typname,
@@ -109,7 +112,7 @@ c.table_schema = $1
 AND c.table_name = $2
 ORDER BY 
 c.ordinal_position;
-"#;
+";
 
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
@@ -129,6 +132,21 @@ pub enum PostgresError {
 pub struct PostgresConnection {
     pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
     invalid_type_action: InvalidTypeAction,
+}
+
+impl SchemaValidator for PostgresConnection {
+    type Error = super::Error;
+
+    fn is_data_type_valid(data_type: &DataType) -> bool {
+        !matches!(data_type, DataType::Map(_, _))
+    }
+
+    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl<'a>
@@ -212,13 +230,18 @@ impl<'a>
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
             let type_details = row.get::<usize, Option<serde_json::Value>>(3);
-            let arrow_type = match pg_data_type_to_arrow_type(&pg_type, type_details) {
-                Ok(arrow_type) => arrow_type,
-                Err(_) => {
-                    handle_unsupported_data_type(&pg_type, &column_name, self.invalid_type_action)?;
-                    continue;
-                }
+            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, type_details) else {
+                handle_invalid_type_error(
+                    self.invalid_type_action,
+                    super::Error::UnsupportedDataType {
+                        data_type: pg_type.to_string(),
+                        field_name: column_name.to_string(),
+                    },
+                )?;
+
+                continue;
             };
+
             fields.push(Field::new(column_name, arrow_type, nullable));
         }
 
@@ -291,25 +314,4 @@ impl PostgresConnection {
         self.invalid_type_action = action;
         self
     }
-}
-
-fn handle_unsupported_data_type(
-    data_type: &str,
-    field_name: &str,
-    invalid_type_action: InvalidTypeAction,
-) -> Result<(), super::Error> {
-    let error = super::Error::UnsupportedDataType {
-        data_type: data_type.to_string(),
-        field_name: field_name.to_string(),
-    };
-    match invalid_type_action {
-        InvalidTypeAction::Error => {
-            return Err(error);
-        }
-        InvalidTypeAction::Warn => {
-            tracing::warn!("{error}");
-        }
-        InvalidTypeAction::Ignore => {}
-    }
-    Ok(())
 }
