@@ -11,6 +11,8 @@ use crate::sql::sql_provider_datafusion::{
     expr::{self, Engine},
     SqlTable,
 };
+use crate::util::schema::SchemaValidator;
+use crate::InvalidTypeAction;
 use arrow::{
     array::RecordBatch,
     datatypes::{Schema, SchemaRef},
@@ -122,7 +124,9 @@ pub enum Error {
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
 
-    #[snafu(display("Failed to create '{table_name}': creating a table with a schema is not supported"))]
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
     TableWithSchemaCreationNotSupported { table_name: String },
 }
 
@@ -207,12 +211,12 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
                 table_name: cmd.name.to_string(),
             }
-            .fail().map_err(to_datafusion_error)?;
+            .fail()
+            .map_err(to_datafusion_error)?;
         }
 
         let name = cmd.name.clone();
@@ -259,7 +263,10 @@ impl TableProviderFactory for PostgresTableProviderFactory {
                 .map_err(to_datafusion_error)?,
         );
 
-        let schema = Arc::new(schema);
+        let schema: SchemaRef = Arc::new(schema);
+        PostgresConnection::handle_unsupported_schema(&schema, InvalidTypeAction::default())
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
         let postgres = Postgres::new(
             name.clone(),
             Arc::clone(&pool),
@@ -424,8 +431,7 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder =
-            InsertBuilder::new(&self.table, vec![batch]);
+        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -460,8 +466,8 @@ impl Postgres {
         transaction: &Transaction<'_>,
         primary_keys: Vec<String>,
     ) -> Result<()> {
-        let create_table_statement = CreateTableBuilder::new(schema, self.table.table())
-            .primary_keys(primary_keys);
+        let create_table_statement =
+            CreateTableBuilder::new(schema, self.table.table()).primary_keys(primary_keys);
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {
