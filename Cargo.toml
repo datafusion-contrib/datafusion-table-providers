@@ -58,7 +58,7 @@ pem = { version = "3.0.4", optional = true }
 tokio-rusqlite = { version = "0.5.1", optional = true }
 tonic = { version = "0.12.2", optional = true }
 datafusion-federation = "0.1"
-datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "4c0ff795deeddcd728b4f973c27f002468e5dd9f" }
+datafusion-federation-sql = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "d0eeb2df72f03db0a94a5bb1ff9b0d5eaf134b1f" }
 itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
