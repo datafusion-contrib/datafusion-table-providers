@@ -128,6 +128,9 @@ pub enum Error {
         "Failed to create '{table_name}': creating a table with a schema is not supported"
     ))]
     TableWithSchemaCreationNotSupported { table_name: String },
+
+    #[snafu(display("Schema validation error: the provided data schema does not match the expected table schema: '{table_name}'"))]
+    SchemaValidationError { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
