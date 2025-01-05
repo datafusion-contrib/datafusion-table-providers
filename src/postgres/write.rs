@@ -4,7 +4,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
-    common::Constraints,
+    common::{Constraints, SchemaExt},
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{dml::InsertOp, Expr},
@@ -140,6 +140,17 @@ impl DataSink for PostgresDataSink {
 
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
+
+            if !self
+                .postgres
+                .schema
+                .equivalent_names_and_types(batch.schema_ref())
+            {
+                return Err(to_datafusion_error(super::Error::SchemaValidationError {
+                    table_name: self.postgres.table.to_string(),
+                }));
+            }
+
             let batch_num_rows = batch.num_rows();
 
             if batch_num_rows == 0 {
