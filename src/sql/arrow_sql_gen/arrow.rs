@@ -86,6 +86,7 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
                 DataType::Int16 => Box::new(ListBuilder::new(Int16Builder::new())),
                 DataType::Int32 => Box::new(ListBuilder::new(Int32Builder::new())),
                 DataType::Int64 => Box::new(ListBuilder::new(Int64Builder::new())),
+                DataType::UInt32 => Box::new(ListBuilder::new(UInt32Builder::new())),
                 DataType::Float32 => Box::new(ListBuilder::new(Float32Builder::new())),
                 DataType::Float64 => Box::new(ListBuilder::new(Float64Builder::new())),
                 DataType::Utf8 => Box::new(ListBuilder::new(StringBuilder::new())),
@@ -109,6 +110,10 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
             )),
             DataType::Int64 => Box::new(FixedSizeListBuilder::new(
                 Int64Builder::new(),
+                size.to_owned(),
+            )),
+            DataType::UInt32 => Box::new(FixedSizeListBuilder::new(
+                UInt32Builder::new(),
                 size.to_owned(),
             )),
             DataType::Float32 => Box::new(FixedSizeListBuilder::new(

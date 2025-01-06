@@ -14,13 +14,14 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "smallint" => Ok(DataType::Int16),
         "integer" | "int" | "int4" => Ok(DataType::Int32),
         "bigint" | "int8" | "money" => Ok(DataType::Int64),
-        "oid" => Ok(DataType::UInt32),
+        "oid" | "xid" | "regproc" => Ok(DataType::UInt32),
         "numeric" | "decimal" => {
             let (precision, scale) = parse_numeric_type(pg_type)?;
             Ok(DataType::Decimal128(precision, scale))
         }
         "real" | "float4" => Ok(DataType::Float32),
         "double precision" | "float8" => Ok(DataType::Float64),
+        "\"char\"" => Ok(DataType::Int8),
         "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid"
         | "name" => Ok(DataType::Utf8),
         "bytea" => Ok(DataType::Binary),
@@ -48,7 +49,13 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "bit" | "bit varying" => Ok(DataType::Binary),
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
         "xml" | "json" | "jsonb" => Ok(DataType::LargeUtf8),
+        "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
         "array" => parse_array_type(type_details),
+        "anyarray" => Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Binary,
+            true,
+        )))),
         "int4range" => Ok(DataType::Struct(Fields::from(vec![
             Field::new("lower", DataType::Int32, true),
             Field::new("upper", DataType::Int32, true),
@@ -212,6 +219,11 @@ mod tests {
         assert_eq!(
             pg_data_type_to_arrow_type("boolean", None).expect("Failed to convert boolean"),
             DataType::Boolean
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("\"char\"", None)
+                .expect("Failed to convert single character"),
+            DataType::Int8
         );
 
         // Test string types
