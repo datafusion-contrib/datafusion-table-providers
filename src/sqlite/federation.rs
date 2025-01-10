@@ -24,12 +24,12 @@ impl<T, P> SQLiteTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.to_quoted_string();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
+        let table_ref = self.base_table.table_reference.clone();
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            table_ref,
             schema,
         )?))
     }
