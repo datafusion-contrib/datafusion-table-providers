@@ -13,19 +13,19 @@ arrow-flight = { version = "53", optional = true, features = [
   "tls",
 ] }
 arrow-odbc = { version = "=14.0.1", optional = true }
-async-stream = { version = "0.3.6", optional = true }
+async-stream = { version = "0.3", optional = true }
 async-trait = "0.1"
-bb8 = { version = "0.8", optional = true }
-bb8-postgres = { version = "0.8", optional = true }
-bigdecimal = "0.4.6"
+bb8 = { version = "0.9", optional = true }
+bb8-postgres = { version = "0.9", optional = true }
+bigdecimal = "0.4"
 byteorder = "1.5.0"
-chrono = "0.4.38"
+chrono = "0.4"
 dashmap = "6.1.0"
-datafusion = { version = "43", default-features = false }
-datafusion-federation = { version = "0.3.1", features = [
+datafusion = { version = "44", default-features = false }
+datafusion-federation = { version = "=0.3.4", features = [
   "sql",
 ], optional = true }
-datafusion-proto = { version = "43", optional = true }
+datafusion-proto = { version = "44", optional = true }
 duckdb = { version = "1.1.1", features = [
   "bundled",
   "r2d2",
@@ -38,20 +38,22 @@ fallible-iterator = "0.3.0"
 fundu = "2.0.1"
 futures = "0.3"
 geo-types = "0.7"
-itertools = "0.13.0"
-mysql_async = { version = "0.34", features = [
+itertools = "0.14.0"
+mysql_async = { version = "0.35", features = [
   "native-tls-tls",
   "chrono",
+  "time",
+  "bigdecimal",
 ], optional = true }
-native-tls = { version = "0.2.12", optional = true }
+native-tls = { version = "0.2", optional = true }
 num-bigint = "0.4"
-odbc-api = { version = "10.0.0", optional = true }
+odbc-api = { version = "10.1", optional = true }
 pem = { version = "3.0.4", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
 prost = { version = "0.13", optional = true }
-r2d2 = { version = "0.8.10", optional = true }
-rusqlite = { version = "0.32.1", optional = true }
-sea-query = { version = "0.32.0", features = [
+r2d2 = { version = "0.8", optional = true }
+rusqlite = { version = "0.32", optional = true }
+sea-query = { version = "0.32", features = [
   "backend-sqlite",
   "backend-postgres",
   "postgres-array",
@@ -63,11 +65,11 @@ sea-query = { version = "0.32.0", features = [
 secrecy = "0.8.0"
 serde = { version = "1.0", optional = true }
 serde_json = "1.0"
-sha2 = "0.10.8"
-snafu = "0.8.5"
-time = "0.3.36"
-tokio = { version = "1.41", features = ["macros", "fs"] }
-tokio-postgres = { version = "0.7.12", features = [
+sha2 = "0.10"
+snafu = "0.8"
+time = "0.3"
+tokio = { version = "1.43", features = ["macros", "fs"] }
+tokio-postgres = { version = "0.7", features = [
   "with-chrono-0_4",
   "with-uuid-1",
   "with-serde_json-1",
@@ -78,23 +80,23 @@ tonic = { version = "0.12", optional = true, features = [
   "tls-native-roots",
   "tls-webpki-roots",
 ] }
-tracing = "0.1.40"
+tracing = "0.1"
 trust-dns-resolver = "0.23.2"
 url = "2.5.4"
-uuid = { version = "1.11.0", optional = true }
+uuid = { version = "1.11", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
 bollard = "0.18.1"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
-insta = { version = "1.41.1", features = ["filters"] }
+insta = { version = "1.42.0", features = ["filters"] }
 prost = { version = "0.13" }
-rand = "0.8.5"
-reqwest = "0.12.9"
-rstest = "0.23.0"
-test-log = { version = "0.2.16", features = ["trace"] }
-tokio-stream = { version = "0.1.16", features = ["net"] }
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+rand = "0.8"
+reqwest = "0.12"
+rstest = "0.24.0"
+test-log = { version = "0.2", features = ["trace"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 duckdb = [

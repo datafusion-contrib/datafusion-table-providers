@@ -1,6 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::{
     common::Statistics,
     error::{DataFusionError, Result},
@@ -9,7 +10,7 @@ use datafusion::{
     physical_plan::{
         common,
         stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
-        DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 
@@ -59,7 +60,8 @@ impl MockExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }

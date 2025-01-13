@@ -568,7 +568,8 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_LONG_BLOB
         | ColumnType::MYSQL_TYPE_TINY_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-        | ColumnType::MYSQL_TYPE_GEOMETRY => {
+        | ColumnType::MYSQL_TYPE_GEOMETRY
+        | ColumnType::MYSQL_TYPE_VECTOR => {
             unimplemented!("Unsupported column type {:?}", column_type)
         }
     }
