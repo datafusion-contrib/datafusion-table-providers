@@ -132,3 +132,8 @@ postgres = [
 postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 sqlite-federation = ["sqlite", "federation"]
+
+[[example]]
+name = "odbc_sqlite"
+path = "examples/odbc_sqlite.rs"
+required-features = ["sqlite", "odbc"]
