@@ -12,6 +12,7 @@ use crate::sql::db_connection_pool::{
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
+    physical_plan::execution_plan::{Boundedness, EmissionType},
     sql::unparser::dialect::{
         DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
     },
@@ -32,8 +33,8 @@ use datafusion::{
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionMode,
-        ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream,
+        stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
+        Partitioning, PlanProperties, SendableRecordBatchStream,
     },
     sql::{unparser::Unparser, TableReference},
 };
@@ -295,7 +296,8 @@ impl<T, P> SqlExec<T, P> {
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
-                ExecutionMode::Bounded,
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             ),
         })
     }

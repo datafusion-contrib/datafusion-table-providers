@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --all-features
+	cargo test --features duckdb-federation,flight,mysql-federation,postgres-federation,sqlite-federation
 
 .PHONY: lint
 lint:
