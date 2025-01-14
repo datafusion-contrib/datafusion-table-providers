@@ -1,6 +1,6 @@
 [package]
 name = "datafusion-table-providers"
-version = "0.2.3"
+version = "0.2.4"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
