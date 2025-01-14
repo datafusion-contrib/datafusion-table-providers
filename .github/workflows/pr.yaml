@@ -59,7 +59,7 @@ jobs:
 
     env:
       PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
-      MYSQL_DOCKER_IMAGE: ghcr.io/mirrorshub/docker/mysql:8-debian
+      MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
 
     steps:
       - uses: actions/checkout@v4
