@@ -153,6 +153,7 @@ impl<T, P> DuckSqlExec<T, P> {
 
     fn sql(&self) -> SqlResult<String> {
         let sql = self.base_exec.sql()?;
+
         Ok(format!(
             "{cte_expr} {sql}",
             cte_expr = get_cte(&self.table_functions)

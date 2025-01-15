@@ -1,7 +1,12 @@
+use std::sync::Arc;
+
 use bigdecimal::{num_bigint::BigInt, BigDecimal};
 use datafusion::{
     logical_expr::{Cast, Expr},
     scalar::ScalarValue,
+    sql::unparser::dialect::{
+        DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
+    },
 };
 
 pub const SECONDS_IN_DAY: i32 = 86_400;
@@ -25,6 +30,18 @@ pub enum Engine {
     ODBC,
     Postgres,
     MySQL,
+}
+
+impl Engine {
+    /// Get the corresponding `Dialect` to use for unparsing
+    pub fn dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match self {
+            Engine::SQLite => Arc::new(SqliteDialect {}),
+            Engine::Postgres => Arc::new(PostgreSqlDialect {}),
+            Engine::MySQL => Arc::new(MySqlDialect {}),
+            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -236,6 +253,10 @@ fn handle_cast(cast: &Cast, engine: Option<Engine>, expr: &Expr) -> Result<Strin
                 to_sql_with_engine(&cast.expr, engine)?,
             )),
         },
+        arrow::datatypes::DataType::Int64 => Ok(format!(
+            "CAST({} AS BIGINT)",
+            to_sql_with_engine(&cast.expr, engine)?,
+        )),
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
