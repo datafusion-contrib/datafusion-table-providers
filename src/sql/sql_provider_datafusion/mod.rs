@@ -10,7 +10,13 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use async_trait::async_trait;
-use datafusion::{catalog::Session, sql::unparser::dialect::Dialect};
+use datafusion::{
+    catalog::Session,
+    sql::unparser::{
+        dialect::{DefaultDialect, Dialect},
+        Unparser,
+    },
+};
 use expr::Engine;
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -46,6 +52,9 @@ pub enum Error {
 
     #[snafu(display("Unable to generate SQL: {source}"))]
     UnableToGenerateSQL { source: expr::Error },
+
+    #[snafu(display("Unable to generate SQL: {source}"))]
+    UnableToGenerateSQLDataFusion { source: DataFusionError },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -174,9 +183,15 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        let dialect = self.engine.map_or(
+            Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+            |e| e.dialect(),
+        );
+        let unparser = Unparser::new(dialect.as_ref());
+
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(|f| match expr::to_sql_with_engine(f, self.engine) {
+            .map(|f| match unparser.expr_to_sql(f) {
                 Ok(_) => TableProviderFilterPushDown::Exact,
                 Err(_) => TableProviderFilterPushDown::Unsupported,
             })
@@ -284,19 +299,18 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
+            let dialect = self.engine.map_or(
+                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+                |e| e.dialect(),
+            );
+            let unparser = Unparser::new(dialect.as_ref());
+
             let filter_expr = self
                 .filters
                 .iter()
-                .map(|f| match f {
-                    // DataFusion optimization uses aliases to preserve original expression names during optimizations and type coercions:
-                    // https://github.com/apache/datafusion/issues/3794
-                    // If there is a filter with additional alias information, we must use the expression only
-                    // as original expression name is unnecessary and the alias can't be part of the WHERE clause
-                    Expr::Alias(alias) => expr::to_sql_with_engine(&alias.expr, self.engine),
-                    _ => expr::to_sql_with_engine(f, self.engine),
-                })
-                .collect::<expr::Result<Vec<_>>>()
-                .context(UnableToGenerateSQLSnafu)?;
+                .map(|f| unparser.expr_to_sql(f).map(|s| s.to_string()))
+                .collect::<Result<Vec<String>, DataFusionError>>()
+                .context(UnableToGenerateSQLDataFusionSnafu)?;
             format!("WHERE {}", filter_expr.join(" AND "))
         };
 

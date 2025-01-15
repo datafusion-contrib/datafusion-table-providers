@@ -1,7 +1,10 @@
+use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::Expr;
+use datafusion::sql::unparser::dialect::DefaultDialect;
+use datafusion::sql::unparser::Unparser;
 use snafu::prelude::*;
-use std::collections::HashMap;
 use std::hash::Hash;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     sql::sql_provider_datafusion::expr::{self, Engine},
@@ -23,14 +26,24 @@ pub mod test;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Unable to generate SQL: {source}"))]
-    UnableToGenerateSQL { source: expr::Error },
+    UnableToGenerateSQL {
+        source: datafusion::error::DataFusionError,
+    },
 }
 
 pub fn filters_to_sql(filters: &[Expr], engine: Option<Engine>) -> Result<String, Error> {
+    println!("filters_to_sql: filters: {:?}", filters);
+    let dialect = engine
+        .map(|e| e.dialect())
+        .unwrap_or(Arc::new(DefaultDialect {}));
     Ok(filters
         .iter()
-        .map(|expr| expr::to_sql_with_engine(expr, engine))
-        .collect::<expr::Result<Vec<_>>>()
+        .map(|f| {
+            Unparser::new(dialect.as_ref())
+                .expr_to_sql(f)
+                .map(|e| e.to_string())
+        })
+        .collect::<DataFusionResult<Vec<String>>>()
         .context(UnableToGenerateSQLSnafu)?
         .join(" AND "))
 }
