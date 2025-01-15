@@ -6,10 +6,7 @@ use snafu::prelude::*;
 use std::hash::Hash;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{
-    sql::sql_provider_datafusion::expr::{self, Engine},
-    InvalidTypeAction,
-};
+use crate::{sql::sql_provider_datafusion::expr::Engine, InvalidTypeAction};
 
 pub mod column_reference;
 pub mod constraints;
