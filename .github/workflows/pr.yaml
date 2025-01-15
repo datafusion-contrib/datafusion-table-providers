@@ -82,7 +82,7 @@ jobs:
             google-cloud-sdk imagemagick \
             libmagickcore-dev libmagickwand-dev libmagic-dev ant ant-optional kubectl \
             mercurial apt-transport-https mono-complete libmysqlclient \
-            unixodbc-dev yarn chrpath libssl-dev libxft-dev \
+            yarn chrpath libssl-dev libxft-dev \
             libfreetype6 libfreetype6-dev libfontconfig1 libfontconfig1-dev \
             snmp pollinate libpq-dev postgresql-client powershell ruby-full \
             sphinxsearch subversion mongodb-org azure-cli microsoft-edge-stable \
@@ -96,6 +96,11 @@ jobs:
           sudo apt-get autoclean -y >/dev/null 2>&1
           echo "some packages purged"
           df -h
+
+      - name: Install ODBC & Sqlite
+        run: |
+          sudo apt-get install -y unixodbc-dev
+          sudo apt-get install -y libsqlite3-dev
 
       - name: Run tests
         run: make test
