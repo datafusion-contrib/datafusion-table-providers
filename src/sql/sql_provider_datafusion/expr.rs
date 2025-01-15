@@ -253,16 +253,10 @@ fn handle_cast(cast: &Cast, engine: Option<Engine>, expr: &Expr) -> Result<Strin
                 to_sql_with_engine(&cast.expr, engine)?,
             )),
         },
-        arrow::datatypes::DataType::Int64 => match engine {
-            Some(Engine::DuckDB | Engine::SQLite | Engine::Postgres) => Ok(format!(
-                "CAST({} AS BIGINT)",
-                to_sql_with_engine(&cast.expr, engine)?,
-            )),
-            _ => Ok(format!(
-                "CAST({} AS INT64)",
-                to_sql_with_engine(&cast.expr, engine)?,
-            )),
-        },
+        arrow::datatypes::DataType::Int64 => Ok(format!(
+            "CAST({} AS BIGINT)",
+            to_sql_with_engine(&cast.expr, engine)?,
+        )),
         _ => Err(Error::UnsupportedFilterExpr {
             expr: format!("{expr}"),
         }),
