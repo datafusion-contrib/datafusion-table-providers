@@ -32,7 +32,6 @@ pub enum Error {
 }
 
 pub fn filters_to_sql(filters: &[Expr], engine: Option<Engine>) -> Result<String, Error> {
-    println!("filters_to_sql: filters: {:?}", filters);
     let dialect = engine
         .map(|e| e.dialect())
         .unwrap_or(Arc::new(DefaultDialect {}));
