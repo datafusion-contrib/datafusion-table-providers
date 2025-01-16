@@ -183,15 +183,9 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let dialect = self.engine.map_or(
-            Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
-            |e| e.dialect(),
-        );
-        let unparser = Unparser::new(dialect.as_ref());
-
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(|f| match unparser.expr_to_sql(f) {
+            .map(|f| match expr::to_sql_with_engine(f, self.engine) {
                 Ok(_) => TableProviderFilterPushDown::Exact,
                 Err(_) => TableProviderFilterPushDown::Unsupported,
             })
