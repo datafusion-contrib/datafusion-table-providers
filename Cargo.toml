@@ -22,7 +22,7 @@ byteorder = "1.5.0"
 chrono = "0.4"
 dashmap = "6.1.0"
 datafusion = { version = "44", default-features = false }
-datafusion-federation = { version = "=0.3.4", features = [
+datafusion-federation = { version = "=0.3.5", features = [
   "sql",
 ], optional = true }
 datafusion-proto = { version = "44", optional = true }
