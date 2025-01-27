@@ -91,7 +91,7 @@ bollard = "0.18.1"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
 insta = { version = "1.42.0", features = ["filters"] }
 prost = { version = "0.13" }
-rand = "0.8"
+rand = "0.9"
 reqwest = "0.12"
 rstest = "0.24.0"
 test-log = { version = "0.2", features = ["trace"] }
