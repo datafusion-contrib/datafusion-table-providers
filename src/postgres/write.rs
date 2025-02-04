@@ -1,7 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use arrow_schema::{DataType, Schema};
+use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
@@ -145,11 +145,15 @@ impl DataSink for PostgresDataSink {
             .fields
             .iter()
             .map(|f| {
-                if f.data_type() == &DataType::LargeUtf8 {
-                    Arc::new(f.with_data_type(DataType::Utf8))
-                } else {
-                    Arc::clone(f)
-                }
+                Arc::new(Field::new(
+                    f.name(),
+                    if f.data_type() == &DataType::LargeUtf8 {
+                        DataType::Utf8
+                    } else {
+                        f.data_type().clone()
+                    },
+                    f.is_nullable(),
+                ))
             })
             .collect::<Vec<_>>();
 
@@ -166,11 +170,15 @@ impl DataSink for PostgresDataSink {
                 .fields()
                 .iter()
                 .map(|f| {
-                    if f.data_type() == &DataType::LargeUtf8 {
-                        Arc::new(f.with_data_type(DataType::Utf8))
-                    } else {
-                        Arc::clone(f)
-                    }
+                    Arc::new(Field::new(
+                        f.name(),
+                        if f.data_type() == &DataType::LargeUtf8 {
+                            DataType::Utf8
+                        } else {
+                            f.data_type().clone()
+                        },
+                        f.is_nullable(),
+                    ))
                 })
                 .collect::<Vec<_>>();
             let batch_schema = Arc::new(Schema::new(batch_fields));
