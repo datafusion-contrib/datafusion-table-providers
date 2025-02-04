@@ -139,6 +139,22 @@ impl DataSink for PostgresDataSink {
                 .map_err(to_datafusion_error)?;
         }
 
+        let postgres_fields = self
+            .postgres
+            .schema
+            .fields
+            .iter()
+            .map(|f| {
+                if f.data_type() == &DataType::LargeUtf8 {
+                    Arc::new(f.with_data_type(DataType::Utf8))
+                } else {
+                    Arc::clone(f)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let postgres_schema = Arc::new(Schema::new(postgres_fields));
+
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
@@ -157,25 +173,9 @@ impl DataSink for PostgresDataSink {
                     }
                 })
                 .collect::<Vec<_>>();
-
-            let postgres_fields = self
-                .postgres
-                .schema
-                .fields
-                .iter()
-                .map(|f| {
-                    if f.data_type() == &DataType::LargeUtf8 {
-                        Arc::new(f.with_data_type(DataType::Utf8))
-                    } else {
-                        Arc::clone(f)
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            let postgres_schema = Arc::new(Schema::new(postgres_fields));
             let batch_schema = Arc::new(Schema::new(batch_fields));
 
-            if !postgres_schema.equivalent_names_and_types(&batch_schema) {
+            if !Arc::clone(&postgres_schema).equivalent_names_and_types(&batch_schema) {
                 return Err(to_datafusion_error(super::Error::SchemaValidationError {
                     table_name: self.postgres.table.to_string(),
                 }));
