@@ -43,7 +43,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
         )),
-        "xml" | "json" => Ok(DataType::LargeUtf8),
+        "xml" | "json" => Ok(DataType::Utf8),
         "array" => parse_array_type(type_details),
         "composite" => parse_composite_type(type_details),
         "geometry" | "geography" => Ok(DataType::Binary),

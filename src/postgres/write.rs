@@ -1,11 +1,11 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema};
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
-    common::{Constraints, DFSchema, SchemaExt},
+    common::{Constraints, SchemaExt},
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{dml::InsertOp, Expr},
@@ -142,25 +142,40 @@ impl DataSink for PostgresDataSink {
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            let postgres_fields = &self.postgres.schema.fields;
-            let batch_fields = batch.schema_ref().fields();
-
-            if !postgres_fields
+            // for the purposes of PostgreSQL, LargeUtf8 is equivalent to Utf8
+            // because Postgres physically cannot store anything larger than 1Gb in text (VARCHAR)
+            // normalize LargeUtf8 fields to Utf8 for both the incoming batch, and Postgres if it happens to specify any
+            let batch_fields = batch
+                .schema_ref()
+                .fields()
                 .iter()
-                .zip(batch_fields.iter())
-                .all(|(pg_field, batch_field)| {
-                    pg_field.name() == batch_field.name()
-                        && DFSchema::datatype_is_semantically_equal(
-                            pg_field.data_type(), // for the purposes of PostgreSQL, LargeUtf8 is equivalent to Utf8
-                            // because Postgres physically cannot store anything larger than 1Gb in text (VARCHAR)
-                            if batch_field.data_type() == &DataType::LargeUtf8 {
-                                &DataType::Utf8
-                            } else {
-                                batch_field.data_type()
-                            },
-                        )
+                .map(|f| {
+                    if f.data_type() == &DataType::LargeUtf8 {
+                        Arc::new(f.with_data_type(DataType::Utf8))
+                    } else {
+                        Arc::clone(f)
+                    }
                 })
-            {
+                .collect::<Vec<_>>();
+
+            let postgres_fields = self
+                .postgres
+                .schema
+                .fields
+                .iter()
+                .map(|f| {
+                    if f.data_type() == &DataType::LargeUtf8 {
+                        Arc::new(f.with_data_type(DataType::Utf8))
+                    } else {
+                        Arc::clone(f)
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let postgres_schema = Arc::new(Schema::new(postgres_fields));
+            let batch_schema = Arc::new(Schema::new(batch_fields));
+
+            if !postgres_schema.equivalent_names_and_types(&batch_schema) {
                 return Err(to_datafusion_error(super::Error::SchemaValidationError {
                     table_name: self.postgres.table.to_string(),
                 }));
