@@ -1,6 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
+use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
@@ -138,14 +139,51 @@ impl DataSink for PostgresDataSink {
                 .map_err(to_datafusion_error)?;
         }
 
+        let postgres_fields = self
+            .postgres
+            .schema
+            .fields
+            .iter()
+            .map(|f| {
+                Arc::new(Field::new(
+                    f.name(),
+                    if f.data_type() == &DataType::LargeUtf8 {
+                        DataType::Utf8
+                    } else {
+                        f.data_type().clone()
+                    },
+                    f.is_nullable(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let postgres_schema = Arc::new(Schema::new(postgres_fields));
+
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            if !self
-                .postgres
-                .schema
-                .equivalent_names_and_types(batch.schema_ref())
-            {
+            // for the purposes of PostgreSQL, LargeUtf8 is equivalent to Utf8
+            // because Postgres physically cannot store anything larger than 1Gb in text (VARCHAR)
+            // normalize LargeUtf8 fields to Utf8 for both the incoming batch, and Postgres if it happens to specify any
+            let batch_fields = batch
+                .schema_ref()
+                .fields()
+                .iter()
+                .map(|f| {
+                    Arc::new(Field::new(
+                        f.name(),
+                        if f.data_type() == &DataType::LargeUtf8 {
+                            DataType::Utf8
+                        } else {
+                            f.data_type().clone()
+                        },
+                        f.is_nullable(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let batch_schema = Arc::new(Schema::new(batch_fields));
+
+            if !Arc::clone(&postgres_schema).equivalent_names_and_types(&batch_schema) {
                 return Err(to_datafusion_error(super::Error::SchemaValidationError {
                     table_name: self.postgres.table.to_string(),
                 }));
