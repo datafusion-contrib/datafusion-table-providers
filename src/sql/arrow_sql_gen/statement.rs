@@ -12,7 +12,9 @@ use chrono::{DateTime, Offset, TimeZone};
 use datafusion::sql::TableReference;
 use num_bigint::BigInt;
 use sea_query::{
-    Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden, IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef
+    Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
+    IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
+    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef,
 };
 use snafu::Snafu;
 use std::{any::Any, str::FromStr, sync::Arc};
@@ -1061,14 +1063,20 @@ impl InsertBuilder {
     }
 }
 
-fn table_reference_to_sea_table_ref(table: &TableReference ) -> TableRef {
+fn table_reference_to_sea_table_ref(table: &TableReference) -> TableRef {
     match table {
-        TableReference::Bare{table} => TableRef::Table(SeaRc::new(Alias::new(table.to_string()))),
-        TableReference::Partial{schema, table} => TableRef::SchemaTable(
+        TableReference::Bare { table } => {
+            TableRef::Table(SeaRc::new(Alias::new(table.to_string())))
+        }
+        TableReference::Partial { schema, table } => TableRef::SchemaTable(
             SeaRc::new(Alias::new(schema.to_string())),
             SeaRc::new(Alias::new(table.to_string())),
         ),
-        TableReference::Full { catalog, schema, table } => TableRef::DatabaseSchemaTable(
+        TableReference::Full {
+            catalog,
+            schema,
+            table,
+        } => TableRef::DatabaseSchemaTable(
             SeaRc::new(Alias::new(catalog.to_string())),
             SeaRc::new(Alias::new(schema.to_string())),
             SeaRc::new(Alias::new(table.to_string())),
@@ -1466,7 +1474,6 @@ mod tests {
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
     }
-
 
     #[test]
     fn test_table_insertion_with_schema() {
