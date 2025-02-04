@@ -390,7 +390,7 @@ mod tests {
         // Test JSON types
         assert_eq!(
             pg_data_type_to_arrow_type("json", None).expect("Failed to convert json"),
-            DataType::LargeUtf8
+            DataType::Utf8
         );
 
         // Test UUID type
