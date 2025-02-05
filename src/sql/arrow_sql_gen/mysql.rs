@@ -37,8 +37,9 @@ pub enum Error {
         source: <u128 as convert::TryInto<i64>>::Error,
     },
 
-    #[snafu(display("Failed to get a row value for {:?}: {}", mysql_type, source))]
+    #[snafu(display("Failed to get a row value for column {column}({mysql_type:?}): {source}"))]
     FailedToGetRowValue {
+        column: String,
         mysql_type: ColumnType,
         source: mysql_async::FromValueError,
     },
@@ -59,7 +60,7 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 macro_rules! handle_primitive_type {
-    ($builder:expr, $type:expr, $builder_ty:ty, $value_ty:ty, $row:expr, $index:expr) => {{
+    ($builder:expr, $type:expr, $builder_ty:ty, $value_ty:ty, $row:expr, $index:expr, $column_name:expr) => {{
         let Some(builder) = $builder else {
             return NoBuilderForIndexSnafu { index: $index }.fail();
         };
@@ -70,7 +71,10 @@ macro_rules! handle_primitive_type {
             .fail();
         };
         let v = handle_null_error($row.get_opt::<$value_ty, usize>($index).transpose())
-            .context(FailedToGetRowValueSnafu { mysql_type: $type })?;
+            .context(FailedToGetRowValueSnafu {
+                column: $column_name,
+                mysql_type: $type 
+            })?;
 
         match v {
             Some(v) => builder.append_value(v),
@@ -148,7 +152,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let Some(builder) = arrow_columns_builders.get_mut(i) else {
                 return NoBuilderForIndexSnafu { index: i }.fail();
             };
-            
+
+            let column_name = column_names.get(i).cloned().unwrap_or_default();
+
             match *mysql_type {
                 ColumnType::MYSQL_TYPE_NULL => {
                     let Some(builder) = builder else {
@@ -174,6 +180,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
                     let value = row.get_opt::<Value, usize>(i).transpose().context(
                         FailedToGetRowValueSnafu {
+                            column: column_name,
                             mysql_type: ColumnType::MYSQL_TYPE_BIT,
                         },
                     )?;
@@ -196,14 +203,15 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Int8Builder,
                         i8,
                         row,
-                        i
+                        i,
+                        column_name
                     );
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_SHORT | ColumnType::MYSQL_TYPE_YEAR) => {
-                    handle_primitive_type!(builder, column_type, Int16Builder, i16, row, i);
+                    handle_primitive_type!(builder, column_type, Int16Builder, i16, row, i, column_name);
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_INT24 | ColumnType::MYSQL_TYPE_LONG) => {
-                    handle_primitive_type!(builder, column_type, Int32Builder, i32, row, i);
+                    handle_primitive_type!(builder, column_type, Int32Builder, i32, row, i, column_name);
                 }
                 ColumnType::MYSQL_TYPE_LONGLONG => {
                     handle_primitive_type!(
@@ -212,7 +220,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Int64Builder,
                         i64,
                         row,
-                        i
+                        i,
+                        column_name
                     );
                 }
                 ColumnType::MYSQL_TYPE_FLOAT => {
@@ -222,7 +231,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Float32Builder,
                         f32,
                         row,
-                        i
+                        i,
+                        column_name
                     );
                 }
                 ColumnType::MYSQL_TYPE_DOUBLE => {
@@ -232,7 +242,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Float64Builder,
                         f64,
                         row,
-                        i
+                        i,
+                        column_name
                     );
                 }
                 ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
@@ -256,6 +267,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                            };
                            let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
                                .context(FailedToGetRowValueSnafu {
+                                    column: column_name,
                                     mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
                                 })?;
        
@@ -286,6 +298,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
         
                             let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
                                 .context(FailedToGetRowValueSnafu {
+                                    column: column_name,
                                     mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
                                 })?;
         
@@ -310,7 +323,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         LargeStringBuilder,
                         String,
                         row,
-                        i
+                        i,
+                        column_name
                     );
                 }
                 ColumnType::MYSQL_TYPE_BLOB => {
@@ -324,7 +338,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             LargeBinaryBuilder,
                             Vec<u8>,
                             row,
-                            i
+                            i,
+                            column_name
+                            
                         ),
                         (true, false) => handle_primitive_type!(
                             builder,
@@ -332,7 +348,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             LargeStringBuilder,
                             String,
                             row,
-                            i
+                            i,
+                            column_name
                         ),
                         (false, true) => handle_primitive_type!(
                             builder,
@@ -340,7 +357,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             BinaryBuilder,
                             Vec<u8>,
                             row,
-                            i
+                            i,
+                            column_name
                         ),
                         (false, false) => handle_primitive_type!(
                             builder,
@@ -348,7 +366,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             StringBuilder,
                             String,
                             row,
-                            i
+                            i,
+                            column_name
                         ),
                     }
                 }
@@ -376,6 +395,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
                         let v = handle_null_error(row.get_opt::<String, usize>(i).transpose())
                             .context(FailedToGetRowValueSnafu {
+                                column: column_name,
                                 mysql_type: ColumnType::MYSQL_TYPE_ENUM,
                             })?;
 
@@ -392,7 +412,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             BinaryBuilder,
                             Vec<u8>,
                             row,
-                            i
+                            i,
+                            column_name
                         );
                     } else {
                         handle_primitive_type!(
@@ -401,7 +422,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             StringBuilder,
                             String,
                             row,
-                            i
+                            i,
+                            column_name
                         );
                     }
                 }
@@ -417,6 +439,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
                     let v = handle_null_error(row.get_opt::<NaiveDate, usize>(i).transpose())
                         .context(FailedToGetRowValueSnafu {
+                            column: column_name,
                             mysql_type: ColumnType::MYSQL_TYPE_DATE,
                         })?;
 
@@ -442,6 +465,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
                     let v = handle_null_error(row.get_opt::<NaiveTime, usize>(i).transpose())
                         .context(FailedToGetRowValueSnafu {
+                            column: column_name,
                             mysql_type: ColumnType::MYSQL_TYPE_TIME,
                         })?;
 
@@ -472,6 +496,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     let v =
                         handle_null_error(row.get_opt::<PrimitiveDateTime, usize>(i).transpose())
                             .context(FailedToGetRowValueSnafu {
+                            column: column_name,
                             mysql_type: column_type,
                         })?;
 
