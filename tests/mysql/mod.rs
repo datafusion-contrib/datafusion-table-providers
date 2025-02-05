@@ -487,6 +487,81 @@ INSERT INTO high_precision_decimal (decimal_values) VALUES
     .await;
 }
 
+async fn test_mysql_zero_date_type(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE zero_datetime_test_table (
+            col_date DATE,
+            col_time TIME,
+            col_datetime DATETIME,
+            col_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ";
+
+    let insert_table_stmt = "
+        INSERT INTO zero_datetime_test_table (
+            col_date, col_time, col_datetime, col_timestamp
+        ) 
+        VALUES 
+        -- Real Values
+        ('2023-05-15', '10:00:00', '2024-09-12 10:00:00', '2024-09-12 10:00:00'),
+        -- Null Values
+        (NULL, NULL, NULL, NULL),
+        -- Zero Values
+        ('0000-00-00', '00:00:00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_date", DataType::Date32, true),
+        Field::new("col_time", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new(
+            "col_datetime",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "col_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Date32Array::from(vec![
+                Some(19492), // '2023-05-15'
+                None,        // NULL
+                None,        // '0000-00-00'
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(36000000000000), // '10:00:00'
+                None,                 // NULL
+                Some(0),              // '00:00:00'
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1_726_135_200_000_000), // '2024-09-12 10:00:00'
+                None,                        // NULL
+                None,                        // '0000-00-00 00:00:00'
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1_726_135_200_000_000), // '2024-09-12 10:00:00'
+                None,                        // NULL
+                None,                        // '0000-00-00 00:00:00'
+            ])),
+        ],
+    )
+    .expect("Failed to create expected arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "zero_datetime_test_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn test_mysql_decimal_types_to_decimal128(port: usize) {
     let create_table_stmt = "
         CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
@@ -539,6 +614,15 @@ async fn arrow_mysql_one_way(
         .connect_direct()
         .await
         .expect("Connection should be established");
+
+    // Disable NO_ZERO_DATE and NO_ZERO_IN_DATE (requied for `test_mysql_zero_date_type`)
+    let _ = db_conn
+        .execute(
+            "SET SESSION sql_mode = REPLACE(REPLACE(REPLACE(@@SESSION.sql_mode, 'NO_ZERO_IN_DATE,', ''), 'NO_ZERO_DATE,', ''), 'NO_ZERO_DATE', '')",
+            &[]
+        )
+        .await
+        .expect("SQL mode should be adjusted");
 
     // Create table and insert data into mysql test_table
     let _ = db_conn
@@ -602,6 +686,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_string_types(port).await;
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;
+    test_mysql_zero_date_type(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
