@@ -437,11 +437,22 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                         .fail();
                     };
-                    let v = handle_null_error(row.get_opt::<NaiveDate, usize>(i).transpose())
-                        .context(FailedToGetRowValueSnafu {
-                            column: column_name,
-                            mysql_type: ColumnType::MYSQL_TYPE_DATE,
-                        })?;
+                
+                    let v = match handle_null_error(row.get_opt::<NaiveDate, usize>(i).transpose()) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
+                            if matches!(err, FromValueError(Value::Date(0, 0, 0, 0, 0, 0, 0))) {
+                                None
+                            } else {
+                                return Err(Error::FailedToGetRowValue {
+                                    column: column_name,
+                                    mysql_type: ColumnType::MYSQL_TYPE_DATE,
+                                    source: err,
+                                });
+                            }
+                        }
+                    };
 
                     match v {
                         Some(v) => {
@@ -493,12 +504,21 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                         .fail();
                     };
-                    let v =
-                        handle_null_error(row.get_opt::<PrimitiveDateTime, usize>(i).transpose())
-                            .context(FailedToGetRowValueSnafu {
-                            column: column_name,
-                            mysql_type: column_type,
-                        })?;
+                    let v = match handle_null_error(row.get_opt::<PrimitiveDateTime, usize>(i).transpose()) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
+                            if matches!(err, FromValueError(Value::Date(0, 0, 0, 0, 0, 0, 0))) {
+                                None
+                            } else {
+                                return Err(Error::FailedToGetRowValue {
+                                    column: column_name,
+                                    mysql_type: column_type,
+                                    source: err,
+                                });
+                            }
+                        }
+                    };               
 
                     match v {
                         Some(v) => {
