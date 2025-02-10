@@ -12,7 +12,7 @@ use crate::sql::sql_provider_datafusion::{
     SqlTable,
 };
 use crate::util::schema::SchemaValidator;
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 use arrow::{
     array::RecordBatch,
     datatypes::{Schema, SchemaRef},
@@ -267,7 +267,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         );
 
         let schema: SchemaRef = Arc::new(schema);
-        PostgresConnection::handle_unsupported_schema(&schema, InvalidTypeAction::default())
+        PostgresConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::default())
             .map_err(|e| DataFusionError::External(e.into()))?;
 
         let postgres = Postgres::new(

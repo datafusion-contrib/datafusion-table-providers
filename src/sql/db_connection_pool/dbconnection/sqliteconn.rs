@@ -2,7 +2,7 @@ use std::any::Any;
 
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
 use crate::util::schema::SchemaValidator;
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_trait::async_trait;
@@ -110,7 +110,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Self::handle_unsupported_schema(&schema, InvalidTypeAction::Error)
+        Self::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
     }
 
     async fn query_arrow(

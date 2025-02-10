@@ -18,7 +18,7 @@ use crate::{
         duckdbpool::DuckDbConnectionPool,
         DbConnectionPool, DbInstanceKey, Mode,
     },
-    InvalidTypeAction,
+    UnsupportedTypeAction,
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -129,7 +129,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
 }
 
@@ -139,7 +139,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
         f.debug_struct("DuckDBTableProviderFactory")
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
-            .field("invalid_type_action", &self.invalid_type_action)
+            .field("unsupported_type_action", &self.unsupported_type_action)
             .finish()
     }
 }
@@ -154,14 +154,17 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode,
             instances: Arc::new(Mutex::new(HashMap::new())),
-            invalid_type_action: InvalidTypeAction::Error,
+            unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
         }
     }
 
     #[must_use]
-    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
-        self.invalid_type_action = invalid_type_action;
+    pub fn with_unsupported_type_action(
+        mut self,
+        unsupported_type_action: UnsupportedTypeAction,
+    ) -> Self {
+        self.unsupported_type_action = unsupported_type_action;
         self
     }
 
@@ -219,7 +222,7 @@ impl DuckDBTableProviderFactory {
 
         let pool = DuckDbConnectionPool::new_memory()
             .context(DbConnectionPoolSnafu)?
-            .with_invalid_type_action(self.invalid_type_action);
+            .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -240,7 +243,7 @@ impl DuckDBTableProviderFactory {
 
         let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
             .context(DbConnectionPoolSnafu)?
-            .with_invalid_type_action(self.invalid_type_action);
+            .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -259,7 +262,6 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
                 table_name: cmd.name.to_string(),

@@ -22,7 +22,7 @@ use futures::StreamExt;
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 
 use super::AsyncDbConnection;
 use super::DbConnection;
@@ -131,7 +131,7 @@ pub enum PostgresError {
 
 pub struct PostgresConnection {
     pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl SchemaValidator for PostgresConnection {
@@ -187,7 +187,7 @@ impl<'a>
     ) -> Self {
         PostgresConnection {
             conn,
-            invalid_type_action: InvalidTypeAction::default(),
+            unsupported_type_action: UnsupportedTypeAction::default(),
         }
     }
 
@@ -232,7 +232,7 @@ impl<'a>
             let type_details = row.get::<usize, Option<serde_json::Value>>(3);
             let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, type_details) else {
                 handle_invalid_type_error(
-                    self.invalid_type_action,
+                    self.unsupported_type_action,
                     super::Error::UnsupportedDataType {
                         data_type: pg_type.to_string(),
                         field_name: column_name.to_string(),
@@ -310,8 +310,8 @@ impl<'a>
 
 impl PostgresConnection {
     #[must_use]
-    pub fn with_invalid_type_action(mut self, action: InvalidTypeAction) -> Self {
-        self.invalid_type_action = action;
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
         self
     }
 }

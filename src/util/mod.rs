@@ -6,7 +6,7 @@ use snafu::prelude::*;
 use std::hash::Hash;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{sql::sql_provider_datafusion::expr::Engine, InvalidTypeAction};
+use crate::{sql::sql_provider_datafusion::expr::Engine, UnsupportedTypeAction};
 
 pub mod column_reference;
 pub mod constraints;
@@ -79,28 +79,30 @@ pub fn remove_prefix_from_hashmap_keys<V>(
         .collect()
 }
 
-/// If the `InvalidTypeAction` is `Error`, the function will return an error.
-/// If the `InvalidTypeAction` is `Warn`, the function will log a warning.
-/// If the `InvalidTypeAction` is `Ignore`, the function will do nothing.
+/// If the `UnsupportedTypeAction` is `Error` or `String`, the function will return an error.
+/// If the `UnsupportedTypeAction` is `Warn`, the function will log a warning.
+/// If the `UnsupportedTypeAction` is `Ignore`, the function will do nothing.
 ///
 /// Used in the handling of unsupported schemas to determine if columns are removed or if the function should return an error.
 ///
+/// Components that want to handle `UnsupportedTypeAction::String` via the component's own logic should handle it before calling this function.
+///
 /// # Errors
 ///
-/// If the `InvalidTypeAction` is `Error` the function will return an error.
+/// If the `UnsupportedTypeAction` is `Error` or `String` the function will return an error.
 pub fn handle_invalid_type_error<E>(
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
     error: E,
 ) -> Result<(), E>
 where
     E: std::error::Error + Send + Sync,
 {
-    match invalid_type_action {
-        InvalidTypeAction::Error => return Err(error),
-        InvalidTypeAction::Warn => {
+    match unsupported_type_action {
+        UnsupportedTypeAction::Error | UnsupportedTypeAction::String => return Err(error),
+        UnsupportedTypeAction::Warn => {
             tracing::warn!("{error}");
         }
-        InvalidTypeAction::Ignore => {}
+        UnsupportedTypeAction::Ignore => {}
     };
 
     Ok(())

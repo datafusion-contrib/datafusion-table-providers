@@ -21,7 +21,7 @@ use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
 use crate::util::schema::SchemaValidator;
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 
 use super::DbConnection;
 use super::Result;
@@ -173,7 +173,7 @@ impl DuckDBAttachments {
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
     attachments: Option<Arc<DuckDBAttachments>>,
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl SchemaValidator for DuckDbConnection {
@@ -222,8 +222,8 @@ impl DuckDbConnection {
     }
 
     #[must_use]
-    pub fn with_invalid_type_action(mut self, invalid_type_action: InvalidTypeAction) -> Self {
-        self.invalid_type_action = invalid_type_action;
+    pub fn with_unsupported_type_action(mut self, unsupported_type_action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = unsupported_type_action;
         self
     }
 
@@ -285,7 +285,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         DuckDbConnection {
             conn,
             attachments: None,
-            invalid_type_action: InvalidTypeAction::default(),
+            unsupported_type_action: UnsupportedTypeAction::default(),
         }
     }
 
@@ -306,7 +306,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Self::handle_unsupported_schema(&result.get_schema(), self.invalid_type_action)
+        Self::handle_unsupported_schema(&result.get_schema(), self.unsupported_type_action)
     }
 
     fn query_arrow(
@@ -522,7 +522,7 @@ mod tests {
         let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
 
         let rebuilt_schema =
-            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Error)
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
                 .expect("should rebuild schema successfully");
 
         assert_eq!(schema, rebuilt_schema);
@@ -574,17 +574,18 @@ mod tests {
             Arc::new(SchemaBuilder::from(Fields::from(rebuilt_fields)).finish());
 
         assert!(
-            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Error).is_err()
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
+                .is_err()
         );
 
         let rebuilt_schema =
-            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Warn)
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Warn)
                 .expect("should rebuild schema successfully");
 
         assert_eq!(rebuilt_schema, expected_rebuilt_schema);
 
         let rebuilt_schema =
-            DuckDbConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Ignore)
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Ignore)
                 .expect("should rebuild schema successfully");
 
         assert_eq!(rebuilt_schema, expected_rebuilt_schema);
