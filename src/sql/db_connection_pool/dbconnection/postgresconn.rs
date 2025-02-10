@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
-use crate::util::handle_invalid_type_error;
+use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
+use crate::util::handle_unsupported_type_error;
 use crate::util::schema::SchemaValidator;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
@@ -137,11 +138,11 @@ pub struct PostgresConnection {
 impl SchemaValidator for PostgresConnection {
     type Error = super::Error;
 
-    fn is_data_type_valid(data_type: &DataType) -> bool {
+    fn is_data_type_supported(data_type: &DataType) -> bool {
         !matches!(data_type, DataType::Map(_, _))
     }
 
-    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
         super::Error::UnsupportedDataType {
             data_type: data_type.to_string(),
             field_name: field_name.to_string(),
@@ -230,8 +231,15 @@ impl<'a>
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
             let type_details = row.get::<usize, Option<serde_json::Value>>(3);
-            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, type_details) else {
-                handle_invalid_type_error(
+            let mut context =
+                ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
+
+            if let Some(type_details) = type_details {
+                context = context.with_type_details(type_details);
+            };
+
+            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context) else {
+                handle_unsupported_type_error(
                     self.unsupported_type_action,
                     super::Error::UnsupportedDataType {
                         data_type: pg_type.to_string(),

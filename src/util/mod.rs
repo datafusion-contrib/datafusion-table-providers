@@ -90,7 +90,7 @@ pub fn remove_prefix_from_hashmap_keys<V>(
 /// # Errors
 ///
 /// If the `UnsupportedTypeAction` is `Error` or `String` the function will return an error.
-pub fn handle_invalid_type_error<E>(
+pub fn handle_unsupported_type_error<E>(
     unsupported_type_action: UnsupportedTypeAction,
     error: E,
 ) -> Result<(), E>

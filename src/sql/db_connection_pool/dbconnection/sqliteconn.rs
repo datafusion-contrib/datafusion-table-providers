@@ -38,7 +38,7 @@ pub struct SqliteConnection {
 impl SchemaValidator for SqliteConnection {
     type Error = super::Error;
 
-    fn is_data_type_valid(data_type: &DataType) -> bool {
+    fn is_data_type_supported(data_type: &DataType) -> bool {
         match data_type {
             DataType::Dictionary(_, _) | DataType::Interval(_) | DataType::Map(_, _) => false,
             DataType::List(inner_field)
@@ -56,12 +56,12 @@ impl SchemaValidator for SqliteConnection {
             }
             DataType::Struct(inner_fields) => inner_fields
                 .iter()
-                .all(|field| Self::is_data_type_valid(field.data_type())),
+                .all(|field| Self::is_data_type_supported(field.data_type())),
             _ => true,
         }
     }
 
-    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
         super::Error::UnsupportedDataType {
             data_type: data_type.to_string(),
             field_name: field_name.to_string(),

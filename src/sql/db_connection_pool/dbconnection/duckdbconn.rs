@@ -179,7 +179,7 @@ pub struct DuckDbConnection {
 impl SchemaValidator for DuckDbConnection {
     type Error = super::Error;
 
-    fn is_data_type_valid(data_type: &DataType) -> bool {
+    fn is_data_type_supported(data_type: &DataType) -> bool {
         match data_type {
             DataType::List(inner_field)
             | DataType::FixedSizeList(inner_field, _)
@@ -196,17 +196,17 @@ impl SchemaValidator for DuckDbConnection {
             }
             DataType::Struct(inner_fields) => inner_fields
                 .iter()
-                .all(|field| Self::is_data_type_valid(field.data_type())),
+                .all(|field| Self::is_data_type_supported(field.data_type())),
             _ => true,
         }
     }
 
-    fn is_field_valid(field: &Arc<Field>) -> bool {
+    fn is_field_supported(field: &Arc<Field>) -> bool {
         let duckdb_type_id = to_duckdb_type_id(field.data_type());
-        Self::is_data_type_valid(field.data_type()) && duckdb_type_id.is_ok()
+        Self::is_data_type_supported(field.data_type()) && duckdb_type_id.is_ok()
     }
 
-    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
         super::Error::UnsupportedDataType {
             data_type: data_type.to_string(),
             field_name: field_name.to_string(),
@@ -222,7 +222,10 @@ impl DuckDbConnection {
     }
 
     #[must_use]
-    pub fn with_unsupported_type_action(mut self, unsupported_type_action: UnsupportedTypeAction) -> Self {
+    pub fn with_unsupported_type_action(
+        mut self,
+        unsupported_type_action: UnsupportedTypeAction,
+    ) -> Self {
         self.unsupported_type_action = unsupported_type_action;
         self
     }
@@ -485,7 +488,7 @@ mod tests {
         );
 
         assert!(
-            !DuckDbConnection::is_data_type_valid(field.data_type()),
+            !DuckDbConnection::is_data_type_supported(field.data_type()),
             "list with struct should be unsupported"
         );
     }
@@ -503,7 +506,7 @@ mod tests {
 
         for field in fields {
             assert!(
-                DuckDbConnection::is_data_type_valid(field.data_type()),
+                DuckDbConnection::is_data_type_supported(field.data_type()),
                 "field should be supported"
             );
         }

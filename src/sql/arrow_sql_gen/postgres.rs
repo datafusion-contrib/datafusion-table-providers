@@ -319,7 +319,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         None => builder.append_null(),
                     }
                 }
-                Type::JSON => {
+                // Schema validation will only allow JSONB columns when `UnsupportedTypeAction` is set to `String`, so it is safe to handle JSONB here as strings.
+                Type::JSON | Type::JSONB => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
                     };
@@ -332,7 +333,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
                     let v = row.try_get::<usize, Option<Value>>(i).with_context(|_| {
                         FailedToGetRowValueSnafu {
-                            pg_type: Type::JSON,
+                            pg_type: postgres_type.clone(),
                         }
                     })?;
 
@@ -843,7 +844,8 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Ok(Some(DataType::Utf8)),
         Type::BYTEA => Ok(Some(DataType::Binary)),
         Type::BOOL => Ok(Some(DataType::Boolean)),
-        Type::JSON => Ok(Some(DataType::LargeUtf8)),
+        // Schema validation will only allow JSONB columns when `UnsupportedTypeAction` is set to `String`, so it is safe to handle JSONB here as strings.
+        Type::JSON | Type::JSONB => Ok(Some(DataType::LargeUtf8)),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
         Type::NUMERIC => Ok(None),
         Type::TIMESTAMPTZ => Ok(Some(DataType::Timestamp(
