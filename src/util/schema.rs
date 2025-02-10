@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::handle_invalid_type_error;
+use super::handle_unsupported_type_error;
 use crate::UnsupportedTypeAction;
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion::arrow::datatypes::SchemaRef;
@@ -12,17 +12,18 @@ pub trait SchemaValidator {
     type Error: std::error::Error + Send + Sync;
 
     #[must_use]
-    fn is_field_valid(field: &Arc<Field>) -> bool {
-        Self::is_data_type_valid(field.data_type())
+    fn is_field_supported(field: &Arc<Field>) -> bool {
+        Self::is_data_type_supported(field.data_type())
     }
 
     #[must_use]
-    fn is_schema_valid(schema: &SchemaRef) -> bool {
-        schema.fields.iter().all(Self::is_field_valid)
+    fn is_schema_supported(schema: &SchemaRef) -> bool {
+        schema.fields.iter().all(Self::is_field_supported)
     }
 
-    fn is_data_type_valid(data_type: &DataType) -> bool;
-    fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error;
+    fn is_data_type_supported(data_type: &DataType) -> bool;
+
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error;
 
     /// For a given input schema, rebuild it according to the `UnsupportedTypeAction`.
     /// Implemented for a specific connection type, that connection determines which types it supports.
@@ -41,12 +42,12 @@ pub trait SchemaValidator {
     ) -> Result<SchemaRef, Self::Error> {
         let mut schema_builder = SchemaBuilder::new();
         for field in &schema.fields {
-            if Self::is_field_valid(field) {
+            if Self::is_field_supported(field) {
                 schema_builder.push(Arc::clone(field));
             } else {
-                handle_invalid_type_error(
+                handle_unsupported_type_error(
                     unsupported_type_action,
-                    Self::invalid_type_error(field.data_type(), field.name()),
+                    Self::unsupported_type_error(field.data_type(), field.name()),
                 )?;
             }
         }
