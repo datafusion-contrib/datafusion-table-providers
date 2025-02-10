@@ -12,7 +12,7 @@ use crate::{
         dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
         JoinPushDown,
     },
-    InvalidTypeAction,
+    UnsupportedTypeAction,
 };
 
 #[derive(Debug, Snafu)]
@@ -38,7 +38,7 @@ pub struct DuckDbConnectionPool {
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
     mode: Mode,
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl std::fmt::Debug for DuckDbConnectionPool {
@@ -48,7 +48,7 @@ impl std::fmt::Debug for DuckDbConnectionPool {
             .field("join_push_down", &self.join_push_down)
             .field("attached_databases", &self.attached_databases)
             .field("mode", &self.mode)
-            .field("invalid_type_action", &self.invalid_type_action)
+            .field("unsupported_type_action", &self.unsupported_type_action)
             .finish()
     }
 }
@@ -86,7 +86,7 @@ impl DuckDbConnectionPool {
             join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
             attached_databases: Vec::new(),
             mode: Mode::Memory,
-            invalid_type_action: InvalidTypeAction::Error,
+            unsupported_type_action: UnsupportedTypeAction::Error,
         })
     }
 
@@ -124,13 +124,13 @@ impl DuckDbConnectionPool {
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
             mode: Mode::File,
-            invalid_type_action: InvalidTypeAction::Error,
+            unsupported_type_action: UnsupportedTypeAction::Error,
         })
     }
 
     #[must_use]
-    pub fn with_invalid_type_action(mut self, action: InvalidTypeAction) -> Self {
-        self.invalid_type_action = action;
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
         self
     }
 
@@ -168,7 +168,7 @@ impl DuckDbConnectionPool {
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
-                .with_invalid_type_action(self.invalid_type_action),
+                .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 
@@ -211,7 +211,7 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
-                .with_invalid_type_action(self.invalid_type_action),
+                .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 

@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use crate::{
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
-    InvalidTypeAction,
+    UnsupportedTypeAction,
 };
 use async_trait::async_trait;
 use bb8::ErrorSink;
@@ -82,7 +82,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct PostgresConnectionPool {
     pool: Arc<bb8::Pool<PostgresConnectionManager<MakeTlsConnector>>>,
     join_push_down: JoinPushDown,
-    invalid_type_action: InvalidTypeAction,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl PostgresConnectionPool {
@@ -208,14 +208,14 @@ impl PostgresConnectionPool {
         Ok(PostgresConnectionPool {
             pool: Arc::new(pool.clone()),
             join_push_down,
-            invalid_type_action: InvalidTypeAction::default(),
+            unsupported_type_action: UnsupportedTypeAction::default(),
         })
     }
 
     /// Specify the action to take when an invalid type is encountered.
     #[must_use]
-    pub fn with_invalid_type_action(mut self, action: InvalidTypeAction) -> Self {
-        self.invalid_type_action = action;
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
         self
     }
 
@@ -385,7 +385,7 @@ impl
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_owned().await.context(ConnectionPoolRunSnafu)?;
         Ok(Box::new(
-            PostgresConnection::new(conn).with_invalid_type_action(self.invalid_type_action),
+            PostgresConnection::new(conn).with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::handle_invalid_type_error;
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion::arrow::datatypes::SchemaRef;
 
@@ -24,18 +24,20 @@ pub trait SchemaValidator {
     fn is_data_type_valid(data_type: &DataType) -> bool;
     fn invalid_type_error(data_type: &DataType, field_name: &str) -> Self::Error;
 
-    /// For a given input schema, rebuild it according to the `InvalidTypeAction`.
+    /// For a given input schema, rebuild it according to the `UnsupportedTypeAction`.
     /// Implemented for a specific connection type, that connection determines which types it supports.
-    /// If the `InvalidTypeAction` is `Error`, the function will return an error if the schema contains an unsupported data type.
-    /// If the `InvalidTypeAction` is `Warn`, the function will log a warning if the schema contains an unsupported data type and remove the column.
-    /// If the `InvalidTypeAction` is `Ignore`, the function will remove the column silently.
+    /// If the `UnsupportedTypeAction` is `Error`/`String`, the function will return an error if the schema contains an unsupported data type.
+    /// If the `UnsupportedTypeAction` is `Warn`, the function will log a warning if the schema contains an unsupported data type and remove the column.
+    /// If the `UnsupportedTypeAction` is `Ignore`, the function will remove the column silently.
+    ///
+    /// Components that want to handle `UnsupportedTypeAction::String` via the component's own logic should re-implement this trait function.
     ///
     /// # Errors
     ///
-    /// If the `InvalidTypeAction` is `Error` and the schema contains an unsupported data type, the function will return an error.
+    /// If the `UnsupportedTypeAction` is `Error` or `String` and the schema contains an unsupported data type, the function will return an error.
     fn handle_unsupported_schema(
         schema: &SchemaRef,
-        invalid_type_action: InvalidTypeAction,
+        unsupported_type_action: UnsupportedTypeAction,
     ) -> Result<SchemaRef, Self::Error> {
         let mut schema_builder = SchemaBuilder::new();
         for field in &schema.fields {
@@ -43,7 +45,7 @@ pub trait SchemaValidator {
                 schema_builder.push(Arc::clone(field));
             } else {
                 handle_invalid_type_error(
-                    invalid_type_action,
+                    unsupported_type_action,
                     Self::invalid_type_error(field.data_type(), field.name()),
                 )?;
             }

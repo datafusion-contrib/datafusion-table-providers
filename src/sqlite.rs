@@ -10,7 +10,7 @@ use crate::sql::db_connection_pool::{
 };
 use crate::sql::sql_provider_datafusion;
 use crate::util::schema::SchemaValidator;
-use crate::InvalidTypeAction;
+use crate::UnsupportedTypeAction;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -299,7 +299,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let schema: SchemaRef =
-            SqliteConnection::handle_unsupported_schema(&schema, InvalidTypeAction::Error)
+            SqliteConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
                 .map_err(|e| DataFusionError::External(e.into()))?;
 
         let sqlite = Arc::new(Sqlite::new(
