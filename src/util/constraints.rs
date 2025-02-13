@@ -4,6 +4,7 @@ use datafusion::{
     execution::context::SessionContext,
     functions_aggregate::count::count,
     logical_expr::{col, lit, utils::COUNT_STAR_EXPANSION},
+    prelude::ident,
 };
 use futures::future;
 use snafu::prelude::*;
@@ -69,7 +70,7 @@ async fn validate_batch_with_constraint(
     // ```
     let num_rows = df
         .aggregate(
-            unique_fields.iter().map(|f| col(f.name())).collect(),
+            unique_fields.iter().map(|f| ident(f.name())).collect(),
             vec![count(lit(COUNT_STAR_EXPANSION))],
         )
         .context(DataFusionSnafu)?
@@ -122,7 +123,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_validate_batch_with_constraints() -> Result<(), Box<dyn std::error::Error>> {
-        let parquet_bytes = reqwest::get("https://public-data.spiceai.org/eth.recent_logs.parquet")
+        let parquet_bytes = reqwest::get("https://public-data.spiceai.org/taxi_sample.parquet")
             .await?
             .bytes()
             .await?;
@@ -132,8 +133,10 @@ pub(crate) mod tests {
         let records = parquet_reader.collect::<Result<Vec<_>, arrow::error::ArrowError>>()?;
         let schema = records[0].schema();
 
-        let constraints =
-            get_unique_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
+        let constraints = get_unique_constraints(
+            &["VendorID", "tpep_pickup_datetime", "PULocationID"],
+            Arc::clone(&schema),
+        );
 
         let result = super::validate_batch_with_constraints(&records, &constraints).await;
         assert!(
@@ -142,21 +145,21 @@ pub(crate) mod tests {
             result.expect_err("this returned an error")
         );
 
-        let invalid_constraints = get_unique_constraints(&["block_number"], Arc::clone(&schema));
+        let invalid_constraints = get_unique_constraints(&["VendorID"], Arc::clone(&schema));
         let result = super::validate_batch_with_constraints(&records, &invalid_constraints).await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
-            "Incoming data violates uniqueness constraint on column(s): block_number"
+            "Incoming data violates uniqueness constraint on column(s): VendorID"
         );
 
         let invalid_constraints =
-            get_unique_constraints(&["block_number", "transaction_hash"], Arc::clone(&schema));
+            get_unique_constraints(&["VendorID", "tpep_pickup_datetime"], Arc::clone(&schema));
         let result = super::validate_batch_with_constraints(&records, &invalid_constraints).await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
-            "Incoming data violates uniqueness constraint on column(s): block_number, transaction_hash"
+            "Incoming data violates uniqueness constraint on column(s): VendorID, tpep_pickup_datetime"
         );
 
         Ok(())
