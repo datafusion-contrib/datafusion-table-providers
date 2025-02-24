@@ -80,6 +80,8 @@ impl DuckDbConnectionPool {
 
         test_connection(&conn)?;
 
+        conn.execute("INSTALL core_functions;", []).context(DuckDBConnectionSnafu)?;
+
         Ok(DuckDbConnectionPool {
             path: ":memory:".into(),
             pool,
@@ -116,6 +118,8 @@ impl DuckDbConnectionPool {
             .context(DuckDBConnectionSnafu)?;
 
         test_connection(&conn)?;
+
+        conn.execute("INSTALL core_functions;", []).context(DuckDBConnectionSnafu)?;
 
         Ok(DuckDbConnectionPool {
             path: path.into(),
