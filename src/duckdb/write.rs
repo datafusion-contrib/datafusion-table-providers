@@ -154,14 +154,15 @@ impl DataSink for DuckDBDataSink {
                     .context(super::UnableToBeginTransactionSnafu)
                     .map_err(to_datafusion_error)?;
 
-                let num_rows = match (overwrite, on_conflict) {
-                    (InsertOp::Append, Some(on_conflict)) => try_append_with_conflict_resolution(
+                let num_rows = match **duckdb.constraints() {
+                    [] => try_write_all_no_constraints(duckdb, &tx, batch_rx, overwrite)?,
+                    _ => try_write_all_with_constraints(
                         duckdb,
                         &tx,
                         batch_rx,
+                        overwrite,
                         on_conflict,
                     )?,
-                    _ => try_write_all(duckdb, &tx, batch_rx, overwrite)?,
                 };
 
                 on_commit_transaction
@@ -248,13 +249,17 @@ impl DisplayAs for DuckDBDataSink {
         write!(f, "DuckDBDataSink")
     }
 }
-/// If the target table defines conflict resolution for constraints, create an empty copy of the target table,
-/// write to that table copy and insert into the target table using the defined conflict resolution strategy.
-fn try_append_with_conflict_resolution(
+
+/// If there are constraints on the `DuckDB` table, we need to create an empty copy of the target table, write to that table copy and then depending on
+/// if the mode is overwrite or not, insert into the target table or drop the target table and rename the current table.
+///
+/// See: <https://duckdb.org/docs/sql/indexes#over-eager-unique-constraint-checking>
+fn try_write_all_with_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
-    on_conflict: OnConflict,
+    overwrite: InsertOp,
+    on_conflict: Option<OnConflict>,
 ) -> datafusion::common::Result<u64> {
     // We want to clone the current table into our insert table
     let Some(ref orig_table_creator) = duckdb.table_creator else {
@@ -280,22 +285,28 @@ fn try_append_with_conflict_resolution(
 
         tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
         insert_table
-            .insert_batch(tx, &batch)
+            .insert_batch_no_constraints(tx, &batch)
             .map_err(to_datafusion_error)?;
     }
-    
-    insert_table
-        .insert_table_into(tx, &duckdb, Some(&on_conflict))
-        .map_err(to_datafusion_error)?;
-    insert_table_creator
-        .delete_table(tx)
-        .map_err(to_datafusion_error)?;
+
+    if matches!(overwrite, InsertOp::Overwrite) {
+        insert_table_creator
+            .replace_table(tx, orig_table_creator)
+            .map_err(to_datafusion_error)?;
+    } else {
+        insert_table
+            .insert_table_into(tx, &duckdb, on_conflict.as_ref())
+            .map_err(to_datafusion_error)?;
+        insert_table_creator
+            .delete_table(tx)
+            .map_err(to_datafusion_error)?;
+    }
 
     Ok(num_rows)
 }
 
-/// Perform single transaction write to a table w/o conflict resolution.
-fn try_write_all(
+/// If there are no constraints on the `DuckDB` table, we can do a simple single transaction write.
+fn try_write_all_no_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
@@ -318,7 +329,7 @@ fn try_write_all(
         tracing::debug!("Inserting {} rows into table.", batch.num_rows());
 
         duckdb
-            .insert_batch(tx, &batch)
+            .insert_batch_no_constraints(tx, &batch)
             .map_err(to_datafusion_error)?;
     }
 
