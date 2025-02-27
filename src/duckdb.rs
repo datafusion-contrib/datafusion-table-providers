@@ -483,6 +483,8 @@ impl DuckDB {
                 .context(UnableToInsertToDuckDBTableSnafu)?;
         }
 
+        appender.flush().context(UnableToInsertToDuckDBTableSnafu)?;
+
         Ok(())
     }
 
