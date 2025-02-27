@@ -18,7 +18,7 @@ base64 = { version = "0.22.1", optional = true }
 bytes = { version = "1.7.1", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
-chrono = "0.4.38"
+chrono = "=0.4.39"
 datafusion = "43"
 datafusion-expr = { version = "43", optional = true }
 datafusion-physical-expr = { version = "43", optional = true }
