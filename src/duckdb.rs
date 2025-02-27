@@ -468,7 +468,7 @@ impl DuckDB {
         Ok(())
     }
 
-    fn insert_batch(
+    fn insert_batch_no_constraints(
         &self,
         transaction: &Transaction<'_>,
         batch: &RecordBatch,
