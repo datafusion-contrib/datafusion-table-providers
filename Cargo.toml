@@ -132,6 +132,7 @@ postgres = [
 postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
 sqlite-federation = ["sqlite", "federation"]
+sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 
 [[example]]
 name = "odbc_sqlite"
