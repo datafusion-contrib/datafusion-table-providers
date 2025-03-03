@@ -103,8 +103,8 @@ impl TableProvider for DuckDBTableWriter {
                 Arc::clone(&self.duckdb),
                 op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
+                self.schema(),
             )),
-            self.schema(),
             None,
         )) as _)
     }
@@ -115,6 +115,7 @@ pub(crate) struct DuckDBDataSink {
     duckdb: Arc<DuckDB>,
     overwrite: bool,
     on_conflict: Option<OnConflict>,
+    schema: SchemaRef,
 }
 
 #[async_trait]
@@ -125,6 +126,10 @@ impl DataSink for DuckDBDataSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(
@@ -235,11 +240,13 @@ impl DuckDBDataSink {
         duckdb: Arc<DuckDB>,
         overwrite: bool,
         on_conflict: Option<OnConflict>,
+        schema: SchemaRef,
     ) -> Self {
         Self {
             duckdb,
             overwrite,
             on_conflict,
+            schema,
         }
     }
 }
