@@ -405,7 +405,7 @@ pub(crate) mod tests {
             let arc_created_table = Arc::new(created_table);
 
             let duckdb_sink =
-                DuckDBDataSink::new(arc_created_table, *overwrite, None, schema.clone());
+                DuckDBDataSink::new(arc_created_table, *overwrite, None, Arc::clone(&schema));
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
@@ -462,7 +462,7 @@ pub(crate) mod tests {
             let arc_created_table = Arc::new(created_table);
 
             let duckdb_sink =
-                DuckDBDataSink::new(arc_created_table, *overwrite, None, schema.clone());
+                DuckDBDataSink::new(arc_created_table, *overwrite, None, Arc::clone(&schema));
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
