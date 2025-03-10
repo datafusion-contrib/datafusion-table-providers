@@ -122,6 +122,12 @@ pub enum Error {
         "Failed to create '{table_name}': creating a table with a schema is not supported"
     ))]
     TableWithSchemaCreationNotSupported { table_name: String },
+
+    #[snafu(display("Failed to parse memory_limit value '{value}': {source}\nProvide a valid value, e.g. '2GB', '512MiB' (expected: KB, MB, GB, TB for 1000^i units or KiB, MiB, GiB, TiB for 1024^i units)"))]
+    UnableToParseMemoryLimit {
+        value: String,
+        source: byte_unit::ParseError,
+    },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -341,6 +347,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .map_err(to_datafusion_error)?;
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
+
+        if let Some(memory_limit) = options.get("memory_limit") {
+            apply_memory_limit(&dyn_pool, memory_limit).await?;
+        }
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
@@ -601,4 +611,28 @@ fn create_table_function_view_name(table_reference: &TableReference) -> TableRef
     .flatten()
     .join(".");
     TableReference::from(&tbl_ref_view)
+}
+
+async fn apply_memory_limit(
+    pool: &Arc<DynDuckDbConnectionPool>,
+    memory_limit: &str,
+) -> DataFusionResult<()> {
+    tracing::debug!("Setting DuckDB memory limit to {memory_limit}");
+
+    if let Err(err) = byte_unit::Byte::parse_str(memory_limit, true) {
+        return Err(to_datafusion_error(Error::UnableToParseMemoryLimit {
+            value: memory_limit.to_string(),
+            source: err,
+        }));
+    }
+
+    let db_conn = pool.connect().await?;
+    let Some(conn) = db_conn.as_sync() else {
+        // should never happen
+        return Err(to_datafusion_error(Error::DbConnectionError {
+            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
+        }));
+    };
+    conn.execute(&format!("SET memory_limit = '{memory_limit}'"), &[])?;
+    Ok(())
 }

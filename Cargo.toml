@@ -16,6 +16,7 @@ async-trait = "0.1.80"
 num-bigint = "0.4.4"
 base64 = { version = "0.22.1", optional = true }
 bytes = { version = "1.7.1", optional = true }
+byte-unit = { version = "5.1.4", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
 # pending next arrow-rs release which resolves chrono's quarter() conflict https://github.com/apache/arrow-rs/commit/2fddf85afcd20110ce783ed5b4cdeb82293da30b 
@@ -82,7 +83,7 @@ insta = { version = "1.40.0", features = ["filters"] }
 mysql = ["dep:mysql_async", "dep:async-stream"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream", "dep:arrow-schema"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
-duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream", "dep:arrow-schema"]
+duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream", "dep:arrow-schema", "dep:byte-unit"]
 flight = [
   "dep:arrow-array",
   "dep:arrow-flight",
