@@ -41,7 +41,7 @@ rand = "0.8.5"
 r2d2 = { version = "0.8.10", optional = true }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
-secrecy = "0.8.0"
+secrecy = "0.10.3"
 serde = { version = "1.0.209", features = ["derive"] }
 serde_json = "1.0.124"
 snafu = "0.8.3"
@@ -71,7 +71,7 @@ anyhow = "1.0.86"
 bollard = "0.16.1"
 rand = "0.8.5"
 reqwest = "0.12.5"
-secrecy = "0.8.0"
+secrecy = "0.10.3"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 test-log = { version = "0.2.16", features = ["trace"] }
 rstest = "0.22.0"
