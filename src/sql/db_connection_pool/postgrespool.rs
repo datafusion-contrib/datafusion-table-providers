@@ -12,7 +12,7 @@ use bb8_postgres::{
 };
 use native_tls::{Certificate, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
-use secrecy::{ExposeSecret, SecretBox, SecretString};
+use secrecy::{ExposeSecret, Secret, SecretString};
 use snafu::{prelude::*, ResultExt};
 use tokio_postgres;
 
@@ -99,11 +99,10 @@ impl PostgresConnectionPool {
         let mut ssl_mode = "verify-full".to_string();
         let mut ssl_rootcert_path: Option<PathBuf> = None;
 
-        if let Some(pg_connection_string) = params
-            .get("connection_string")
-            .map(SecretBox::expose_secret)
+        if let Some(pg_connection_string) =
+            params.get("connection_string").map(Secret::expose_secret)
         {
-            let (str, mode, cert_path) = parse_connection_string(pg_connection_string);
+            let (str, mode, cert_path) = parse_connection_string(pg_connection_string.as_str());
             connection_string = str;
             ssl_mode = mode;
             if let Some(cert_path) = cert_path {
@@ -115,24 +114,24 @@ impl PostgresConnectionPool {
                 ssl_rootcert_path = Some(PathBuf::from(sslrootcert));
             }
         } else {
-            if let Some(pg_host) = params.get("host").map(SecretBox::expose_secret) {
+            if let Some(pg_host) = params.get("host").map(Secret::expose_secret) {
                 connection_string.push_str(format!("host={pg_host} ").as_str());
             }
-            if let Some(pg_user) = params.get("user").map(SecretBox::expose_secret) {
+            if let Some(pg_user) = params.get("user").map(Secret::expose_secret) {
                 connection_string.push_str(format!("user={pg_user} ").as_str());
             }
-            if let Some(pg_db) = params.get("db").map(SecretBox::expose_secret) {
+            if let Some(pg_db) = params.get("db").map(Secret::expose_secret) {
                 connection_string.push_str(format!("dbname={pg_db} ").as_str());
             }
-            if let Some(pg_pass) = params.get("pass").map(SecretBox::expose_secret) {
+            if let Some(pg_pass) = params.get("pass").map(Secret::expose_secret) {
                 connection_string.push_str(format!("password={pg_pass} ").as_str());
             }
-            if let Some(pg_port) = params.get("port").map(SecretBox::expose_secret) {
+            if let Some(pg_port) = params.get("port").map(Secret::expose_secret) {
                 connection_string.push_str(format!("port={pg_port} ").as_str());
             }
         }
 
-        if let Some(pg_sslmode) = params.get("sslmode").map(SecretBox::expose_secret) {
+        if let Some(pg_sslmode) = params.get("sslmode").map(Secret::expose_secret) {
             match pg_sslmode.to_lowercase().as_str() {
                 "disable" | "require" | "prefer" | "verify-ca" | "verify-full" => {
                     ssl_mode = pg_sslmode.to_string();
@@ -145,7 +144,7 @@ impl PostgresConnectionPool {
                 }
             }
         }
-        if let Some(pg_sslrootcert) = params.get("sslrootcert").map(SecretBox::expose_secret) {
+        if let Some(pg_sslrootcert) = params.get("sslrootcert").map(Secret::expose_secret) {
             ensure!(
                 std::path::Path::new(pg_sslrootcert).exists(),
                 InvalidRootCertPathSnafu {
@@ -186,7 +185,7 @@ impl PostgresConnectionPool {
         let mut connection_pool_size = 10; // The BB8 default is 10
         if let Some(pg_pool_size) = params
             .get("connection_pool_size")
-            .map(SecretBox::expose_secret)
+            .map(Secret::expose_secret)
         {
             connection_pool_size = pg_pool_size.parse().context(InvalidIntegerParameterSnafu {
                 parameter_name: "pool_size".to_string(),
@@ -386,8 +385,7 @@ impl
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_owned().await.context(ConnectionPoolRunSnafu)?;
         Ok(Box::new(
-            PostgresConnection::new(conn)
-                .with_unsupported_type_action(self.unsupported_type_action),
+            PostgresConnection::new(conn).with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 
