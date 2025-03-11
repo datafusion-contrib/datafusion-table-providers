@@ -8,7 +8,7 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [dependencies]
-arrow-flight = { version = "54", optional = true, features = [
+arrow-flight = { version = "54.2.1", optional = true, features = [
   "flight-sql-experimental",
   "tls",
 ] }
