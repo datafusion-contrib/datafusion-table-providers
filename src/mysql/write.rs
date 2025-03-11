@@ -85,8 +85,8 @@ impl TableProvider for MySQLTableWriter {
                 Arc::clone(&self.mysql),
                 op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
+                self.schema(),
             )),
-            self.schema(),
             None,
         )))
     }
@@ -96,6 +96,7 @@ pub struct MySQLDataSink {
     pub mysql: Arc<MySQL>,
     pub overwrite: bool,
     pub on_conflict: Option<OnConflict>,
+    schema: SchemaRef,
 }
 
 #[async_trait]
@@ -106,6 +107,10 @@ impl DataSink for MySQLDataSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(
@@ -168,11 +173,17 @@ impl DataSink for MySQLDataSink {
 }
 
 impl MySQLDataSink {
-    pub fn new(mysql: Arc<MySQL>, overwrite: bool, on_conflict: Option<OnConflict>) -> Self {
+    pub fn new(
+        mysql: Arc<MySQL>,
+        overwrite: bool,
+        on_conflict: Option<OnConflict>,
+        schema: SchemaRef,
+    ) -> Self {
         Self {
             mysql,
             overwrite,
             on_conflict,
+            schema,
         }
     }
 }
