@@ -92,8 +92,8 @@ impl TableProvider for PostgresTableWriter {
                 Arc::clone(&self.postgres),
                 op == InsertOp::Overwrite,
                 self.on_conflict.clone(),
+                self.schema(),
             )),
-            self.schema(),
             None,
         )) as _)
     }
@@ -104,6 +104,7 @@ struct PostgresDataSink {
     postgres: Arc<Postgres>,
     overwrite: bool,
     on_conflict: Option<OnConflict>,
+    schema: SchemaRef,
 }
 
 #[async_trait]
@@ -114,6 +115,10 @@ impl DataSink for PostgresDataSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(
@@ -174,11 +179,17 @@ impl DataSink for PostgresDataSink {
 }
 
 impl PostgresDataSink {
-    fn new(postgres: Arc<Postgres>, overwrite: bool, on_conflict: Option<OnConflict>) -> Self {
+    fn new(
+        postgres: Arc<Postgres>,
+        overwrite: bool,
+        on_conflict: Option<OnConflict>,
+        schema: SchemaRef,
+    ) -> Self {
         Self {
             postgres,
             overwrite,
             on_conflict,
+            schema,
         }
     }
 }
