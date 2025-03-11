@@ -19,7 +19,7 @@ bb8 = { version = "0.9", optional = true }
 bb8-postgres = { version = "0.9", optional = true }
 bigdecimal = "0.4"
 byteorder = "1.5.0"
-chrono = ">= 0.4.34, < 0.4.40"
+chrono = "0.4"
 dashmap = "6.1.0"
 datafusion = { version = "45", default-features = false }
 datafusion-federation = { version = "=0.3.6", features = [
