@@ -325,6 +325,7 @@ pub(crate) mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::{
         execution::{SendableRecordBatchStream, TaskContext},
+        logical_expr::dml::InsertOp,
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
         physical_plan::{insert::DataSink, memory::MemoryStream},
     };
@@ -374,7 +375,7 @@ pub(crate) mod tests {
 
         let schema = batches[0].schema();
 
-        for overwrite in &[false, true] {
+        for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
             let constraints =
                 get_unique_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
@@ -438,7 +439,7 @@ pub(crate) mod tests {
 
         let schema = batches[0].schema();
 
-        for overwrite in &[false, true] {
+        for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
             let constraints =
                 get_pk_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));

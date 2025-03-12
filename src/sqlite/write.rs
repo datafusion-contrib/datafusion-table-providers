@@ -91,7 +91,7 @@ impl TableProvider for SqliteTableWriter {
             input,
             Arc::new(SqliteDataSink::new(
                 Arc::clone(&self.sqlite),
-                op == InsertOp::Overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),
@@ -103,7 +103,7 @@ impl TableProvider for SqliteTableWriter {
 #[derive(Clone)]
 struct SqliteDataSink {
     sqlite: Arc<Sqlite>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
 }
@@ -181,7 +181,7 @@ impl DataSink for SqliteDataSink {
             .call(move |conn| {
                 let transaction = conn.transaction()?;
 
-                if overwrite {
+                if matches!(overwrite, InsertOp::Overwrite) {
                     sqlite.delete_all_table_data(&transaction)?;
                 }
 
@@ -203,7 +203,23 @@ impl DataSink for SqliteDataSink {
             })
             .await
             .context(super::UnableToInsertIntoTableAsyncSnafu)
-            .map_err(to_retriable_data_write_error)?;
+            .map_err(|e| {
+                if let super::Error::UnableToInsertIntoTableAsync {
+                    source:
+                        tokio_rusqlite::Error::Rusqlite(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error {
+                                code: rusqlite::ffi::ErrorCode::DiskFull,
+                                ..
+                            },
+                            _,
+                        )),
+                } = e
+                {
+                    DataFusionError::External(super::Error::DiskFull {}.into())
+                } else {
+                    to_retriable_data_write_error(e)
+                }
+            })?;
 
         let num_rows = task.await.map_err(to_retriable_data_write_error)??;
 
@@ -214,7 +230,7 @@ impl DataSink for SqliteDataSink {
 impl SqliteDataSink {
     fn new(
         sqlite: Arc<Sqlite>,
-        overwrite: bool,
+        overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
     ) -> Self {
@@ -279,7 +295,7 @@ mod tests {
             options: HashMap::new(),
             constraints: Constraints::empty(),
             column_defaults: HashMap::default(),
-            temporary: true,
+            temporary: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()

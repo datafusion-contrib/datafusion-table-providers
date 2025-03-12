@@ -4,12 +4,16 @@ use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
+use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
+use crate::util::handle_unsupported_type_error;
+use crate::util::schema::SchemaValidator;
+use arrow::datatypes::Field;
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
+use arrow_schema::DataType;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
 use bb8_postgres::PostgresConnectionManager;
-use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -19,11 +23,13 @@ use futures::StreamExt;
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 
+use crate::UnsupportedTypeAction;
+
 use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
 
-const SCHEMA_QUERY: &str = r#"
+const SCHEMA_QUERY: &str = r"
 WITH custom_type_details AS (
 SELECT 
 t.typname,
@@ -107,41 +113,54 @@ c.table_schema = $1
 AND c.table_name = $2
 ORDER BY 
 c.ordinal_position;
-"#;
+";
 
-const SCHEMAS_QUERY: &str = r#"
+const SCHEMAS_QUERY: &str = "
 SELECT nspname AS schema_name
 FROM pg_namespace
 WHERE nspname NOT IN ('pg_catalog', 'information_schema')
   AND nspname !~ '^pg_toast';
-"#;
+";
 
-const TABLES_QUERY: &str = r#"
+const TABLES_QUERY: &str = "
 SELECT tablename
 FROM pg_tables
 WHERE schemaname = $1;
-"#;
+";
 
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
-    #[snafu(display("{source}"))]
+    #[snafu(display(
+        "Query execution failed.\n{source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
+    ))]
     QueryError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("Failed to convert query result to Arrow: {source}"))]
+    #[snafu(display("Failed to convert query result to Arrow.\n{source}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError {
         source: crate::sql::arrow_sql_gen::postgres::Error,
-    },
-
-    #[snafu(display("{source}"))]
-    InternalError {
-        source: tokio_postgres::error::Error,
     },
 }
 
 pub struct PostgresConnection {
     pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
+    unsupported_type_action: UnsupportedTypeAction,
+}
+
+impl SchemaValidator for PostgresConnection {
+    type Error = super::Error;
+
+    fn is_data_type_supported(data_type: &DataType) -> bool {
+        !matches!(data_type, DataType::Map(_, _))
+    }
+
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl<'a>
@@ -180,7 +199,10 @@ impl<'a>
     fn new(
         conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
     ) -> Self {
-        PostgresConnection { conn }
+        PostgresConnection {
+            conn,
+            unsupported_type_action: UnsupportedTypeAction::default(),
+        }
     }
 
     async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
@@ -244,9 +266,25 @@ impl<'a>
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
             let type_details = row.get::<usize, Option<serde_json::Value>>(3);
-            let arrow_type = pg_data_type_to_arrow_type(&pg_type, type_details)
-                .boxed()
-                .context(super::UnableToGetSchemaSnafu)?;
+            let mut context =
+                ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
+
+            if let Some(type_details) = type_details {
+                context = context.with_type_details(type_details);
+            };
+
+            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context) else {
+                handle_unsupported_type_error(
+                    self.unsupported_type_action,
+                    super::Error::UnsupportedDataType {
+                        data_type: pg_type.to_string(),
+                        field_name: column_name.to_string(),
+                    },
+                )?;
+
+                continue;
+            };
+
             fields.push(Field::new(column_name, arrow_type, nullable));
         }
 
@@ -310,5 +348,13 @@ impl<'a>
 
     async fn execute(&self, sql: &str, params: &[&'a (dyn ToSql + Sync)]) -> Result<u64> {
         Ok(self.conn.execute(sql, params).await?)
+    }
+}
+
+impl PostgresConnection {
+    #[must_use]
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
+        self
     }
 }

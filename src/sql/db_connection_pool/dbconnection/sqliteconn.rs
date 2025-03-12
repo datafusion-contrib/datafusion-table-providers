@@ -1,8 +1,11 @@
 use std::any::Any;
 
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
+use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
+use arrow::datatypes::SchemaRef;
+use arrow_schema::DataType;
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::sql::TableReference;
@@ -30,6 +33,40 @@ pub enum Error {
 
 pub struct SqliteConnection {
     pub conn: Connection,
+}
+
+impl SchemaValidator for SqliteConnection {
+    type Error = super::Error;
+
+    fn is_data_type_supported(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Dictionary(_, _) | DataType::Interval(_) | DataType::Map(_, _) => false,
+            DataType::List(inner_field)
+            | DataType::FixedSizeList(inner_field, _)
+            | DataType::LargeList(inner_field) => {
+                match inner_field.data_type() {
+                    dt if dt.is_primitive() => true,
+                    DataType::Utf8
+                    | DataType::Binary
+                    | DataType::Utf8View
+                    | DataType::BinaryView
+                    | DataType::Boolean => true,
+                    _ => false, // nested lists don't support anything else yet
+                }
+            }
+            DataType::Struct(inner_fields) => inner_fields
+                .iter()
+                .all(|field| Self::is_data_type_supported(field.data_type())),
+            _ => true,
+        }
+    }
+
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
@@ -79,7 +116,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
         let table_reference = table_reference.to_quoted_string();
-        let schema = self
+        let schema: SchemaRef = self
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(&format!("SELECT * FROM {table_reference} LIMIT 1"))?;
@@ -95,7 +132,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Ok(schema)
+        Self::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
     }
 
     async fn query_arrow(

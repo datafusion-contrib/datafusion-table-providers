@@ -6,12 +6,15 @@ use datafusion_table_providers::{
 use rstest::{fixture, rstest};
 use std::sync::Arc;
 
-use crate::docker::RunningContainer;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::{
+use arrow::{
     array::*,
     datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
 };
+
+use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
+
+use crate::docker::RunningContainer;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::logical_expr::dml::InsertOp;
@@ -21,7 +24,6 @@ use datafusion::physical_plan::memory::MemoryExec;
 #[cfg(feature = "mysql-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
-use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
@@ -498,6 +500,81 @@ INSERT INTO high_precision_decimal (decimal_values) VALUES
     .await;
 }
 
+async fn test_mysql_zero_date_type(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE zero_datetime_test_table (
+            col_date DATE,
+            col_time TIME,
+            col_datetime DATETIME,
+            col_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ";
+
+    let insert_table_stmt = "
+        INSERT INTO zero_datetime_test_table (
+            col_date, col_time, col_datetime, col_timestamp
+        ) 
+        VALUES 
+        -- Real Values
+        ('2023-05-15', '10:00:00', '2024-09-12 10:00:00', '2024-09-12 10:00:00'),
+        -- Null Values
+        (NULL, NULL, NULL, NULL),
+        -- Zero Values
+        ('0000-00-00', '00:00:00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_date", DataType::Date32, true),
+        Field::new("col_time", DataType::Time64(TimeUnit::Nanosecond), true),
+        Field::new(
+            "col_datetime",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(
+            "col_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Date32Array::from(vec![
+                Some(19492), // '2023-05-15'
+                None,        // NULL
+                None,        // '0000-00-00'
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(36000000000000), // '10:00:00'
+                None,                 // NULL
+                Some(0),              // '00:00:00'
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1_726_135_200_000_000), // '2024-09-12 10:00:00'
+                None,                        // NULL
+                None,                        // '0000-00-00 00:00:00'
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1_726_135_200_000_000), // '2024-09-12 10:00:00'
+                None,                        // NULL
+                None,                        // '0000-00-00 00:00:00'
+            ])),
+        ],
+    )
+    .expect("Failed to create expected arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "zero_datetime_test_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+    )
+    .await;
+}
+
 async fn test_mysql_decimal_types_to_decimal128(port: usize) {
     let create_table_stmt = "
         CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
@@ -551,6 +628,15 @@ async fn arrow_mysql_one_way(
         .await
         .expect("Connection should be established");
 
+    // Disable NO_ZERO_DATE and NO_ZERO_IN_DATE (requied for `test_mysql_zero_date_type`)
+    let _ = db_conn
+        .execute(
+            "SET SESSION sql_mode = REPLACE(REPLACE(REPLACE(@@SESSION.sql_mode, 'NO_ZERO_IN_DATE,', ''), 'NO_ZERO_DATE,', ''), 'NO_ZERO_DATE', '')",
+            &[]
+        )
+        .await
+        .expect("SQL mode should be adjusted");
+
     // Create table and insert data into mysql test_table
     let _ = db_conn
         .execute(create_table_stmt, &[])
@@ -564,7 +650,7 @@ async fn arrow_mysql_one_way(
 
     // Register datafusion table, test mysql row -> arrow conversion
     let sqltable_pool: Arc<DynMySQLConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("mysql", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("mysql", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
 
@@ -589,6 +675,7 @@ async fn arrow_mysql_one_way(
     record_batch
 }
 
+#[allow(unused_variables)]
 async fn arrow_mysql_round_trip(
     port: usize,
     arrow_record: RecordBatch,
@@ -738,6 +825,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_string_types(port).await;
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;
+    test_mysql_zero_date_type(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }

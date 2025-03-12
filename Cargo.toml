@@ -8,23 +8,33 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [dependencies]
+arrow = "54.2.1"
+arrow-array = { version = "54.2.1", optional = true }
 arrow-flight = { version = "54.2.1", optional = true, features = [
   "flight-sql-experimental",
   "tls",
 ] }
+arrow-schema = { version = "54.2.1", optional = true, features = ["serde"] }
+arrow-json = "54.2.1"
 arrow-odbc = { version = "=15.1.1", optional = true }
 async-stream = { version = "0.3", optional = true }
 async-trait = "0.1"
+base64 = { version = "0.22.1", optional = true }
 bb8 = { version = "0.9", optional = true }
 bb8-postgres = { version = "0.9", optional = true }
 bigdecimal = "0.4"
 byteorder = "1.5.0"
+bytes = { version = "1.7.1", optional = true }
+byte-unit = { version = "5.1.4", optional = true }
 chrono = "0.4"
 dashmap = "6.1.0"
 datafusion = { version = "45", default-features = false }
+datafusion-expr = { version = "45", optional = true }
 datafusion-federation = { version = "=0.3.6", features = [
   "sql",
 ], optional = true }
+datafusion-physical-expr = { version = "45", optional = true }
+datafusion-physical-plan = { version = "45", optional = true }
 datafusion-proto = { version = "45", optional = true }
 duckdb = { version = "=1.2.0", features = [
   "bundled",
@@ -52,6 +62,7 @@ odbc-api = { version = "11.1", optional = true }
 pem = { version = "3.0.4", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
 prost = { version = "0.13", optional = true }
+rand = { version = "0.9" }
 r2d2 = { version = "0.8", optional = true }
 rusqlite = { version = "0.32", optional = true }
 sea-query = { version = "0.32", features = [
@@ -64,7 +75,7 @@ sea-query = { version = "0.32", features = [
   "with-chrono",
 ] }
 secrecy = "0.8.0"
-serde = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 snafu = "0.8"
@@ -106,6 +117,8 @@ duckdb = [
   "dep:uuid",
   "dep:dyn-clone",
   "dep:async-stream",
+  "dep:arrow-schema",
+  "dep:byte-unit",
 ]
 duckdb-federation = ["duckdb", "federation"]
 federation = ["dep:datafusion-federation"]
@@ -113,7 +126,7 @@ flight = [
   "dep:arrow-flight",
   "datafusion/serde",
   "dep:datafusion-proto",
-  "dep:serde",
+  "dep:prost",
   "dep:tonic",
 ]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -129,9 +142,10 @@ postgres = [
   "dep:native-tls",
   "dep:pem",
   "dep:async-stream",
+  "dep:arrow-schema",
 ]
 postgres-federation = ["postgres", "federation"]
-sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
+sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 
@@ -139,3 +153,13 @@ sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 name = "odbc_sqlite"
 path = "examples/odbc_sqlite.rs"
 required-features = ["sqlite", "odbc"]
+
+[[example]]
+name = "flight-sql"
+path = "examples/flight-sql.rs"
+required-features = ["flight"]
+
+[[example]]
+name = "sqlite"
+path = "examples/sqlite.rs"
+required-features = ["sqlite"]

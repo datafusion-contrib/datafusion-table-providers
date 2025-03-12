@@ -13,27 +13,24 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-pub mod write;
-
 use crate::mysql::write::MySQLTableWriter;
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool;
 use crate::sql::db_connection_pool::dbconnection::mysqlconn::MySQLConnection;
 use crate::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
-use crate::sql::db_connection_pool::{mysqlpool, DbConnectionPool};
-use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
-use crate::util;
-use crate::util::column_reference::ColumnReference;
-use crate::util::constraints::get_primary_keys_from_constraints;
-use crate::util::indexes::IndexType;
-use crate::util::on_conflict::OnConflict;
-use crate::util::secrets::to_secret_map;
-use crate::util::{column_reference, constraints, on_conflict, to_datafusion_error};
+use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::db_connection_pool::{self, mysqlpool};
+use crate::sql::sql_provider_datafusion::{self, SqlTable};
+use crate::util::{
+    self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
+    indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
+};
+use crate::util::{column_reference, constraints, on_conflict};
 use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::MySqlDialect;
 use datafusion::{
     catalog::TableProviderFactory, common::Constraints, datasource::TableProvider,
     error::DataFusionError, logical_expr::CreateExternalTable, sql::TableReference,
@@ -42,6 +39,7 @@ use mysql_async::prelude::{Queryable, ToValue};
 use mysql_async::TxOpts;
 use sea_query::{Alias, DeleteStatement, MysqlQueryBuilder};
 use snafu::prelude::*;
+use sql_table::MySQLTable;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -49,6 +47,12 @@ pub type DynMySQLConnectionPool =
     dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> + Send + Sync;
 
 pub type DynMySQLConnection = dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>;
+
+#[cfg(feature = "mysql-federation")]
+pub mod federation;
+pub(crate) mod mysql_window;
+pub mod sql_table;
+pub mod write;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -123,9 +127,9 @@ impl MySQLTableFactory {
         let pool = Arc::clone(&self.pool);
         let dyn_pool: Arc<DynMySQLConnectionPool> = pool;
         let table_provider = Arc::new(
-            SqlTable::new("mysql", &dyn_pool, table_reference, Some(Engine::MySQL))
+            MySQLTable::new(&dyn_pool, table_reference)
                 .await
-                .context(UnableToConstructSQLTableSnafu)?,
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
 
         #[cfg(feature = "mysql-federation")]
@@ -273,13 +277,15 @@ impl TableProviderFactory for MySQLTableProviderFactory {
 
         let dyn_pool: Arc<DynMySQLConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "mysql",
-            &dyn_pool,
-            Arc::clone(&schema),
-            TableReference::bare(name.clone()),
-            Some(Engine::MySQL),
-        ));
+        let read_provider = Arc::new(
+            SqlTable::new_with_schema(
+                "mysql",
+                &dyn_pool,
+                Arc::clone(&schema),
+                TableReference::bare(name.clone()),
+            )
+            .with_dialect(Arc::new(MySqlDialect {})),
+        );
 
         #[cfg(feature = "mysql-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
@@ -374,7 +380,8 @@ impl MySQL {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
+        let insert_table_builder =
+            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));

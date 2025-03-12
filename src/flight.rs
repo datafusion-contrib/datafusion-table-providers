@@ -299,12 +299,21 @@ impl MetadataSupplier {
 }
 
 /// Table provider that wraps a specific flight from an Arrow Flight service
-#[derive(Debug)]
 pub struct FlightTable {
     metadata_supplier: MetadataSupplier,
     origin: String,
     logical_schema: SchemaRef,
     stats: Statistics,
+}
+
+impl std::fmt::Debug for FlightTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlightTable")
+            .field("origin", &self.origin)
+            .field("logical_schema", &self.logical_schema)
+            .field("stats", &self.stats)
+            .finish()
+    }
 }
 
 #[async_trait]

@@ -88,7 +88,6 @@ impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
                 &self.name,
                 &self.pool,
                 TableReference::partial(self.name.clone(), table.to_string()),
-                None,
             )
             .await
             .map(|v| Some(Arc::new(v) as Arc<dyn TableProvider>))

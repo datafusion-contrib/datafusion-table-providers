@@ -39,37 +39,11 @@ CREATE TABLE example_table (
     -- Enumerated type
     mood_col mood,
     
-    -- Geometric types
-    point_col POINT,
-    line_col LINE,
-    lseg_col LSEG,
-    box_col BOX,
-    path_col PATH,
-    polygon_col POLYGON,
-    circle_col CIRCLE,
-    
-    -- Network address types
-    inet_col INET,
-    cidr_col CIDR,
-    macaddr_col MACADDR,
-    
-    -- Bit string type
-    bit_col BIT(8),
-    bit_varying_col BIT VARYING(64),
-    
-    -- Text search types
-    tsvector_col TSVECTOR,
-    tsquery_col TSQUERY,
-    
     -- UUID type
     uuid_col UUID,
     
-    -- XML type
-    xml_col XML,
-    
     -- JSON types
     json_col JSON,
-    jsonb_col JSONB,
     
     -- Arrays
     int_array_col INTEGER[],

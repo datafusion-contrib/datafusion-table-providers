@@ -1,5 +1,5 @@
-use crate::arrow_record_batch_gen::*;
-use datafusion::arrow::{
+use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
+use arrow::{
     array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
@@ -15,8 +15,10 @@ use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::{
     postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
     sql::sql_provider_datafusion::SqlTable,
+    UnsupportedTypeAction,
 };
 use rstest::{fixture, rstest};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
@@ -56,7 +58,7 @@ async fn arrow_postgres_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
+        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
         .await
         .expect("insert plan created");
 
@@ -91,22 +93,27 @@ async fn arrow_postgres_round_trip(
     assert_eq!(arrow_record, casted_result);
 }
 
-#[derive(Debug)]
 struct ContainerManager {
     port: usize,
     claimed: bool,
+    running_container: Option<RunningContainer>,
 }
 
 impl Drop for ContainerManager {
     fn drop(&mut self) {
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(stop_container(self.port));
+            .block_on(stop_container(self.running_container.take(), self.port));
     }
 }
 
-async fn stop_container(port: usize) {
+async fn stop_container(running_container: Option<RunningContainer>, port: usize) {
     println!("Stopping Postgres container on port {}", port);
+    if let Some(running_container) = running_container {
+        if let Err(e) = running_container.stop().await {
+            tracing::error!("Error stopping container: {}", e);
+        };
+    }
 }
 
 #[fixture]
@@ -115,13 +122,16 @@ fn container_manager() -> Mutex<ContainerManager> {
     Mutex::new(ContainerManager {
         port: crate::get_random_port(),
         claimed: false,
+        running_container: None,
     })
 }
 
-async fn start_container(manager: &MutexGuard<'_, ContainerManager>) {
-    let _ = common::start_postgres_docker_container(manager.port)
+async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
+    let running_container = common::start_postgres_docker_container(manager.port)
         .await
         .expect("Postgres container to start");
+
+    manager.running_container = Some(running_container);
 
     tracing::debug!("Container started");
 }
@@ -150,7 +160,7 @@ async fn test_arrow_postgres_roundtrip(
     let mut container_manager = container_manager.lock().await;
     if !container_manager.claimed {
         container_manager.claimed = true;
-        start_container(&container_manager).await;
+        start_container(&mut container_manager).await;
     }
 
     arrow_postgres_round_trip(
@@ -168,11 +178,12 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     let mut container_manager = container_manager.lock().await;
     if !container_manager.claimed {
         container_manager.claimed = true;
-        start_container(&container_manager).await;
+        start_container(&mut container_manager).await;
     }
 
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
+    test_postgres_jsonb_type(container_manager.port).await;
 }
 
 async fn test_postgres_enum_type(port: usize) {
@@ -195,6 +206,7 @@ async fn test_postgres_enum_type(port: usize) {
         insert_table_stmt,
         extra_stmt,
         expected_record,
+        UnsupportedTypeAction::default(),
     )
     .await;
 }
@@ -251,6 +263,65 @@ async fn test_postgres_numeric_type(port: usize) {
         insert_table_stmt,
         extra_stmt,
         expected_record,
+        UnsupportedTypeAction::default(),
+    )
+    .await;
+}
+
+async fn test_postgres_jsonb_type(port: usize) {
+    let create_table_stmt = "
+    CREATE TABLE jsonb_values (
+        data JSONB
+    );";
+
+    let insert_table_stmt = r#"
+    INSERT INTO jsonb_values (data) VALUES 
+    ('{"name": "John", "age": 30}'),
+    ('{"name": "Jane", "age": 25}'),
+    ('[1, 2, 3]'),
+    ('null'),
+    ('{"nested": {"key": "value"}}');
+    "#;
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "data",
+        DataType::LargeUtf8,
+        true,
+    )]));
+
+    // Parse and re-serialize the JSON to ensure consistent ordering
+    let expected_values = vec![
+        serde_json::from_str::<Value>(r#"{"name":"John","age":30}"#)
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>(r#"{"name":"Jane","age":25}"#)
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>("[1,2,3]")
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>("null").unwrap().to_string(),
+        serde_json::from_str::<Value>(r#"{"nested":{"key":"value"}}"#)
+            .unwrap()
+            .to_string(),
+    ];
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow::array::LargeStringArray::from(
+            expected_values,
+        ))],
+    )
+    .expect("Failed to create arrow record batch");
+
+    arrow_postgres_one_way(
+        port,
+        "jsonb_values",
+        create_table_stmt,
+        insert_table_stmt,
+        None,
+        expected_record,
+        UnsupportedTypeAction::String,
     )
     .await;
 }
@@ -262,13 +333,15 @@ async fn arrow_postgres_one_way(
     insert_table_stmt: &str,
     extra_stmt: Option<&str>,
     expected_record: RecordBatch,
+    unsupported_type_action: UnsupportedTypeAction,
 ) {
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
     let pool = common::get_postgres_connection_pool(port)
         .await
-        .expect("Postgres connection pool should be created");
+        .expect("Postgres connection pool should be created")
+        .with_unsupported_type_action(unsupported_type_action);
 
     let db_conn = pool
         .connect_direct()
@@ -297,7 +370,7 @@ async fn arrow_postgres_one_way(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))

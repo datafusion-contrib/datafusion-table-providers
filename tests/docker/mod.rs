@@ -24,10 +24,6 @@ impl RunningContainer {
     pub async fn stop(&self) -> Result<(), anyhow::Error> {
         stop(&self.docker, &self.name).await
     }
-
-    pub async fn start(&self) -> Result<(), anyhow::Error> {
-        start(&self.docker, &self.name).await
-    }
 }
 
 pub async fn remove(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
@@ -44,12 +40,6 @@ pub async fn remove(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
 
 pub async fn stop(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
     Ok(docker.stop_container(name, None).await?)
-}
-
-pub async fn start(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
-    Ok(docker
-        .start_container(name, None::<StartContainerOptions<String>>)
-        .await?)
 }
 
 pub struct ContainerRunnerBuilder<'a> {

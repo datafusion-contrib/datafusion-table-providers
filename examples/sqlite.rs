@@ -1,11 +1,11 @@
+use std::{sync::Arc, time::Duration};
+
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
     common::DatabaseCatalogProvider,
     sql::db_connection_pool::{sqlitepool::SqliteConnectionPoolFactory, Mode},
     sqlite::SqliteTableFactory,
 };
-use std::sync::Arc;
-use std::time::Duration;
 
 /// This example demonstrates how to:
 /// 1. Create a SQLite connection pool
@@ -22,11 +22,11 @@ async fn main() {
         SqliteConnectionPoolFactory::new(
             "examples/sqlite_example.db",
             Mode::File,
-            Duration::default(),
+            Duration::from_millis(5000),
         )
         .build()
         .await
-        .expect("unable to create Sqlite connection pool"),
+        .expect("failed to create sqlite connection pool"),
     );
 
     // Create SQLite table provider factory

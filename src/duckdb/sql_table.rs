@@ -1,7 +1,7 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -20,7 +20,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
         PlanProperties, SendableRecordBatchStream,
     },
-    sql::TableReference,
+    sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
@@ -32,7 +32,9 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DuckDBTable {}", self.base_table.name())
+        f.debug_struct("DuckDBTable")
+            .field("base_table", &self.base_table)
+            .finish()
     }
 }
 
@@ -42,14 +44,10 @@ impl<T, P> DuckDBTable<T, P> {
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
+        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(
-            "duckdb",
-            pool,
-            schema,
-            table_reference,
-            Some(Engine::DuckDB),
-        );
+        let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
+            .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
 
         Self {
             base_table,
@@ -136,6 +134,7 @@ impl<T, P> DuckSqlExec<T, P> {
 
     fn sql(&self) -> SqlResult<String> {
         let sql = self.base_exec.sql()?;
+
         Ok(format!(
             "{cte_expr} {sql}",
             cte_expr = get_cte(&self.table_functions)

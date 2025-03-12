@@ -1,6 +1,9 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
-use crate::util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect};
+use crate::{
+    util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
+    UnsupportedTypeAction,
+};
 use async_trait::async_trait;
 use bb8::ErrorSink;
 use bb8_postgres::{
@@ -21,50 +24,56 @@ use crate::sql::db_connection_pool::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("ConnectionPoolError: {source}"))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     ConnectionPoolError {
         source: bb8_postgres::tokio_postgres::Error,
     },
 
-    #[snafu(display("ConnectionPoolRunError: {source}"))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nAdjust the connection pool parameters for sufficient capacity."))]
     ConnectionPoolRunError {
         source: bb8::RunError<bb8_postgres::tokio_postgres::Error>,
     },
 
-    #[snafu(display("Invalid parameter: {parameter_name}"))]
+    #[snafu(display(
+        "Invalid parameter: {parameter_name}. Ensure the parameter name is correct."
+    ))]
     InvalidParameterError { parameter_name: String },
 
-    #[snafu(display("Could not parse {parameter_name} into a valid integer"))]
+    #[snafu(display("Could not parse {parameter_name} into a valid integer. Ensure it is configured with a valid value."))]
     InvalidIntegerParameterError {
         parameter_name: String,
         source: std::num::ParseIntError,
     },
 
-    #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
+    #[snafu(display("Cannot connect to PostgreSQL on {host}:{port}. Ensure the host and port are correct and reachable."))]
     InvalidHostOrPortError {
         source: crate::util::ns_lookup::Error,
         host: String,
         port: u16,
     },
 
-    #[snafu(display("Invalid root cert path: {path}"))]
+    #[snafu(display(
+        "Invalid root certificate path: {path}. Ensure it points to a valid root certificate."
+    ))]
     InvalidRootCertPathError { path: String },
 
-    #[snafu(display("Failed to read cert : {source}"))]
+    #[snafu(display(
+        "Failed to read certificate.\n{source}\nEnsure the root certificate path points to a valid certificate."
+    ))]
     FailedToReadCertError { source: std::io::Error },
 
-    #[snafu(display("Failed to load cert : {source}"))]
+    #[snafu(display(
+        "Certificate loading failed.\n{source}\nEnsure the root certificate path points to a valid certificate."
+    ))]
     FailedToLoadCertError { source: native_tls::Error },
 
-    #[snafu(display("Failed to build tls connector : {source}"))]
+    #[snafu(display("TLS connector initialization failed.\n{source}\nVerify SSL mode and root certificate validity"))]
     FailedToBuildTlsConnectorError { source: native_tls::Error },
 
-    #[snafu(display("Postgres connection error: {source}"))]
+    #[snafu(display("PostgreSQL connection failed.\n{source}\nFor details, refer to the PostgreSQL documentation: https://www.postgresql.org/docs/17/index.html"))]
     PostgresConnectionError { source: tokio_postgres::Error },
 
-    #[snafu(display(
-        "Authentication failed. Ensure that the username and password are correctly configured."
-    ))]
+    #[snafu(display("Authentication failed. Verify username and password."))]
     InvalidUsernameOrPassword { source: tokio_postgres::Error },
 }
 
@@ -74,6 +83,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct PostgresConnectionPool {
     pool: Arc<bb8::Pool<PostgresConnectionManager<MakeTlsConnector>>>,
     join_push_down: JoinPushDown,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl PostgresConnectionPool {
@@ -199,7 +209,15 @@ impl PostgresConnectionPool {
         Ok(PostgresConnectionPool {
             pool: Arc::new(pool.clone()),
             join_push_down,
+            unsupported_type_action: UnsupportedTypeAction::default(),
         })
+    }
+
+    /// Specify the action to take when an invalid type is encountered.
+    #[must_use]
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
+        self
     }
 
     /// Returns a direct connection to the underlying database.
@@ -367,7 +385,9 @@ impl
     > {
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_owned().await.context(ConnectionPoolRunSnafu)?;
-        Ok(Box::new(PostgresConnection::new(conn)))
+        Ok(Box::new(
+            PostgresConnection::new(conn).with_unsupported_type_action(self.unsupported_type_action),
+        ))
     }
 
     fn join_push_down(&self) -> JoinPushDown {

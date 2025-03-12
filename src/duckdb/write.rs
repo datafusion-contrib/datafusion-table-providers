@@ -101,7 +101,7 @@ impl TableProvider for DuckDBTableWriter {
             input,
             Arc::new(DuckDBDataSink::new(
                 Arc::clone(&self.duckdb),
-                op == InsertOp::Overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),
@@ -113,7 +113,7 @@ impl TableProvider for DuckDBTableWriter {
 #[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
     duckdb: Arc<DuckDB>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
 }
@@ -238,7 +238,7 @@ impl DataSink for DuckDBDataSink {
 impl DuckDBDataSink {
     pub(crate) fn new(
         duckdb: Arc<DuckDB>,
-        overwrite: bool,
+        overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
     ) -> Self {
@@ -271,7 +271,7 @@ fn try_write_all_with_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
-    overwrite: bool,
+    overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
 ) -> datafusion::common::Result<u64> {
     // We want to clone the current table into our insert table
@@ -302,7 +302,7 @@ fn try_write_all_with_constraints(
             .map_err(to_datafusion_error)?;
     }
 
-    if overwrite {
+    if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
             .replace_table(tx, orig_table_creator)
             .map_err(to_datafusion_error)?;
@@ -323,11 +323,11 @@ fn try_write_all_no_constraints(
     duckdb: Arc<DuckDB>,
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
-    overwrite: bool,
+    overwrite: InsertOp,
 ) -> datafusion::common::Result<u64> {
     let mut num_rows = 0;
 
-    if overwrite {
+    if matches!(overwrite, InsertOp::Overwrite) {
         tracing::debug!("Deleting all data from table.");
         duckdb
             .delete_all_table_data(tx)

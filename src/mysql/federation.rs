@@ -1,27 +1,31 @@
-use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
+use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
+use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion::sql::sqlparser::ast::{self, VisitMut};
+use datafusion::sql::unparser::dialect::Dialect;
+use datafusion_federation::sql::{AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
-use snafu::prelude::*;
+use snafu::ResultExt;
 use std::sync::Arc;
 
-use crate::sql::sql_provider_datafusion::{
-    get_stream, to_execution_error, SqlTable, UnableToGetSchemaSnafu,
-};
+use super::mysql_window::MySQLWindowVisitor;
+use super::sql_table::MySQLTable;
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream},
-    sql::{unparser::dialect::Dialect, TableReference},
+    execution::SendableRecordBatchStream,
+    physical_plan::stream::RecordBatchStreamAdapter,
+    sql::TableReference,
 };
 
-impl<T, P> SqlTable<T, P> {
+impl<T, P> MySQLTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.table_reference.to_quoted_string();
-        let schema = Arc::clone(&self.schema);
+        let table_name = self.base_table.table_reference.to_quoted_string();
+        let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
@@ -41,23 +45,37 @@ impl<T, P> SqlTable<T, P> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
+fn mysql_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionError> {
+    match ast {
+        ast::Statement::Query(query) => {
+            let mut new_query = query.clone();
+
+            let mut window_visitor = MySQLWindowVisitor::default();
+            new_query.visit(&mut window_visitor);
+
+            Ok(ast::Statement::Query(new_query))
+        }
+        _ => Ok(ast),
+    }
+}
+
 #[async_trait]
-impl<T, P> SQLExecutor for SqlTable<T, P> {
+impl<T, P> SQLExecutor for MySQLTable<T, P> {
     fn name(&self) -> &str {
-        &self.name
+        self.base_table.name()
     }
 
     fn compute_context(&self) -> Option<String> {
-        match self.pool.join_push_down() {
-            JoinPushDown::AllowedFor(context) => Some(context),
-            // Don't return None here - it will cause incorrect federation with other providers of the same name that also have a compute_context of None.
-            // Instead return a random string that will never match any other provider's context.
-            JoinPushDown::Disallow => Some(format!("{}", self.unique_id())),
-        }
+        self.base_table.compute_context()
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.arc_dialect()
+        self.base_table.dialect()
+    }
+
+    fn ast_analyzer(&self) -> Option<AstAnalyzer> {
+        Some(Box::new(mysql_ast_analyzer))
     }
 
     fn execute(
@@ -66,7 +84,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         schema: SchemaRef,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
-            Arc::clone(&self.pool),
+            self.base_table.clone_pool(),
             query.to_string(),
             Arc::clone(&schema),
         );
@@ -82,10 +100,16 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
     }
 
     async fn get_table_schema(&self, table_name: &str) -> DataFusionResult<SchemaRef> {
-        let conn = self.pool.connect().await.map_err(to_execution_error)?;
+        let conn = self
+            .base_table
+            .clone_pool()
+            .connect()
+            .await
+            .map_err(to_execution_error)?;
         get_schema(conn, &TableReference::from(table_name))
             .await
-            .context(UnableToGetSchemaSnafu)
+            .boxed()
+            .map_err(|e| DbError::UnableToGetSchema { source: e })
             .map_err(to_execution_error)
     }
 }

@@ -1,14 +1,3 @@
-use crate::sql::db_connection_pool::{
-    self,
-    dbconnection::{
-        duckdbconn::{
-            flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
-        },
-        get_schema, DbConnection,
-    },
-    duckdbpool::DuckDbConnectionPool,
-    DbConnectionPool, DbInstanceKey, Mode,
-};
 use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
@@ -17,8 +6,23 @@ use crate::util::{
     indexes::IndexType,
     on_conflict::{self, OnConflict},
 };
+use crate::{
+    sql::db_connection_pool::{
+        self,
+        dbconnection::{
+            duckdbconn::{
+                flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+            },
+            get_schema, DbConnection,
+        },
+        duckdbpool::DuckDbConnectionPool,
+        DbConnectionPool, DbInstanceKey, Mode,
+    },
+    UnsupportedTypeAction,
+};
+use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
-use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
     common::Constraints,
@@ -96,10 +100,10 @@ pub enum Error {
     #[snafu(display("Unable to rollback transaction: {source}"))]
     UnableToRollbackTransaction { source: duckdb::Error },
 
-    #[snafu(display("Unable to delete all data from the Postgres table: {source}"))]
+    #[snafu(display("Unable to delete all data from the DuckDB table: {source}"))]
     UnableToDeleteAllTableData { source: duckdb::Error },
 
-    #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
+    #[snafu(display("Unable to insert data into the DuckDB table: {source}"))]
     UnableToInsertIntoTableAsync { source: duckdb::Error },
 
     #[snafu(display("The table '{table_name}' doesn't exist in the DuckDB server"))]
@@ -113,14 +117,37 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
+
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
+    TableWithSchemaCreationNotSupported { table_name: String },
+
+    #[snafu(display("Failed to parse memory_limit value '{value}': {source}\nProvide a valid value, e.g. '2GB', '512MiB' (expected: KB, MB, GB, TB for 1000^i units or KiB, MiB, GiB, TiB for 1024^i units)"))]
+    UnableToParseMemoryLimit {
+        value: String,
+        source: byte_unit::ParseError,
+    },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug)]
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
+    unsupported_type_action: UnsupportedTypeAction,
+    dialect: Arc<dyn Dialect>,
+}
+
+// Dialect trait does not implement Debug so we implement Debug manually
+impl std::fmt::Debug for DuckDBTableProviderFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDBTableProviderFactory")
+            .field("access_mode", &self.access_mode)
+            .field("instances", &self.instances)
+            .field("unsupported_type_action", &self.unsupported_type_action)
+            .finish()
+    }
 }
 
 const DUCKDB_DB_PATH_PARAM: &str = "open";
@@ -133,7 +160,24 @@ impl DuckDBTableProviderFactory {
         Self {
             access_mode,
             instances: Arc::new(Mutex::new(HashMap::new())),
+            unsupported_type_action: UnsupportedTypeAction::Error,
+            dialect: Arc::new(DuckDBDialect::new()),
         }
+    }
+
+    #[must_use]
+    pub fn with_unsupported_type_action(
+        mut self,
+        unsupported_type_action: UnsupportedTypeAction,
+    ) -> Self {
+        self.unsupported_type_action = unsupported_type_action;
+        self
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     #[must_use]
@@ -149,20 +193,29 @@ impl DuckDBTableProviderFactory {
             .unwrap_or_default()
     }
 
-    #[must_use]
-    pub fn duckdb_file_path(&self, name: &str, options: &mut HashMap<String, String>) -> String {
+    /// Get the path to the DuckDB file database.
+    ///
+    /// ## Errors
+    ///
+    /// - If the path includes absolute sequences to escape the current directory, like `./`, `../`, or `/`.
+    pub fn duckdb_file_path(
+        &self,
+        name: &str,
+        options: &mut HashMap<String, String>,
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "duckdb_");
 
         let db_base_folder = options
             .get(DUCKDB_DB_BASE_FOLDER_PARAM)
             .cloned()
             .unwrap_or(".".to_string()); // default to the current directory
-        let default_filepath = format!("{db_base_folder}/{name}.db");
+        let default_filepath = &format!("{db_base_folder}/{name}.db");
 
-        options
+        let filepath = options
             .get(DUCKDB_DB_PATH_PARAM)
-            .cloned()
-            .unwrap_or(default_filepath)
+            .unwrap_or(default_filepath);
+
+        Ok(filepath.to_string())
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
@@ -173,7 +226,9 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_memory().context(DbConnectionPoolSnafu)?;
+        let pool = DuckDbConnectionPool::new_memory()
+            .context(DbConnectionPoolSnafu)?
+            .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -193,7 +248,8 @@ impl DuckDBTableProviderFactory {
         }
 
         let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-            .context(DbConnectionPoolSnafu)?;
+            .context(DbConnectionPoolSnafu)?
+            .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -212,6 +268,14 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
+        if cmd.name.schema().is_some() {
+            TableWithSchemaCreationNotSupportedSnafu {
+                table_name: cmd.name.to_string(),
+            }
+            .fail()
+            .map_err(to_datafusion_error)?;
+        }
+
         let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
         let mode = remove_option(&mut options, "mode").unwrap_or_default();
@@ -251,7 +315,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
-                let db_path = self.duckdb_file_path(&name, &mut options);
+                let db_path = self
+                    .duckdb_file_path(&name, &mut options)
+                    .map_err(to_datafusion_error)?;
 
                 self.get_or_init_file_instance(db_path)
                     .await
@@ -282,20 +348,21 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
+        if let Some(memory_limit) = options.get("memory_limit") {
+            apply_memory_limit(&dyn_pool, memory_limit).await?;
+        }
+
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
             TableReference::bare(name.clone()),
             None,
+            Some(self.dialect.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
-            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
-            Arc::new(read_provider.create_federated_table_provider()?)
-        } else {
-            read_provider
-        };
+        let read_provider: Arc<dyn TableProvider> =
+            Arc::new(read_provider.create_federated_table_provider()?);
 
         Ok(DuckDBTableWriter::create(
             read_provider,
@@ -315,6 +382,16 @@ pub struct DuckDB {
     schema: SchemaRef,
     constraints: Constraints,
     table_creator: Option<TableCreator>,
+}
+
+impl std::fmt::Debug for DuckDB {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDB")
+            .field("table_name", &self.table_name)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
 }
 
 impl DuckDB {
@@ -416,6 +493,8 @@ impl DuckDB {
                 .context(UnableToInsertToDuckDBTableSnafu)?;
         }
 
+        appender.flush().context(UnableToInsertToDuckDBTableSnafu)?;
+
         Ok(())
     }
 
@@ -436,12 +515,22 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
+    dialect: Arc<dyn Dialect>,
 }
 
 impl DuckDBTableFactory {
     #[must_use]
     pub fn new(pool: Arc<DuckDbConnectionPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            dialect: Arc::new(DuckDBDialect::new()),
+        }
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub async fn table_provider(
@@ -467,16 +556,16 @@ impl DuckDBTableFactory {
         };
 
         let table_provider = Arc::new(DuckDBTable::new_with_schema(
-            &dyn_pool, schema, tbl_ref, cte,
+            &dyn_pool,
+            schema,
+            tbl_ref,
+            cte,
+            Some(self.dialect.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
-        let table_provider: Arc<dyn TableProvider> = if self.pool.mode() == Mode::File {
-            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
-            Arc::new(table_provider.create_federated_table_provider()?)
-        } else {
-            table_provider
-        };
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(table_provider.create_federated_table_provider()?);
 
         Ok(table_provider)
     }
@@ -522,4 +611,28 @@ fn create_table_function_view_name(table_reference: &TableReference) -> TableRef
     .flatten()
     .join(".");
     TableReference::from(&tbl_ref_view)
+}
+
+async fn apply_memory_limit(
+    pool: &Arc<DynDuckDbConnectionPool>,
+    memory_limit: &str,
+) -> DataFusionResult<()> {
+    tracing::debug!("Setting DuckDB memory limit to {memory_limit}");
+
+    if let Err(err) = byte_unit::Byte::parse_str(memory_limit, true) {
+        return Err(to_datafusion_error(Error::UnableToParseMemoryLimit {
+            value: memory_limit.to_string(),
+            source: err,
+        }));
+    }
+
+    let db_conn = pool.connect().await?;
+    let Some(conn) = db_conn.as_sync() else {
+        // should never happen
+        return Err(to_datafusion_error(Error::DbConnectionError {
+            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
+        }));
+    };
+    conn.execute(&format!("SET memory_limit = '{memory_limit}'"), &[])?;
+    Ok(())
 }

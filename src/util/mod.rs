@@ -1,15 +1,10 @@
-use datafusion::logical_expr::Expr;
 use snafu::prelude::*;
-use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::Arc;
 
-use crate::sql::sql_provider_datafusion::Engine;
 use datafusion::common::DataFusionError;
-use datafusion::{
-    error::Result as DataFusionResult,
-    sql::unparser::{dialect::DefaultDialect, Unparser},
-};
+use std::collections::HashMap;
+
+use crate::UnsupportedTypeAction;
 
 pub mod column_reference;
 pub mod constraints;
@@ -17,6 +12,9 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
+
+#[cfg(any(feature = "sqlite", feature = "duckdb", feature = "postgres"))]
+pub mod schema;
 pub mod secrets;
 pub mod test;
 
@@ -26,22 +24,6 @@ pub enum Error {
     UnableToGenerateSQL {
         source: datafusion::error::DataFusionError,
     },
-}
-
-pub fn filters_to_sql(filters: &[Expr], engine: Option<Engine>) -> Result<String, Error> {
-    let dialect = engine
-        .map(|e| e.dialect())
-        .unwrap_or(Arc::new(DefaultDialect {}));
-    Ok(filters
-        .iter()
-        .map(|f| {
-            Unparser::new(dialect.as_ref())
-                .expr_to_sql(f)
-                .map(|e| e.to_string())
-        })
-        .collect::<DataFusionResult<Vec<String>>>()
-        .context(UnableToGenerateSQLSnafu)?
-        .join(" AND "))
 }
 
 #[must_use]
@@ -85,6 +67,35 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     DataFusionError::External(Box::new(error))
+}
+
+/// If the `UnsupportedTypeAction` is `Error` or `String`, the function will return an error.
+/// If the `UnsupportedTypeAction` is `Warn`, the function will log a warning.
+/// If the `UnsupportedTypeAction` is `Ignore`, the function will do nothing.
+///
+/// Used in the handling of unsupported schemas to determine if columns are removed or if the function should return an error.
+///
+/// Components that want to handle `UnsupportedTypeAction::String` via the component's own logic should handle it before calling this function.
+///
+/// # Errors
+///
+/// If the `UnsupportedTypeAction` is `Error` or `String` the function will return an error.
+pub fn handle_unsupported_type_error<E>(
+    unsupported_type_action: UnsupportedTypeAction,
+    error: E,
+) -> Result<(), E>
+where
+    E: std::error::Error + Send + Sync,
+{
+    match unsupported_type_action {
+        UnsupportedTypeAction::Error | UnsupportedTypeAction::String => return Err(error),
+        UnsupportedTypeAction::Warn => {
+            tracing::warn!("{error}");
+        }
+        UnsupportedTypeAction::Ignore => {}
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]

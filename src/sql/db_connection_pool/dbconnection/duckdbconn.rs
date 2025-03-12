@@ -1,8 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
+use arrow_schema::{DataType, Field};
 use async_stream::stream;
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
@@ -11,11 +12,16 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
+use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
+use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
+
+use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
 
 use super::DbConnection;
 use super::Result;
@@ -23,20 +29,24 @@ use super::SyncDbConnection;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("DuckDBError: {source}"))]
-    DuckDBError { source: duckdb::Error },
+    #[snafu(display("DuckDB connection failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBConnectionError { source: duckdb::Error },
 
-    #[snafu(display("ChannelError: {message}"))]
+    #[snafu(display("Query execution failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBQueryError { source: duckdb::Error },
+
+    #[snafu(display(
+        "An unexpected error occurred.\n{message}\nVerify the configuration and try again."
+    ))]
     ChannelError { message: String },
 
-    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
+    #[snafu(display(
+        "Unable to attach DuckDB database {path}.\n{source}\nEnsure the DuckDB file path is valid."
+    ))]
     UnableToAttachDatabase {
         path: Arc<str>,
         source: std::io::Error,
     },
-
-    #[snafu(display("Unable to extract database name from database file path"))]
-    UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
 pub trait DuckDBSyncParameter: ToSql + Sync + Send + DynClone {
@@ -55,23 +65,26 @@ pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 pub struct DuckDBAttachments {
     attachments: Vec<Arc<str>>,
     search_path: Arc<str>,
+    random_id: String,
 }
 
 impl DuckDBAttachments {
     /// Creates a new instance of a `DuckDBAttachments`, which instructs DuckDB connections to attach other DuckDB databases for queries.
     #[must_use]
     pub fn new(id: &str, attachments: &[Arc<str>]) -> Self {
-        let search_path = Self::get_search_path(id, attachments);
+        let random_id = Alphanumeric.sample_string(&mut rand::rng(), 8);
+        let search_path = Self::get_search_path(id, &random_id, attachments);
         Self {
             attachments: attachments.to_owned(),
             search_path,
+            random_id,
         }
     }
 
     /// Returns the search path for the given database and attachments.
     /// The given database needs to be included separately, as search path by default do not include the main database.
     #[must_use]
-    pub fn get_search_path(id: &str, attachments: &[Arc<str>]) -> Arc<str> {
+    pub fn get_search_path(id: &str, random_id: &str, attachments: &[Arc<str>]) -> Arc<str> {
         // search path includes the main database and all attached databases
         let mut search_path: Vec<Arc<str>> = vec![id.into()];
 
@@ -79,7 +92,7 @@ impl DuckDBAttachments {
             attachments
                 .iter()
                 .enumerate()
-                .map(|(i, _)| format!("attachment_{i}").into()),
+                .map(|(i, _)| Self::get_attachment_name(random_id, i).into()),
         );
 
         search_path.join(",").into()
@@ -92,7 +105,7 @@ impl DuckDBAttachments {
     /// Returns an error if the search path cannot be set or the connection fails.
     pub fn set_search_path(&self, conn: &Connection) -> Result<()> {
         conn.execute(&format!("SET search_path ='{}'", self.search_path), [])
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
         Ok(())
     }
 
@@ -102,7 +115,8 @@ impl DuckDBAttachments {
     ///
     /// Returns an error if the search path cannot be set or the connection fails.
     pub fn reset_search_path(&self, conn: &Connection) -> Result<()> {
-        conn.execute("RESET search_path", []).context(DuckDBSnafu)?;
+        conn.execute("RESET search_path", [])
+            .context(DuckDBConnectionSnafu)?;
         Ok(())
     }
 
@@ -119,14 +133,16 @@ impl DuckDBAttachments {
             })?;
 
             conn.execute(
-                &format!("ATTACH IF NOT EXISTS '{db}' AS attachment_{i} (READ_ONLY)"),
+                &format!(
+                    "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
+                    Self::get_attachment_name(&self.random_id, i)
+                ),
                 [],
             )
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
         }
 
         self.set_search_path(conn)?;
-
         Ok(())
     }
 
@@ -137,19 +153,65 @@ impl DuckDBAttachments {
     /// Returns an error if an attachment cannot be detached, search path cannot be set or the connection fails.
     pub fn detach(&self, conn: &Connection) -> Result<()> {
         for (i, _) in self.attachments.iter().enumerate() {
-            conn.execute(&format!("DETACH attachment_{i}"), [])
-                .context(DuckDBSnafu)?;
+            conn.execute(
+                &format!("DETACH {}", Self::get_attachment_name(&self.random_id, i)),
+                [],
+            )
+            .context(DuckDBConnectionSnafu)?;
         }
 
         self.reset_search_path(conn)?;
-
         Ok(())
+    }
+
+    #[must_use]
+    fn get_attachment_name(random_id: &str, index: usize) -> String {
+        format!("attachment_{random_id}_{index}")
     }
 }
 
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
     attachments: Option<Arc<DuckDBAttachments>>,
+    unsupported_type_action: UnsupportedTypeAction,
+}
+
+impl SchemaValidator for DuckDbConnection {
+    type Error = super::Error;
+
+    fn is_data_type_supported(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::List(inner_field)
+            | DataType::FixedSizeList(inner_field, _)
+            | DataType::LargeList(inner_field) => {
+                match inner_field.data_type() {
+                    dt if dt.is_primitive() => true,
+                    DataType::Utf8
+                    | DataType::Binary
+                    | DataType::Utf8View
+                    | DataType::BinaryView
+                    | DataType::Boolean => true,
+                    _ => false, // nested lists don't support anything else yet
+                }
+            }
+            DataType::Struct(inner_fields) => inner_fields
+                .iter()
+                .all(|field| Self::is_data_type_supported(field.data_type())),
+            _ => true,
+        }
+    }
+
+    fn is_field_supported(field: &Arc<Field>) -> bool {
+        let duckdb_type_id = to_duckdb_type_id(field.data_type());
+        Self::is_data_type_supported(field.data_type()) && duckdb_type_id.is_ok()
+    }
+
+    fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
+        super::Error::UnsupportedDataType {
+            data_type: data_type.to_string(),
+            field_name: field_name.to_string(),
+        }
+    }
 }
 
 impl DuckDbConnection {
@@ -157,6 +219,15 @@ impl DuckDbConnection {
         &mut self,
     ) -> &mut r2d2::PooledConnection<DuckdbConnectionManager> {
         &mut self.conn
+    }
+
+    #[must_use]
+    pub fn with_unsupported_type_action(
+        mut self,
+        unsupported_type_action: UnsupportedTypeAction,
+    ) -> Self {
+        self.unsupported_type_action = unsupported_type_action;
+        self
     }
 
     #[must_use]
@@ -217,6 +288,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         DuckDbConnection {
             conn,
             attachments: None,
+            unsupported_type_action: UnsupportedTypeAction::default(),
         }
     }
 
@@ -285,7 +357,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
-        Ok(result.get_schema())
+        Self::handle_unsupported_schema(&result.get_schema(), self.unsupported_type_action)
     }
 
     fn query_arrow(
@@ -325,14 +397,14 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let join_handle = tokio::task::spawn_blocking(move || {
             Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
-            let mut stmt = conn.prepare(&sql).context(DuckDBSnafu)?;
+            let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
             let params: &[&dyn ToSql] = &params
                 .iter()
                 .map(|f| f.as_input_parameter())
                 .collect::<Vec<_>>();
             let result: duckdb::ArrowStream<'_> = stmt
                 .stream_arrow(params, cloned_schema)
-                .context(DuckDBSnafu)?;
+                .context(DuckDBQuerySnafu)?;
             for i in result {
                 blocking_channel_send(&batch_tx, i)?;
             }
@@ -373,7 +445,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .map(|f| f.as_input_parameter())
             .collect::<Vec<_>>();
 
-        let rows_modified = self.conn.execute(sql, params).context(DuckDBSnafu)?;
+        let rows_modified = self.conn.execute(sql, params).context(DuckDBQuerySnafu)?;
         Ok(rows_modified as u64)
     }
 }
@@ -428,6 +500,8 @@ pub fn is_table_function(table_reference: &TableReference) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+
     use super::*;
 
     #[test]
@@ -446,5 +520,125 @@ mod tests {
             let table_reference = TableReference::bare(table_name.to_string());
             assert_eq!(is_table_function(&table_reference), expected);
         }
+    }
+
+    #[test]
+    fn test_field_is_unsupported() {
+        // A list with a struct is not supported
+        let field = Field::new(
+            "list_struct",
+            DataType::List(Arc::new(Field::new(
+                "struct",
+                DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                false,
+            ))),
+            false,
+        );
+
+        assert!(
+            !DuckDbConnection::is_data_type_supported(field.data_type()),
+            "list with struct should be unsupported"
+        );
+    }
+
+    #[test]
+    fn test_fields_are_supported() {
+        // test that the usual field types are supported, string, numbers, etc
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+        ];
+
+        for field in fields {
+            assert!(
+                DuckDbConnection::is_data_type_supported(field.data_type()),
+                "field should be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_rebuild_with_supported_fields() {
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+        ];
+
+        let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
+
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
+                .expect("should rebuild schema successfully");
+
+        assert_eq!(schema, rebuilt_schema);
+    }
+
+    #[test]
+    fn test_schema_rebuild_with_unsupported_fields() {
+        let fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+            Field::new(
+                "list_struct",
+                DataType::List(Arc::new(Field::new(
+                    "struct",
+                    DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                    false,
+                ))),
+                false,
+            ),
+            Field::new("another_bool", DataType::Boolean, false),
+            Field::new(
+                "another_list_struct",
+                DataType::List(Arc::new(Field::new(
+                    "struct",
+                    DataType::Struct(vec![Field::new("field", DataType::Int64, false)].into()),
+                    false,
+                ))),
+                false,
+            ),
+            Field::new("another_float", DataType::Float32, false),
+        ];
+
+        let rebuilt_fields = vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("int", DataType::Int64, false),
+            Field::new("float", DataType::Float64, false),
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("binary", DataType::Binary, false),
+            // this also tests that ordering is preserved when rebuilding the schema with removed fields
+            Field::new("another_bool", DataType::Boolean, false),
+            Field::new("another_float", DataType::Float32, false),
+        ];
+
+        let schema = Arc::new(SchemaBuilder::from(Fields::from(fields)).finish());
+        let expected_rebuilt_schema =
+            Arc::new(SchemaBuilder::from(Fields::from(rebuilt_fields)).finish());
+
+        assert!(
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
+                .is_err()
+        );
+
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Warn)
+                .expect("should rebuild schema successfully");
+
+        assert_eq!(rebuilt_schema, expected_rebuilt_schema);
+
+        let rebuilt_schema =
+            DuckDbConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Ignore)
+                .expect("should rebuild schema successfully");
+
+        assert_eq!(rebuilt_schema, expected_rebuilt_schema);
     }
 }

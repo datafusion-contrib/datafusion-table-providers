@@ -7,19 +7,20 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-
-use crate::sql::sql_provider_datafusion::{Engine, SqlTable};
-
+use crate::sql::sql_provider_datafusion::SqlTable;
+use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
+use arrow::{
+    array::RecordBatch,
+    datatypes::{Schema, SchemaRef},
+};
 use async_trait::async_trait;
 use bb8_postgres::{
     tokio_postgres::{types::ToSql, Transaction},
     PostgresConnectionManager,
 };
-use datafusion::arrow::{
-    array::RecordBatch,
-    datatypes::{Schema, SchemaRef},
-};
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,
@@ -121,6 +122,14 @@ pub enum Error {
 
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
+
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
+    TableWithSchemaCreationNotSupported { table_name: String },
+
+    #[snafu(display("Schema validation error: the provided data schema does not match the expected table schema: '{table_name}'"))]
+    SchemaValidationError { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -143,14 +152,10 @@ impl PostgresTableFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let table_provider = Arc::new(
-            SqlTable::new(
-                "postgres",
-                &dyn_pool,
-                table_reference,
-                Some(Engine::Postgres),
-            )
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            SqlTable::new("postgres", &dyn_pool, table_reference)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
 
         #[cfg(feature = "postgres-federation")]
@@ -170,9 +175,8 @@ impl PostgresTableFactory {
         let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
-        let table_name = table_reference.to_string();
         let postgres = Postgres::new(
-            table_name,
+            table_reference,
             Arc::clone(&self.pool),
             schema,
             Constraints::empty(),
@@ -205,7 +209,15 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-        let name = cmd.name.to_string();
+        if cmd.name.schema().is_some() {
+            TableWithSchemaCreationNotSupportedSnafu {
+                table_name: cmd.name.to_string(),
+            }
+            .fail()
+            .map_err(to_datafusion_error)?;
+        }
+
+        let name = cmd.name.clone();
         let mut options = cmd.options.clone();
         let schema: Schema = cmd.schema.as_ref().into();
 
@@ -249,7 +261,10 @@ impl TableProviderFactory for PostgresTableProviderFactory {
                 .map_err(to_datafusion_error)?,
         );
 
-        let schema = Arc::new(schema);
+        let schema: SchemaRef = Arc::new(schema);
+        PostgresConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::default())
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
         let postgres = Postgres::new(
             name.clone(),
             Arc::clone(&pool),
@@ -292,13 +307,10 @@ impl TableProviderFactory for PostgresTableProviderFactory {
 
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "postgres",
-            &dyn_pool,
-            Arc::clone(&schema),
-            TableReference::bare(name.clone()),
-            Some(Engine::Postgres),
-        ));
+        let read_provider = Arc::new(
+            SqlTable::new_with_schema("postgres", &dyn_pool, Arc::clone(&schema), name)
+                .with_dialect(Arc::new(PostgreSqlDialect {})),
+        );
 
         #[cfg(feature = "postgres-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
@@ -311,24 +323,34 @@ impl TableProviderFactory for PostgresTableProviderFactory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Postgres {
-    table_name: String,
+    table: TableReference,
     pool: Arc<PostgresConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
 }
 
+impl std::fmt::Debug for Postgres {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Postgres")
+            .field("table_name", &self.table)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
+}
+
 impl Postgres {
     #[must_use]
     pub fn new(
-        table_name: String,
+        table: TableReference,
         pool: Arc<PostgresConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
     ) -> Self {
         Self {
-            table_name,
+            table,
             pool,
             schema,
             constraints,
@@ -337,7 +359,7 @@ impl Postgres {
 
     #[must_use]
     pub fn table_name(&self) -> &str {
-        &self.table_name
+        self.table.table()
     }
 
     #[must_use]
@@ -352,7 +374,7 @@ impl Postgres {
 
         if !self.table_exists(pg_conn).await {
             TableDoesntExistSnafu {
-                table_name: self.table_name.clone(),
+                table_name: self.table.to_string(),
             }
             .fail()?;
         }
@@ -370,14 +392,18 @@ impl Postgres {
     }
 
     async fn table_exists(&self, postgres_conn: &PostgresConnection) -> bool {
-        let sql = format!(
-            r#"SELECT EXISTS (
-          SELECT 1
-          FROM information_schema.tables
-          WHERE table_name = '{name}'
-        )"#,
-            name = self.table_name
-        );
+        let sql = match self.table.schema() {
+            Some(schema) => format!(
+                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')"#,
+                name = self.table.table(),
+                schema = schema
+            ),
+            None => format!(
+                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')"#,
+                name = self.table.table()
+            ),
+        };
+
         tracing::trace!("{sql}");
 
         let Ok(row) = postgres_conn.conn.query_one(&sql, &[]).await else {
@@ -393,7 +419,7 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
+        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -413,7 +439,7 @@ impl Postgres {
     async fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> Result<()> {
         transaction
             .execute(
-                format!(r#"DELETE FROM "{}""#, self.table_name).as_str(),
+                format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
                 &[],
             )
             .await
@@ -429,7 +455,7 @@ impl Postgres {
         primary_keys: Vec<String>,
     ) -> Result<()> {
         let create_table_statement =
-            CreateTableBuilder::new(schema, &self.table_name).primary_keys(primary_keys);
+            CreateTableBuilder::new(schema, self.table.table()).primary_keys(primary_keys);
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {
@@ -448,7 +474,7 @@ impl Postgres {
         columns: Vec<&str>,
         unique: bool,
     ) -> Result<()> {
-        let mut index_builder = IndexBuilder::new(&self.table_name, columns);
+        let mut index_builder = IndexBuilder::new(self.table.table(), columns);
         if unique {
             index_builder = index_builder.unique();
         }
