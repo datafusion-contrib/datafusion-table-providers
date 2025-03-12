@@ -105,8 +105,6 @@ pub fn rows_to_arrow(
                 }
             }
 
-            let data_type = map_column_type_to_data_type(column_type);
-
             let data_type = match &projected_schema {
                 Some(schema) => {
                     to_sqlite_decoding_type(schema.fields()[i].data_type(), &column_type)

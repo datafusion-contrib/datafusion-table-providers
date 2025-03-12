@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 
 use super::to_datafusion_error;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     duckdb: Arc<DuckDB>,
@@ -101,7 +101,7 @@ impl TableProvider for DuckDBTableWriter {
             input,
             Arc::new(DuckDBDataSink::new(
                 Arc::clone(&self.duckdb),
-                op == InsertOp::Overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),

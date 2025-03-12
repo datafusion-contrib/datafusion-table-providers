@@ -6,7 +6,6 @@ use crate::UnsupportedTypeAction;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::sql::TableReference;

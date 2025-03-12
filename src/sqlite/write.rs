@@ -91,7 +91,7 @@ impl TableProvider for SqliteTableWriter {
             input,
             Arc::new(SqliteDataSink::new(
                 Arc::clone(&self.sqlite),
-                op == InsertOp::Overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),

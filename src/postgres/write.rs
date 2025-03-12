@@ -3,7 +3,6 @@ use std::{any::Any, fmt, sync::Arc};
 use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::{
     catalog::Session,
     common::{Constraints, SchemaExt},
@@ -92,7 +91,7 @@ impl TableProvider for PostgresTableWriter {
             input,
             Arc::new(PostgresDataSink::new(
                 Arc::clone(&self.postgres),
-                op == InsertOp::Overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),

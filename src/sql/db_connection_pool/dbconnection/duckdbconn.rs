@@ -16,7 +16,7 @@ use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
-use rand::distr::Alphanumeric;
+use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 

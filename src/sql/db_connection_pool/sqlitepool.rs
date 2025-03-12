@@ -269,11 +269,11 @@ mod tests {
     use std::time::Duration;
 
     fn random_db_name() -> String {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut name = String::new();
 
         for _ in 0..10 {
-            name.push(rng.gen_range(b'a'..=b'z') as char);
+            name.push(rng.random_range(b'a'..=b'z') as char);
         }
 
         format!("./{name}.sqlite")

@@ -57,7 +57,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.engine.dialect()
+        self.arc_dialect()
     }
 
     fn execute(

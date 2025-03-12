@@ -13,9 +13,7 @@ use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
     physical_plan::execution_plan::{Boundedness, EmissionType},
-    sql::unparser::dialect::{
-        DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
-    },
+    sql::unparser::dialect::{DefaultDialect, Dialect},
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -56,31 +54,6 @@ pub enum Error {
     UnableToGenerateSQL { source: DataFusionError },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Engine {
-    Spark,
-    SQLite,
-    DuckDB,
-    ODBC,
-    Postgres,
-    MySQL,
-    Default,
-}
-
-impl Engine {
-    /// Get the corresponding `Dialect` to use for unparsing
-    pub fn dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
-        match self {
-            Engine::SQLite => Arc::new(SqliteDialect {}),
-            Engine::Postgres => Arc::new(PostgreSqlDialect {}),
-            Engine::MySQL => Arc::new(MySqlDialect {}),
-            Engine::Spark | Engine::DuckDB | Engine::ODBC | Engine::Default => {
-                Arc::new(DefaultDialect {})
-            }
-        }
-    }
-}
-
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone)]
@@ -89,7 +62,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     schema: SchemaRef,
     pub table_reference: TableReference,
-    engine: Engine,
+    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
 impl<T, P> fmt::Debug for SqlTable<T, P> {
@@ -98,7 +71,6 @@ impl<T, P> fmt::Debug for SqlTable<T, P> {
             .field("name", &self.name)
             .field("schema", &self.schema)
             .field("table_reference", &self.table_reference)
-            .field("engine", &self.engine)
             .finish()
     }
 }
@@ -108,7 +80,6 @@ impl<T, P> SqlTable<T, P> {
         name: &str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         table_reference: impl Into<TableReference>,
-        engine: Option<Engine>,
     ) -> Result<Self> {
         let table_reference = table_reference.into();
         let conn = pool
@@ -120,13 +91,7 @@ impl<T, P> SqlTable<T, P> {
             .await
             .context(UnableToGetSchemaSnafu)?;
 
-        Ok(Self::new_with_schema(
-            name,
-            pool,
-            schema,
-            table_reference,
-            engine,
-        ))
+        Ok(Self::new_with_schema(name, pool, schema, table_reference))
     }
 
     pub fn new_with_schema(
@@ -134,15 +99,13 @@ impl<T, P> SqlTable<T, P> {
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
-        engine: Option<Engine>,
     ) -> Self {
-        let engine = engine.unwrap_or(Engine::Default);
         Self {
             name: name.to_owned(),
             pool: Arc::clone(pool),
             schema: schema.into(),
             table_reference: table_reference.into(),
-            engine,
+            dialect: None,
         }
     }
 
@@ -153,7 +116,7 @@ impl<T, P> SqlTable<T, P> {
         limit: Option<usize>,
     ) -> DataFusionResult<String> {
         let logical_plan = self.create_logical_plan(projection, filters, limit)?;
-        let sql = Unparser::new(self.engine.dialect().as_ref())
+        let sql = Unparser::new(self.dialect())
             .plan_to_sql(&logical_plan)?
             .to_string();
 
@@ -196,6 +159,14 @@ impl<T, P> SqlTable<T, P> {
     }
 
     #[must_use]
+    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        Self {
+            dialect: Some(dialect),
+            ..self
+        }
+    }
+
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -203,6 +174,20 @@ impl<T, P> SqlTable<T, P> {
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
+    }
+
+    fn dialect(&self) -> &(dyn Dialect + Send + Sync) {
+        match &self.dialect {
+            Some(dialect) => dialect.as_ref(),
+            None => &DefaultDialect {},
+        }
+    }
+
+    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
     }
 }
 
@@ -226,12 +211,10 @@ impl<T, P> TableProvider for SqlTable<T, P> {
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(
-                |f| match Unparser::new(self.engine.dialect().as_ref()).expr_to_sql(f) {
-                    Ok(_) => TableProviderFilterPushDown::Exact,
-                    Err(_) => TableProviderFilterPushDown::Unsupported,
-                },
-            )
+            .map(|f| match Unparser::new(self.dialect()).expr_to_sql(f) {
+                Ok(_) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            })
             .collect();
 
         Ok(filter_push_down)
@@ -414,6 +397,7 @@ mod tests {
 
         use async_trait::async_trait;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+        use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
         use datafusion::{
             logical_expr::{col, lit},
             sql::TableReference,
@@ -423,7 +407,6 @@ mod tests {
             dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
         };
 
-        use super::super::Engine;
         use super::*;
 
         struct MockConn {}
@@ -458,7 +441,7 @@ mod tests {
 
         fn new_sql_table(
             table_reference: &'static str,
-            engine: Option<Engine>,
+            dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         ) -> Result<SqlTable<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
             let fields = vec![
                 Field::new("name", DataType::Utf8, false),
@@ -477,18 +460,17 @@ mod tests {
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
             let table_ref = TableReference::parse_str(table_reference);
 
-            Ok(SqlTable::new_with_schema(
-                table_reference,
-                &pool,
-                schema,
-                table_ref,
-                engine,
-            ))
+            let sql_table = SqlTable::new_with_schema(table_reference, &pool, schema, table_ref);
+            if let Some(dialect) = dialect {
+                Ok(sql_table.with_dialect(dialect))
+            } else {
+                Ok(sql_table)
+            }
         }
 
         #[tokio::test]
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_table = new_sql_table("users", Some(Engine::SQLite))?;
+            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
             assert_eq!(result, r#"SELECT `users`.`name` FROM `users`"#);
             Ok(())
@@ -498,7 +480,7 @@ mod tests {
         async fn test_sql_to_string_with_filters_and_limit(
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_table = new_sql_table("users", Some(Engine::SQLite))?;
+            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
             let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
             assert_eq!(
                 result,
@@ -506,8 +488,6 @@ mod tests {
             );
             Ok(())
         }
-
-        // TODO cover more test cases with different Engines & Dialects
     }
 
     #[test]
@@ -552,7 +532,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test").await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion limit 1";
             let df = ctx.sql(sql).await?;
@@ -587,7 +567,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test").await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion where a > 1 and b = 'bar' limit 1";
             let df = ctx.sql(sql).await?;

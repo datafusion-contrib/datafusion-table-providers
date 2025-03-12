@@ -7,10 +7,7 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::{
-    expr::{self, Engine},
-    SqlTable,
-};
+use crate::sql::sql_provider_datafusion::SqlTable;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 use arrow::{
@@ -21,10 +18,6 @@ use async_trait::async_trait;
 use bb8_postgres::{
     tokio_postgres::{types::ToSql, Transaction},
     PostgresConnectionManager,
-};
-use datafusion::arrow::{
-    array::RecordBatch,
-    datatypes::{Schema, SchemaRef},
 };
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::PostgreSqlDialect;
@@ -159,14 +152,10 @@ impl PostgresTableFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let table_provider = Arc::new(
-            SqlTable::new(
-                "postgres",
-                &dyn_pool,
-                table_reference,
-                Some(Engine::Postgres),
-            )
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            SqlTable::new("postgres", &dyn_pool, table_reference)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
 
         #[cfg(feature = "postgres-federation")]
@@ -319,14 +308,8 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let read_provider = Arc::new(
-            SqlTable::new_with_schema(
-                "postgres",
-                &dyn_pool,
-                Arc::clone(&schema),
-                name,
-                Some(Engine::Postgres),
-            )
-            .with_dialect(Arc::new(PostgreSqlDialect {})),
+            SqlTable::new_with_schema("postgres", &dyn_pool, Arc::clone(&schema), name)
+                .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
 
         #[cfg(feature = "postgres-federation")]
@@ -340,7 +323,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Postgres {
     table: TableReference,
     pool: Arc<PostgresConnectionPool>,

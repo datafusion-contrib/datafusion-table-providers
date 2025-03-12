@@ -1,19 +1,10 @@
-use datafusion::error::Result as DataFusionResult;
-use datafusion::logical_expr::Expr;
-use datafusion::sql::unparser::dialect::DefaultDialect;
-use datafusion::sql::unparser::Unparser;
 use snafu::prelude::*;
 use std::hash::Hash;
-use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
-use datafusion::{
-    error::Result as DataFusionResult,
-    sql::unparser::{dialect::DefaultDialect, Unparser},
-};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use crate::{sql::sql_provider_datafusion::Engine, UnsupportedTypeAction};
+use crate::UnsupportedTypeAction;
 
 pub mod column_reference;
 pub mod constraints;
@@ -33,22 +24,6 @@ pub enum Error {
     UnableToGenerateSQL {
         source: datafusion::error::DataFusionError,
     },
-}
-
-pub fn filters_to_sql(filters: &[Expr], engine: Option<Engine>) -> Result<String, Error> {
-    let dialect = engine
-        .map(|e| e.dialect())
-        .unwrap_or(Arc::new(DefaultDialect {}));
-    Ok(filters
-        .iter()
-        .map(|f| {
-            Unparser::new(dialect.as_ref())
-                .expr_to_sql(f)
-                .map(|e| e.to_string())
-        })
-        .collect::<DataFusionResult<Vec<String>>>()
-        .context(UnableToGenerateSQLSnafu)?
-        .join(" AND "))
 }
 
 #[must_use]

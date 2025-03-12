@@ -74,7 +74,8 @@ impl MySQLWindowVisitor {
 mod test {
     use datafusion::sql::sqlparser::{
         self,
-        ast::{self, ObjectName, WindowFrame},
+        ast::{self, helpers::attached_token::AttachedToken, ObjectName, WindowFrame},
+        tokenizer::{Span, Token, TokenWithSpan},
     };
 
     use super::*;
@@ -85,13 +86,16 @@ mod test {
             name: ObjectName(vec![Ident {
                 value: "RANK".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(ast::WindowSpec {
                 window_name: None,
                 partition_by: vec![],
                 order_by: vec![sqlparser::ast::OrderByExpr {
-                    expr: sqlparser::ast::Expr::Wildcard,
+                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                        Token::Char('*'),
+                    ))),
                     asc: None,
                     nulls_first: Some(true),
                     with_fill: None,
@@ -106,13 +110,16 @@ mod test {
             null_treatment: None,
             filter: None,
             within_group: vec![],
+            uses_odbc_syntax: false,
         };
 
         let expected = Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
             window_name: None,
             partition_by: vec![],
             order_by: vec![sqlparser::ast::OrderByExpr {
-                expr: sqlparser::ast::Expr::Wildcard,
+                expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                    Token::Char('*'),
+                ))),
                 asc: None,
                 nulls_first: Some(true),
                 with_fill: None,
@@ -131,13 +138,16 @@ mod test {
             name: ObjectName(vec![Ident {
                 value: "RANK".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: sqlparser::ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
                 window_name: None,
                 partition_by: vec![],
                 order_by: vec![sqlparser::ast::OrderByExpr {
-                    expr: sqlparser::ast::Expr::Wildcard,
+                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                        Token::Char('*'),
+                    ))),
                     asc: None,
                     nulls_first: Some(true),
                     with_fill: None,
@@ -152,13 +162,16 @@ mod test {
             null_treatment: None,
             filter: None,
             within_group: vec![],
+            uses_odbc_syntax: false,
         };
 
         let expected = Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
             window_name: None,
             partition_by: vec![],
             order_by: vec![sqlparser::ast::OrderByExpr {
-                expr: sqlparser::ast::Expr::Wildcard,
+                expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                    Token::Char('*'),
+                ))),
                 asc: None,
                 nulls_first: None,
                 with_fill: None,

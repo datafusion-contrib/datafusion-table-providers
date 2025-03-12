@@ -1,5 +1,4 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::Dialect;
@@ -47,14 +46,8 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(
-            "duckdb",
-            pool,
-            schema,
-            table_reference,
-            Some(Engine::DuckDB),
-        )
-        .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
+        let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
+            .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
 
         Self {
             base_table,

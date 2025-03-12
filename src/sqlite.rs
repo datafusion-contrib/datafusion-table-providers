@@ -14,8 +14,6 @@ use crate::UnsupportedTypeAction;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
-use datafusion::arrow::array::{Int64Array, StringArray};
-use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::{
     catalog::TableProviderFactory,
@@ -169,45 +167,6 @@ impl SqliteTableProviderFactory {
             .unwrap_or(default_filepath);
 
         Ok(filepath.to_string())
-    }
-
-    pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
-        let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
-        match busy_timeout {
-            Some(busy_timeout) => {
-                let duration = fundu::parse_duration(&busy_timeout)
-                    .context(UnableToParseBusyTimeoutParameterSnafu)?;
-                Ok(duration)
-            }
-            None => Ok(Duration::from_millis(5000)),
-        }
-    }
-
-    pub async fn get_or_init_instance(
-        &self,
-        db_path: impl Into<Arc<str>>,
-        mode: Mode,
-        busy_timeout: Duration,
-    ) -> Result<SqliteConnectionPool> {
-        let db_path = db_path.into();
-        let key = match mode {
-            Mode::Memory => DbInstanceKey::memory(),
-            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
-        };
-        let mut instances = self.instances.lock().await;
-
-        if let Some(instance) = instances.get(&key) {
-            return instance.try_clone().await.context(DbConnectionPoolSnafu);
-        }
-
-        let pool = SqliteConnectionPoolFactory::new(&db_path, mode, busy_timeout)
-            .build()
-            .await
-            .context(DbConnectionPoolSnafu)?;
-
-        instances.insert(key, pool.try_clone().await.context(DbConnectionPoolSnafu)?);
-
-        Ok(pool)
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
@@ -453,7 +412,7 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Sqlite {
     table: TableReference,
     schema: SchemaRef,

@@ -15,20 +15,22 @@ limitations under the License.
 */
 use crate::mysql::write::MySQLTableWriter;
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool;
 use crate::sql::db_connection_pool::dbconnection::mysqlconn::MySQLConnection;
 use crate::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::{self, Engine, SqlTable};
+use crate::sql::db_connection_pool::{self, mysqlpool};
+use crate::sql::sql_provider_datafusion::{self, SqlTable};
 use crate::util::{
     self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
     indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
 };
+use crate::util::{column_reference, constraints, on_conflict};
 use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::MySqlDialect;
 use datafusion::{
     catalog::TableProviderFactory, common::Constraints, datasource::TableProvider,
     error::DataFusionError, logical_expr::CreateExternalTable, sql::TableReference,
@@ -124,7 +126,7 @@ impl MySQLTableFactory {
         let pool = Arc::clone(&self.pool);
         let dyn_pool: Arc<DynMySQLConnectionPool> = pool;
         let table_provider = Arc::new(
-            MySQLTable::new(&pool, table_reference)
+            MySQLTable::new(&dyn_pool, table_reference)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
@@ -274,13 +276,15 @@ impl TableProviderFactory for MySQLTableProviderFactory {
 
         let dyn_pool: Arc<DynMySQLConnectionPool> = pool;
 
-        let read_provider = Arc::new(SqlTable::new_with_schema(
-            "mysql",
-            &dyn_pool,
-            Arc::clone(&schema),
-            TableReference::bare(name.clone()),
-            Some(Engine::MySQL),
-        ));
+        let read_provider = Arc::new(
+            SqlTable::new_with_schema(
+                "mysql",
+                &dyn_pool,
+                Arc::clone(&schema),
+                TableReference::bare(name.clone()),
+            )
+            .with_dialect(Arc::new(MySqlDialect {})),
+        );
 
         #[cfg(feature = "mysql-federation")]
         let read_provider = Arc::new(read_provider.create_federated_table_provider()?);
@@ -375,7 +379,8 @@ impl MySQL {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
+        let insert_table_builder =
+            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));

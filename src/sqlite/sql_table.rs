@@ -1,7 +1,7 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::SqliteDialect;
 use futures::TryStreamExt;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
@@ -40,13 +40,8 @@ impl<T, P> SQLiteTable<T, P> {
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(
-            "sqlite",
-            pool,
-            schema,
-            table_reference,
-            Some(Engine::SQLite),
-        );
+        let base_table = SqlTable::new_with_schema("sqlite", pool, schema, table_reference)
+            .with_dialect(Arc::new(SqliteDialect {}));
 
         Self { base_table }
     }

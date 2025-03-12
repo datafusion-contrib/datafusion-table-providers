@@ -86,7 +86,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
         "xml" | "json" => Ok(DataType::LargeUtf8),
         "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
-        "array" => parse_array_type(type_details),
+        "array" => parse_array_type(context),
         "anyarray" => Ok(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Binary,
@@ -96,7 +96,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Field::new("lower", DataType::Int32, true),
             Field::new("upper", DataType::Int32, true),
         ]))),
-        "composite" => parse_composite_type(type_details),
+        "composite" => parse_composite_type(context),
         "geometry" | "geography" => Ok(DataType::Binary),
 
         // `jsonb` is currently not supported, but if the user has set the `UnsupportedTypeAction` to `String` we'll return `Utf8`.
@@ -479,27 +479,27 @@ mod tests {
 
         // Test geometric types
         assert_eq!(
-            pg_data_type_to_arrow_type("point", None).expect("Failed to convert point"),
+            pg_data_type_to_arrow_type("point", &context).expect("Failed to convert point"),
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 2)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("line", None).expect("Failed to convert line"),
+            pg_data_type_to_arrow_type("line", &context).expect("Failed to convert line"),
             DataType::Binary
         );
 
         // Test network address types
         assert_eq!(
-            pg_data_type_to_arrow_type("inet", None).expect("Failed to convert inet"),
+            pg_data_type_to_arrow_type("inet", &context).expect("Failed to convert inet"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("cidr", None).expect("Failed to convert cidr"),
+            pg_data_type_to_arrow_type("cidr", &context).expect("Failed to convert cidr"),
             DataType::Utf8
         );
 
         // Test range types
         assert_eq!(
-            pg_data_type_to_arrow_type("int4range", None).expect("Failed to convert int4range"),
+            pg_data_type_to_arrow_type("int4range", &context).expect("Failed to convert int4range"),
             DataType::Struct(Fields::from(vec![
                 Field::new("lower", DataType::Int32, true),
                 Field::new("upper", DataType::Int32, true),
