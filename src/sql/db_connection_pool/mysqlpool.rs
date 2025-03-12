@@ -5,7 +5,7 @@ use mysql_async::{
     prelude::{Queryable, ToValue},
     DriverError, Opts, Params, Row, SslOpts,
 };
-use secrecy::{ExposeSecret, Secret, SecretString};
+use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
@@ -83,36 +83,37 @@ impl MySQLConnectionPool {
         let mut ssl_mode = "required";
         let mut ssl_rootcert_path: Option<PathBuf> = None;
 
-        if let Some(mysql_connection_string) =
-            params.get("connection_string").map(Secret::expose_secret)
+        if let Some(mysql_connection_string) = params
+            .get("connection_string")
+            .map(SecretBox::expose_secret)
         {
             connection_string = mysql_async::OptsBuilder::from_opts(
-                mysql_async::Opts::from_url(mysql_connection_string.as_str())
+                mysql_async::Opts::from_url(mysql_connection_string)
                     .context(InvalidConnectionStringSnafu)?,
             );
         } else {
-            if let Some(mysql_host) = params.get("host").map(Secret::expose_secret) {
-                connection_string = connection_string.ip_or_hostname(mysql_host.as_str());
+            if let Some(mysql_host) = params.get("host").map(SecretBox::expose_secret) {
+                connection_string = connection_string.ip_or_hostname(mysql_host);
             }
-            if let Some(mysql_user) = params.get("user").map(Secret::expose_secret) {
+            if let Some(mysql_user) = params.get("user").map(SecretBox::expose_secret) {
                 connection_string = connection_string.user(Some(mysql_user));
             }
-            if let Some(mysql_db) = params.get("db").map(Secret::expose_secret) {
+            if let Some(mysql_db) = params.get("db").map(SecretBox::expose_secret) {
                 connection_string = connection_string.db_name(Some(mysql_db));
             }
-            if let Some(mysql_pass) = params.get("pass").map(Secret::expose_secret) {
+            if let Some(mysql_pass) = params.get("pass").map(SecretBox::expose_secret) {
                 connection_string = connection_string.pass(Some(mysql_pass));
             }
-            if let Some(mysql_tcp_port) = params.get("tcp_port").map(Secret::expose_secret) {
+            if let Some(mysql_tcp_port) = params.get("tcp_port").map(SecretBox::expose_secret) {
                 connection_string =
                     connection_string.tcp_port(mysql_tcp_port.parse::<u16>().unwrap_or(3306));
             }
         }
 
-        if let Some(mysql_sslmode) = params.get("sslmode").map(Secret::expose_secret) {
+        if let Some(mysql_sslmode) = params.get("sslmode").map(SecretBox::expose_secret) {
             match mysql_sslmode.to_lowercase().as_str() {
                 "disabled" | "required" | "preferred" => {
-                    ssl_mode = mysql_sslmode.as_str();
+                    ssl_mode = mysql_sslmode;
                 }
                 _ => {
                     InvalidParameterSnafu {
@@ -122,7 +123,7 @@ impl MySQLConnectionPool {
                 }
             }
         }
-        if let Some(mysql_sslrootcert) = params.get("sslrootcert").map(Secret::expose_secret) {
+        if let Some(mysql_sslrootcert) = params.get("sslrootcert").map(SecretBox::expose_secret) {
             if !std::path::Path::new(mysql_sslrootcert).exists() {
                 InvalidRootCertPathSnafu {
                     path: mysql_sslrootcert,
