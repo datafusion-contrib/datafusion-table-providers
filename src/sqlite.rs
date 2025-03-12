@@ -9,6 +9,10 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool, Mode,
 };
 use crate::sql::sql_provider_datafusion;
+use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
+use arrow::array::{Int64Array, StringArray};
+use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::arrow::array::{Int64Array, StringArray};
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
@@ -77,6 +81,9 @@ pub enum Error {
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error },
 
+    #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
+    DiskFull {},
+
     #[snafu(display("Unable to deleta all table data in Sqlite: {source}"))]
     UnableToDeleteAllTableData { source: rusqlite::Error },
 
@@ -102,6 +109,11 @@ pub enum Error {
         "Unable to parse SQLite busy_timeout parameter, ensure it is a valid duration"
     ))]
     UnableToParseBusyTimeoutParameter { source: fundu::ParseError },
+
+    #[snafu(display(
+        "Failed to create '{table_name}': creating a table with a schema is not supported"
+    ))]
+    TableWithSchemaCreationNotSupported { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -134,20 +146,68 @@ impl SqliteTableProviderFactory {
         })
     }
 
-    #[must_use]
-    pub fn sqlite_file_path(&self, name: &str, options: &HashMap<String, String>) -> String {
+    /// Get the path to the SQLite file database.
+    ///
+    /// ## Errors
+    ///
+    /// - If the path includes absolute sequences to escape the current directory, like `./`, `../`, or `/`.
+    pub fn sqlite_file_path(
+        &self,
+        name: &str,
+        options: &HashMap<String, String>,
+    ) -> Result<String, Error> {
         let options = util::remove_prefix_from_hashmap_keys(options.clone(), "sqlite_");
 
         let db_base_folder = options
             .get(SQLITE_DB_BASE_FOLDER_PARAM)
             .cloned()
             .unwrap_or(".".to_string()); // default to the current directory
-        let default_filepath = format!("{db_base_folder}/{name}_sqlite.db");
+        let default_filepath = &format!("{db_base_folder}/{name}_sqlite.db");
 
-        options
+        let filepath = options
             .get(SQLITE_DB_PATH_PARAM)
-            .cloned()
-            .unwrap_or(default_filepath)
+            .unwrap_or(default_filepath);
+
+        Ok(filepath.to_string())
+    }
+
+    pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
+        let busy_timeout = options.get(SQLITE_BUSY_TIMEOUT_PARAM).cloned();
+        match busy_timeout {
+            Some(busy_timeout) => {
+                let duration = fundu::parse_duration(&busy_timeout)
+                    .context(UnableToParseBusyTimeoutParameterSnafu)?;
+                Ok(duration)
+            }
+            None => Ok(Duration::from_millis(5000)),
+        }
+    }
+
+    pub async fn get_or_init_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+        mode: Mode,
+        busy_timeout: Duration,
+    ) -> Result<SqliteConnectionPool> {
+        let db_path = db_path.into();
+        let key = match mode {
+            Mode::Memory => DbInstanceKey::memory(),
+            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
+        };
+        let mut instances = self.instances.lock().await;
+
+        if let Some(instance) = instances.get(&key) {
+            return instance.try_clone().await.context(DbConnectionPoolSnafu);
+        }
+
+        let pool = SqliteConnectionPoolFactory::new(&db_path, mode, busy_timeout)
+            .build()
+            .await
+            .context(DbConnectionPoolSnafu)?;
+
+        instances.insert(key, pool.try_clone().await.context(DbConnectionPoolSnafu)?);
+
+        Ok(pool)
     }
 
     pub fn sqlite_busy_timeout(&self, options: &HashMap<String, String>) -> Result<Duration> {
@@ -207,7 +267,15 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-        let name = cmd.name.to_string();
+        if cmd.name.schema().is_some() {
+            TableWithSchemaCreationNotSupportedSnafu {
+                table_name: cmd.name.to_string(),
+            }
+            .fail()
+            .map_err(to_datafusion_error)?;
+        }
+
+        let name = cmd.name.clone();
         let mut options = cmd.options.clone();
         let mode = options.remove("mode").unwrap_or_default();
         let mode: Mode = mode.as_str().into();
@@ -246,7 +314,10 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let busy_timeout = self
             .sqlite_busy_timeout(&cmd.options)
             .map_err(to_datafusion_error)?;
-        let db_path: Arc<str> = self.sqlite_file_path(&name, &cmd.options).into();
+        let db_path: Arc<str> = self
+            .sqlite_file_path(name.table(), &cmd.options)
+            .map_err(to_datafusion_error)?
+            .into();
 
         let pool: Arc<SqliteConnectionPool> = Arc::new(
             self.get_or_init_instance(Arc::clone(&db_path), mode, busy_timeout)
@@ -268,6 +339,10 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         };
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        let schema: SchemaRef =
+            SqliteConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
+                .map_err(|e| DataFusionError::External(e.into()))?;
+
         let sqlite = Arc::new(Sqlite::new(
             name.clone(),
             Arc::clone(&schema),
@@ -322,7 +397,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let read_provider = Arc::new(SQLiteTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
-            TableReference::bare(name.clone()),
+            name,
         ));
 
         let sqlite = Arc::into_inner(sqlite)
@@ -330,12 +405,8 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             .map_err(to_datafusion_error)?;
 
         #[cfg(feature = "sqlite-federation")]
-        let read_provider: Arc<dyn TableProvider> = if mode == Mode::File {
-            // federation is disabled for in-memory mode until memory connections are updated to use the same database instance instead of separate instances
-            Arc::new(read_provider.create_federated_table_provider()?)
-        } else {
-            read_provider
-        };
+        let read_provider: Arc<dyn TableProvider> =
+            Arc::new(read_provider.create_federated_table_provider()?);
 
         Ok(SqliteTableWriter::create(
             read_provider,
@@ -384,22 +455,32 @@ fn to_datafusion_error(error: Error) -> DataFusionError {
 
 #[derive(Debug, Clone)]
 pub struct Sqlite {
-    table_name: String,
+    table: TableReference,
     schema: SchemaRef,
     pool: Arc<SqliteConnectionPool>,
     constraints: Constraints,
 }
 
+impl std::fmt::Debug for Sqlite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sqlite")
+            .field("table_name", &self.table)
+            .field("schema", &self.schema)
+            .field("constraints", &self.constraints)
+            .finish()
+    }
+}
+
 impl Sqlite {
     #[must_use]
     pub fn new(
-        table_name: String,
+        table: TableReference,
         schema: SchemaRef,
         pool: Arc<SqliteConnectionPool>,
         constraints: Constraints,
     ) -> Self {
         Self {
-            table_name,
+            table,
             schema,
             pool,
             constraints,
@@ -408,7 +489,7 @@ impl Sqlite {
 
     #[must_use]
     pub fn table_name(&self) -> &str {
-        &self.table_name
+        self.table.table()
     }
 
     #[must_use]
@@ -439,7 +520,7 @@ impl Sqlite {
           WHERE type='table'
           AND name = '{name}'
         )"#,
-            name = self.table_name
+            name = self.table
         );
         tracing::trace!("{sql}");
 
@@ -460,7 +541,7 @@ impl Sqlite {
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
     ) -> rusqlite::Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table_name, vec![batch]);
+        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -475,7 +556,10 @@ impl Sqlite {
     }
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-        transaction.execute(format!(r#"DELETE FROM "{}""#, self.table_name).as_str(), [])?;
+        transaction.execute(
+            format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+            [],
+        )?;
 
         Ok(())
     }
@@ -486,7 +570,7 @@ impl Sqlite {
         primary_keys: Vec<String>,
     ) -> rusqlite::Result<()> {
         let create_table_statement =
-            CreateTableBuilder::new(Arc::clone(&self.schema), &self.table_name)
+            CreateTableBuilder::new(Arc::clone(&self.schema), self.table.table())
                 .primary_keys(primary_keys);
         let sql = create_table_statement.build_sqlite();
 
@@ -501,7 +585,7 @@ impl Sqlite {
         columns: Vec<&str>,
         unique: bool,
     ) -> rusqlite::Result<()> {
-        let mut index_builder = IndexBuilder::new(&self.table_name, columns);
+        let mut index_builder = IndexBuilder::new(self.table.table(), columns);
         if unique {
             index_builder = index_builder.unique();
         }
@@ -518,7 +602,7 @@ impl Sqlite {
     ) -> DataFusionResult<HashSet<String>> {
         let query_result = sqlite_conn
             .query_arrow(
-                format!("PRAGMA index_list({name})", name = self.table_name).as_str(),
+                format!("PRAGMA index_list({name})", name = self.table).as_str(),
                 &[],
                 None,
             )
@@ -554,7 +638,7 @@ impl Sqlite {
     ) -> DataFusionResult<HashSet<String>> {
         let query_result = sqlite_conn
             .query_arrow(
-                format!("PRAGMA table_info({name})", name = self.table_name).as_str(),
+                format!("PRAGMA table_info({name})", name = self.table).as_str(),
                 &[],
                 None,
             )
@@ -596,7 +680,9 @@ impl Sqlite {
     ) -> DataFusionResult<bool> {
         let expected_indexes_str_map: HashSet<String> = indexes
             .iter()
-            .map(|(col, _)| IndexBuilder::new(&self.table_name, col.iter().collect()).index_name())
+            .map(|(col, _)| {
+                IndexBuilder::new(self.table.table(), col.iter().collect()).index_name()
+            })
             .collect();
 
         let actual_indexes_str_map = self.get_indexes(sqlite_conn).await?;
@@ -612,14 +698,14 @@ impl Sqlite {
             tracing::warn!(
                 "Missing indexes detected for the table '{name}': {:?}.",
                 missing_in_actual,
-                name = self.table_name
+                name = self.table
             );
         }
         if !extra_in_actual.is_empty() {
             tracing::warn!(
                 "The table '{name}' contains unexpected indexes not presented in the configuration: {:?}.",
                 extra_in_actual,
-                name = self.table_name
+                name = self.table
             );
         }
 
@@ -646,14 +732,14 @@ impl Sqlite {
             tracing::warn!(
                 "Missing primary keys detected for the table '{name}': {:?}.",
                 missing_in_actual,
-                name = self.table_name
+                name = self.table
             );
         }
         if !extra_in_actual.is_empty() {
             tracing::warn!(
                 "The table '{name}' contains unexpected primary keys not presented in the configuration: {:?}.",
                 extra_in_actual,
-                name = self.table_name
+                name = self.table
             );
         }
 
@@ -663,7 +749,7 @@ impl Sqlite {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use datafusion::arrow::datatypes::{DataType, Schema};
+    use arrow::datatypes::{DataType, Schema};
     use datafusion::{
         common::{Constraint, ToDFSchema},
         prelude::SessionContext,
@@ -674,9 +760,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_sqlite_table_creation_with_indexes() {
         let schema = Arc::new(Schema::new(vec![
-            datafusion::arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
-            datafusion::arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
-            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            arrow::datatypes::Field::new("first_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("last_name", DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
         ]));
 
         let options: HashMap<String, String> = [(
@@ -697,12 +783,15 @@ pub(crate) mod tests {
 
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
 
-        let expected_primary_keys: HashSet<String> = ["id".to_string()].iter().cloned().collect();
+        let primary_keys_constraints = {
+            let schema = Arc::clone(&schema);
+            let indices: Vec<usize> = ["id"]
+                .iter()
+                .filter_map(|&col_name| schema.column_with_name(col_name).map(|(index, _)| index))
+                .collect();
 
-        let primary_keys_constraints =
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![schema
-                .index_of("id")
-                .expect("[id] not found")])]);
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
+        };
 
         let external_table = CreateExternalTable {
             schema: df_schema,
@@ -717,7 +806,7 @@ pub(crate) mod tests {
             options,
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
-            temporary: true,
+            temporary: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -747,6 +836,11 @@ pub(crate) mod tests {
             .await
             .expect("should get primary keys");
 
-        assert_eq!(retrieved_primary_keys, expected_primary_keys);
+        assert_eq!(
+            retrieved_primary_keys,
+            vec!["id".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>()
+        );
     }
 }

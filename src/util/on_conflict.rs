@@ -50,6 +50,13 @@ impl OnConflict {
                         update_cols.push_str(", ");
                     }
                 }
+                // This means that all columns are constraint columns, so we should do nothing
+                if update_cols.is_empty() {
+                    return format!(
+                        r#"ON CONFLICT ("{}") DO NOTHING"#,
+                        column.iter().join(r#"", ""#)
+                    );
+                }
                 format!(
                     r#"ON CONFLICT ("{}") DO UPDATE SET {update_cols}"#,
                     column.iter().join(r#"", ""#)

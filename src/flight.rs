@@ -307,6 +307,17 @@ pub struct FlightTable {
     stats: Statistics,
 }
 
+impl std::fmt::Debug for FlightTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlightTable")
+            .field("origin", &self.origin)
+            .field("logical_schema", &self.logical_schema)
+            .field("options", &self.options)
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
 #[async_trait]
 impl TableProvider for FlightTable {
     fn as_any(&self) -> &dyn Any {

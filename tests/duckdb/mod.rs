@@ -46,7 +46,7 @@ async fn arrow_duckdb_round_trip(
     let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
         .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
+        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
         .await
         .expect("insert plan created");
 
@@ -97,6 +97,12 @@ async fn arrow_duckdb_round_trip(
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
+#[case::list_of_structs(get_arrow_list_of_structs_record_batch(), "list_of_structs")]
+#[case::list_of_fixed_size_lists(
+    get_arrow_list_of_fixed_size_lists_record_batch(),
+    "list_of_fixed_size_lists"
+)]
+#[case::list_of_lists(get_arrow_list_of_lists_record_batch(), "list_of_lists")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_duckdb_roundtrip(
     #[case] arrow_result: (RecordBatch, SchemaRef),

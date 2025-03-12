@@ -1,15 +1,19 @@
+use datafusion::error::Result as DataFusionResult;
 use datafusion::logical_expr::Expr;
+use datafusion::sql::unparser::dialect::DefaultDialect;
+use datafusion::sql::unparser::Unparser;
 use snafu::prelude::*;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::sql::sql_provider_datafusion::Engine;
 use datafusion::common::DataFusionError;
 use datafusion::{
     error::Result as DataFusionResult,
     sql::unparser::{dialect::DefaultDialect, Unparser},
 };
+use std::{collections::HashMap, sync::Arc};
+
+use crate::{sql::sql_provider_datafusion::Engine, UnsupportedTypeAction};
 
 pub mod column_reference;
 pub mod constraints;
@@ -17,6 +21,9 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
+
+#[cfg(any(feature = "sqlite", feature = "duckdb", feature = "postgres"))]
+pub mod schema;
 pub mod secrets;
 pub mod test;
 
@@ -85,6 +92,35 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     DataFusionError::External(Box::new(error))
+}
+
+/// If the `UnsupportedTypeAction` is `Error` or `String`, the function will return an error.
+/// If the `UnsupportedTypeAction` is `Warn`, the function will log a warning.
+/// If the `UnsupportedTypeAction` is `Ignore`, the function will do nothing.
+///
+/// Used in the handling of unsupported schemas to determine if columns are removed or if the function should return an error.
+///
+/// Components that want to handle `UnsupportedTypeAction::String` via the component's own logic should handle it before calling this function.
+///
+/// # Errors
+///
+/// If the `UnsupportedTypeAction` is `Error` or `String` the function will return an error.
+pub fn handle_unsupported_type_error<E>(
+    unsupported_type_action: UnsupportedTypeAction,
+    error: E,
+) -> Result<(), E>
+where
+    E: std::error::Error + Send + Sync,
+{
+    match unsupported_type_action {
+        UnsupportedTypeAction::Error | UnsupportedTypeAction::String => return Err(error),
+        UnsupportedTypeAction::Warn => {
+            tracing::warn!("{error}");
+        }
+        UnsupportedTypeAction::Ignore => {}
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]

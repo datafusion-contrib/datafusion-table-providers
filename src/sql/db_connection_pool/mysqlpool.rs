@@ -22,31 +22,31 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("MySQL connection error: {source}"))]
+    #[snafu(display("MySQL connection failed.\n{source}\nFor further information, refer to the MySQL manual: https://dev.mysql.com/doc/mysql-errors/9.1/en/error-reference-introduction.html"))]
     MySQLConnectionError { source: mysql_async::Error },
 
-    #[snafu(display("Invalid MySQL connection string: {source} "))]
+    #[snafu(display(
+        "Invalid MySQL connection string.\n{source}\nEnsure the MySQL connection string is valid"
+    ))]
     InvalidConnectionString { source: mysql_async::UrlError },
 
-    #[snafu(display("Invalid parameter: {parameter_name}"))]
+    #[snafu(display("Invalid value for parameter {parameter_name}\nEnsure the value is valid for parameter {parameter_name}"))]
     InvalidParameterError { parameter_name: String },
 
-    #[snafu(display("Invalid root cert path: {path}"))]
+    #[snafu(display("Invalid root cert path: {path}\nEnsure the root cert path is valid"))]
     InvalidRootCertPathError { path: String },
 
-    #[snafu(display("Cannot connect to MySQL on {host}:{port}. Ensure that the host and port are correctly configured, and that the host is reachable."))]
+    #[snafu(display("Cannot connect to MySQL on {host}:{port}. Ensure the host and port are correct and reachable."))]
     InvalidHostOrPortError {
         source: crate::util::ns_lookup::Error,
         host: String,
         port: u16,
     },
 
-    #[snafu(display(
-        "Authentication failed. Ensure that the username and password are correctly configured."
-    ))]
+    #[snafu(display("Authentication failed. Verify username and password."))]
     InvalidUsernameOrPassword,
 
-    #[snafu(display("{message}"))]
+    #[snafu(display("{message}\nEnsure the given MySQL database exists"))]
     UnknownMySQLDatabase { message: String },
 }
 
@@ -186,7 +186,14 @@ impl MySQLConnectionPool {
     /// Returns an error if there is a problem creating the connection pool.
     pub async fn connect_direct(&self) -> super::Result<MySQLConnection> {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
+        let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
+
+        // Set MySQL session default time zone to UTC to match Datafusion
+        let _: Vec<Row> = conn
+            .exec("SET time_zone = '+00:00'", Params::Empty)
+            .await
+            .context(MySQLConnectionSnafu)?;
+
         Ok(MySQLConnection::new(conn))
     }
 }
@@ -245,7 +252,14 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
     ) -> super::Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>>
     {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
+        let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
+
+        // Set MySQL session default time zone to UTC to match Datafusion
+        let _: Vec<Row> = conn
+            .exec("SET time_zone = '+00:00'", Params::Empty)
+            .await
+            .context(MySQLConnectionSnafu)?;
+
         Ok(Box::new(MySQLConnection::new(conn)))
     }
 

@@ -8,23 +8,33 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [dependencies]
+arrow = "54.2.1"
+arrow-array = { version = "54.2.1", optional = true }
 arrow-flight = { version = "54.2.1", optional = true, features = [
   "flight-sql-experimental",
   "tls",
 ] }
+arrow-schema = { version = "54.2.1", optional = true, features = ["serde"] }
+arrow-json = "54.2.1"
 arrow-odbc = { version = "=15.1.1", optional = true }
 async-stream = { version = "0.3", optional = true }
 async-trait = "0.1"
+base64 = { version = "0.22.1", optional = true }
 bb8 = { version = "0.9", optional = true }
 bb8-postgres = { version = "0.9", optional = true }
 bigdecimal = "0.4"
 byteorder = "1.5.0"
+bytes = { version = "1.7.1", optional = true }
+byte-unit = { version = "5.1.4", optional = true }
 chrono = "0.4"
 dashmap = "6.1.0"
 datafusion = { version = "45", default-features = false }
+datafusion-expr = { version = "45", optional = true }
 datafusion-federation = { version = "=0.3.6", features = [
   "sql",
 ], optional = true }
+datafusion-physical-expr = { version = "45", optional = true }
+datafusion-physical-plan = { version = "45", optional = true }
 datafusion-proto = { version = "45", optional = true }
 duckdb = { version = "=1.2.0", features = [
   "bundled",
@@ -106,6 +116,8 @@ duckdb = [
   "dep:uuid",
   "dep:dyn-clone",
   "dep:async-stream",
+  "dep:arrow-schema",
+  "dep:byte-unit",
 ]
 duckdb-federation = ["duckdb", "federation"]
 federation = ["dep:datafusion-federation"]
@@ -114,6 +126,7 @@ flight = [
   "datafusion/serde",
   "dep:datafusion-proto",
   "dep:serde",
+  "dep:prost",
   "dep:tonic",
 ]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -129,9 +142,10 @@ postgres = [
   "dep:native-tls",
   "dep:pem",
   "dep:async-stream",
+  "dep:arrow-schema",
 ]
 postgres-federation = ["postgres", "federation"]
-sqlite = ["dep:rusqlite", "dep:tokio-rusqlite"]
+sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 

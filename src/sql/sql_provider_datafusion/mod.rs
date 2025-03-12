@@ -103,6 +103,17 @@ impl<T, P> fmt::Debug for SqlTable<T, P> {
     }
 }
 
+impl<T, P> std::fmt::Debug for SqlTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlTable")
+            .field("name", &self.name)
+            .field("table_reference", &self.table_reference)
+            .field("schema", &self.schema)
+            .field("engine", &self.engine)
+            .finish()
+    }
+}
+
 impl<T, P> SqlTable<T, P> {
     pub async fn new(
         name: &str,

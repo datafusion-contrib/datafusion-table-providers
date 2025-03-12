@@ -7,29 +7,27 @@ use super::{
     dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
     DbConnectionPool, Mode, Result,
 };
-use crate::sql::db_connection_pool::{
-    dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
-    JoinPushDown,
+use crate::{
+    sql::db_connection_pool::{
+        dbconnection::{duckdbconn::DuckDbConnection, DbConnection, SyncDbConnection},
+        JoinPushDown,
+    },
+    UnsupportedTypeAction,
 };
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("DuckDBError: {source}"))]
-    DuckDBError { source: duckdb::Error },
+    #[snafu(display("DuckDB connection failed.\n{source}\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/"))]
+    DuckDBConnectionError { source: duckdb::Error },
 
-    #[snafu(display("ConnectionPoolError: {source}"))]
+    #[snafu(display(
+        "DuckDB connection failed.\n{source}\nAdjust the DuckDB connection pool parameters for sufficient capacity."
+    ))]
     ConnectionPoolError { source: r2d2::Error },
 
-    #[snafu(display("Unable to connect to DuckDB: {source}"))]
-    UnableToConnect { source: duckdb::Error },
-
-    #[snafu(display("Unable to attach DuckDB database {path}: {source}"))]
-    UnableToAttachDatabase {
-        path: Arc<str>,
-        source: std::io::Error,
-    },
-
-    #[snafu(display("Unable to extract database name from database file path"))]
+    #[snafu(display(
+        "Invalid DuckDB file path: {path}. Ensure it contains a valid database name."
+    ))]
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
@@ -40,11 +38,18 @@ pub struct DuckDbConnectionPool {
     join_push_down: JoinPushDown,
     attached_databases: Vec<Arc<str>>,
     mode: Mode,
+    unsupported_type_action: UnsupportedTypeAction,
 }
 
 impl std::fmt::Debug for DuckDbConnectionPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DuckDbConnectionPool {}", self.path)
+        f.debug_struct("DuckDbConnectionPool")
+            .field("path", &self.path)
+            .field("join_push_down", &self.join_push_down)
+            .field("attached_databases", &self.attached_databases)
+            .field("mode", &self.mode)
+            .field("unsupported_type_action", &self.unsupported_type_action)
+            .finish()
     }
 }
 
@@ -61,27 +66,27 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    /// * `UnableToConnectSnafu` - If there is an error connecting to the database
     pub fn new_memory() -> Result<Self> {
         let config = get_config(&AccessMode::ReadWrite)?;
-        let manager = DuckdbConnectionManager::memory_with_flags(config).context(DuckDBSnafu)?;
+        let manager =
+            DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
         let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
 
         test_connection(&conn)?;
 
         Ok(DuckDbConnectionPool {
             path: ":memory:".into(),
             pool,
-            // There can't be any other tables that share the same context for an in-memory DuckDB.
-            join_push_down: JoinPushDown::Disallow,
+            join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
             attached_databases: Vec::new(),
             mode: Mode::Memory,
+            unsupported_type_action: UnsupportedTypeAction::Error,
         })
     }
 
@@ -98,18 +103,17 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    /// * `UnableToConnectSnafu` - If there is an error connecting to the database
     pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
         let config = get_config(access_mode)?;
-        let manager =
-            DuckdbConnectionManager::file_with_flags(path, config).context(DuckDBSnafu)?;
+        let manager = DuckdbConnectionManager::file_with_flags(path, config)
+            .context(DuckDBConnectionSnafu)?;
         let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBSnafu)?;
+            .context(DuckDBConnectionSnafu)?;
 
         test_connection(&conn)?;
 
@@ -120,7 +124,14 @@ impl DuckDbConnectionPool {
             join_push_down: JoinPushDown::AllowedFor(path.to_string()),
             attached_databases: Vec::new(),
             mode: Mode::File,
+            unsupported_type_action: UnsupportedTypeAction::Error,
         })
+    }
+
+    #[must_use]
+    pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
+        self.unsupported_type_action = action;
+        self
     }
 
     #[must_use]
@@ -142,7 +153,7 @@ impl DuckDbConnectionPool {
     ///
     /// # Errors
     ///
-    /// * `DuckDBSnafu` - If there is an error creating the connection pool
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     pub fn connect_sync(
         self: Arc<Self>,
     ) -> Result<
@@ -155,7 +166,9 @@ impl DuckDbConnectionPool {
         let attachments = self.get_attachments()?;
 
         Ok(Box::new(
-            DuckDbConnection::new(conn).with_attachments(attachments),
+            DuckDbConnection::new(conn)
+                .with_attachments(attachments)
+                .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 
@@ -196,7 +209,9 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let attachments = self.get_attachments()?;
 
         Ok(Box::new(
-            DuckDbConnection::new(conn).with_attachments(attachments),
+            DuckDbConnection::new(conn)
+                .with_attachments(attachments)
+                .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
 
@@ -206,7 +221,8 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 }
 
 fn test_connection(conn: &r2d2::PooledConnection<DuckdbConnectionManager>) -> Result<()> {
-    conn.execute("SELECT 1", []).context(UnableToConnectSnafu)?;
+    conn.execute("SELECT 1", [])
+        .context(DuckDBConnectionSnafu)?;
     Ok(())
 }
 
@@ -217,7 +233,7 @@ fn get_config(access_mode: &AccessMode) -> Result<duckdb::Config> {
             AccessMode::ReadWrite => duckdb::AccessMode::ReadWrite,
             AccessMode::Automatic => duckdb::AccessMode::Automatic,
         })
-        .context(DuckDBSnafu)?;
+        .context(DuckDBConnectionSnafu)?;
 
     Ok(config)
 }
@@ -240,8 +256,22 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
+    use rand::Rng;
+
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
+    use std::sync::Arc;
+
+    fn random_db_name() -> String {
+        let mut rng = rand::thread_rng();
+        let mut name = String::new();
+
+        for _ in 0..10 {
+            name.push(rng.gen_range(b'a'..=b'z') as char);
+        }
+
+        format!("./{name}.duckdb")
+    }
 
     #[tokio::test]
     async fn test_duckdb_connection_pool() {
@@ -262,5 +292,80 @@ mod test {
 
         conn.query_arrow("SELECT * FROM test", &[], None)
             .expect("Query should be successful");
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "duckdb-federation")]
+    async fn test_duckdb_connection_pool_with_attached_databases() {
+        let db_base_name = random_db_name();
+        let db_attached_name = random_db_name();
+        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
+            .expect("DuckDB connection pool to be created")
+            .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
+
+        let pool_attached =
+            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
+                .expect("DuckDB connection pool to be created")
+                .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
+
+        let conn = pool
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
+
+        conn.execute("CREATE TABLE test_one (a INTEGER, b VARCHAR)", [])
+            .expect("Table should be created");
+        conn.execute("INSERT INTO test_one VALUES (1, 'a')", [])
+            .expect("Data should be inserted");
+
+        let conn_attached = pool_attached
+            .pool
+            .get()
+            .expect("DuckDB connection should be established");
+
+        conn_attached
+            .execute("CREATE TABLE test_two (a INTEGER, b VARCHAR)", [])
+            .expect("Table should be created");
+        conn_attached
+            .execute("INSERT INTO test_two VALUES (1, 'a')", [])
+            .expect("Data should be inserted");
+
+        let conn = pool
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn = conn
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
+
+        let conn_attached = pool_attached
+            .connect()
+            .await
+            .expect("DuckDB connection should be established");
+        let conn_attached = conn_attached
+            .as_sync()
+            .expect("DuckDB connection should be synchronous");
+
+        // sleep to let writes clear
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        conn.query_arrow("SELECT * FROM test_one", &[], None)
+            .expect("Query should be successful");
+
+        conn_attached
+            .query_arrow("SELECT * FROM test_two", &[], None)
+            .expect("Query should be successful");
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        conn_attached
+            .query_arrow("SELECT * FROM test_one", &[], None)
+            .expect("Query should be successful");
+
+        conn.query_arrow("SELECT * FROM test_two", &[], None)
+            .expect("Query should be successful");
+
+        std::fs::remove_file(&db_base_name).expect("File should be removed");
+        std::fs::remove_file(&db_attached_name).expect("File should be removed");
     }
 }

@@ -73,7 +73,7 @@ impl SqliteConnectionPoolFactory {
                 }
             }
             (Mode::File, None) => JoinPushDown::AllowedFor(self.path.to_string()),
-            _ => JoinPushDown::Disallow,
+            (Mode::Memory, _) => JoinPushDown::AllowedFor("memory".to_string()),
         };
 
         let attach_databases = if let Some(attach_databases) = &self.attach_databases {
@@ -283,7 +283,8 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory() {
         let db_name = random_db_name();
-        let factory = SqliteConnectionPoolFactory::new(&db_name, Mode::File, Duration::default());
+        let factory =
+            SqliteConnectionPoolFactory::new(&db_name, Mode::File, Duration::from_secs(5));
         let pool = factory.build().await.unwrap();
 
         assert!(pool.join_push_down == JoinPushDown::AllowedFor(db_name.clone()));
@@ -360,7 +361,7 @@ mod tests {
         .with_databases(Some(vec!["./test1.sqlite".into(), "./test2.sqlite".into()]));
         let pool = factory.build().await.unwrap();
 
-        assert!(pool.join_push_down == JoinPushDown::Disallow);
+        assert!(pool.join_push_down == JoinPushDown::AllowedFor("memory".to_string()));
         assert!(pool.mode == Mode::Memory);
         assert_eq!(pool.path, "./test.sqlite".into());
 

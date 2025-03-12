@@ -1,22 +1,25 @@
 use bigdecimal::BigDecimal;
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Offset, TimeZone};
 use datafusion::arrow::{
     array::{
-        array, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, StructArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        array, timezone::Tz, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray,
+        StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
+use datafusion::sql::TableReference;
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SimpleExpr, SqliteQueryBuilder, Table,
+    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef,
 };
 use snafu::Snafu;
-use std::sync::Arc;
+use std::{any::Any, str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]
@@ -177,7 +180,7 @@ macro_rules! push_list_values {
 }
 
 pub struct InsertBuilder {
-    table_name: String,
+    table: TableReference,
     record_batches: Vec<RecordBatch>,
 }
 
@@ -206,9 +209,9 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
 
 impl InsertBuilder {
     #[must_use]
-    pub fn new(table_name: &str, record_batches: Vec<RecordBatch>) -> Self {
+    pub fn new(table: &TableReference, record_batches: Vec<RecordBatch>) -> Self {
         Self {
-            table_name: table_name.to_string(),
+            table: table.clone(),
             record_batches,
         }
     }
@@ -244,6 +247,7 @@ impl InsertBuilder {
                     DataType::Float64 => push_value!(row_values, column, row, Float64Array),
                     DataType::Utf8 => push_value!(row_values, column, row, StringArray),
                     DataType::LargeUtf8 => push_value!(row_values, column, row, LargeStringArray),
+                    DataType::Utf8View => push_value!(row_values, column, row, StringViewArray),
                     DataType::Boolean => push_value!(row_values, column, row, BooleanArray),
                     DataType::Decimal128(_, scale) => {
                         let array = column.as_any().downcast_ref::<array::Decimal128Array>();
@@ -487,11 +491,14 @@ impl InsertBuilder {
                                     valid_array.value(row) * 1_000_000_000,
                                 )
                                 .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -517,11 +524,14 @@ impl InsertBuilder {
                                     valid_array.value(row) * 1_000_000,
                                 )
                                 .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -548,11 +558,14 @@ impl InsertBuilder {
                                 let utc_time =
                                     DateTime::from_timestamp_nanos(valid_array.value(row) * 1_000)
                                         .to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -578,11 +591,14 @@ impl InsertBuilder {
                             if let Some(timezone) = timezone {
                                 let utc_time =
                                     DateTime::from_timestamp_nanos(valid_array.value(row)).to_utc();
-                                let offset = parse_fixed_offset(timezone.as_ref()).ok_or(
+                                let timezone = Tz::from_str(timezone).map_err(|_| {
                                     Error::FailedToCreateInsertStatement {
                                         source: "Unable to parse arrow timezone information".into(),
-                                    },
-                                )?;
+                                    }
+                                })?;
+                                let offset = timezone
+                                    .offset_from_utc_datetime(&utc_time.naive_utc())
+                                    .fix();
                                 let time_with_offset = utc_time.with_timezone(&offset);
                                 row_values.push(time_with_offset.into());
                             } else {
@@ -683,6 +699,18 @@ impl InsertBuilder {
                         let array = column
                             .as_any()
                             .downcast_ref::<array::FixedSizeBinaryArray>();
+
+                        if let Some(valid_array) = array {
+                            if valid_array.is_null(row) {
+                                row_values.push(Keyword::Null.into());
+                                continue;
+                            }
+
+                            row_values.push(valid_array.value(row).into());
+                        }
+                    }
+                    DataType::BinaryView => {
+                        let array = column.as_any().downcast_ref::<array::BinaryViewArray>();
 
                         if let Some(valid_array) = array {
                             if valid_array.is_null(row) {
@@ -922,6 +950,22 @@ impl InsertBuilder {
                                             param_values.push(valid_string_array.value(row).into());
                                         }
                                     }
+                                    DataType::Utf8View => {
+                                        let view_array =
+                                            col.as_any().downcast_ref::<array::StringViewArray>();
+
+                                        if let Some(valid_view_array) = view_array {
+                                            param_values.push(valid_view_array.value(row).into());
+                                        }
+                                    }
+                                    DataType::BinaryView => {
+                                        let view_array =
+                                            col.as_any().downcast_ref::<array::BinaryViewArray>();
+
+                                        if let Some(valid_view_array) = view_array {
+                                            param_values.push(valid_view_array.value(row).into());
+                                        }
+                                    }
                                     DataType::Float16
                                     | DataType::Timestamp(_, _)
                                     | DataType::Date32
@@ -930,8 +974,6 @@ impl InsertBuilder {
                                     | DataType::Time64(_)
                                     | DataType::Duration(_)
                                     | DataType::Interval(_)
-                                    | DataType::BinaryView
-                                    | DataType::Utf8View
                                     | DataType::List(_)
                                     | DataType::ListView(_)
                                     | DataType::FixedSizeList(_, _)
@@ -1023,7 +1065,7 @@ impl InsertBuilder {
             .collect();
 
         let mut insert_stmt = Query::insert()
-            .into_table(Alias::new(&self.table_name))
+            .into_table(table_reference_to_sea_table_ref(&self.table))
             .columns(columns)
             .to_owned();
 
@@ -1034,6 +1076,27 @@ impl InsertBuilder {
             insert_stmt.on_conflict(on_conflict);
         }
         Ok(insert_stmt.to_string(query_builder))
+    }
+}
+
+fn table_reference_to_sea_table_ref(table: &TableReference) -> TableRef {
+    match table {
+        TableReference::Bare { table } => {
+            TableRef::Table(SeaRc::new(Alias::new(table.to_string())))
+        }
+        TableReference::Partial { schema, table } => TableRef::SchemaTable(
+            SeaRc::new(Alias::new(schema.to_string())),
+            SeaRc::new(Alias::new(table.to_string())),
+        ),
+        TableReference::Full {
+            catalog,
+            schema,
+            table,
+        } => TableRef::DatabaseSchemaTable(
+            SeaRc::new(Alias::new(catalog.to_string())),
+            SeaRc::new(Alias::new(schema.to_string())),
+            SeaRc::new(Alias::new(table.to_string())),
+        ),
     }
 }
 
@@ -1107,34 +1170,6 @@ fn insert_timestamp_into_row_values(
         Err(e) => Err(Error::FailedToCreateInsertStatement {
             source: Box::new(e),
         }),
-    }
-}
-
-// Reference: https://github.com/apache/arrow-rs/blob/6c59b7637592e4b67b18762b8313f91086c0d5d8/arrow-array/src/timezone.rs#L25
-#[allow(clippy::cast_lossless)]
-fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
-    let bytes = tz.as_bytes();
-
-    let mut values = match bytes.len() {
-        // [+-]XX:XX
-        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
-        // [+-]XXXX
-        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
-        // [+-]XX
-        3 => [bytes[1], bytes[2], b'0', b'0'],
-        _ => return None,
-    };
-    values.iter_mut().for_each(|x| *x = x.wrapping_sub(b'0'));
-    if values.iter().any(|x| *x > 9) {
-        return None;
-    }
-    let secs =
-        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
-
-    match bytes[0] {
-        b'+' => FixedOffset::east_opt(secs),
-        b'-' => FixedOffset::west_opt(secs),
-        _ => None,
     }
 }
 
@@ -1219,6 +1254,17 @@ fn insert_list_into_row_values(
             // We must cast here in case the array is empty which SeaQuery does not handle.
             row_values.push(expr.cast_as(Alias::new("text[]")));
         }
+        DataType::Utf8View => {
+            let mut list_values: Vec<String> = vec![];
+            for i in 0..list_array.len() {
+                let view_array = list_array.as_any().downcast_ref::<array::StringViewArray>();
+                if let Some(valid_view_array) = view_array {
+                    list_values.push(valid_view_array.value(i).to_string());
+                }
+            }
+            let expr: SimpleExpr = list_values.into();
+            row_values.push(expr.cast_as(Alias::new("text[]")));
+        }
         DataType::Boolean => push_list_values!(
             list_type.data_type(),
             list_array,
@@ -1259,7 +1305,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::UInt64 => ColumnType::BigUnsigned,
         DataType::Float32 => ColumnType::Float,
         DataType::Float64 => ColumnType::Double,
-        DataType::Utf8 | DataType::LargeUtf8 => ColumnType::Text,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => ColumnType::Text,
         DataType::Boolean => ColumnType::Boolean,
         #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
         DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
@@ -1326,6 +1372,9 @@ fn insert_list_into_row_values_json(
         DataType::Utf8 => serialize_list_values!(data_type, list_array, StringArray, String),
         DataType::LargeUtf8 => {
             serialize_list_values!(data_type, list_array, LargeStringArray, String)
+        }
+        DataType::Utf8View => {
+            serialize_list_values!(data_type, list_array, StringViewArray, String)
         }
         DataType::Boolean => serialize_list_values!(data_type, list_array, BooleanArray, bool),
         _ => unimplemented!(
@@ -1438,10 +1487,54 @@ mod tests {
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new("users", record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("users"), record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
+    }
+
+    #[test]
+    fn test_table_insertion_with_schema() {
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ]);
+        let id_array = array::Int32Array::from(vec![1, 2, 3]);
+        let name_array = array::StringArray::from(vec!["a", "b", "c"]);
+        let age_array = array::Int32Array::from(vec![10, 20, 30]);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema1.clone()),
+            vec![
+                Arc::new(id_array.clone()),
+                Arc::new(name_array.clone()),
+                Arc::new(age_array.clone()),
+            ],
+        )
+        .expect("Unable to build record batch");
+
+        let schema2 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("blah", DataType::Int32, true),
+        ]);
+
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema2),
+            vec![
+                Arc::new(id_array),
+                Arc::new(name_array),
+                Arc::new(age_array),
+            ],
+        )
+        .expect("Unable to build record batch");
+        let record_batches = vec![batch1, batch2];
+
+        let sql = InsertBuilder::new(&TableReference::from("schema.users"), record_batches)
+            .build_postgres(None)
+            .expect("Failed to build insert statement");
+        assert_eq!(sql, "INSERT INTO \"schema\".\"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
     }
 
     #[test]
@@ -1475,7 +1568,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema1.clone()), vec![Arc::new(list_array)])
             .expect("Unable to build record batch");
 
-        let sql = InsertBuilder::new("arrays", vec![batch])
+        let sql = InsertBuilder::new(&TableReference::from("arrays"), vec![batch])
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(

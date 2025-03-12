@@ -17,22 +17,16 @@ limitations under the License.
 use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
-use datafusion::arrow::array::ArrayBuilder;
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::array::BinaryBuilder;
-use datafusion::arrow::array::Float64Builder;
-use datafusion::arrow::array::Int64Builder;
-use datafusion::arrow::array::NullBuilder;
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::array::RecordBatchOptions;
-use datafusion::arrow::array::StringBuilder;
-use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::datatypes::SchemaRef;
-use rusqlite::types::Type;
-use rusqlite::Row;
-use rusqlite::Rows;
+use arrow::{
+    array::{
+        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
+        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
+        RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder, UInt32Builder,
+        UInt64Builder, UInt8Builder,
+    },
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
+use rusqlite::{types::Type, Row, Rows};
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
@@ -70,7 +64,7 @@ pub fn rows_to_arrow(
 ) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Field> = Vec::new();
     let mut arrow_columns_builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
-    let mut sqlite_types: Vec<Type> = Vec::new();
+    let mut arrow_types: Vec<DataType> = Vec::new();
     let mut row_count = 0;
 
     if let Ok(Some(row)) = rows.next() {
@@ -113,17 +107,24 @@ pub fn rows_to_arrow(
 
             let data_type = map_column_type_to_data_type(column_type);
 
-            arrow_fields.push(Field::new(column_name, data_type.clone(), true));
+            let data_type = match &projected_schema {
+                Some(schema) => {
+                    to_sqlite_decoding_type(schema.fields()[i].data_type(), &column_type)
+                }
+                None => map_column_type_to_data_type(column_type),
+            };
+
+            arrow_types.push(data_type.clone());
             arrow_columns_builders.push(map_data_type_to_array_builder(&data_type));
-            sqlite_types.push(column_type);
+            arrow_fields.push(Field::new(column_name, data_type, true));
         }
 
-        add_row_to_builders(row, &sqlite_types, &mut arrow_columns_builders)?;
+        add_row_to_builders(row, &arrow_types, &mut arrow_columns_builders)?;
         row_count += 1;
     };
 
     while let Ok(Some(row)) = rows.next() {
-        add_row_to_builders(row, &sqlite_types, &mut arrow_columns_builders)?;
+        add_row_to_builders(row, &arrow_types, &mut arrow_columns_builders)?;
         row_count += 1;
     }
 
@@ -136,6 +137,38 @@ pub fn rows_to_arrow(
     match RecordBatch::try_new_with_options(Arc::new(Schema::new(arrow_fields)), columns, options) {
         Ok(record_batch) => Ok(record_batch),
         Err(e) => Err(e).context(FailedToBuildRecordBatchSnafu),
+    }
+}
+
+fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType {
+    if *sqlite_type == Type::Text {
+        // Text is a special case as it can represent different types while correctly decoded to
+        // desired Arrow type during additional type casting step.
+        return DataType::Utf8;
+    }
+    // Other SQLite types are Integer, Real, Blob, Null are safe to decode based on target Arrow type
+    match data_type {
+        DataType::Null => DataType::Null,
+        DataType::Int8 => DataType::Int8,
+        DataType::Int16 => DataType::Int16,
+        DataType::Int32 => DataType::Int32,
+        DataType::Int64 => DataType::Int64,
+        DataType::UInt8 => DataType::UInt8,
+        DataType::UInt16 => DataType::UInt16,
+        DataType::UInt32 => DataType::UInt32,
+        DataType::UInt64 => DataType::UInt64,
+        DataType::Boolean => DataType::Boolean,
+        DataType::Float16 => DataType::Float16,
+        DataType::Float32 => DataType::Float32,
+        DataType::Float64 => DataType::Float64,
+        DataType::Utf8 => DataType::Utf8,
+        DataType::LargeUtf8 => DataType::LargeUtf8,
+        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => DataType::Binary,
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => DataType::Float64,
+        DataType::Duration(_) => DataType::Int64,
+
+        // Timestamp, Date32, Date64, Time32, Time64, List, Struct, Union, Dictionary, Map
+        _ => DataType::Utf8,
     }
 }
 
@@ -157,30 +190,52 @@ macro_rules! append_value {
 
 fn add_row_to_builders(
     row: &Row,
-    sqlite_types: &[Type],
+    arrow_types: &[DataType],
     arrow_columns_builders: &mut [Box<dyn ArrayBuilder>],
 ) -> Result<()> {
-    for (i, sqlite_type) in sqlite_types.iter().enumerate() {
+    for (i, arrow_type) in arrow_types.iter().enumerate() {
         let Some(builder) = arrow_columns_builders.get_mut(i) else {
             return NoBuilderForIndexSnafu { index: i }.fail();
         };
 
-        match *sqlite_type {
-            Type::Null => {
+        match *arrow_type {
+            DataType::Null => {
                 let Some(builder) = builder.as_any_mut().downcast_mut::<NullBuilder>() else {
                     return FailedToDowncastBuilderSnafu {
-                        sqlite_type: format!("{sqlite_type}"),
+                        sqlite_type: format!("{}", Type::Null),
                     }
                     .fail();
                 };
                 builder.append_null();
             }
-            Type::Integer => append_value!(builder, row, i, i64, Int64Builder, sqlite_type),
-            Type::Real => append_value!(builder, row, i, f64, Float64Builder, sqlite_type),
-            Type::Text => append_value!(builder, row, i, String, StringBuilder, sqlite_type),
-            Type::Blob => append_value!(builder, row, i, Vec<u8>, BinaryBuilder, sqlite_type),
+            DataType::Int8 => append_value!(builder, row, i, i8, Int8Builder, Type::Integer),
+            DataType::Int16 => append_value!(builder, row, i, i16, Int16Builder, Type::Integer),
+            DataType::Int32 => append_value!(builder, row, i, i32, Int32Builder, Type::Integer),
+            DataType::Int64 => append_value!(builder, row, i, i64, Int64Builder, Type::Integer),
+            DataType::UInt8 => append_value!(builder, row, i, u8, UInt8Builder, Type::Integer),
+            DataType::UInt16 => append_value!(builder, row, i, u16, UInt16Builder, Type::Integer),
+            DataType::UInt32 => append_value!(builder, row, i, u32, UInt32Builder, Type::Integer),
+            DataType::UInt64 => append_value!(builder, row, i, u64, UInt64Builder, Type::Integer),
+
+            DataType::Boolean => {
+                append_value!(builder, row, i, bool, BooleanBuilder, Type::Integer)
+            }
+
+            DataType::Float32 => append_value!(builder, row, i, f32, Float32Builder, Type::Real),
+            DataType::Float64 => append_value!(builder, row, i, f64, Float64Builder, Type::Real),
+
+            DataType::Utf8 => append_value!(builder, row, i, String, StringBuilder, Type::Text),
+            DataType::LargeUtf8 => {
+                append_value!(builder, row, i, String, LargeStringBuilder, Type::Text)
+            }
+
+            DataType::Binary => append_value!(builder, row, i, Vec<u8>, BinaryBuilder, Type::Blob),
+            _ => {
+                unimplemented!("Unsupported data type {arrow_type} for column index {i}")
+            }
         }
     }
+
     Ok(())
 }
 
