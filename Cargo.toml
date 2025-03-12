@@ -153,3 +153,13 @@ sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 name = "odbc_sqlite"
 path = "examples/odbc_sqlite.rs"
 required-features = ["sqlite", "odbc"]
+
+[[example]]
+name = "flight-sql"
+path = "examples/flight-sql.rs"
+required-features = ["flight"]
+
+[[example]]
+name = "sqlite"
+path = "examples/sqlite.rs"
+required-features = ["sqlite"]

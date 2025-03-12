@@ -63,7 +63,7 @@ async fn arrow_sqlite_round_trip(
 
     // Perform the test twice: first, simulate a request without a known schema;
     // then, test result conversion with a known projected schema (matching the test RecordBatch).
-    for projected_schema in vec![None, Some(arrow_record.schema())] {
+    for projected_schema in [None, Some(arrow_record.schema())] {
         if ctx
             .table_exist(table_name)
             .expect("should be able to check if table exists")
@@ -73,12 +73,10 @@ async fn arrow_sqlite_round_trip(
         }
 
         let table = match projected_schema {
-            None => SqlTable::new("sqlite", &sqltable_pool, table_name, None)
+            None => SqlTable::new("sqlite", &sqltable_pool, table_name)
                 .await
                 .expect("Table should be created"),
-            Some(schema) => {
-                SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None)
-            }
+            Some(schema) => SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name),
         };
 
         ctx.register_table(table_name, Arc::new(table))

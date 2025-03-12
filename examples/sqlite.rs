@@ -23,7 +23,11 @@ async fn main() {
             "examples/sqlite_example.db",
             Mode::File,
             Duration::from_millis(5000),
-        .expect("unable to create Sqlite connection pool"),
+        )
+        .build()
+        .await
+        .expect("failed to create sqlite connection pool"),
+    );
 
     // Create SQLite table provider factory
     // Used to generate TableProvider instances that can read SQLite table data

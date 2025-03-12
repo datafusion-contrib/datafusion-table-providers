@@ -19,5 +19,5 @@ fn container_registry() -> String {
 }
 
 fn get_random_port() -> usize {
-    rand::thread_rng().gen_range(15432..65535)
+    rand::rng().random_range(15432..65535)
 }

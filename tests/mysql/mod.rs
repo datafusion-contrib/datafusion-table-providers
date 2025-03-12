@@ -15,10 +15,6 @@ use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbCo
 
 use crate::docker::RunningContainer;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::{
-    array::*,
-    datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
-};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::logical_expr::dml::InsertOp;
@@ -28,7 +24,6 @@ use datafusion::physical_plan::memory::MemoryExec;
 #[cfg(feature = "mysql-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
-use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
@@ -655,7 +650,7 @@ async fn arrow_mysql_one_way(
 
     // Register datafusion table, test mysql row -> arrow conversion
     let sqltable_pool: Arc<DynMySQLConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("mysql", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("mysql", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
 
@@ -680,12 +675,7 @@ async fn arrow_mysql_one_way(
     record_batch
 }
 
-async fn arrow_mysql_round_trip(
-    port: usize,
-    arrow_record: RecordBatch,
-    source_schema: SchemaRef,
-    table_name: &str,
-) {
+async fn arrow_mysql_round_trip(port: usize, arrow_record: RecordBatch, table_name: &str) {
     let factory = MySQLTableProviderFactory::new();
     let ctx = SessionContext::new();
     let cmd = CreateExternalTable {
@@ -806,13 +796,7 @@ async fn test_arrow_mysql_roundtrip(
         start_mysql_container(container_manager.port).await;
     }
 
-    arrow_mysql_round_trip(
-        container_manager.port,
-        arrow_result.0,
-        arrow_result.1,
-        table_name,
-    )
-    .await;
+    arrow_mysql_round_trip(container_manager.port, arrow_result.0, table_name).await;
 }
 
 #[rstest]

@@ -370,7 +370,7 @@ async fn arrow_postgres_one_way(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))
