@@ -511,8 +511,12 @@ mod tests {
             pg_data_type_to_arrow_type("json", &context).expect("Failed to convert json"),
             DataType::LargeUtf8
         );
+
+        let jsonb_context = context
+            .clone()
+            .with_unsupported_type_action(UnsupportedTypeAction::String);
         assert_eq!(
-            pg_data_type_to_arrow_type("jsonb", &context).expect("Failed to convert jsonb"),
+            pg_data_type_to_arrow_type("jsonb", &jsonb_context).expect("Failed to convert jsonb"),
             DataType::LargeUtf8
         );
 

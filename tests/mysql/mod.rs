@@ -675,7 +675,13 @@ async fn arrow_mysql_one_way(
     record_batch
 }
 
-async fn arrow_mysql_round_trip(port: usize, arrow_record: RecordBatch, table_name: &str) {
+#[allow(unused_variables)]
+async fn arrow_mysql_round_trip(
+    port: usize,
+    arrow_record: RecordBatch,
+    source_schema: SchemaRef,
+    table_name: &str,
+) {
     let factory = MySQLTableProviderFactory::new();
     let ctx = SessionContext::new();
     let cmd = CreateExternalTable {
@@ -796,7 +802,13 @@ async fn test_arrow_mysql_roundtrip(
         start_mysql_container(container_manager.port).await;
     }
 
-    arrow_mysql_round_trip(container_manager.port, arrow_result.0, table_name).await;
+    arrow_mysql_round_trip(
+        container_manager.port,
+        arrow_result.0,
+        arrow_result.1,
+        table_name,
+    )
+    .await;
 }
 
 #[rstest]

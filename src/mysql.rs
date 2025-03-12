@@ -48,6 +48,7 @@ pub type DynMySQLConnectionPool =
 
 pub type DynMySQLConnection = dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>;
 
+#[cfg(feature = "mysql-federation")]
 pub mod federation;
 pub(crate) mod mysql_window;
 pub mod sql_table;
