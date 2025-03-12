@@ -42,7 +42,7 @@ use odbc_api::handles::StatementImpl;
 use odbc_api::parameter::InputParameter;
 use odbc_api::Cursor;
 use odbc_api::CursorImpl;
-use secrecy::{ExposeSecret, Secret, SecretString};
+use secrecy::{SecretBox, ExposeSecret, SecretString};
 use snafu::prelude::*;
 use snafu::Snafu;
 use tokio::runtime::Handle;
@@ -276,8 +276,7 @@ fn build_odbc_reader<C: Cursor>(
     let bind_as_usize = |k: &str, default: Option<usize>, f: &mut dyn FnMut(usize)| {
         params
             .get(k)
-            .map(Secret::expose_secret)
-            .cloned()
+            .map(SecretBox::expose_secret)
             .and_then(|s| s.parse::<usize>().ok())
             .or(default)
             .into_iter()

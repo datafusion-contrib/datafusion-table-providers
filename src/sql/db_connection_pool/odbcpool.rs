@@ -19,7 +19,7 @@ use crate::sql::db_connection_pool::dbconnection::odbcconn::{ODBCDbConnection, O
 use crate::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
 use async_trait::async_trait;
 use odbc_api::{sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment};
-use secrecy::{ExposeSecret, Secret, SecretString};
+use secrecy::{SecretBox, ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use snafu::prelude::*;
 use std::{
@@ -77,7 +77,7 @@ impl ODBCPool {
     pub fn new(params: HashMap<String, SecretString>) -> Result<Self, Error> {
         let connection_string = params
             .get("connection_string")
-            .map(Secret::expose_secret)
+            .map(SecretBox::expose_secret)
             .map(ToString::to_string)
             .context(MissingConnectionStringSnafu)?;
 
