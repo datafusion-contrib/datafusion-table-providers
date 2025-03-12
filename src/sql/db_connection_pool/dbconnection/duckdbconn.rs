@@ -16,7 +16,7 @@ use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::Alphanumeric;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
@@ -72,7 +72,7 @@ impl DuckDBAttachments {
     /// Creates a new instance of a `DuckDBAttachments`, which instructs DuckDB connections to attach other DuckDB databases for queries.
     #[must_use]
     pub fn new(id: &str, attachments: &[Arc<str>]) -> Self {
-        let random_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 8);
+        let random_id = Alphanumeric.sample_string(&mut rand::rng(), 8);
         let search_path = Self::get_search_path(id, &random_id, attachments);
         Self {
             attachments: attachments.to_owned(),

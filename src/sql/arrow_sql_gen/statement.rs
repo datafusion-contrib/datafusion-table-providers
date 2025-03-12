@@ -1,6 +1,4 @@
 use bigdecimal::BigDecimal;
-use bigdecimal::BigDecimal;
-use chrono::{DateTime, FixedOffset};
 use chrono::{DateTime, Offset, TimeZone};
 use datafusion::arrow::{
     array::{
@@ -16,10 +14,10 @@ use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef,
+    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, Table, TableRef,
 };
 use snafu::Snafu;
-use std::{any::Any, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]

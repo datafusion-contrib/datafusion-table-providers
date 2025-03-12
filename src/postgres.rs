@@ -27,6 +27,7 @@ use datafusion::arrow::{
     datatypes::{Schema, SchemaRef},
 };
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,

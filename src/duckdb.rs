@@ -255,6 +255,7 @@ impl DuckDBTableProviderFactory {
 
         Ok(pool)
     }
+}
 
 type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     + Send
