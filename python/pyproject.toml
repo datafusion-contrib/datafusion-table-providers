@@ -4,6 +4,7 @@ build-backend = "[maturin]"
 
 [project]
 name = "datafusion_table_providers"
+version = "0.1.0"
 description = "Build and run queries against data"
 readme = "../README.md"
 license = { file = "../LICENSE" }
@@ -23,8 +24,7 @@ classifier = [
     "Programming Language :: Python",
     "Programming Language :: Rust",
 ]
-# TODO update this to 43.1.0 as soon as release is complete
-dependencies = ["datafusion>=42.0.0"]
+dependencies = ["datafusion>=43.0.0"]
 
 [project.urls]
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
