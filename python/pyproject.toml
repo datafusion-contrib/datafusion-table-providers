@@ -1,6 +1,6 @@
 [build-system]
 requires = ["maturin>=1.5.1,<1.6.0"]
-build-backend = "maturin"
+build-backend = "[maturin]"
 
 [project]
 name = "datafusion_table_providers"

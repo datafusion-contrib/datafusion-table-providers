@@ -1,165 +1,38 @@
-[package]
-name = "datafusion-table-providers"
-version = "0.3.0"
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[workspace]
+members = [
+    "core",
+    "python",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.3"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
-[dependencies]
+[workspace.dependencies]
 arrow = "54.2.1"
-arrow-array = { version = "54.2.1", optional = true }
-arrow-flight = { version = "54.2.1", optional = true, features = [
-  "flight-sql-experimental",
-  "tls",
-] }
-arrow-schema = { version = "54.2.1", optional = true, features = ["serde"] }
-arrow-json = "54.2.1"
-arrow-odbc = { version = "=15.1.1", optional = true }
-async-stream = { version = "0.3", optional = true }
-async-trait = "0.1"
-base64 = { version = "0.22.1", optional = true }
-bb8 = { version = "0.9", optional = true }
-bb8-postgres = { version = "0.9", optional = true }
-bigdecimal = "0.4"
-byteorder = "1.5.0"
-bytes = { version = "1.7.1", optional = true }
-byte-unit = { version = "5.1.4", optional = true }
-chrono = "0.4"
-dashmap = "6.1.0"
 datafusion = { version = "45", default-features = false }
-datafusion-expr = { version = "45", optional = true }
-datafusion-federation = { version = "=0.3.6", features = [
-  "sql",
-], optional = true }
-datafusion-physical-expr = { version = "45", optional = true }
-datafusion-physical-plan = { version = "45", optional = true }
-datafusion-proto = { version = "45", optional = true }
-duckdb = { version = "=1.2.1", features = [
-  "bundled",
-  "r2d2",
-  "vtab",
-  "vtab-arrow",
-  "appender-arrow",
-], optional = true }
-libduckdb-sys = { version = "=1.2.1", optional = true }
-dyn-clone = { version = "1.0", optional = true }
-fallible-iterator = "0.3.0"
-fundu = "2.0.1"
-futures = "0.3"
-geo-types = "0.7"
-itertools = "0.14.0"
-mysql_async = { version = "0.35", features = [
-  "native-tls-tls",
-  "chrono",
-  "time",
-  "bigdecimal",
-], optional = true }
-native-tls = { version = "0.2", optional = true }
-num-bigint = "0.4"
-odbc-api = { version = "11.1", optional = true }
-pem = { version = "3.0.4", optional = true }
-postgres-native-tls = { version = "0.5.0", optional = true }
-prost = { version = "0.13", optional = true }
-rand = { version = "0.9" }
-r2d2 = { version = "0.8", optional = true }
-rusqlite = { version = "0.32", optional = true }
-sea-query = { version = "0.32", features = [
-  "backend-sqlite",
-  "backend-postgres",
-  "postgres-array",
-  "with-rust_decimal",
-  "with-bigdecimal",
-  "with-time",
-  "with-chrono",
-] }
-secrecy = "0.10.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.10"
-snafu = "0.8"
-time = "0.3"
-tokio = { version = "1.43", features = ["macros", "fs"] }
-tokio-postgres = { version = "0.7", features = [
-  "with-chrono-0_4",
-  "with-uuid-1",
-  "with-serde_json-1",
-  "with-geo-types-0_7",
-], optional = true }
-tokio-rusqlite = { version = "0.6.0", optional = true }
-tonic = { version = "0.12", optional = true, features = [
-  "tls-native-roots",
-  "tls-webpki-roots",
-] }
-tracing = "0.1"
-trust-dns-resolver = "0.23.2"
-url = "2.5.4"
-uuid = { version = "1.11", optional = true }
-
-[dev-dependencies]
-anyhow = "1.0"
-bollard = "0.18.1"
-geozero = { version = "0.14.0", features = ["with-wkb"] }
-insta = { version = "1.42.0", features = ["filters"] }
-prost = { version = "0.13" }
-rand = "0.9"
-reqwest = "0.12"
-rstest = "0.24.0"
-test-log = { version = "0.2", features = ["trace"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[features]
-duckdb = [
-  "dep:duckdb",
-  "dep:r2d2",
-  "dep:uuid",
-  "dep:dyn-clone",
-  "dep:async-stream",
-  "dep:arrow-schema",
-  "dep:byte-unit",
-]
-duckdb-federation = ["duckdb", "federation"]
-federation = ["dep:datafusion-federation"]
-flight = [
-  "dep:arrow-flight",
-  "datafusion/serde",
-  "dep:datafusion-proto",
-  "dep:prost",
-  "dep:tonic",
-]
-mysql = ["dep:mysql_async", "dep:async-stream"]
-mysql-federation = ["mysql", "federation"]
-odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]
-odbc-federation = ["odbc", "federation"]
-postgres = [
-  "dep:tokio-postgres",
-  "dep:uuid",
-  "dep:postgres-native-tls",
-  "dep:bb8",
-  "dep:bb8-postgres",
-  "dep:native-tls",
-  "dep:pem",
-  "dep:async-stream",
-  "dep:arrow-schema",
-]
-postgres-federation = ["postgres", "federation"]
-sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
-sqlite-federation = ["sqlite", "federation"]
-sqlite-bundled = ["sqlite", "rusqlite/bundled"]
-
-[[example]]
-name = "odbc_sqlite"
-path = "examples/odbc_sqlite.rs"
-required-features = ["sqlite", "odbc"]
-
-[[example]]
-name = "flight-sql"
-path = "examples/flight-sql.rs"
-required-features = ["flight"]
-
-[[example]]
-name = "sqlite"
-path = "examples/sqlite.rs"
-required-features = ["sqlite"]
+datafusion-ffi = { version = "45" }
+datafusion-proto = { version = "45" }
+datafusion-table-providers = { path = "core" }
