@@ -1839,6 +1839,7 @@ name = "datafusion-table-providers"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "arrow-array",
  "arrow-flight",
  "arrow-json",
@@ -1912,6 +1913,7 @@ dependencies = [
  "datafusion",
  "datafusion-ffi",
  "datafusion-table-providers",
+ "pyo3",
  "tokio",
 ]
 

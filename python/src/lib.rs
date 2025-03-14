@@ -18,10 +18,13 @@ impl RawTableProvider {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
-        let provider =
-            FFI_TableProvider::new(Arc::clone(&self.table), self.supports_pushdown_filters);
+        let provider = FFI_TableProvider::new(
+            Arc::clone(&self.table),
+            self.supports_pushdown_filters,
+            None,
+        );
 
-        PyCapsule::new_bound(py, provider, Some(name.clone()))
+        PyCapsule::new(py, provider, Some(name.clone()))
     }
 }
 
@@ -38,7 +41,7 @@ pub mod utils;
 fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RawTableProvider>()?;
 
-    let sqlite = PyModule::new_bound(py, "sqlite")?;
+    let sqlite = PyModule::new(py, "sqlite")?;
     sqlite::init_module(&sqlite)?;
     m.add_submodule(&sqlite)?;
 
