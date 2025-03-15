@@ -231,7 +231,20 @@ impl<'a>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let table_name = table_reference.table();
+        let table_str = if is_table_function(table_reference) {
+            self.conn
+                .get_function_return_type(table_str)
+                .await
+                .map_err(|e| super::Error::QueryError {
+                    source: Box::new(e),
+                })?
+                .ok_or_else(|| super::Error::UndefinedTable {
+                    table_name: table_str.to_string(),
+                })?
+        } else {
+            table_reference.to_quoted_string()
+        };
+
         let schema_name = table_reference.schema().unwrap_or("public");
 
         let rows = match self
@@ -357,4 +370,48 @@ impl PostgresConnection {
         self.unsupported_type_action = action;
         self
     }
+
+    pub async fn get_function_return_type(&self, function_name: &str) -> Result<Option<String>> {
+        let sql = r#"
+            SELECT format_type(p.prorettype, null) as return_type
+            FROM pg_proc p
+            WHERE p.proname = $1
+              AND p.pronamespace = current_schema::regnamespace
+              AND p.prokind = 'f'
+        "#;
+
+        let rows = self.conn.query(sql, &[&function_name]).await.map_err(|e| {
+            super::Error::QueryError {
+                source: Box::new(e),
+            }
+        })?;
+
+        Ok(rows.first().map(|row| row.get::<_, String>(0)))
+    }
+}
+
+#[must_use]
+pub fn is_table_function(table_reference: &TableReference) -> bool {
+    let table_name = match table_reference {
+        TableReference::Full { .. } | TableReference::Partial { .. } => return false,
+        TableReference::Bare { table } => table,
+    };
+
+    let dialect = DuckDbDialect {};
+    let mut tokenizer = Tokenizer::new(&dialect, table_name);
+    let Ok(tokens) = tokenizer.tokenize() else {
+        return false;
+    };
+    let Ok(tf) = Parser::new(&dialect)
+        .with_tokens(tokens)
+        .parse_table_factor()
+    else {
+        return false;
+    };
+
+    let TableFactor::Table { args, .. } = tf else {
+        return false;
+    };
+
+    args.is_some()
 }
