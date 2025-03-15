@@ -1,4 +1,5 @@
 use crate::sql::sql_provider_datafusion;
+use crate::util::constraints::get_primary_keys_from_constraints;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -34,6 +35,7 @@ use datafusion::{
 use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
+use std::collections::HashSet;
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -72,6 +74,9 @@ pub enum Error {
 
     #[snafu(display("Unable to create index on duckdb table: {source}"))]
     UnableToCreateIndexOnDuckDBTable { source: duckdb::Error },
+
+    #[snafu(display("Unable to retrieve existing primary keys from DuckDB table: {source}"))]
+    UnableToGetPrimaryKeysOnDuckDBTable { source: duckdb::Error },
 
     #[snafu(display("Unable to drop index on duckdb table: {source}"))]
     UnableToDropIndexOnDuckDBTable { source: duckdb::Error },
@@ -153,6 +158,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
 const DUCKDB_DB_PATH_PARAM: &str = "open";
 const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
+const DUCKDB_SETTING_MEMORY_LIMIT: &str = "memory_limit";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
@@ -346,6 +352,21 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .create()
             .map_err(to_datafusion_error)?;
 
+        // If the table is already created, we don't create it again and don't apply primary keys.
+        // We need to verify that the table was created with the correct primary keys.
+        if !duckdb
+            .verify_primary_keys_match()
+            .await
+            .map_err(to_datafusion_error)?
+        {
+            tracing::warn!(
+                "Schema mismatch detected:\nThe local table definition for '{table_name}' in database '{db_path}' does not match the expected configuration.\n\
+                 To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon the next access.",
+                db_path = duckdb.pool.db_path(),
+                table_name = duckdb.table_name
+            );
+        }
+
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
         if let Some(memory_limit) = options.get("memory_limit") {
@@ -505,6 +526,52 @@ impl DuckDB {
 
         Ok(())
     }
+
+    pub async fn verify_primary_keys_match(&self) -> Result<bool> {
+        let expected_pk_keys_str_map: HashSet<String> =
+            get_primary_keys_from_constraints(&self.constraints, &self.schema)
+                .into_iter()
+                .collect();
+
+        let mut db_conn = self.connect_sync()?;
+
+        let actual_pk_keys_str_map = TableCreator::get_existing_primary_keys(
+            DuckDB::duckdb_conn(&mut db_conn)?,
+            &self.table_name,
+        )
+        .await?;
+
+        tracing::debug!(
+            "Expected primary keys: {:?}\nActual primary keys: {:?}",
+            expected_pk_keys_str_map,
+            actual_pk_keys_str_map
+        );
+
+        let missing_in_actual = expected_pk_keys_str_map
+            .difference(&actual_pk_keys_str_map)
+            .collect::<Vec<_>>();
+        let extra_in_actual = actual_pk_keys_str_map
+            .difference(&expected_pk_keys_str_map)
+            .collect::<Vec<_>>();
+
+        if !missing_in_actual.is_empty() {
+            tracing::warn!(
+                "Missing primary key(s) detected for the table '{name}': {:?}.",
+                missing_in_actual.iter().join(", "),
+                name = self.table_name
+            );
+        }
+
+        if !extra_in_actual.is_empty() {
+            tracing::warn!(
+                "The table '{name}' has unexpected primary key(s) not defined in the configuration: {:?}.",
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
+        }
+
+        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
 }
 
 fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<String> {
@@ -633,6 +700,9 @@ async fn apply_memory_limit(
             source: "Failed to get sync DuckDbConnection using DbConnection".into(),
         }));
     };
-    conn.execute(&format!("SET memory_limit = '{memory_limit}'"), &[])?;
+    conn.execute(
+        &format!("SET {DUCKDB_SETTING_MEMORY_LIMIT} = '{memory_limit}'"),
+        &[],
+    )?;
     Ok(())
 }
