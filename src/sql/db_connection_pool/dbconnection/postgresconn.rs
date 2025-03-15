@@ -17,6 +17,7 @@ use bb8_postgres::PostgresConnectionManager;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::sql::sqlparser::{dialect::ClickHouseDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
 use futures::stream;
 use futures::StreamExt;
