@@ -1,9 +1,13 @@
-use crate::sql::arrow_sql_gen::statement::IndexBuilder;
+use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+use crate::{
+    duckdb::UnableToGetPrimaryKeysOnDuckDBTableSnafu, sql::arrow_sql_gen::statement::IndexBuilder,
+};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::Constraints;
 use duckdb::{vtab::arrow_recordbatch_to_query_params, ToSql, Transaction};
 use snafu::prelude::*;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -130,6 +134,38 @@ impl TableCreator {
         };
 
         new_table_creator.create_with_tx(tx)
+    }
+
+    #[tracing::instrument(level = "debug", skip(conn))]
+    pub async fn get_existing_primary_keys(
+        conn: &mut DuckDbConnection,
+        table_name: &str,
+    ) -> super::Result<HashSet<String>> {
+        // DuckDB provides convinient querable 'pragma_table_info' table function
+        // '"<name>"' is required to escape the table name, otherwise it will be parsed to schema and table name
+        let sql = format!(
+            r#"SELECT name FROM pragma_table_info('"{table_name}"') WHERE pk = true"#,
+            table_name = table_name
+        );
+        tracing::debug!("{sql}");
+
+        let mut stmt = conn
+            .conn
+            .prepare(&sql)
+            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
+
+        let primary_keys_iter = stmt
+            .query_map([], |row| {
+                row.get::<usize, String>(0)
+            })
+            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
+
+        let mut primary_keys = HashSet::new();
+        for pk in primary_keys_iter {
+            primary_keys.insert(pk.context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
+        }
+
+        Ok(primary_keys)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -428,6 +464,12 @@ pub(crate) mod tests {
                 .expect("to get count");
 
             assert_eq!(num_rows, rows_written);
+
+            let primary_keys = TableCreator::get_existing_primary_keys(conn, "eth.logs")
+                .await
+                .expect("to get primary keys");
+
+            assert_eq!(primary_keys, HashSet::<String>::new());
         }
     }
 
@@ -497,6 +539,17 @@ pub(crate) mod tests {
             assert_eq!(
                 create_stmt,
                 r#"CREATE TABLE "eth.logs"(log_index BIGINT, transaction_hash VARCHAR, transaction_index BIGINT, address VARCHAR, "data" VARCHAR, topics VARCHAR[], block_timestamp BIGINT, block_hash VARCHAR, block_number BIGINT, PRIMARY KEY(log_index, transaction_hash));"#
+            );
+
+            let primary_keys = TableCreator::get_existing_primary_keys(conn, "eth.logs")
+                .await
+                .expect("to get primary keys");
+
+            assert_eq!(
+                primary_keys,
+                vec!["log_index".to_string(), "transaction_hash".to_string()]
+                    .into_iter()
+                    .collect::<HashSet<_>>()
             );
         }
     }
