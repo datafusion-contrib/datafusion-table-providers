@@ -18,6 +18,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::sqlparser::ast::TableFactor;
+use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::ClickHouseDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
 use futures::stream;
@@ -277,7 +278,7 @@ impl<'a>
 
         let rows = match self
             .conn
-            .query(SCHEMA_QUERY, &[&schema_name, &table_name])
+            .query(SCHEMA_QUERY, &[&schema_name, &table_str])
             .await
         {
             Ok(rows) => rows,
@@ -398,24 +399,6 @@ impl PostgresConnection {
         self.unsupported_type_action = action;
         self
     }
-
-    pub async fn get_function_return_type(&self, function_name: &str) -> Result<Option<String>> {
-        let sql = r#"
-            SELECT format_type(p.prorettype, null) as return_type
-            FROM pg_proc p
-            WHERE p.proname = $1
-              AND p.pronamespace = current_schema::regnamespace
-              AND p.prokind = 'f'
-        "#;
-
-        let rows = self.conn.query(sql, &[&function_name]).await.map_err(|e| {
-            super::Error::QueryError {
-                source: Box::new(e),
-            }
-        })?;
-
-        Ok(rows.first().map(|row| row.get::<_, String>(0)))
-    }
 }
 
 #[must_use]
@@ -425,7 +408,7 @@ pub fn is_table_function(table_reference: &TableReference) -> bool {
         TableReference::Bare { table } => table,
     };
 
-    let dialect = DuckDbDialect {};
+    let dialect = ClickHouseDialect {};
     let mut tokenizer = Tokenizer::new(&dialect, table_name);
     let Ok(tokens) = tokenizer.tokenize() else {
         return false;
