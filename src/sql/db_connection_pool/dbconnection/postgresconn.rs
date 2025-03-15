@@ -17,6 +17,7 @@ use bb8_postgres::PostgresConnectionManager;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::{dialect::ClickHouseDialect, tokenizer::Tokenizer};
 use datafusion::sql::TableReference;
 use futures::stream;
@@ -233,15 +234,41 @@ impl<'a>
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
         let table_str = if is_table_function(table_reference) {
-            self.conn
-                .get_function_return_type(table_str)
+            let SCHEMA_QUERY_FN = r#"
+            SELECT format_type(p.prorettype, null) as return_type
+            FROM pg_proc p
+            WHERE p.proname = $1
+              AND p.pronamespace = current_schema::regnamespace
+              AND p.prokind = 'f'
+            "#;
+            let rows = match self
+                .conn
+                .query(SCHEMA_QUERY_FN, &[&table_reference.to_string()])
                 .await
-                .map_err(|e| super::Error::QueryError {
-                    source: Box::new(e),
-                })?
-                .ok_or_else(|| super::Error::UndefinedTable {
-                    table_name: table_str.to_string(),
-                })?
+            {
+                Ok(rows) => rows,
+                Err(e) => {
+                    if let Some(error_source) = e.source() {
+                        if let Some(pg_error) =
+                            error_source.downcast_ref::<tokio_postgres::error::DbError>()
+                        {
+                            if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE
+                            {
+                                return Err(super::Error::UndefinedTable {
+                                    source: Box::new(pg_error.clone()),
+                                    table_name: table_reference.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    return Err(super::Error::UnableToGetSchema {
+                        source: Box::new(e),
+                    });
+                }
+            };
+            rows.first()
+                .map(|row| row.get::<usize, String>(0))
+                .unwrap_or_default()
         } else {
             table_reference.to_quoted_string()
         };
