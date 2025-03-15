@@ -54,6 +54,12 @@ impl std::fmt::Debug for DuckDbConnectionPool {
 }
 
 impl DuckDbConnectionPool {
+
+    /// Get the dataset path. Returns `:memory:` if the in memory database is used.
+    pub fn db_path(&self) -> &str {
+        self.path.as_ref()
+    }
+
     /// Create a new `DuckDbConnectionPool` from memory.
     ///
     /// # Arguments
