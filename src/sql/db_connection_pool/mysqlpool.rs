@@ -190,10 +190,10 @@ impl MySQLConnectionPool {
         let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
         // Set MySQL session default time zone to UTC to match Datafusion
-        let _: Vec<Row> = conn
-            .exec("SET time_zone = '+00:00'", Params::Empty)
-            .await
-            .context(MySQLConnectionSnafu)?;
+        // let _: Vec<Row> = conn
+        //     .exec("SET time_zone = '+00:00'", Params::Empty)
+        //     .await
+        //     .context(MySQLConnectionSnafu)?;
 
         Ok(MySQLConnection::new(conn))
     }
