@@ -618,7 +618,7 @@ impl DuckDB {
         if !extra_in_actual.is_empty() {
            tracing::warn!(
     "Unexpected index(es) detected in table '{name}': {}.\n\
-     These indexes are not defined in the expected configuration.",
+     These indexes are not defined in the configuration.",
     extra_in_actual.iter().join(", "),
     name = self.table_name
 );
