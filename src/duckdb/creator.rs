@@ -155,9 +155,7 @@ impl TableCreator {
             .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
 
         let primary_keys_iter = stmt
-            .query_map([], |row| {
-                row.get::<usize, String>(0)
-            })
+            .query_map([], |row| row.get::<usize, String>(0))
             .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
 
         let mut primary_keys = HashSet::new();
@@ -166,6 +164,44 @@ impl TableCreator {
         }
 
         Ok(primary_keys)
+    }
+
+    #[tracing::instrument(level = "trace")]
+    pub fn get_index_name(table_name: &str, index: &(ColumnReference, IndexType)) -> String {
+        let mut index_builder = IndexBuilder::new(table_name, index.0.iter().collect());
+        if matches!(index.1, IndexType::Unique) {
+            index_builder = index_builder.unique();
+        }
+        index_builder.index_name()
+    }
+
+    #[tracing::instrument(level = "debug", skip(conn))]
+    pub async fn get_existing_indexes(
+        conn: &mut DuckDbConnection,
+        table_name: &str,
+    ) -> super::Result<HashSet<String>> {
+        let sql = format!(
+            r#"SELECT index_name FROM duckdb_indexes WHERE table_name = '{table_name}'"#,
+            table_name = table_name
+        );
+
+        tracing::debug!("{sql}");
+
+        let mut stmt = conn
+            .conn
+            .prepare(&sql)
+            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
+
+        let indexes_iter = stmt
+            .query_map([], |row| row.get::<usize, String>(0))
+            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
+
+        let mut indexes = HashSet::new();
+        for pk in indexes_iter {
+            indexes.insert(pk.context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
+        }
+
+        Ok(indexes)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -355,8 +391,13 @@ impl TableCreator {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::sql::db_connection_pool::{
-        dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+    use std::collections::HashMap;
+
+    use crate::{
+        sql::db_connection_pool::{
+            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+        },
+        util::indexes,
     };
     use datafusion::arrow::array::RecordBatch;
     use datafusion::{
@@ -471,6 +512,21 @@ pub(crate) mod tests {
                 .expect("to get primary keys");
 
             assert_eq!(primary_keys, HashSet::<String>::new());
+
+            let created_indexes_str_map = TableCreator::get_existing_indexes(conn, "eth.logs")
+                .await
+                .expect("to get indexes");
+
+            assert_eq!(
+                created_indexes_str_map,
+                vec![
+                    "i_eth.logs_block_number".to_string(),
+                    "i_eth.logs_log_index_transaction_hash".to_string()
+                ]
+                .into_iter()
+                .collect::<HashSet<_>>(),
+                "Indexes must match"
+            );
         }
     }
 
@@ -552,6 +608,18 @@ pub(crate) mod tests {
                 vec!["log_index".to_string(), "transaction_hash".to_string()]
                     .into_iter()
                     .collect::<HashSet<_>>()
+            );
+
+            let created_indexes_str_map = TableCreator::get_existing_indexes(conn, "eth.logs")
+                .await
+                .expect("to get indexes");
+
+            assert_eq!(
+                created_indexes_str_map,
+                vec!["i_eth.logs_block_number".to_string()]
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+                "Indexes must match"
             );
         }
     }
