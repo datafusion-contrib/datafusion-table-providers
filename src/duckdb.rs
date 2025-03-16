@@ -367,8 +367,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         if !table_schema_matches {
             tracing::warn!(
-                "Schema mismatch detected:\nThe local table definition for '{table_name}' in database '{db_path}' does not match the expected configuration.\n\
-                 To fix this, drop the existing local copy. A new table with the correct schema will be automatically created upon the next access.",
+                "Schema mismatch detected for table '{table_name}' in database '{db_path}'.\n\
+         The local table definition does not match the expected schema.\n\
+         To resolve this issue, drop the existing table. A new table with the correct schema will be created automatically on the next access.",
                 db_path = duckdb.pool.db_path(),
                 table_name = duckdb.table_name
             );
