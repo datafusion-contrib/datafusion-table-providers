@@ -636,3 +636,72 @@ async fn apply_memory_limit(
     conn.execute(&format!("SET memory_limit = '{memory_limit}'"), &[])?;
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::{Constraints, ToDFSchema};
+    use datafusion::logical_expr::CreateExternalTable;
+    use datafusion::prelude::SessionContext;
+    use datafusion::sql::TableReference;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_create_with_memory_limit() {
+        let table_name = TableReference::bare("test_table");
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Int32, false)]);
+
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+        options.insert("memory_limit".to_string(), "123MiB".to_string());
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name.into(),
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+
+        let table_provider = factory
+            .create(&ctx.state(), &cmd)
+            .await
+            .expect("table provider created");
+
+        let writer = table_provider
+            .as_any()
+            .downcast_ref::<DuckDBTableWriter>()
+            .expect("cast to DuckDBTableWriter");
+
+        let mut conn_box = writer.duckdb().connect_sync().expect("to get connection");
+        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+
+        let mut stmt = conn
+            .conn
+            .prepare("SELECT value FROM duckdb_settings() WHERE name = 'memory_limit'")
+            .expect("to prepare statement");
+
+        let memory_limit = stmt
+            .query_row([], |row| row.get::<usize, String>(0))
+            .expect("to query memory limit");
+
+        println!("Memory limit: {memory_limit}");
+
+        assert_eq!(
+            memory_limit, "123.0 MiB",
+            "Memory limit must be set to 123.0 MiB"
+        );
+    }
+}
