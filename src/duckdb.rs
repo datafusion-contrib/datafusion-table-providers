@@ -615,11 +615,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-            tracing::warn!(
-                "The table '{name}' has unexpected index(es) not defined in the configuration: {:?}.",
-                extra_in_actual.iter().join(", "),
-                name = self.table_name
-            );
+           tracing::warn!(
+    "Unexpected index(es) detected in table '{name}': {}.\n\
+     These indexes are not defined in the expected configuration.",
+    extra_in_actual.iter().join(", "),
+    name = self.table_name
+);
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
