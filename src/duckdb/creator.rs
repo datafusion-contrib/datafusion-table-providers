@@ -4,6 +4,7 @@ use crate::{
     duckdb::UnableToGetPrimaryKeysOnDuckDBTableSnafu, sql::arrow_sql_gen::statement::IndexBuilder,
 };
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use duckdb::{vtab::arrow_recordbatch_to_query_params, ToSql, Transaction};
 use snafu::prelude::*;
@@ -142,10 +143,11 @@ impl TableCreator {
         table_name: &str,
     ) -> super::Result<HashSet<String>> {
         // DuckDB provides convinient querable 'pragma_table_info' table function
-        // '"<name>"' is required to escape the table name, otherwise it will be parsed to schema and table name
+        // Complex table name with schema as part of the name must be quoted as
+        // '"<name>"', otherwise it will be parsed to schema and table name
         let sql = format!(
-            r#"SELECT name FROM pragma_table_info('"{table_name}"') WHERE pk = true"#,
-            table_name = table_name
+            r#"SELECT name FROM pragma_table_info('{table_name}') WHERE pk = true"#,
+            table_name = quote_identifier(table_name)
         );
         tracing::debug!("{sql}");
 
@@ -391,13 +393,8 @@ impl TableCreator {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::HashMap;
-
-    use crate::{
-        sql::db_connection_pool::{
-            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
-        },
-        util::indexes,
+    use crate::sql::db_connection_pool::{
+        dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
     };
     use datafusion::arrow::array::RecordBatch;
     use datafusion::{
