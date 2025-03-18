@@ -45,5 +45,9 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     sqlite::init_module(&sqlite)?;
     m.add_submodule(&sqlite)?;
 
+    let duckdb = PyModule::new(py, "duckdb")?;
+    duckdb::init_module(&duckdb)?;
+    m.add_submodule(&duckdb)?;
+
     Ok(())
 }

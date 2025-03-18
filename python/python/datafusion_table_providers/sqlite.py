@@ -5,6 +5,7 @@ from . import _internal
 class SqliteTableFactory:
 
     def __init__(self, path: str, mode: str, busy_timeout_s: float, attach_databases: Optional[List[str]] = None) -> None:
+        # TODO: fix documentation
         """Create a new :py:class:`SessionConfig` with the given configuration options.
 
         Args:

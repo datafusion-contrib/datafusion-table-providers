@@ -1913,6 +1913,7 @@ dependencies = [
  "datafusion",
  "datafusion-ffi",
  "datafusion-table-providers",
+ "duckdb",
  "pyo3",
  "tokio",
 ]
