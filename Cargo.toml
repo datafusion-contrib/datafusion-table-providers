@@ -35,7 +35,7 @@ datafusion-federation = { version = "=0.3.6", features = [
 ], optional = true }
 datafusion-physical-expr = { version = "45", optional = true }
 datafusion-physical-plan = { version = "45", optional = true }
-datafusion-proto = { version = "45", optional = true }
+datafusion-proto = { version = "46", optional = true }
 duckdb = { version = "=1.2.1", features = [
   "bundled",
   "r2d2",
