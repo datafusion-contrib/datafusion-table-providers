@@ -45,14 +45,11 @@ impl RawDuckDBTableFactory {
 
     pub fn tables(&self, py: Python) -> PyResult<Vec<String>> {
         wait_for_future(py, async {
-            // let conn = self.pool.connect_sync().map_err(to_pyerr)?;
             let conn = self.pool.connect().await.map_err(to_pyerr)?;
-            // let conn_async = conn.as_async().ok_or(to_pyerr(
-            //     "Unable to create connection to duckdb db".to_string(),
-            // ))?;
+
             let conn_sync = conn
                 .as_sync()
-                .expect("DuckDB connection should be synchronous");
+                .ok_or(to_pyerr("Unable to create synchronous DuckDB connection"))?;
             let schemas = conn_sync.schemas().map_err(to_pyerr)?;
 
             let mut tables = Vec::default();
