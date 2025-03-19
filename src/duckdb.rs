@@ -133,6 +133,11 @@ pub enum Error {
         value: String,
         source: byte_unit::ParseError,
     },
+
+    #[snafu(display(
+        r#"Invalid value "{value}" for "connection_pool_size": must be a positive integer greater than zero."#
+    ))]
+    InvalidConnectionPoolSize { value: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -224,7 +229,10 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
+    pub async fn get_or_init_memory_instance(
+        &self,
+        connection_pool_size: Option<u32>,
+    ) -> Result<DuckDbConnectionPool> {
         let key = DbInstanceKey::memory();
         let mut instances = self.instances.lock().await;
 
@@ -232,7 +240,7 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_memory()
+        let pool = DuckDbConnectionPool::new_memory(connection_pool_size)
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 
@@ -244,6 +252,7 @@ impl DuckDBTableProviderFactory {
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
+        connection_pool_size: Option<u32>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path = db_path.into();
         let key = DbInstanceKey::file(Arc::clone(&db_path));
@@ -253,9 +262,10 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-            .context(DbConnectionPoolSnafu)?
-            .with_unsupported_type_action(self.unsupported_type_action);
+        let pool =
+            DuckDbConnectionPool::new_file(&db_path, &self.access_mode, connection_pool_size)
+                .context(DbConnectionPoolSnafu)?
+                .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -318,6 +328,26 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             );
         }
 
+        let connection_pool_size = options
+            .get("connection_pool_size")
+            .map(|s| {
+                s.parse::<u32>()
+                    .map_err(|_| Error::InvalidConnectionPoolSize {
+                        value: s.to_string(),
+                    })
+                    .and_then(|size| {
+                        if size > 0 {
+                            Ok(size)
+                        } else {
+                            Err(Error::InvalidConnectionPoolSize {
+                                value: s.to_string(),
+                            })
+                        }
+                    })
+            })
+            .transpose()
+            .map_err(to_datafusion_error)?;
+
         let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
@@ -325,12 +355,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance(db_path, connection_pool_size)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance(connection_pool_size)
                 .await
                 .map_err(to_datafusion_error)?,
         };
@@ -616,12 +646,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-           tracing::warn!(
-    "Unexpected index(es) detected in table '{name}': {}.\n\
+            tracing::warn!(
+                "Unexpected index(es) detected in table '{name}': {}.\n\
      These indexes are not defined in the configuration.",
-    extra_in_actual.iter().join(", "),
-    name = self.table_name
-);
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())

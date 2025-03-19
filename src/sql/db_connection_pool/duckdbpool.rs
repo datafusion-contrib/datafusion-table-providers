@@ -54,7 +54,6 @@ impl std::fmt::Debug for DuckDbConnectionPool {
 }
 
 impl DuckDbConnectionPool {
-
     /// Get the dataset path. Returns `:memory:` if the in memory database is used.
     pub fn db_path(&self) -> &str {
         self.path.as_ref()
@@ -74,11 +73,16 @@ impl DuckDbConnectionPool {
     ///
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    pub fn new_memory() -> Result<Self> {
+    pub fn new_memory(connection_pool_size: Option<u32>) -> Result<Self> {
         let config = get_config(&AccessMode::ReadWrite)?;
         let manager =
             DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
-        let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
+
+        let mut pool_builder = r2d2::Pool::builder();
+        if let Some(size) = connection_pool_size {
+            pool_builder = pool_builder.max_size(size);
+        }
+        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
@@ -111,11 +115,20 @@ impl DuckDbConnectionPool {
     ///
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
+    pub fn new_file(
+        path: &str,
+        access_mode: &AccessMode,
+        connection_pool_size: Option<u32>,
+    ) -> Result<Self> {
         let config = get_config(access_mode)?;
         let manager = DuckdbConnectionManager::file_with_flags(path, config)
             .context(DuckDBConnectionSnafu)?;
-        let pool = Arc::new(r2d2::Pool::new(manager).context(ConnectionPoolSnafu)?);
+
+        let mut pool_builder = r2d2::Pool::builder();
+        if let Some(size) = connection_pool_size {
+            pool_builder = pool_builder.max_size(size);
+        }
+        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
         conn.register_table_function::<ArrowVTab>("arrow")
@@ -282,7 +295,7 @@ mod test {
     #[tokio::test]
     async fn test_duckdb_connection_pool() {
         let pool =
-            DuckDbConnectionPool::new_memory().expect("DuckDB connection pool to be created");
+            DuckDbConnectionPool::new_memory(None).expect("DuckDB connection pool to be created");
         let conn = pool
             .connect()
             .await
@@ -305,12 +318,12 @@ mod test {
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();
-        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
+        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite, None)
             .expect("DuckDB connection pool to be created")
             .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
 
         let pool_attached =
-            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
+            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite, None)
                 .expect("DuckDB connection pool to be created")
                 .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
 
