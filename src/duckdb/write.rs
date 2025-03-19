@@ -338,6 +338,8 @@ fn try_write_all_with_constraints(
         rows_since_last_commit += batch.num_rows();
 
         if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
+            tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
+
             // Commit the current transaction
             tx_manager
                 .commit()
