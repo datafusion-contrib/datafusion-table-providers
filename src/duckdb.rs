@@ -460,6 +460,12 @@ impl DuckDB {
             .context(DbConnectionSnafu)
     }
 
+    pub fn connect_sync_direct(self: Arc<Self>) -> Result<DuckDbConnection> {
+        Arc::clone(&self.pool)
+            .connect_sync_direct()
+            .context(DbConnectionSnafu)
+    }
+
     pub fn duckdb_conn(
         db_connection: &mut Box<
             dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>,
@@ -616,12 +622,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-           tracing::warn!(
-    "Unexpected index(es) detected in table '{name}': {}.\n\
+            tracing::warn!(
+                "Unexpected index(es) detected in table '{name}': {}.\n\
      These indexes are not defined in the configuration.",
-    extra_in_actual.iter().join(", "),
-    name = self.table_name
-);
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())

@@ -54,7 +54,6 @@ impl std::fmt::Debug for DuckDbConnectionPool {
 }
 
 impl DuckDbConnectionPool {
-
     /// Get the dataset path. Returns `:memory:` if the in memory database is used.
     pub fn db_path(&self) -> &str {
         self.path.as_ref()
@@ -165,17 +164,19 @@ impl DuckDbConnectionPool {
     ) -> Result<
         Box<dyn DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>>,
     > {
+        Ok(Box::new(self.connect_sync_direct()?))
+    }
+
+    pub fn connect_sync_direct(self: Arc<Self>) -> Result<DuckDbConnection> {
         let pool = Arc::clone(&self.pool);
         let conn: r2d2::PooledConnection<DuckdbConnectionManager> =
             pool.get().context(ConnectionPoolSnafu)?;
 
         let attachments = self.get_attachments()?;
 
-        Ok(Box::new(
-            DuckDbConnection::new(conn)
-                .with_attachments(attachments)
-                .with_unsupported_type_action(self.unsupported_type_action),
-        ))
+        Ok(DuckDbConnection::new(conn)
+            .with_attachments(attachments)
+            .with_unsupported_type_action(self.unsupported_type_action))
     }
 
     #[must_use]
