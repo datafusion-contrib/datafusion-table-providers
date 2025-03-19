@@ -377,31 +377,76 @@ fn try_write_all_with_constraints(
     Ok((num_rows, tx_manager))
 }
 
-/// If there are no constraints on the `DuckDB` table, we can do a simple single transaction write.
+/// Even if there are no constraints on the `DuckDB` table, we use the temp table approach
+/// to be consistent with the constrained case and to help with performance.
 fn try_write_all_no_constraints(
     duckdb: Arc<DuckDB>,
-    tx_manager: DuckDbTransactionManager,
+    mut tx_manager: DuckDbTransactionManager,
     mut data_batches: Receiver<RecordBatch>,
     overwrite: InsertOp,
 ) -> datafusion::common::Result<(u64, DuckDbTransactionManager)> {
+    // We want to clone the current table into our insert table
+    let Some(ref orig_table_creator) = duckdb.table_creator else {
+        return Err(DataFusionError::Execution(
+            "Expected table to have a table creator".to_string(),
+        ));
+    };
+
     let mut num_rows = 0;
 
-    if matches!(overwrite, InsertOp::Overwrite) {
-        tracing::debug!("Deleting all data from table.");
-        duckdb
-            .delete_all_table_data(tx_manager.tx().unwrap())
-            .map_err(to_datafusion_error)?;
-    }
+    let mut insert_table = orig_table_creator
+        .create_empty_clone(tx_manager.tx().unwrap())
+        .map_err(to_datafusion_error)?;
+
+    let Some(insert_table_creator) = insert_table.table_creator.take() else {
+        unreachable!()
+    };
+
+    // Auto-commit after processing this many rows
+    const MAX_ROWS_PER_COMMIT: usize = 10_000_000;
+    let mut rows_since_last_commit = 0;
 
     while let Some(batch) = data_batches.blocking_recv() {
         num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
             DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
         })?;
 
-        tracing::debug!("Inserting {} rows into table.", batch.num_rows());
+        rows_since_last_commit += batch.num_rows();
 
-        duckdb
+        if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
+            tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
+
+            // Commit the current transaction
+            tx_manager
+                .commit()
+                .context(super::UnableToCommitTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            // Create a new transaction
+            tx_manager
+                .begin()
+                .context(super::UnableToBeginTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            rows_since_last_commit = 0;
+        }
+
+        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
+        insert_table
             .insert_batch_no_constraints(tx_manager.tx().unwrap(), &batch)
+            .map_err(to_datafusion_error)?;
+    }
+
+    if matches!(overwrite, InsertOp::Overwrite) {
+        insert_table_creator
+            .replace_table(tx_manager.tx().unwrap(), orig_table_creator)
+            .map_err(to_datafusion_error)?;
+    } else {
+        insert_table
+            .insert_table_into(tx_manager.tx().unwrap(), &duckdb, None)
+            .map_err(to_datafusion_error)?;
+        insert_table_creator
+            .delete_table(tx_manager.tx().unwrap())
             .map_err(to_datafusion_error)?;
     }
 
