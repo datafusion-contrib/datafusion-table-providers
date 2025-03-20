@@ -233,7 +233,7 @@ impl DataSink for DuckDBDataSink {
                     [] => {
                         try_write_all_no_constraints(duckdb, append_manager, batch_rx, overwrite)?
                     }
-                    _ => try_write_all_with_constraints(
+                    _ => try_write_all_with_constraints_phased_commit(
                         duckdb,
                         append_manager,
                         batch_rx,
@@ -425,7 +425,7 @@ fn try_write_all_with_constraints_phased_commit(
     };
 
     // Auto-commit after processing this many rows
-    const MAX_ROWS_PER_COMMIT: usize = 10_000_000;
+    const MAX_ROWS_PER_COMMIT: usize = 100_000_000;
     let mut rows_since_last_commit = 0;
 
     while let Some(batch) = data_batches.blocking_recv() {
@@ -437,6 +437,8 @@ fn try_write_all_with_constraints_phased_commit(
 
         if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
             tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
+
+            append_manager.appender_flush().unwrap();
 
             // Commit the current transaction
             append_manager
@@ -458,6 +460,11 @@ fn try_write_all_with_constraints_phased_commit(
             .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
             .map_err(to_datafusion_error)?;
     }
+
+    append_manager.appender_flush().unwrap();
+
+    append_manager.commit().unwrap();
+    append_manager.begin(duckdb.table_name()).unwrap();
 
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
@@ -548,6 +555,8 @@ fn try_write_all_no_constraints_phased_commit(
         if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
             tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
 
+            append_manager.appender_flush().unwrap();
+
             // Commit the current transaction
             append_manager
                 .commit()
@@ -568,6 +577,11 @@ fn try_write_all_no_constraints_phased_commit(
             .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
             .map_err(to_datafusion_error)?;
     }
+
+    append_manager.appender_flush().unwrap();
+
+    append_manager.commit().unwrap();
+    append_manager.begin(duckdb.table_name()).unwrap();
 
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
