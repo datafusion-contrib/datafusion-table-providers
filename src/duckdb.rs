@@ -133,11 +133,6 @@ pub enum Error {
         value: String,
         source: byte_unit::ParseError,
     },
-
-    #[snafu(display(
-        r#"Invalid value "{value}" for "connection_pool_size": must be a positive integer greater than zero."#
-    ))]
-    InvalidConnectionPoolSize { value: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
