@@ -32,7 +32,7 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
+use duckdb::{AccessMode, Appender, DuckdbConnectionManager, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
@@ -101,6 +101,9 @@ pub enum Error {
 
     #[snafu(display("Unable to begin duckdb transaction: {source}"))]
     UnableToBeginTransaction { source: duckdb::Error },
+
+    #[snafu(display("Unable to flush appender: {source}"))]
+    UnableToFlushAppender { source: duckdb::Error },
 
     #[snafu(display("Unable to rollback transaction: {source}"))]
     UnableToRollbackTransaction { source: duckdb::Error },
@@ -515,20 +518,14 @@ impl DuckDB {
 
     fn insert_batch_no_constraints(
         &self,
-        transaction: &Transaction<'_>,
+        appender: &mut Appender<'_>,
         batch: &RecordBatch,
     ) -> Result<()> {
-        let mut appender = transaction
-            .appender(&self.table_name)
-            .context(UnableToGetAppenderToDuckDBTableSnafu)?;
-
         for batch in Self::split_batch(batch) {
             appender
                 .append_record_batch(batch.clone())
                 .context(UnableToInsertToDuckDBTableSnafu)?;
         }
-
-        appender.flush().context(UnableToInsertToDuckDBTableSnafu)?;
 
         Ok(())
     }
@@ -791,7 +788,7 @@ pub(crate) mod tests {
         let ctx = SessionContext::new();
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
-            name: table_name.into(),
+            name: table_name,
             location: "".to_string(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
