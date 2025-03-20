@@ -328,26 +328,6 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             );
         }
 
-        let connection_pool_size = options
-            .get("connection_pool_size")
-            .map(|s| {
-                s.parse::<u32>()
-                    .map_err(|_| Error::InvalidConnectionPoolSize {
-                        value: s.to_string(),
-                    })
-                    .and_then(|size| {
-                        if size > 0 {
-                            Ok(size)
-                        } else {
-                            Err(Error::InvalidConnectionPoolSize {
-                                value: s.to_string(),
-                            })
-                        }
-                    })
-            })
-            .transpose()
-            .map_err(to_datafusion_error)?;
-
         let pool: DuckDbConnectionPool = match &mode {
             Mode::File => {
                 // open duckdb at given path or create a new one
@@ -355,12 +335,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path, connection_pool_size)
+                self.get_or_init_file_instance(db_path, None)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance(connection_pool_size)
+                .get_or_init_memory_instance(None)
                 .await
                 .map_err(to_datafusion_error)?,
         };

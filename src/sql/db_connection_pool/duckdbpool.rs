@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
-use std::sync::Arc;
+use std::{cmp::max, sync::Arc};
 
 use super::{
     dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
@@ -14,6 +14,8 @@ use crate::{
     },
     UnsupportedTypeAction,
 };
+
+const DEFAULT_IDLE_CONNECTION: u32 = 10;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -80,7 +82,10 @@ impl DuckDbConnectionPool {
 
         let mut pool_builder = r2d2::Pool::builder();
         if let Some(size) = connection_pool_size {
-            pool_builder = pool_builder.max_size(size);
+            let max_size = max(DEFAULT_IDLE_CONNECTION, size);
+            pool_builder = pool_builder
+                .max_size(max_size)
+                .min_idle(Some(DEFAULT_IDLE_CONNECTION));
         }
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
@@ -126,7 +131,10 @@ impl DuckDbConnectionPool {
 
         let mut pool_builder = r2d2::Pool::builder();
         if let Some(size) = connection_pool_size {
-            pool_builder = pool_builder.max_size(size);
+            let max_size = max(DEFAULT_IDLE_CONNECTION, size);
+            pool_builder = pool_builder
+                .max_size(max_size)
+                .min_idle(Some(DEFAULT_IDLE_CONNECTION));
         }
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
