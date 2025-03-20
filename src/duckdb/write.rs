@@ -376,6 +376,9 @@ fn try_write_all_with_constraints(
 
     append_manager.appender_flush().unwrap();
 
+    append_manager.commit().unwrap();
+    append_manager.begin(duckdb.table_name()).unwrap();
+
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
             .replace_table(append_manager.tx().unwrap(), orig_table_creator)
