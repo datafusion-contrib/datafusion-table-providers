@@ -245,10 +245,11 @@ impl DataSink for DuckDBDataSink {
                     .try_recv()
                     .map_err(to_retriable_data_write_error)?;
 
-                append_manager
-                    .appender_flush()
-                    .context(super::UnableToFlushAppenderSnafu)
-                    .map_err(to_retriable_data_write_error)?;
+                // flush in the respective write functions
+                // append_manager
+                //     .appender_flush()
+                //     .context(super::UnableToFlushAppenderSnafu)
+                //     .map_err(to_retriable_data_write_error)?;
 
                 append_manager
                     .commit()
@@ -371,6 +372,8 @@ fn try_write_all_with_constraints(
             .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
             .map_err(to_datafusion_error)?;
     }
+
+    append_manager.appender_flush().unwrap();
 
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
@@ -495,6 +498,8 @@ fn try_write_all_no_constraints(
             .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
             .map_err(to_datafusion_error)?;
     }
+
+    append_manager.appender_flush().unwrap();
 
     Ok((num_rows, append_manager))
 }
