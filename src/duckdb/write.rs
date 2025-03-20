@@ -100,6 +100,7 @@ impl DuckDbAppendManager {
 
     pub fn appender_flush(&mut self) -> Result<(), DuckDBError> {
         if let Some(appender) = self.appender_mut() {
+            tracing::debug!("Flushing appender");
             appender.flush()?;
         }
         Ok(())
