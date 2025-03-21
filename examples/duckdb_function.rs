@@ -10,7 +10,7 @@ use datafusion_table_providers::{
 #[tokio::main]
 async fn main() {
     let duckdb_pool = Arc::new(
-        DuckDbConnectionPool::new_memory().expect("unable to create DuckDB connection pool"),
+        DuckDbConnectionPool::new_memory(None).expect("unable to create DuckDB connection pool"),
     );
 
     let duckdb_table_factory = DuckDBTableFactory::new(duckdb_pool);

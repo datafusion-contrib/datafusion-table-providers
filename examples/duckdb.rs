@@ -12,7 +12,7 @@ use duckdb::AccessMode;
 async fn main() {
     // Opening in ReadOnly mode allows multiple reader processes to access the database at the same time.
     let duckdb_pool = Arc::new(
-        DuckDbConnectionPool::new_file("examples/duckdb_example.db", &AccessMode::ReadOnly)
+        DuckDbConnectionPool::new_file("examples/duckdb_example.db", &AccessMode::ReadOnly, None)
             .expect("unable to create DuckDB connection pool"),
     );
 
