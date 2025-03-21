@@ -143,6 +143,9 @@ pub enum Error {
 
     #[snafu(display("Failed to retrieve the DuckDB writer appender.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
     MissingAppender,
+
+    #[snafu(display("An invalid write mode was provided: '{write_mode}'\nSpecify a valid write mode of 'standard' or 'batch', and try again."))]
+    InvalidWriteMode { write_mode: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -152,7 +155,6 @@ pub struct DuckDBTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
-    write_mode: DuckDBWriteMode,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -162,7 +164,6 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
-            .field("write_mode", &self.write_mode)
             .finish()
     }
 }
@@ -171,6 +172,7 @@ const DUCKDB_DB_PATH_PARAM: &str = "open";
 const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 const DUCKDB_SETTING_MEMORY_LIMIT: &str = "memory_limit";
+const DUCKDB_SETTING_WRITE_MODE: &str = "write_mode";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
@@ -180,7 +182,6 @@ impl DuckDBTableProviderFactory {
             instances: Arc::new(Mutex::new(HashMap::new())),
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
-            write_mode: DuckDBWriteMode::Standard,
         }
     }
 
@@ -196,12 +197,6 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
-        self
-    }
-
-    #[must_use]
-    pub fn with_write_mode(mut self, write_mode: DuckDBWriteMode) -> Self {
-        self.write_mode = write_mode;
         self
     }
 
@@ -288,6 +283,7 @@ type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<Duckd
 
 #[async_trait]
 impl TableProviderFactory for DuckDBTableProviderFactory {
+    #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
         _state: &dyn Session,
@@ -305,6 +301,11 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let mut options = cmd.options.clone();
         let mode = remove_option(&mut options, "mode").unwrap_or_default();
         let mode: Mode = mode.as_str().into();
+
+        let write_mode = remove_option(&mut options, DUCKDB_SETTING_WRITE_MODE)
+            .unwrap_or("standard".to_string());
+        let write_mode =
+            DuckDBWriteMode::try_from(write_mode.as_str()).map_err(to_datafusion_error)?;
 
         let indexes_option_str = remove_option(&mut options, "indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
@@ -416,7 +417,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             read_provider,
             duckdb,
             on_conflict,
-            self.write_mode,
+            write_mode,
         ))
     }
 }

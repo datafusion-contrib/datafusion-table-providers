@@ -210,6 +210,20 @@ pub enum DuckDBWriteMode {
     BatchedCommit,
 }
 
+impl TryFrom<&str> for DuckDBWriteMode {
+    type Error = super::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "standard" => Ok(Self::Standard),
+            "batch" => Ok(Self::BatchedCommit),
+            _ => Err(super::Error::InvalidWriteMode {
+                write_mode: value.to_string(),
+            }),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
     duckdb: Arc<DuckDB>,
