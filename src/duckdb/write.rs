@@ -230,10 +230,13 @@ impl DataSink for DuckDBDataSink {
                     .map_err(to_datafusion_error)?;
 
                 let (num_rows, mut append_manager) = match **duckdb.constraints() {
-                    [] => {
-                        try_write_all_no_constraints(duckdb, append_manager, batch_rx, overwrite)?
-                    }
-                    _ => try_write_all_with_constraints(
+                    [] => try_write_all_no_constraints_phased_commit(
+                        duckdb,
+                        append_manager,
+                        batch_rx,
+                        overwrite,
+                    )?,
+                    _ => try_write_all_with_constraints_phased_commit(
                         duckdb,
                         append_manager,
                         batch_rx,
