@@ -38,6 +38,7 @@ use snafu::prelude::*;
 use std::collections::HashSet;
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+use write::DuckDBWriteMode;
 
 use self::{creator::TableCreator, sql_table::DuckDBTable, write::DuckDBTableWriter};
 
@@ -136,6 +137,12 @@ pub enum Error {
         value: String,
         source: byte_unit::ParseError,
     },
+
+    #[snafu(display("Failed to retrieve the DuckDB writer transaction.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
+    MissingTransaction,
+
+    #[snafu(display("Failed to retrieve the DuckDB writer appender.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
+    MissingAppender,
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -145,6 +152,7 @@ pub struct DuckDBTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
+    write_mode: DuckDBWriteMode,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -154,6 +162,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
+            .field("write_mode", &self.write_mode)
             .finish()
     }
 }
@@ -171,6 +180,7 @@ impl DuckDBTableProviderFactory {
             instances: Arc::new(Mutex::new(HashMap::new())),
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
+            write_mode: DuckDBWriteMode::Standard,
         }
     }
 
@@ -186,6 +196,12 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_write_mode(mut self, write_mode: DuckDBWriteMode) -> Self {
+        self.write_mode = write_mode;
         self
     }
 
@@ -400,6 +416,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             read_provider,
             duckdb,
             on_conflict,
+            self.write_mode,
         ))
     }
 }
@@ -640,6 +657,7 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
+    write_mode: Option<DuckDBWriteMode>,
 }
 
 impl DuckDBTableFactory {
@@ -648,12 +666,19 @@ impl DuckDBTableFactory {
         Self {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
+            write_mode: None,
         }
     }
 
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_write_mode(mut self, write_mode: DuckDBWriteMode) -> Self {
+        self.write_mode = Some(write_mode);
         self
     }
 
@@ -709,7 +734,12 @@ impl DuckDBTableFactory {
             Constraints::empty(),
         );
 
-        Ok(DuckDBTableWriter::create(read_provider, duckdb, None))
+        Ok(DuckDBTableWriter::create(
+            read_provider,
+            duckdb,
+            None,
+            self.write_mode.unwrap_or(DuckDBWriteMode::Standard),
+        ))
     }
 }
 

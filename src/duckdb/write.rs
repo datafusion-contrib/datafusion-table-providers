@@ -23,7 +23,7 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan,
     },
 };
-use duckdb::{Appender, Error as DuckDBError, Transaction};
+use duckdb::{Appender, Transaction};
 use futures::StreamExt;
 use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -53,9 +53,13 @@ impl DuckDbAppendManager {
     }
 
     /// Begin a new transaction if one doesn't already exist
-    pub fn begin(&mut self, table_name: &str) -> Result<(), DuckDBError> {
+    pub fn begin(&mut self, table_name: &str) -> Result<(), super::Error> {
         if self.transaction.is_none() {
-            let tx = self.conn.conn.transaction()?;
+            let tx = self
+                .conn
+                .conn
+                .transaction()
+                .context(super::UnableToBeginTransactionSnafu)?;
             // SAFETY: The transaction is tied to the lifetime of the connection - because Rust
             // doesn't support self-referential structs, we need to transmute the transaction
             // to a static lifetime. We never give out a reference to the transaction with the static lifetime,
@@ -66,7 +70,9 @@ impl DuckDbAppendManager {
             // SAFETY: The appender is tied to the lifetime of the transaction.
             self.appender = Some(unsafe {
                 std::mem::transmute::<duckdb::Appender<'_>, duckdb::Appender<'static>>(
-                    static_tx.appender(table_name)?,
+                    static_tx
+                        .appender(table_name)
+                        .context(super::UnableToGetAppenderToDuckDBTableSnafu)?,
                 )
             });
             self.transaction = Some(static_tx);
@@ -74,36 +80,49 @@ impl DuckDbAppendManager {
         Ok(())
     }
 
-    /// Commit the current transaction if one exists and return success/failure
-    pub fn commit(&mut self) -> Result<(), DuckDBError> {
-        if let Some(tx) = self.transaction.take() {
-            tx.commit()?;
+    /// Commit the current transaction
+    pub fn commit(&mut self) -> Result<(), super::Error> {
+        if let Some(transaction) = self.transaction.take() {
+            transaction
+                .commit()
+                .context(super::UnableToCommitTransactionSnafu)?;
         }
         Ok(())
+    }
+
+    /// Flush the appender, commit the current transaction, and begin a new transaction
+    pub fn commit_and_begin(&mut self, table_name: &str) -> Result<(), super::Error> {
+        self.appender_flush()?;
+        self.commit()?;
+        self.begin(table_name)
     }
 
     /// Execute a database operation with the current transaction
-    pub fn tx(&self) -> Option<&Transaction<'_>> {
-        self.transaction.as_ref()
+    pub fn tx(&self) -> Result<&Transaction<'_>, super::Error> {
+        self.transaction
+            .as_ref()
+            .context(super::MissingTransactionSnafu)
     }
 
-    pub fn appender(&self) -> Option<&Appender<'_>> {
-        self.appender.as_ref()
+    pub fn appender(&self) -> Result<&Appender<'_>, super::Error> {
+        self.appender.as_ref().context(super::MissingAppenderSnafu)
     }
 
     #[allow(clippy::needless_lifetimes)]
-    pub fn appender_mut<'a>(&'a mut self) -> Option<&'a mut Appender<'a>> {
-        self.appender.as_mut().map(|appender| unsafe {
-            std::mem::transmute::<&mut duckdb::Appender<'_>, &mut duckdb::Appender<'a>>(appender)
+    pub fn appender_mut<'a>(&'a mut self) -> Result<&'a mut Appender<'a>, super::Error> {
+        Ok(unsafe {
+            std::mem::transmute::<&mut duckdb::Appender<'_>, &mut duckdb::Appender<'a>>(
+                self.appender
+                    .as_mut()
+                    .context(super::MissingAppenderSnafu)?,
+            )
         })
     }
 
-    pub fn appender_flush(&mut self) -> Result<(), DuckDBError> {
-        if let Some(appender) = self.appender_mut() {
-            tracing::debug!("Flushing appender");
-            appender.flush()?;
-        }
-        Ok(())
+    pub fn appender_flush(&mut self) -> Result<(), super::Error> {
+        self.appender_mut()?
+            .flush()
+            .context(super::UnableToFlushAppenderSnafu)
     }
 }
 
@@ -112,6 +131,7 @@ pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     duckdb: Arc<DuckDB>,
     on_conflict: Option<OnConflict>,
+    write_mode: DuckDBWriteMode,
 }
 
 impl DuckDBTableWriter {
@@ -119,11 +139,13 @@ impl DuckDBTableWriter {
         read_provider: Arc<dyn TableProvider>,
         duckdb: DuckDB,
         on_conflict: Option<OnConflict>,
+        write_mode: DuckDBWriteMode,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_provider,
             duckdb: Arc::new(duckdb),
             on_conflict,
+            write_mode,
         })
     }
 
@@ -174,6 +196,7 @@ impl TableProvider for DuckDBTableWriter {
                 Arc::clone(&self.duckdb),
                 overwrite,
                 self.on_conflict.clone(),
+                self.write_mode,
             )),
             self.schema(),
             None,
@@ -181,11 +204,18 @@ impl TableProvider for DuckDBTableWriter {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum DuckDBWriteMode {
+    Standard,
+    BatchedCommit,
+}
+
 #[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
     duckdb: Arc<DuckDB>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
+    write_mode: DuckDBWriteMode,
 }
 
 #[async_trait]
@@ -216,6 +246,7 @@ impl DataSink for DuckDBDataSink {
         let (notify_commit_transaction, mut on_commit_transaction) =
             tokio::sync::oneshot::channel();
 
+        let write_mode = self.write_mode;
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
                 let db_conn = Arc::clone(&duckdb)
@@ -226,38 +257,37 @@ impl DataSink for DuckDBDataSink {
 
                 append_manager
                     .begin(duckdb.table_name())
-                    .context(super::UnableToBeginTransactionSnafu)
                     .map_err(to_datafusion_error)?;
 
-                let (num_rows, mut append_manager) = match **duckdb.constraints() {
-                    [] => try_write_all_no_constraints_phased_commit(
-                        duckdb,
-                        append_manager,
-                        batch_rx,
-                        overwrite,
-                    )?,
-                    _ => try_write_all_with_constraints_phased_commit(
-                        duckdb,
-                        append_manager,
-                        batch_rx,
-                        overwrite,
-                        on_conflict,
-                    )?,
-                };
+                let (num_rows, mut append_manager) =
+                    match (duckdb.constraints().is_empty(), write_mode) {
+                        // the only scenario where we can write directly to the table
+                        (true, DuckDBWriteMode::Standard) => try_write_all_no_constraints(
+                            &duckdb,
+                            append_manager,
+                            batch_rx,
+                            overwrite,
+                        )?,
+                        _ =>
+                        // all other scenarios where we need to create a temp table
+                        {
+                            try_write_all_with_temp_table(
+                                &duckdb,
+                                append_manager,
+                                batch_rx,
+                                overwrite,
+                                on_conflict.as_ref(),
+                                write_mode,
+                            )?
+                        }
+                    };
 
                 on_commit_transaction
                     .try_recv()
                     .map_err(to_retriable_data_write_error)?;
 
-                // flush in the respective write functions
-                // append_manager
-                //     .appender_flush()
-                //     .context(super::UnableToFlushAppenderSnafu)
-                //     .map_err(to_retriable_data_write_error)?;
-
                 append_manager
                     .commit()
-                    .context(super::UnableToCommitTransactionSnafu)
                     .map_err(to_retriable_data_write_error)?;
                 drop(append_manager);
 
@@ -317,11 +347,13 @@ impl DuckDBDataSink {
         duckdb: Arc<DuckDB>,
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
+        write_mode: DuckDBWriteMode,
     ) -> Self {
         Self {
             duckdb,
             overwrite,
             on_conflict,
+            write_mode,
         }
     }
 }
@@ -342,73 +374,14 @@ impl DisplayAs for DuckDBDataSink {
 /// if the mode is overwrite or not, insert into the target table or drop the target table and rename the current table.
 ///
 /// See: <https://duckdb.org/docs/sql/indexes#over-eager-unique-constraint-checking>
-fn try_write_all_with_constraints(
-    duckdb: Arc<DuckDB>,
-    mut append_manager: DuckDbAppendManager,
-    mut data_batches: Receiver<RecordBatch>,
-    overwrite: InsertOp,
-    on_conflict: Option<OnConflict>,
-) -> datafusion::common::Result<(u64, DuckDbAppendManager)> {
-    // We want to clone the current table into our insert table
-    let Some(ref orig_table_creator) = duckdb.table_creator else {
-        return Err(DataFusionError::Execution(
-            "Expected table with constraints to have a table creator".to_string(),
-        ));
-    };
-
-    let mut num_rows = 0;
-
-    let mut insert_table = orig_table_creator
-        .create_empty_clone(append_manager.tx().unwrap())
-        .map_err(to_datafusion_error)?;
-
-    let Some(insert_table_creator) = insert_table.table_creator.take() else {
-        unreachable!()
-    };
-
-    while let Some(batch) = data_batches.blocking_recv() {
-        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
-            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        })?;
-
-        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
-        insert_table
-            .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
-            .map_err(to_datafusion_error)?;
-    }
-
-    append_manager.appender_flush().unwrap();
-
-    append_manager.commit().unwrap();
-    append_manager.begin(duckdb.table_name()).unwrap();
-
-    if matches!(overwrite, InsertOp::Overwrite) {
-        insert_table_creator
-            .replace_table(append_manager.tx().unwrap(), orig_table_creator)
-            .map_err(to_datafusion_error)?;
-    } else {
-        insert_table
-            .insert_table_into(append_manager.tx().unwrap(), &duckdb, on_conflict.as_ref())
-            .map_err(to_datafusion_error)?;
-        insert_table_creator
-            .delete_table(append_manager.tx().unwrap())
-            .map_err(to_datafusion_error)?;
-    }
-
-    Ok((num_rows, append_manager))
-}
-
-/// If there are constraints on the `DuckDB` table, we need to create an empty copy of the target table, write to that table copy and then depending on
-/// if the mode is overwrite or not, insert into the target table or drop the target table and rename the current table.
-///
-/// See: <https://duckdb.org/docs/sql/indexes#over-eager-unique-constraint-checking>
 #[allow(dead_code)]
-fn try_write_all_with_constraints_phased_commit(
-    duckdb: Arc<DuckDB>,
+fn try_write_all_with_temp_table(
+    duckdb: &Arc<DuckDB>,
     mut append_manager: DuckDbAppendManager,
     mut data_batches: Receiver<RecordBatch>,
     overwrite: InsertOp,
-    on_conflict: Option<OnConflict>,
+    on_conflict: Option<&OnConflict>,
+    write_mode: DuckDBWriteMode,
 ) -> datafusion::common::Result<(u64, DuckDbAppendManager)> {
     // We want to clone the current table into our insert table
     let Some(ref orig_table_creator) = duckdb.table_creator else {
@@ -420,7 +393,7 @@ fn try_write_all_with_constraints_phased_commit(
     let mut num_rows = 0;
 
     let mut insert_table = orig_table_creator
-        .create_empty_clone(append_manager.tx().unwrap())
+        .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?)
         .map_err(to_datafusion_error)?;
 
     let Some(insert_table_creator) = insert_table.table_creator.take() else {
@@ -438,21 +411,13 @@ fn try_write_all_with_constraints_phased_commit(
 
         rows_since_last_commit += batch.num_rows();
 
-        if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
+        if matches!(write_mode, DuckDBWriteMode::BatchedCommit)
+            && rows_since_last_commit > MAX_ROWS_PER_COMMIT
+        {
             tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
 
-            append_manager.appender_flush().unwrap();
-
-            // Commit the current transaction
             append_manager
-                .commit()
-                .context(super::UnableToCommitTransactionSnafu)
-                .map_err(to_datafusion_error)?;
-
-            // Create a new transaction
-            append_manager
-                .begin(duckdb.table_name())
-                .context(super::UnableToBeginTransactionSnafu)
+                .commit_and_begin(duckdb.table_name())
                 .map_err(to_datafusion_error)?;
 
             rows_since_last_commit = 0;
@@ -460,25 +425,34 @@ fn try_write_all_with_constraints_phased_commit(
 
         tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
         insert_table
-            .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
+            .insert_batch_no_constraints(
+                append_manager.appender_mut().map_err(to_datafusion_error)?,
+                &batch,
+            )
             .map_err(to_datafusion_error)?;
     }
 
-    append_manager.appender_flush().unwrap();
-
-    append_manager.commit().unwrap();
-    append_manager.begin(duckdb.table_name()).unwrap();
+    append_manager
+        .commit_and_begin(duckdb.table_name())
+        .map_err(to_datafusion_error)?;
 
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
-            .replace_table(append_manager.tx().unwrap(), orig_table_creator)
+            .replace_table(
+                append_manager.tx().map_err(to_datafusion_error)?,
+                orig_table_creator,
+            )
             .map_err(to_datafusion_error)?;
     } else {
         insert_table
-            .insert_table_into(append_manager.tx().unwrap(), &duckdb, on_conflict.as_ref())
+            .insert_table_into(
+                append_manager.tx().map_err(to_datafusion_error)?,
+                duckdb,
+                on_conflict,
+            )
             .map_err(to_datafusion_error)?;
         insert_table_creator
-            .delete_table(append_manager.tx().unwrap())
+            .delete_table(append_manager.tx().map_err(to_datafusion_error)?)
             .map_err(to_datafusion_error)?;
     }
 
@@ -487,7 +461,7 @@ fn try_write_all_with_constraints_phased_commit(
 
 /// If there are no constraints on the `DuckDB` table, we can do a simple single transaction write.
 fn try_write_all_no_constraints(
-    duckdb: Arc<DuckDB>,
+    duckdb: &Arc<DuckDB>,
     mut append_manager: DuckDbAppendManager,
     mut data_batches: Receiver<RecordBatch>,
     overwrite: InsertOp,
@@ -497,7 +471,7 @@ fn try_write_all_no_constraints(
     if matches!(overwrite, InsertOp::Overwrite) {
         tracing::debug!("Deleting all data from table.");
         duckdb
-            .delete_all_table_data(append_manager.tx().unwrap())
+            .delete_all_table_data(append_manager.tx().map_err(to_datafusion_error)?)
             .map_err(to_datafusion_error)?;
     }
 
@@ -509,95 +483,16 @@ fn try_write_all_no_constraints(
         tracing::debug!("Inserting {} rows into table.", batch.num_rows());
 
         duckdb
-            .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
+            .insert_batch_no_constraints(
+                append_manager.appender_mut().map_err(to_datafusion_error)?,
+                &batch,
+            )
             .map_err(to_datafusion_error)?;
     }
 
-    append_manager.appender_flush().unwrap();
-
-    Ok((num_rows, append_manager))
-}
-
-/// Even if there are no constraints on the `DuckDB` table, we use the temp table approach
-/// to be consistent with the constrained case and to help with performance.
-#[allow(dead_code)]
-fn try_write_all_no_constraints_phased_commit(
-    duckdb: Arc<DuckDB>,
-    mut append_manager: DuckDbAppendManager,
-    mut data_batches: Receiver<RecordBatch>,
-    overwrite: InsertOp,
-) -> datafusion::common::Result<(u64, DuckDbAppendManager)> {
-    // We want to clone the current table into our insert table
-    let Some(ref orig_table_creator) = duckdb.table_creator else {
-        return Err(DataFusionError::Execution(
-            "Expected table to have a table creator".to_string(),
-        ));
-    };
-
-    let mut num_rows = 0;
-
-    let mut insert_table = orig_table_creator
-        .create_empty_clone(append_manager.tx().unwrap())
+    append_manager
+        .appender_flush()
         .map_err(to_datafusion_error)?;
-
-    let Some(insert_table_creator) = insert_table.table_creator.take() else {
-        unreachable!()
-    };
-
-    // Auto-commit after processing this many rows
-    const MAX_ROWS_PER_COMMIT: usize = 10_000_000;
-    let mut rows_since_last_commit = 0;
-
-    while let Some(batch) = data_batches.blocking_recv() {
-        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
-            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        })?;
-
-        rows_since_last_commit += batch.num_rows();
-
-        if rows_since_last_commit > MAX_ROWS_PER_COMMIT {
-            tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
-
-            append_manager.appender_flush().unwrap();
-
-            // Commit the current transaction
-            append_manager
-                .commit()
-                .context(super::UnableToCommitTransactionSnafu)
-                .map_err(to_datafusion_error)?;
-
-            // Create a new transaction
-            append_manager
-                .begin(duckdb.table_name())
-                .context(super::UnableToBeginTransactionSnafu)
-                .map_err(to_datafusion_error)?;
-
-            rows_since_last_commit = 0;
-        }
-
-        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
-        insert_table
-            .insert_batch_no_constraints(append_manager.appender_mut().unwrap(), &batch)
-            .map_err(to_datafusion_error)?;
-    }
-
-    append_manager.appender_flush().unwrap();
-
-    append_manager.commit().unwrap();
-    append_manager.begin(duckdb.table_name()).unwrap();
-
-    if matches!(overwrite, InsertOp::Overwrite) {
-        insert_table_creator
-            .replace_table(append_manager.tx().unwrap(), orig_table_creator)
-            .map_err(to_datafusion_error)?;
-    } else {
-        insert_table
-            .insert_table_into(append_manager.tx().unwrap(), &duckdb, None)
-            .map_err(to_datafusion_error)?;
-        insert_table_creator
-            .delete_table(append_manager.tx().unwrap())
-            .map_err(to_datafusion_error)?;
-    }
 
     Ok((num_rows, append_manager))
 }
