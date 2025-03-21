@@ -452,7 +452,7 @@ fn try_write_all_with_temp_table(
                 .begin_transaction()
                 .map_err(to_datafusion_error)?;
             append_manager
-                .begin_appender(duckdb.table_name())
+                .begin_appender(insert_table.table_name())
                 .map_err(to_datafusion_error)?;
 
             rows_since_last_commit = 0;
