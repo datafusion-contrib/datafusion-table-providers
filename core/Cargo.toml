@@ -9,14 +9,14 @@ description = "Extend the capabilities of DataFusion to support additional data 
 
 [dependencies]
 arrow = { workspace = true }
-arrow-array = { version = "54.2.1", optional = true }
-arrow-flight = { version = "54.2.1", optional = true, features = [
+arrow-array = { workspace = true, optional = true }
+arrow-flight = { workspace = true, optional = true, features = [
   "flight-sql-experimental",
   "tls",
 ] }
-arrow-schema = { version = "54.2.1", optional = true, features = ["serde"] }
-arrow-json = "54.2.1"
-arrow-odbc = { version = "=15.1.1", optional = true }
+arrow-schema = { workspace = true, optional = true, features = ["serde"] }
+arrow-json = { workspace = true }
+arrow-odbc = { workspace = true, optional = true }
 async-stream = { version = "0.3", optional = true }
 async-trait = "0.1"
 base64 = { version = "0.22.1", optional = true }
@@ -28,15 +28,15 @@ bytes = { version = "1.7.1", optional = true }
 byte-unit = { version = "5.1.4", optional = true }
 chrono = "0.4"
 dashmap = "6.1.0"
-datafusion = { version = "45", default-features = false }
-datafusion-expr = { version = "45", optional = true }
-datafusion-federation = { version = "=0.3.6", features = [
+datafusion = { workspace = true, default-features = false }
+datafusion-expr = { workspace = true, optional = true }
+datafusion-federation = { workspace = true, features = [
   "sql",
 ], optional = true }
-datafusion-physical-expr = { version = "45", optional = true }
-datafusion-physical-plan = { version = "45", optional = true }
-datafusion-proto = { version = "45", optional = true }
-duckdb = { version = "=1.2.1", features = [
+datafusion-physical-expr = { workspace = true, optional = true }
+datafusion-physical-plan = { workspace = true, optional = true }
+datafusion-proto = { workspace = true, optional = true }
+duckdb = { workspace = true, features = [
   "bundled",
   "r2d2",
   "vtab",

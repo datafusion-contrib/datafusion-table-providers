@@ -32,7 +32,22 @@ description = "Extend the capabilities of DataFusion to support additional data 
 
 [workspace.dependencies]
 arrow = "54.2.1"
+arrow-array = { version = "54.2.1" }
+arrow-flight = { version = "54.2.1", features = [
+  "flight-sql-experimental",
+  "tls",
+] }
+arrow-schema = { version = "54.2.1", features = ["serde"] }
+arrow-json = "54.2.1"
+arrow-odbc = { version = "=15.1.1" }
 datafusion = { version = "45", default-features = false }
+datafusion-expr = { version = "45" }
+datafusion-federation = { version = "=0.3.6", features = [
+  "sql",
+] }
 datafusion-ffi = { version = "45" }
 datafusion-proto = { version = "45" }
+datafusion-physical-expr = { version = "45" }
+datafusion-physical-plan = { version = "45" }
 datafusion-table-providers = { path = "core" }
+duckdb = { version = "=1.2.1" }

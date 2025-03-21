@@ -19,4 +19,4 @@ datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb"] }
 pyo3 = { version = "0.23" }
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-duckdb = { version = "1.2.1" }
+duckdb = { workspace = true }
