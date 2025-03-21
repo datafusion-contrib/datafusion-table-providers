@@ -429,7 +429,7 @@ fn try_write_all_with_temp_table(
     };
 
     // Auto-commit after processing this many rows
-    const MAX_ROWS_PER_COMMIT: usize = 100_000_000;
+    const MAX_ROWS_PER_COMMIT: usize = 1_000_000;
     let mut rows_since_last_commit = 0;
 
     while let Some(batch) = data_batches.blocking_recv() {
@@ -437,6 +437,12 @@ fn try_write_all_with_temp_table(
             DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
         })?;
 
+        insert_table
+            .insert_batch_no_constraints(
+                append_manager.appender_mut().map_err(to_datafusion_error)?,
+                &batch,
+            )
+            .map_err(to_datafusion_error)?;
         rows_since_last_commit += batch.num_rows();
 
         if matches!(write_mode, DuckDBWriteMode::BatchedCommit)
@@ -457,24 +463,20 @@ fn try_write_all_with_temp_table(
 
             rows_since_last_commit = 0;
         }
+    }
 
-        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
-        insert_table
-            .insert_batch_no_constraints(
-                append_manager.appender_mut().map_err(to_datafusion_error)?,
-                &batch,
-            )
+    if rows_since_last_commit > 0 {
+        tracing::debug!("Flushing appender and committing transaction.");
+        append_manager
+            .appender_flush()
+            .map_err(to_datafusion_error)?;
+        append_manager.commit().map_err(to_datafusion_error)?;
+        append_manager
+            .begin_transaction()
             .map_err(to_datafusion_error)?;
     }
 
-    append_manager
-        .appender_flush()
-        .map_err(to_datafusion_error)?;
-    append_manager.commit().map_err(to_datafusion_error)?;
-    append_manager
-        .begin_transaction()
-        .map_err(to_datafusion_error)?;
-
+    tracing::debug!("Inserting into target table.");
     if matches!(overwrite, InsertOp::Overwrite) {
         insert_table_creator
             .replace_table(
