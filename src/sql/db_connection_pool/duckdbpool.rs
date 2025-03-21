@@ -15,7 +15,7 @@ use crate::{
     UnsupportedTypeAction,
 };
 
-const DEFAULT_IDLE_CONNECTION: u32 = 10;
+const DEFAULT_MIN_IDLE_CONNECTIONS: u32 = 10;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -82,10 +82,10 @@ impl DuckDbConnectionPool {
 
         let mut pool_builder = r2d2::Pool::builder();
         if let Some(size) = connection_pool_size {
-            let max_size = max(DEFAULT_IDLE_CONNECTION, size);
+            let max_size = max(DEFAULT_MIN_IDLE_CONNECTIONS, size);
             pool_builder = pool_builder
                 .max_size(max_size)
-                .min_idle(Some(DEFAULT_IDLE_CONNECTION));
+                .min_idle(Some(DEFAULT_MIN_IDLE_CONNECTIONS));
         }
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
@@ -131,10 +131,10 @@ impl DuckDbConnectionPool {
 
         let mut pool_builder = r2d2::Pool::builder();
         if let Some(size) = connection_pool_size {
-            let max_size = max(DEFAULT_IDLE_CONNECTION, size);
+            let max_size = max(DEFAULT_MIN_IDLE_CONNECTIONS, size);
             pool_builder = pool_builder
                 .max_size(max_size)
-                .min_idle(Some(DEFAULT_IDLE_CONNECTION));
+                .min_idle(Some(DEFAULT_MIN_IDLE_CONNECTIONS));
         }
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
