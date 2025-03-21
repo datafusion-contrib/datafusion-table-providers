@@ -446,7 +446,7 @@ fn try_write_all_with_temp_table(
         rows_since_last_commit += batch.num_rows();
 
         if matches!(write_mode, DuckDBWriteMode::BatchedCommit)
-            && rows_since_last_commit >= MAX_ROWS_PER_COMMIT
+            && rows_since_last_commit > MAX_ROWS_PER_COMMIT
         {
             tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
 
@@ -465,16 +465,16 @@ fn try_write_all_with_temp_table(
         }
     }
 
-    // if rows_since_last_commit > 0 {
-    tracing::debug!("Flushing appender and committing transaction.");
-    append_manager
-        .appender_flush()
-        .map_err(to_datafusion_error)?;
-    append_manager.commit().map_err(to_datafusion_error)?;
-    append_manager
-        .begin_transaction()
-        .map_err(to_datafusion_error)?;
-    // }
+    if rows_since_last_commit > 0 {
+        tracing::debug!("Flushing appender and committing transaction.");
+        append_manager
+            .appender_flush()
+            .map_err(to_datafusion_error)?;
+        append_manager.commit().map_err(to_datafusion_error)?;
+        append_manager
+            .begin_transaction()
+            .map_err(to_datafusion_error)?;
+    }
 
     tracing::debug!("Inserting into target table.");
     if matches!(overwrite, InsertOp::Overwrite) {
