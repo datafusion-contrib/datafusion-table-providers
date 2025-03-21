@@ -429,7 +429,7 @@ fn try_write_all_with_temp_table(
     };
 
     // Auto-commit after processing this many rows
-    const MAX_ROWS_PER_COMMIT: usize = 1_000_000;
+    const MAX_ROWS_PER_COMMIT: usize = 100_000_000;
     let mut rows_since_last_commit = 0;
 
     while let Some(batch) = data_batches.blocking_recv() {
