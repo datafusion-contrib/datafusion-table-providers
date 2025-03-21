@@ -53,7 +53,7 @@ impl DuckDbAppendManager {
     }
 
     /// Begin a new transaction if one doesn't already exist
-    pub fn begin(&mut self, table_name: &str) -> Result<(), super::Error> {
+    pub fn begin(&mut self, table_name: Option<&str>) -> Result<(), super::Error> {
         if self.transaction.is_none() {
             let tx = self
                 .conn
@@ -67,14 +67,20 @@ impl DuckDbAppendManager {
             let static_tx = unsafe {
                 std::mem::transmute::<duckdb::Transaction<'_>, duckdb::Transaction<'static>>(tx)
             };
-            // SAFETY: The appender is tied to the lifetime of the transaction.
-            self.appender = Some(unsafe {
-                std::mem::transmute::<duckdb::Appender<'_>, duckdb::Appender<'static>>(
-                    static_tx
-                        .appender(table_name)
-                        .context(super::UnableToGetAppenderToDuckDBTableSnafu)?,
-                )
-            });
+
+            if let Some(table_name) = table_name {
+                // SAFETY: The appender is tied to the lifetime of the transaction.
+                self.appender = Some(unsafe {
+                    std::mem::transmute::<duckdb::Appender<'_>, duckdb::Appender<'static>>(
+                        static_tx
+                            .appender(table_name)
+                            .context(super::UnableToGetAppenderToDuckDBTableSnafu)?,
+                    )
+                });
+            } else {
+                self.appender = None;
+            }
+
             self.transaction = Some(static_tx);
         }
         Ok(())
@@ -94,7 +100,7 @@ impl DuckDbAppendManager {
     pub fn commit_and_begin(&mut self, table_name: &str) -> Result<(), super::Error> {
         self.appender_flush()?;
         self.commit()?;
-        self.begin(table_name)
+        self.begin(Some(table_name))
     }
 
     /// Execute a database operation with the current transaction
@@ -267,11 +273,7 @@ impl DataSink for DuckDBDataSink {
                     .connect_sync_direct()
                     .map_err(to_retriable_data_write_error)?;
 
-                let mut append_manager = DuckDbAppendManager::new(db_conn);
-
-                append_manager
-                    .begin(duckdb.table_name())
-                    .map_err(to_datafusion_error)?;
+                let append_manager = DuckDbAppendManager::new(db_conn);
 
                 let (num_rows, mut append_manager) =
                     match (duckdb.constraints().is_empty(), write_mode) {
@@ -406,8 +408,14 @@ fn try_write_all_with_temp_table(
 
     let mut num_rows = 0;
 
+    append_manager.begin(None).map_err(to_datafusion_error)?;
+
     let mut insert_table = orig_table_creator
         .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?)
+        .map_err(to_datafusion_error)?;
+
+    append_manager
+        .commit_and_begin(insert_table.table_name())
         .map_err(to_datafusion_error)?;
 
     let Some(insert_table_creator) = insert_table.table_creator.take() else {
@@ -481,6 +489,10 @@ fn try_write_all_no_constraints(
     overwrite: InsertOp,
 ) -> datafusion::common::Result<(u64, DuckDbAppendManager)> {
     let mut num_rows = 0;
+
+    append_manager
+        .begin(Some(duckdb.table_name()))
+        .map_err(to_datafusion_error)?;
 
     if matches!(overwrite, InsertOp::Overwrite) {
         tracing::debug!("Deleting all data from table.");
