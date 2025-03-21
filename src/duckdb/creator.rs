@@ -58,7 +58,7 @@ impl TableCreator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_with_tx(mut self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
+    pub fn create_with_tx(mut self, tx: &Transaction<'_>, temp: bool) -> super::Result<DuckDB> {
         assert!(!self.created, "Table already created");
         let primary_keys = if let Some(constraints) = &self.constraints {
             get_primary_keys_from_constraints(constraints, &self.schema)
@@ -66,7 +66,11 @@ impl TableCreator {
             Vec::new()
         };
 
-        self.create_table(tx, primary_keys)?;
+        if temp {
+            self.create_temp_table(tx)?;
+        } else {
+            self.create_table(tx, primary_keys)?;
+        }
 
         for index in self.indexes_vec() {
             self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
@@ -102,7 +106,7 @@ impl TableCreator {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
 
-        let duckdb = self.create_with_tx(&tx)?;
+        let duckdb = self.create_with_tx(&tx, false)?;
 
         tx.commit().context(super::UnableToCommitTransactionSnafu)?;
 
@@ -111,7 +115,7 @@ impl TableCreator {
 
     /// Creates a copy of the `DuckDB` table with the same schema and constraints
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_empty_clone(&self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
+    pub fn create_empty_clone(&self, tx: &Transaction<'_>, temp: bool) -> super::Result<DuckDB> {
         assert!(self.created, "Table must be created before cloning");
 
         let new_table_name = format!(
@@ -134,7 +138,7 @@ impl TableCreator {
             created: false,
         };
 
-        new_table_creator.create_with_tx(tx)
+        new_table_creator.create_with_tx(tx, temp)
     }
 
     #[tracing::instrument(level = "debug", skip(conn))]
@@ -264,6 +268,21 @@ impl TableCreator {
             let primary_key_clause = format!(", PRIMARY KEY ({}));", primary_keys.join(", "));
             sql = sql.replace(");", &primary_key_clause);
         }
+        tracing::debug!("{sql}");
+
+        transaction
+            .execute(&sql, [])
+            .context(super::UnableToCreateDuckDBTableSnafu)?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, transaction))]
+    fn create_temp_table(&self, transaction: &Transaction<'_>) -> super::Result<()> {
+        let mut sql = self
+            .get_table_create_statement()?
+            .replace("CREATE TABLE", "CREATE TEMP TABLE");
+
         tracing::debug!("{sql}");
 
         transaction

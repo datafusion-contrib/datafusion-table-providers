@@ -417,7 +417,7 @@ fn try_write_all_with_temp_table(
         .map_err(to_datafusion_error)?;
 
     let mut insert_table = orig_table_creator
-        .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?)
+        .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?, true)
         .map_err(to_datafusion_error)?;
 
     append_manager
@@ -476,23 +476,42 @@ fn try_write_all_with_temp_table(
             .map_err(to_datafusion_error)?;
     }
 
+    let mut non_temp_table = orig_table_creator
+        .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?, false)
+        .map_err(to_datafusion_error)?;
+
+    let Some(non_temp_table_creator) = non_temp_table.table_creator.take() else {
+        unreachable!()
+    };
+
+    insert_table
+        .insert_table_into(
+            append_manager.tx().map_err(to_datafusion_error)?,
+            &non_temp_table,
+            on_conflict,
+        )
+        .map_err(to_datafusion_error)?;
+    insert_table_creator
+        .delete_table(append_manager.tx().map_err(to_datafusion_error)?)
+        .map_err(to_datafusion_error)?;
+
     tracing::debug!("Inserting into target table.");
     if matches!(overwrite, InsertOp::Overwrite) {
-        insert_table_creator
+        non_temp_table_creator
             .replace_table(
                 append_manager.tx().map_err(to_datafusion_error)?,
                 orig_table_creator,
             )
             .map_err(to_datafusion_error)?;
     } else {
-        insert_table
+        non_temp_table
             .insert_table_into(
                 append_manager.tx().map_err(to_datafusion_error)?,
                 duckdb,
                 on_conflict,
             )
             .map_err(to_datafusion_error)?;
-        insert_table_creator
+        non_temp_table_creator
             .delete_table(append_manager.tx().map_err(to_datafusion_error)?)
             .map_err(to_datafusion_error)?;
     }
