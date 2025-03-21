@@ -224,7 +224,10 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
+    pub async fn get_or_init_memory_instance(
+        &self,
+        connection_pool_size: Option<u32>,
+    ) -> Result<DuckDbConnectionPool> {
         let key = DbInstanceKey::memory();
         let mut instances = self.instances.lock().await;
 
@@ -232,7 +235,7 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_memory()
+        let pool = DuckDbConnectionPool::new_memory(connection_pool_size)
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 
@@ -244,6 +247,7 @@ impl DuckDBTableProviderFactory {
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
+        connection_pool_size: Option<u32>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path = db_path.into();
         let key = DbInstanceKey::file(Arc::clone(&db_path));
@@ -253,9 +257,10 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
-            .context(DbConnectionPoolSnafu)?
-            .with_unsupported_type_action(self.unsupported_type_action);
+        let pool =
+            DuckDbConnectionPool::new_file(&db_path, &self.access_mode, connection_pool_size)
+                .context(DbConnectionPoolSnafu)?
+                .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
@@ -325,12 +330,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance(db_path, None)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance(None)
                 .await
                 .map_err(to_datafusion_error)?,
         };
@@ -616,12 +621,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-           tracing::warn!(
-    "Unexpected index(es) detected in table '{name}': {}.\n\
+            tracing::warn!(
+                "Unexpected index(es) detected in table '{name}': {}.\n\
      These indexes are not defined in the configuration.",
-    extra_in_actual.iter().join(", "),
-    name = self.table_name
-);
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
