@@ -141,6 +141,9 @@ pub enum Error {
     #[snafu(display("Failed to retrieve the DuckDB writer transaction.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
     MissingTransaction,
 
+    #[snafu(display("A transaction is already in progress for the DuckDB writer.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
+    TransactionAlreadyInProgress,
+
     #[snafu(display("Failed to retrieve the DuckDB writer appender.\nThis is an internal error. Submit a bug: https://github.com/datafusion-contrib/datafusion-table-providers"))]
     MissingAppender,
 
