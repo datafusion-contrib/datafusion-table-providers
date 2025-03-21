@@ -233,7 +233,7 @@ impl DataSink for DuckDBDataSink {
                     [] => {
                         try_write_all_no_constraints(duckdb, append_manager, batch_rx, overwrite)?
                     }
-                    _ => try_write_all_with_constraints_phased_commit(
+                    _ => try_write_all_with_constraints(
                         duckdb,
                         append_manager,
                         batch_rx,
