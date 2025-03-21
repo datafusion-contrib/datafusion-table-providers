@@ -53,36 +53,42 @@ impl DuckDbAppendManager {
     }
 
     /// Begin a new transaction if one doesn't already exist
-    pub fn begin(&mut self, table_name: Option<&str>) -> Result<(), super::Error> {
-        if self.transaction.is_none() {
-            let tx = self
-                .conn
-                .conn
-                .transaction()
-                .context(super::UnableToBeginTransactionSnafu)?;
-            // SAFETY: The transaction is tied to the lifetime of the connection - because Rust
-            // doesn't support self-referential structs, we need to transmute the transaction
-            // to a static lifetime. We never give out a reference to the transaction with the static lifetime,
-            // so it's safe to transmute.
-            let static_tx = unsafe {
-                std::mem::transmute::<duckdb::Transaction<'_>, duckdb::Transaction<'static>>(tx)
-            };
-
-            if let Some(table_name) = table_name {
-                // SAFETY: The appender is tied to the lifetime of the transaction.
-                self.appender = Some(unsafe {
-                    std::mem::transmute::<duckdb::Appender<'_>, duckdb::Appender<'static>>(
-                        static_tx
-                            .appender(table_name)
-                            .context(super::UnableToGetAppenderToDuckDBTableSnafu)?,
-                    )
-                });
-            } else {
-                self.appender = None;
-            }
-
-            self.transaction = Some(static_tx);
+    pub fn begin_transaction(&mut self) -> Result<(), super::Error> {
+        if self.transaction.is_some() {
+            return Err(super::Error::TransactionAlreadyInProgress);
         }
+
+        let tx = self
+            .conn
+            .conn
+            .transaction()
+            .context(super::UnableToBeginTransactionSnafu)?;
+        // SAFETY: The transaction is tied to the lifetime of the connection - because Rust
+        // doesn't support self-referential structs, we need to transmute the transaction
+        // to a static lifetime. We never give out a reference to the transaction with the static lifetime,
+        // so it's safe to transmute.
+        let static_tx = unsafe {
+            std::mem::transmute::<duckdb::Transaction<'_>, duckdb::Transaction<'static>>(tx)
+        };
+
+        self.transaction = Some(static_tx);
+        Ok(())
+    }
+
+    pub fn begin_appender(&mut self, table_name: &str) -> Result<(), super::Error> {
+        let Some(transaction) = self.transaction.take() else {
+            return Err(super::Error::MissingTransaction);
+        };
+
+        let appender = transaction
+            .appender(table_name)
+            .context(super::UnableToGetAppenderToDuckDBTableSnafu)?;
+        // SAFETY: The appender is tied to the lifetime of the transaction.
+        self.appender = Some(unsafe {
+            std::mem::transmute::<duckdb::Appender<'_>, duckdb::Appender<'static>>(appender)
+        });
+        self.transaction = Some(transaction);
+
         Ok(())
     }
 
@@ -93,14 +99,8 @@ impl DuckDbAppendManager {
                 .commit()
                 .context(super::UnableToCommitTransactionSnafu)?;
         }
+        self.appender = None;
         Ok(())
-    }
-
-    /// Flush the appender, commit the current transaction, and begin a new transaction
-    pub fn commit_and_begin(&mut self, table_name: &str) -> Result<(), super::Error> {
-        self.appender_flush()?;
-        self.commit()?;
-        self.begin(Some(table_name))
     }
 
     /// Execute a database operation with the current transaction
@@ -126,6 +126,10 @@ impl DuckDbAppendManager {
     }
 
     pub fn appender_flush(&mut self) -> Result<(), super::Error> {
+        if self.appender.is_none() {
+            return Ok(());
+        }
+
         self.appender_mut()?
             .flush()
             .context(super::UnableToFlushAppenderSnafu)
@@ -408,14 +412,16 @@ fn try_write_all_with_temp_table(
 
     let mut num_rows = 0;
 
-    append_manager.begin(None).map_err(to_datafusion_error)?;
+    append_manager
+        .begin_transaction()
+        .map_err(to_datafusion_error)?;
 
     let mut insert_table = orig_table_creator
         .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?)
         .map_err(to_datafusion_error)?;
 
     append_manager
-        .commit_and_begin(insert_table.table_name())
+        .begin_appender(insert_table.table_name())
         .map_err(to_datafusion_error)?;
 
     let Some(insert_table_creator) = insert_table.table_creator.take() else {
@@ -439,7 +445,14 @@ fn try_write_all_with_temp_table(
             tracing::info!("Committing DuckDB transaction after {rows_since_last_commit} rows.",);
 
             append_manager
-                .commit_and_begin(duckdb.table_name())
+                .appender_flush()
+                .map_err(to_datafusion_error)?;
+            append_manager.commit().map_err(to_datafusion_error)?;
+            append_manager
+                .begin_transaction()
+                .map_err(to_datafusion_error)?;
+            append_manager
+                .begin_appender(duckdb.table_name())
                 .map_err(to_datafusion_error)?;
 
             rows_since_last_commit = 0;
@@ -455,7 +468,11 @@ fn try_write_all_with_temp_table(
     }
 
     append_manager
-        .commit_and_begin(duckdb.table_name())
+        .appender_flush()
+        .map_err(to_datafusion_error)?;
+    append_manager.commit().map_err(to_datafusion_error)?;
+    append_manager
+        .begin_transaction()
         .map_err(to_datafusion_error)?;
 
     if matches!(overwrite, InsertOp::Overwrite) {
@@ -491,7 +508,10 @@ fn try_write_all_no_constraints(
     let mut num_rows = 0;
 
     append_manager
-        .begin(Some(duckdb.table_name()))
+        .begin_transaction()
+        .map_err(to_datafusion_error)?;
+    append_manager
+        .begin_appender(duckdb.table_name())
         .map_err(to_datafusion_error)?;
 
     if matches!(overwrite, InsertOp::Overwrite) {
