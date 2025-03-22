@@ -18,7 +18,7 @@ use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::Sender;
 
 use crate::util::schema::SchemaValidator;
@@ -403,9 +403,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let cloned_schema = schema.clone();
         let attachments = self.attachments.clone();
 
-        // TODO: We should not change rust code. Might need to add tokio runtime initialization
-        // somewhere in datafusion-python but still undecided.
-        let join_handle = get_tokio_runtime().block_on(async move {
+        let f = || {
             tokio::task::spawn_blocking(move || {
                 Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
                 let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
@@ -422,15 +420,22 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
                 Self::detach(&conn, &attachments)?;
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-            }).await
-        });
+            })
+        };
+
+        // TODO: We should not change rust code. Might need to add tokio runtime initialization
+        // somewhere in datafusion-python but still undecided.
+        let join_handle = match (Handle::try_current()) {
+            Ok(_) => f(),
+            Err(_) => get_tokio_runtime().block_on(async move { f() }),
+        };
 
         let output_stream = stream! {
             while let Some(batch) = batch_rx.recv().await {
                 yield Ok(batch);
             }
 
-            match join_handle {
+            match join_handle.await {
                 Ok(Err(task_error)) => {
                     yield Err(DataFusionError::Execution(format!(
                         "Failed to execute DuckDB query: {task_error}"
