@@ -425,7 +425,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         // TODO: We should not change rust code. Might need to add tokio runtime initialization
         // somewhere in datafusion-python but still undecided.
-        let join_handle = match (Handle::try_current()) {
+        let join_handle = match Handle::try_current() {
             Ok(_) => f(),
             Err(_) => get_tokio_runtime().block_on(async move { f() }),
         };
