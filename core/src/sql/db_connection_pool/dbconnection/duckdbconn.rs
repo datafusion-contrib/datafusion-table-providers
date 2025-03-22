@@ -422,7 +422,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
                 Self::detach(&conn, &attachments)?;
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-            })
+            }).await
         });
 
         let output_stream = stream! {
@@ -430,7 +430,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 yield Ok(batch);
             }
 
-            match join_handle.await {
+            match join_handle {
                 Ok(Err(task_error)) => {
                     yield Err(DataFusionError::Execution(format!(
                         "Failed to execute DuckDB query: {task_error}"
