@@ -403,7 +403,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let cloned_schema = schema.clone();
         let attachments = self.attachments.clone();
 
-        let f = || -> Result<SendableRecordBatchStream> {
+        let create_stream = || -> Result<SendableRecordBatchStream> {
             let join_handle = tokio::task::spawn_blocking(move || {
                 Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
                 let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
@@ -448,9 +448,12 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             )))
         };
 
+        // If calling directly from Rust, there is already tokio runtime so no
+        // additional work is needed. If calling from Python FFI, there's no existing
+        // tokio runtime, so we need to start a new one.
         match Handle::try_current() {
-            Ok(_) => f(),
-            Err(_) => get_tokio_runtime().block_on(async { f() }),
+            Ok(_) => create_stream(),
+            Err(_) => get_tokio_runtime().block_on(async { create_stream() }),
         }
     }
 
