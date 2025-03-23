@@ -1,9 +1,19 @@
 from typing import Any, List, Optional
 from . import _internal
+from enum import Enum
+
+class AccessMode(Enum):
+    # Equivalent of rust duckdb::AccessMode type
+    Automatic = "AUTOMATIC"
+    ReadOnly = "READ_ONLY"
+    ReadWrite = "READ_WRITE"
+    
+    def __str__(self):
+        return self.value
 
 class DuckDBTableFactory:
 
-    def __init__(self, path: str, access_mode: str = "") -> None:
+    def __init__(self, path: str, access_mode: AccessMode = AccessMode.Automatic) -> None:
         # TODO: revise documentation
         """Create a DuckDB table factory. If creating an in-memory table factory,
         then specify path to be :memory: or none and don't specify access_mode.
@@ -19,7 +29,7 @@ class DuckDBTableFactory:
         if path == ":memory:" or path == "":
             self._raw = _internal.duckdb.RawDuckDBTableFactory.new_memory()
         else:
-            self._raw = _internal.duckdb.RawDuckDBTableFactory.new_file(path, access_mode)
+            self._raw = _internal.duckdb.RawDuckDBTableFactory.new_file(path, str(access_mode))
     
     def tables(self) -> List[str]:
         return self._raw.tables()

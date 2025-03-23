@@ -2,7 +2,7 @@ from datafusion import SessionContext
 from datafusion_table_providers import duckdb
 
 ctx = SessionContext()
-pool = duckdb.DuckDBTableFactory("../../core/examples/duckdb_example.db", "READ_ONLY")
+pool = duckdb.DuckDBTableFactory("../../core/examples/duckdb_example.db", duckdb.AccessMode.ReadOnly)
 tables = pool.tables()
 
 for t in tables:
