@@ -1,11 +1,11 @@
 [package]
 name = "datafusion-table-providers"
-version = "0.3.0"
-readme = "README.md"
-edition = "2021"
-repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
-license = "Apache-2.0"
-description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
+version = { workspace = true} 
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = { workspace = true }
 
 [dependencies]
 arrow = { workspace = true }

@@ -33,8 +33,7 @@ impl RawSqliteTableFactory {
     ) -> PyResult<Self> {
         let mode = mode.as_str().into();
         let busy_timeout = Duration::from_secs_f64(busy_timeout_s);
-        let attach_databases =
-            attach_databases.map(|d| d.into_iter().map(Arc::from).collect());
+        let attach_databases = attach_databases.map(|d| d.into_iter().map(Arc::from).collect());
         let factory = SqliteConnectionPoolFactory::new(path, mode, busy_timeout)
             .with_databases(attach_databases);
         let pool = Arc::new(wait_for_future(py, factory.build()).map_err(to_pyerr)?);
