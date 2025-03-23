@@ -403,8 +403,8 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let cloned_schema = schema.clone();
         let attachments = self.attachments.clone();
 
-        let f = || {
-            tokio::task::spawn_blocking(move || {
+        let f = || -> Result<SendableRecordBatchStream> {
+            let join_handle = tokio::task::spawn_blocking(move || {
                 Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
                 let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
                 let params: &[&dyn ToSql] = &params
@@ -420,40 +420,38 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
                 Self::detach(&conn, &attachments)?;
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-            })
+            });
+
+            let output_stream = stream! {
+                while let Some(batch) = batch_rx.recv().await {
+                    yield Ok(batch);
+                }
+
+                match join_handle.await {
+                    Ok(Err(task_error)) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {task_error}"
+                        )))
+                    },
+                    Err(join_error) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {join_error}"
+                        )))
+                    },
+                    _ => {}
+                }
+            };
+
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                output_stream,
+            )))
         };
 
-        // TODO: We should not change rust code. Might need to add tokio runtime initialization
-        // somewhere in datafusion-python but still undecided.
-        let join_handle = match Handle::try_current() {
+        match Handle::try_current() {
             Ok(_) => f(),
-            Err(_) => get_tokio_runtime().block_on(async move { f() }),
-        };
-
-        let output_stream = stream! {
-            while let Some(batch) = batch_rx.recv().await {
-                yield Ok(batch);
-            }
-
-            match join_handle.await {
-                Ok(Err(task_error)) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {task_error}"
-                    )))
-                },
-                Err(join_error) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {join_error}"
-                    )))
-                },
-                _ => {}
-            }
-        };
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            output_stream,
-        )))
+            Err(_) => get_tokio_runtime().block_on(async { f() }),
+        }
     }
 
     fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {

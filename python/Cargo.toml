@@ -6,6 +6,7 @@ edition = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 description = { workspace = true }
+publish = false
 
 [lib]
 name = "datafusion_table_providers"
