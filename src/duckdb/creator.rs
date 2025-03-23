@@ -18,6 +18,183 @@ use crate::util::{
     indexes::IndexType,
 };
 
+/// Holds constraints and indexes that need to be applied to a table.
+///
+/// This struct is returned when creating a table and allows deferring the application
+/// of constraints and indexes until after data has been loaded.
+///
+/// # Safety
+///
+/// This struct implements Drop which will panic if the constraints and indexes are
+/// not applied before the struct is dropped. This ensures that constraints and indexes
+/// aren't forgotten.
+///
+/// # Usage
+///
+/// ```
+/// let (duckdb, constraints_and_indexes) = table_creator.create()?;
+///
+/// // Load data into the table...
+///
+/// // Then apply constraints and indexes
+/// constraints_and_indexes.apply()?;
+/// ```
+pub struct ConstraintsAndIndexes {
+    /// The target table to apply constraints and indexes to
+    table: Arc<DuckDB>,
+    /// Primary key constraints to be applied
+    primary_keys: Vec<String>,
+    /// Indexes to be created
+    indexes: Vec<(Vec<String>, IndexType)>,
+    /// Track if constraints and indexes have been applied
+    applied: bool,
+}
+
+impl ConstraintsAndIndexes {
+    /// Creates a new ConstraintsAndIndexes instance
+    fn new(
+        table: Arc<DuckDB>,
+        primary_keys: Vec<String>,
+        indexes: Vec<(Vec<String>, IndexType)>,
+    ) -> Self {
+        Self {
+            table,
+            primary_keys,
+            indexes,
+            applied: false,
+        }
+    }
+
+    /// Check if there are any constraints or indexes to apply
+    pub fn has_constraints_or_indexes(&self) -> bool {
+        !self.primary_keys.is_empty() || !self.indexes.is_empty()
+    }
+
+    /// Mark this instance as deliberately ignored
+    ///
+    /// This method is useful when you know that you don't need to apply the constraints
+    /// and indexes, for example when creating a temporary table that will be dropped shortly.
+    pub fn mark_as_ignored(mut self) {
+        self.applied = true;
+    }
+
+    /// Apply all constraints and indexes to the table.
+    ///
+    /// This method should be called after data has been loaded into the table
+    /// to apply any deferred constraints and indexes. This is useful for bulk
+    /// loading data as it allows avoiding the overhead of maintaining indexes
+    /// and checking constraints during the load operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Create a table with deferred constraints and indexes
+    /// let (table, constraints_and_indexes) = table_creator.create()?;
+    ///
+    /// // Load data into the table
+    /// // ...
+    ///
+    /// // Apply the constraints and indexes
+    /// constraints_and_indexes.apply()?;
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// This method consumes the struct to prevent it from being applied multiple times.
+    /// If the struct is dropped without calling this method, it will panic.
+    pub fn apply(mut self) -> super::Result<()> {
+        // If there's nothing to apply, just mark it as applied and return
+        if !self.has_constraints_or_indexes() {
+            self.applied = true;
+            return Ok(());
+        }
+
+        let mut db_conn = Arc::clone(&self.table.pool)
+            .connect_sync()
+            .context(super::DbConnectionSnafu)?;
+        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+
+        let tx = duckdb_conn
+            .conn
+            .transaction()
+            .context(super::UnableToBeginTransactionSnafu)?;
+
+        // Track result to ensure we rollback if any operation fails
+        let mut result = Ok(());
+
+        // Apply primary keys if any
+        if !self.primary_keys.is_empty() {
+            let table_name = self.table.table_name().to_string();
+
+            // Use ALTER TABLE to add primary key
+            let primary_key_columns = self.primary_keys.join(", ");
+            let sql = format!(
+                r#"ALTER TABLE "{}" ADD PRIMARY KEY ({});"#,
+                table_name, primary_key_columns
+            );
+
+            tracing::debug!("Adding primary key to table: {}", sql);
+
+            if let Err(e) = tx
+                .execute(&sql, [])
+                .context(super::UnableToCreateDuckDBTableSnafu)
+            {
+                tracing::error!("Failed to add primary key to table: {}", e);
+                result = Err(e);
+            }
+
+            // If there was an error, stop here and don't try to create indexes
+            if result.is_err() {
+                // Attempt to rollback
+                if let Err(e) = tx.rollback() {
+                    tracing::error!("Failed to rollback transaction: {}", e);
+                    return Err(super::Error::UnableToRollbackTransaction { source: e });
+                }
+                return result;
+            }
+        }
+
+        // Apply indexes
+        for (columns, index_type) in &self.indexes {
+            let unique = *index_type == IndexType::Unique;
+            let creator = TableCreator::new(
+                self.table.table_name().to_string(),
+                Arc::clone(&self.table.schema),
+                Arc::clone(&self.table.pool),
+            );
+            // Convert String back to &str for the API
+            let cols: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+
+            if let Err(e) = creator.create_index(&tx, cols.clone(), unique) {
+                tracing::error!("Failed to create index on {:?}: {}", cols, e);
+                result = Err(e);
+                break;
+            }
+        }
+
+        if result.is_ok() {
+            tx.commit().context(super::UnableToCommitTransactionSnafu)?;
+            self.applied = true;
+            Ok(())
+        } else {
+            // Attempt to rollback
+            if let Err(e) = tx.rollback() {
+                tracing::error!("Failed to rollback transaction: {}", e);
+                return Err(super::Error::UnableToRollbackTransaction { source: e });
+            }
+            result
+        }
+    }
+}
+
+impl Drop for ConstraintsAndIndexes {
+    fn drop(&mut self) {
+        if !self.applied {
+            panic!("ConstraintsAndIndexes was dropped without being applied. Call .apply() before dropping.");
+        }
+    }
+}
+
 /// Responsible for creating a `DuckDB` table along with any constraints and indexes
 pub(crate) struct TableCreator {
     table_name: String,
@@ -57,8 +234,19 @@ impl TableCreator {
             .collect()
     }
 
+    fn indexes_vec_owned(&self) -> Vec<(Vec<String>, IndexType)> {
+        self.indexes
+            .iter()
+            .map(|(key, ty)| (key.iter().map(String::from).collect(), *ty))
+            .collect()
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_with_tx(mut self, tx: &Transaction<'_>, temp: bool) -> super::Result<DuckDB> {
+    fn create_with_tx(
+        mut self,
+        tx: &Transaction<'_>,
+        temp: bool,
+    ) -> super::Result<(Arc<DuckDB>, ConstraintsAndIndexes)> {
         assert!(!self.created, "Table already created");
         let primary_keys = if let Some(constraints) = &self.constraints {
             get_primary_keys_from_constraints(constraints, &self.schema)
@@ -66,14 +254,12 @@ impl TableCreator {
             Vec::new()
         };
 
+        // Create table without constraints or indexes
         if temp {
             self.create_temp_table(tx)?;
         } else {
-            self.create_table(tx, primary_keys)?;
-        }
-
-        for index in self.indexes_vec() {
-            self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
+            // Create the table with no primary keys
+            self.create_table(tx, Vec::new())?;
         }
 
         let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
@@ -87,13 +273,20 @@ impl TableCreator {
 
         self.created = true;
 
+        let indexes = self.indexes_vec_owned();
+
         duckdb.table_creator = Some(self);
 
-        Ok(duckdb)
+        // Create the ConstraintsAndIndexes object to hold deferred constraints and indexes
+        let duckdb_arc = Arc::new(duckdb);
+        let constraints_and_indexes =
+            ConstraintsAndIndexes::new(Arc::clone(&duckdb_arc), primary_keys, indexes);
+
+        Ok((duckdb_arc, constraints_and_indexes))
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create(self) -> super::Result<DuckDB> {
+    pub fn create(self) -> super::Result<(Arc<DuckDB>, ConstraintsAndIndexes)> {
         assert!(!self.created, "Table already created");
 
         let mut db_conn = Arc::clone(&self.pool)
@@ -106,16 +299,20 @@ impl TableCreator {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
 
-        let duckdb = self.create_with_tx(&tx, false)?;
+        let (duckdb, constraints_and_indexes) = self.create_with_tx(&tx, false)?;
 
         tx.commit().context(super::UnableToCommitTransactionSnafu)?;
 
-        Ok(duckdb)
+        Ok((duckdb, constraints_and_indexes))
     }
 
     /// Creates a copy of the `DuckDB` table with the same schema and constraints
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_empty_clone(&self, tx: &Transaction<'_>, temp: bool) -> super::Result<DuckDB> {
+    pub fn create_empty_clone(
+        &self,
+        tx: &Transaction<'_>,
+        temp: bool,
+    ) -> super::Result<(Arc<DuckDB>, ConstraintsAndIndexes)> {
         assert!(self.created, "Table must be created before cloning");
 
         let new_table_name = format!(
@@ -279,7 +476,7 @@ impl TableCreator {
 
     #[tracing::instrument(level = "debug", skip(self, transaction))]
     fn create_temp_table(&self, transaction: &Transaction<'_>) -> super::Result<()> {
-        let mut sql = self
+        let sql = self
             .get_table_create_statement()?
             .replace("CREATE TABLE", "CREATE TEMP TABLE");
 
@@ -412,8 +609,11 @@ impl TableCreator {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::sql::db_connection_pool::{
-        dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+    use crate::{
+        duckdb::write::DuckDBWriteMode,
+        sql::db_connection_pool::{
+            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+        },
     };
     use arrow::array::RecordBatch;
     use datafusion::{
@@ -472,7 +672,7 @@ pub(crate) mod tests {
             let pool = get_mem_duckdb();
             let constraints =
                 get_unique_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
-            let created_table = TableCreator::new(
+            let (created_table, constraints_and_indexes) = TableCreator::new(
                 "eth.logs".to_string(),
                 Arc::clone(&schema),
                 Arc::clone(&pool),
@@ -496,9 +696,8 @@ pub(crate) mod tests {
             .create()
             .expect("to create table");
 
-            let arc_created_table = Arc::new(created_table);
-
-            let duckdb_sink = DuckDBDataSink::new(arc_created_table, *overwrite, None);
+            let duckdb_sink =
+                DuckDBDataSink::new(created_table, *overwrite, None, DuckDBWriteMode::Standard);
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
@@ -507,6 +706,11 @@ pub(crate) mod tests {
                 )
                 .await
                 .expect("to write all");
+
+            // Now apply constraints and indexes
+            constraints_and_indexes
+                .apply()
+                .expect("to apply constraints and indexes");
 
             let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
             let conn = pool_conn
@@ -556,7 +760,7 @@ pub(crate) mod tests {
             let pool = get_mem_duckdb();
             let constraints =
                 get_pk_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
-            let created_table = TableCreator::new(
+            let (created_table, constraints_and_indexes) = TableCreator::new(
                 "eth.logs".to_string(),
                 Arc::clone(&schema),
                 Arc::clone(&pool),
@@ -573,9 +777,8 @@ pub(crate) mod tests {
             .create()
             .expect("to create table");
 
-            let arc_created_table = Arc::new(created_table);
-
-            let duckdb_sink = DuckDBDataSink::new(arc_created_table, *overwrite, None);
+            let duckdb_sink =
+                DuckDBDataSink::new(created_table, *overwrite, None, DuckDBWriteMode::Standard);
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
@@ -584,6 +787,11 @@ pub(crate) mod tests {
                 )
                 .await
                 .expect("to write all");
+
+            // Now apply constraints and indexes
+            constraints_and_indexes
+                .apply()
+                .expect("to apply constraints and indexes");
 
             let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
             let conn = pool_conn
@@ -636,6 +844,73 @@ pub(crate) mod tests {
                 "Indexes must match"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_deferred_primary_key_application() {
+        let _guard = init_tracing(None);
+        let batches = get_logs_batches().await;
+
+        let schema = batches[0].schema();
+        let pool = get_mem_duckdb();
+
+        // Create a table without primary keys initially
+        let (created_table, existing_constraints) = TableCreator::new(
+            "eth.logs".to_string(),
+            Arc::clone(&schema),
+            Arc::clone(&pool),
+        )
+        .create()
+        .expect("to create table");
+
+        // Mark the initial constraints as ignored since we'll create a new one
+        existing_constraints.mark_as_ignored();
+
+        // Load data first
+        let duckdb_sink = DuckDBDataSink::new(
+            created_table.clone(),
+            InsertOp::Append,
+            None,
+            DuckDBWriteMode::Standard,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+        data_sink
+            .write_all(
+                get_stream_from_batches(batches.clone()),
+                &Arc::new(TaskContext::default()),
+            )
+            .await
+            .expect("to write all");
+
+        // Now create a new constraints object with primary keys
+        let primary_keys = vec!["log_index".to_string(), "transaction_hash".to_string()];
+
+        // Create a new ConstraintsAndIndexes instance with primary keys and no indexes
+        let constraints_and_indexes =
+            ConstraintsAndIndexes::new(created_table.clone(), primary_keys.clone(), Vec::new());
+
+        // Apply the constraints after loading the data
+        constraints_and_indexes
+            .apply()
+            .expect("to apply constraints");
+
+        // Verify the primary keys were applied correctly
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+
+        let applied_primary_keys = TableCreator::get_existing_primary_keys(conn, "eth.logs")
+            .await
+            .expect("to get primary keys");
+
+        // Check that the primary keys match
+        let expected_primary_keys: HashSet<String> = primary_keys.into_iter().collect();
+        assert_eq!(
+            applied_primary_keys, expected_primary_keys,
+            "Primary keys should match"
+        );
     }
 
     pub(crate) fn init_tracing(default_level: Option<&str>) -> DefaultGuard {

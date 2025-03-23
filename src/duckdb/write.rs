@@ -147,13 +147,13 @@ pub struct DuckDBTableWriter {
 impl DuckDBTableWriter {
     pub fn create(
         read_provider: Arc<dyn TableProvider>,
-        duckdb: DuckDB,
+        duckdb: Arc<DuckDB>,
         on_conflict: Option<OnConflict>,
         write_mode: DuckDBWriteMode,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_provider,
-            duckdb: Arc::new(duckdb),
+            duckdb,
             on_conflict,
             write_mode,
         })
@@ -416,12 +416,20 @@ fn try_write_all_with_temp_table(
         .begin_transaction()
         .map_err(to_datafusion_error)?;
 
-    let mut insert_table = orig_table_creator
+    let (insert_table, insert_table_constraints) = orig_table_creator
         .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?, true)
         .map_err(to_datafusion_error)?;
 
     append_manager
         .begin_appender(insert_table.table_name())
+        .map_err(to_datafusion_error)?;
+
+    // We don't need to apply constraints to the temporary table
+    insert_table_constraints.mark_as_ignored();
+
+    let mut insert_table = Arc::try_unwrap(insert_table)
+        .ok()
+        .context(super::UnexpectedReferenceCountOnDuckDBTableSnafu)
         .map_err(to_datafusion_error)?;
 
     let Some(insert_table_creator) = insert_table.table_creator.take() else {
@@ -476,8 +484,15 @@ fn try_write_all_with_temp_table(
             .map_err(to_datafusion_error)?;
     }
 
-    let mut non_temp_table = orig_table_creator
+    let (non_temp_table, non_temp_table_constraints) = orig_table_creator
         .create_empty_clone(append_manager.tx().map_err(to_datafusion_error)?, false)
+        .map_err(to_datafusion_error)?;
+
+    // We don't need to apply constraints to the intermediate table
+    non_temp_table_constraints.mark_as_ignored();
+    let mut non_temp_table = Arc::try_unwrap(non_temp_table)
+        .ok()
+        .context(super::UnexpectedReferenceCountOnDuckDBTableSnafu)
         .map_err(to_datafusion_error)?;
 
     let Some(non_temp_table_creator) = non_temp_table.table_creator.take() else {
