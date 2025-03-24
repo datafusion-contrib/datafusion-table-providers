@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::RecordBatch;
 use arrow_schema::{DataType, Field};
@@ -18,6 +18,7 @@ use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::Sender;
 
 use crate::util::schema::SchemaValidator;
@@ -281,6 +282,13 @@ impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParamet
     }
 }
 
+fn get_tokio_runtime() -> &'static Runtime {
+    // TODO: this function is a repetition of python/src/utils.rs::get_tokio_runtime.
+    // Think about how to refactor it
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
+}
+
 impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
@@ -395,48 +403,58 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let cloned_schema = schema.clone();
         let attachments = self.attachments.clone();
 
-        let join_handle = tokio::task::spawn_blocking(move || {
-            Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
-            let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
-            let params: &[&dyn ToSql] = &params
-                .iter()
-                .map(|f| f.as_input_parameter())
-                .collect::<Vec<_>>();
-            let result: duckdb::ArrowStream<'_> = stmt
-                .stream_arrow(params, cloned_schema)
-                .context(DuckDBQuerySnafu)?;
-            for i in result {
-                blocking_channel_send(&batch_tx, i)?;
-            }
+        let create_stream = || -> Result<SendableRecordBatchStream> {
+            let join_handle = tokio::task::spawn_blocking(move || {
+                Self::attach(&conn, &attachments)?; // this attach could happen when we clone the connection, but we can't detach after the thread closes because the connection isn't thread safe
+                let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
+                let params: &[&dyn ToSql] = &params
+                    .iter()
+                    .map(|f| f.as_input_parameter())
+                    .collect::<Vec<_>>();
+                let result: duckdb::ArrowStream<'_> = stmt
+                    .stream_arrow(params, cloned_schema)
+                    .context(DuckDBQuerySnafu)?;
+                for i in result {
+                    blocking_channel_send(&batch_tx, i)?;
+                }
 
-            Self::detach(&conn, &attachments)?;
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-        });
+                Self::detach(&conn, &attachments)?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            });
 
-        let output_stream = stream! {
-            while let Some(batch) = batch_rx.recv().await {
-                yield Ok(batch);
-            }
+            let output_stream = stream! {
+                while let Some(batch) = batch_rx.recv().await {
+                    yield Ok(batch);
+                }
 
-            match join_handle.await {
-                Ok(Err(task_error)) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {task_error}"
-                    )))
-                },
-                Err(join_error) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {join_error}"
-                    )))
-                },
-                _ => {}
-            }
+                match join_handle.await {
+                    Ok(Err(task_error)) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {task_error}"
+                        )))
+                    },
+                    Err(join_error) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {join_error}"
+                        )))
+                    },
+                    _ => {}
+                }
+            };
+
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                output_stream,
+            )))
         };
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            output_stream,
-        )))
+        // If calling directly from Rust, there is already tokio runtime so no
+        // additional work is needed. If calling from Python FFI, there's no existing
+        // tokio runtime, so we need to start a new one.
+        match Handle::try_current() {
+            Ok(_) => create_stream(),
+            Err(_) => get_tokio_runtime().block_on(async { create_stream() }),
+        }
     }
 
     fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {
