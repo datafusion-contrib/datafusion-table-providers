@@ -18,7 +18,7 @@ use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 
 use crate::sql::db_connection_pool::runtime::get_tokio_runtime;

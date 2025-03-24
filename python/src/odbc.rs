@@ -1,14 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use datafusion_table_providers::{
-    odbc::ODBCTableFactory,
-    sql::db_connection_pool::{odbcpool::ODBCPool, DbConnectionPool},
+    odbc::ODBCTableFactory, sql::db_connection_pool::odbcpool::ODBCPool,
     util::secrets::to_secret_map,
 };
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::{prelude::*, types::PyDict};
 
 use crate::{
     utils::{to_pyerr, wait_for_future},
@@ -17,7 +13,7 @@ use crate::{
 
 #[pyclass(module = "datafusion_table_providers._internal.odbc")]
 struct RawODBCTableFactory {
-    pool: Arc<ODBCPool>,
+    _pool: Arc<ODBCPool>,
     factory: ODBCTableFactory<'static>, // TODO: 'static lifetime might be wrong
 }
 
@@ -38,7 +34,7 @@ impl RawODBCTableFactory {
         let pool = Arc::new(ODBCPool::new(hashmap).map_err(to_pyerr)?);
         Ok(Self {
             factory: ODBCTableFactory::new(pool.clone()),
-            pool,
+            _pool: pool,
         })
     }
 
