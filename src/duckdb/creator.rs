@@ -60,8 +60,13 @@ impl TableCreator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn create_with_tx(mut self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
         assert!(!self.created, "Table already created");
+        let primary_keys = if let Some(constraints) = &self.constraints {
+            get_primary_keys_from_constraints(constraints, &self.schema)
+        } else {
+            Vec::new()
+        };
 
-        self.create_table(tx)?;
+        self.create_table(tx, primary_keys)?;
 
         let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
 
@@ -245,34 +250,7 @@ impl TableCreator {
     }
 
     pub fn apply_constraints_and_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
-        self.apply_primary_keys(tx)?;
         self.apply_indexes(tx)?;
-        Ok(())
-    }
-
-    fn apply_primary_keys(&self, tx: &Transaction<'_>) -> super::Result<()> {
-        let Some(constraints) = &self.constraints else {
-            return Ok(());
-        };
-
-        let primary_keys = get_primary_keys_from_constraints(constraints, &self.schema);
-
-        if primary_keys.is_empty() {
-            return Ok(());
-        }
-
-        // Use ALTER TABLE to add primary key
-        let primary_key_columns = primary_keys.join(", ");
-        let sql = format!(
-            r#"ALTER TABLE "{}" ADD PRIMARY KEY ({});"#,
-            self.table_name, primary_key_columns
-        );
-
-        tracing::debug!("Adding primary key to table: {sql}");
-
-        tx.execute(&sql, [])
-            .context(super::UnableToAddPrimaryKeySnafu)?;
-
         Ok(())
     }
 
@@ -284,9 +262,18 @@ impl TableCreator {
     }
 
     #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn create_table(&self, transaction: &Transaction<'_>) -> super::Result<()> {
-        let sql = self.get_table_create_statement()?;
+    fn create_table(
+        &self,
+        transaction: &Transaction<'_>,
+        primary_keys: Vec<String>,
+    ) -> super::Result<()> {
+        let mut sql = self.get_table_create_statement()?;
         tracing::debug!("{sql}");
+
+        if !primary_keys.is_empty() && !sql.contains("PRIMARY KEY") {
+            let primary_key_clause = format!(", PRIMARY KEY ({}));", primary_keys.join(", "));
+            sql = sql.replace(");", &primary_key_clause);
+        }
 
         transaction
             .execute(&sql, [])
