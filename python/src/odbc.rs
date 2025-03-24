@@ -46,8 +46,6 @@ impl RawODBCTableFactory {
     }
 
     pub fn get_table(&self, py: Python, table_reference: &str) -> PyResult<RawTableProvider> {
-        // TODO: I pass schema=None into table_provider() call. Not sure if it will be
-        // needed at any point.
         let table = wait_for_future(
             py,
             self.factory.table_provider(table_reference.into(), None),
