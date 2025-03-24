@@ -14,7 +14,9 @@ use crate::{
 #[pyclass(module = "datafusion_table_providers._internal.odbc")]
 struct RawODBCTableFactory {
     _pool: Arc<ODBCPool>,
-    factory: ODBCTableFactory<'static>, // TODO: 'static lifetime might be wrong
+    // TODO: 'static lifetime might be wrong, we want the lifetime to be 'py but it is
+    // still unclear how to define it.
+    factory: ODBCTableFactory<'static>,
 }
 
 #[pymethods]
@@ -22,15 +24,15 @@ impl RawODBCTableFactory {
     #[new]
     #[pyo3(signature = (params))]
     pub fn new(params: &Bound<'_, PyDict>) -> PyResult<Self> {
+        // Convert Python dict into Rust hashmap, and convert it to secret map
         let mut hashmap = HashMap::new();
-
-        // Iterate over the tuple and treat it as pairs
         for (key, value) in params.iter() {
             let key: String = key.extract()?;
             let value: String = value.extract()?;
             hashmap.insert(key, value);
         }
         let hashmap = to_secret_map(hashmap);
+
         let pool = Arc::new(ODBCPool::new(hashmap).map_err(to_pyerr)?);
         Ok(Self {
             factory: ODBCTableFactory::new(pool.clone()),
@@ -44,7 +46,8 @@ impl RawODBCTableFactory {
     }
 
     pub fn get_table(&self, py: Python, table_reference: &str) -> PyResult<RawTableProvider> {
-        // TODO: schema is optional
+        // TODO: I pass schema=None into table_provider() call. Not sure if it will be
+        // needed at any point.
         let table = wait_for_future(
             py,
             self.factory.table_provider(table_reference.into(), None),
