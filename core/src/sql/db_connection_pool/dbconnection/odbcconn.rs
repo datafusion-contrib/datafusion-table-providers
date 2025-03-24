@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::sql::db_connection_pool::{
     dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
+    runtime::get_tokio_runtime,
     DbConnectionPool,
 };
 use arrow_odbc::arrow_schema_from;
@@ -42,7 +43,7 @@ use odbc_api::handles::StatementImpl;
 use odbc_api::parameter::InputParameter;
 use odbc_api::Cursor;
 use odbc_api::CursorImpl;
-use secrecy::{SecretBox, ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::prelude::*;
 use snafu::Snafu;
 use tokio::runtime::Handle;
@@ -184,69 +185,74 @@ where
         let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
         let secrets = Arc::clone(&self.params);
 
-        let join_handle = tokio::task::spawn_blocking(move || {
-            let handle = Handle::current();
-            let cxn = handle.block_on(async { conn.lock().await });
+        let create_stream = async || -> Result<SendableRecordBatchStream> {
+            let join_handle = tokio::task::spawn_blocking(move || {
+                let handle = Handle::current();
+                let cxn = handle.block_on(async { conn.lock().await });
 
-            let mut prepared = cxn.prepare(&sql)?;
-            let schema = Arc::new(arrow_schema_from(&mut prepared, false)?);
-            blocking_channel_send(&schema_tx, Arc::clone(&schema))?;
+                let mut prepared = cxn.prepare(&sql)?;
+                let schema = Arc::new(arrow_schema_from(&mut prepared, false)?);
+                blocking_channel_send(&schema_tx, Arc::clone(&schema))?;
 
-            let mut statement = prepared.into_statement();
+                let mut statement = prepared.into_statement();
 
-            bind_parameters(&mut statement, &params)?;
+                bind_parameters(&mut statement, &params)?;
 
-            // StatementImpl<'_>::execute is unsafe, CursorImpl<_>::new is unsafe
-            let cursor = unsafe {
-                if let SqlResult::Error { function } = statement.execute() {
-                    return Err(Error::ODBCAPIErrorNoSource {
-                        message: function.to_string(),
+                // StatementImpl<'_>::execute is unsafe, CursorImpl<_>::new is unsafe
+                let cursor = unsafe {
+                    if let SqlResult::Error { function } = statement.execute() {
+                        return Err(Error::ODBCAPIErrorNoSource {
+                            message: function.to_string(),
+                        }
+                        .into());
                     }
-                    .into());
+
+                    Ok::<_, GenericError>(CursorImpl::new(statement.as_stmt_ref()))
+                }?;
+
+                let reader = build_odbc_reader(cursor, &schema, &secrets)?;
+                for batch in reader {
+                    blocking_channel_send(&batch_tx, batch.context(ArrowSnafu)?)?;
                 }
 
-                Ok::<_, GenericError>(CursorImpl::new(statement.as_stmt_ref()))
-            }?;
+                Ok::<_, GenericError>(())
+            });
 
-            let reader = build_odbc_reader(cursor, &schema, &secrets)?;
-            for batch in reader {
-                blocking_channel_send(&batch_tx, batch.context(ArrowSnafu)?)?;
-            }
+            // we need to wait for the schema first before we can build our RecordBatchStreamAdapter
+            let Some(schema) = schema_rx.recv().await else {
+                // if the channel drops, the task errored
+                if !join_handle.is_finished() {
+                    unreachable!("Schema channel should not have dropped before the task finished");
+                }
 
-            Ok::<_, GenericError>(())
-        });
+                let result = join_handle.await?;
+                let Err(err) = result else {
+                    unreachable!("Task should have errored");
+                };
 
-        // we need to wait for the schema first before we can build our RecordBatchStreamAdapter
-        let Some(schema) = schema_rx.recv().await else {
-            // if the channel drops, the task errored
-            if !join_handle.is_finished() {
-                unreachable!("Schema channel should not have dropped before the task finished");
-            }
-
-            let result = join_handle.await?;
-            let Err(err) = result else {
-                unreachable!("Task should have errored");
+                return Err(err);
             };
 
-            return Err(err);
+            let output_stream = stream! {
+                while let Some(batch) = batch_rx.recv().await {
+                    yield Ok(batch);
+                }
+
+                if let Err(e) = join_handle.await {
+                    yield Err(DataFusionError::Execution(format!(
+                        "Failed to execute ODBC query: {e}"
+                    )))
+                }
+            };
+
+            let result: SendableRecordBatchStream =
+                Box::pin(RecordBatchStreamAdapter::new(schema, output_stream));
+            Ok(result)
         };
-
-        let output_stream = stream! {
-            while let Some(batch) = batch_rx.recv().await {
-                yield Ok(batch);
-            }
-
-            if let Err(e) = join_handle.await {
-                yield Err(DataFusionError::Execution(format!(
-                    "Failed to execute ODBC query: {e}"
-                )))
-            }
-        };
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            output_stream,
-        )))
+        match Handle::try_current() {
+            Ok(_) => create_stream().await,
+            Err(_) => get_tokio_runtime().block_on(async { create_stream().await }),
+        }
     }
 
     async fn execute(&self, query: &str, params: &[ODBCParameter]) -> Result<u64> {

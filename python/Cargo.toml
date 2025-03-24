@@ -17,7 +17,7 @@ doc = false
 arrow = { workspace = true }
 datafusion = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
-datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb"] }
+datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb", "odbc"] }
 pyo3 = { version = "0.23" }
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 duckdb = { workspace = true }
