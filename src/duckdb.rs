@@ -36,6 +36,7 @@ use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -133,6 +134,9 @@ pub enum Error {
         value: String,
         source: byte_unit::ParseError,
     },
+
+    #[snafu(display("Unable to add primary key to table: {source}"))]
+    UnableToAddPrimaryKey { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -411,6 +415,8 @@ pub struct DuckDB {
     schema: SchemaRef,
     constraints: Constraints,
     table_creator: Option<TableCreator>,
+    // Indicates whether the table has been newly created and is empty
+    is_empty: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for DuckDB {
@@ -430,6 +436,7 @@ impl DuckDB {
         pool: Arc<DuckDbConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
+        is_empty: bool,
     ) -> Self {
         Self {
             table_name,
@@ -437,6 +444,7 @@ impl DuckDB {
             schema,
             constraints,
             table_creator: None,
+            is_empty: Arc::new(AtomicBool::new(is_empty)),
         }
     }
 
@@ -535,6 +543,14 @@ impl DuckDB {
         Ok(())
     }
 
+    fn apply_constraints_and_indexes(&self, transaction: &Transaction<'_>) -> Result<()> {
+        if let Some(table_creator) = &self.table_creator {
+            table_creator.apply_constraints_and_indexes(transaction)
+        } else {
+            Ok(())
+        }
+    }
+
     pub async fn verify_primary_keys_match(&self) -> Result<bool> {
         let expected_pk_keys_str_map: HashSet<String> =
             get_primary_keys_from_constraints(&self.constraints, &self.schema)
@@ -616,12 +632,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-           tracing::warn!(
-    "Unexpected index(es) detected in table '{name}': {}.\n\
+            tracing::warn!(
+                "Unexpected index(es) detected in table '{name}': {}.\n\
      These indexes are not defined in the configuration.",
-    extra_in_actual.iter().join(", "),
-    name = self.table_name
-);
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
@@ -704,6 +720,7 @@ impl DuckDBTableFactory {
             Arc::clone(&self.pool),
             schema,
             Constraints::empty(),
+            false,
         );
 
         Ok(DuckDBTableWriter::create(read_provider, duckdb, None))
@@ -785,7 +802,7 @@ pub(crate) mod tests {
         let ctx = SessionContext::new();
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
-            name: table_name.into(),
+            name: table_name,
             location: "".to_string(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
