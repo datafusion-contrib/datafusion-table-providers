@@ -24,13 +24,7 @@ class ODBCTableFactory:
 
     def __init__(self, params: dict) -> None:
         """Create am odbc table factory."""
-        print(type(params))
-        print(params)
         self._raw = _internal.odbc.RawODBCTableFactory(params)
-
-    def tables(self) -> List[str]:
-        """Get all the table names."""
-        return self._raw.tables()
 
     def get_table(self, table_reference: str) -> Any:
         """Return the table provider for table named `table_reference`.

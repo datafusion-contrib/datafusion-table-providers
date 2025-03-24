@@ -43,6 +43,7 @@ impl RawODBCTableFactory {
     }
 
     pub fn tables(&self) -> PyResult<Vec<String>> {
+        // This method is not supported yet because of unimplemented traints in odbcconn.
         unimplemented!();
     }
 
