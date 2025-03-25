@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
@@ -154,10 +155,18 @@ impl DataSink for DuckDBDataSink {
                     .context(super::UnableToBeginTransactionSnafu)
                     .map_err(to_datafusion_error)?;
 
-                let num_rows = match **duckdb.constraints() {
-                    [] => try_write_all_no_constraints(duckdb, &tx, batch_rx, overwrite)?,
-                    _ => try_write_all_with_constraints(
-                        duckdb,
+                let initial_load = duckdb.is_empty.load(Ordering::Relaxed);
+
+                let num_rows = match (initial_load, &**duckdb.constraints()) {
+                    (true, _) | (false, &[]) => try_write_all_no_constraints(
+                        Arc::clone(&duckdb),
+                        &tx,
+                        batch_rx,
+                        overwrite,
+                        initial_load,
+                    )?,
+                    (false, _) => try_write_all_with_constraints(
+                        Arc::clone(&duckdb),
                         &tx,
                         batch_rx,
                         overwrite,
@@ -172,6 +181,31 @@ impl DataSink for DuckDBDataSink {
                 tx.commit()
                     .context(super::UnableToCommitTransactionSnafu)
                     .map_err(to_retriable_data_write_error)?;
+
+                // If this was the initial load of the table, we need to apply constraints and indexes.
+                if initial_load {
+                    tracing::debug!(
+                        "Initial load for table {} complete, applying constraints and indexes.",
+                        duckdb.table_name()
+                    );
+                    // Mark the table as no longer empty.
+                    duckdb.is_empty.store(false, Ordering::Relaxed);
+
+                    let tx = duckdb_conn
+                        .conn
+                        .transaction()
+                        .context(super::UnableToBeginTransactionSnafu)
+                        .map_err(to_datafusion_error)?;
+
+                    // Apply constraints and indexes.
+                    duckdb
+                        .apply_constraints_and_indexes(&tx)
+                        .map_err(to_retriable_data_write_error)?;
+
+                    tx.commit()
+                        .context(super::UnableToCommitTransactionSnafu)
+                        .map_err(to_retriable_data_write_error)?;
+                }
 
                 Ok(num_rows)
             });
@@ -311,10 +345,11 @@ fn try_write_all_no_constraints(
     tx: &Transaction<'_>,
     mut data_batches: Receiver<RecordBatch>,
     overwrite: InsertOp,
+    initial_load: bool,
 ) -> datafusion::common::Result<u64> {
     let mut num_rows = 0;
 
-    if matches!(overwrite, InsertOp::Overwrite) {
+    if !initial_load && matches!(overwrite, InsertOp::Overwrite) {
         tracing::debug!("Deleting all data from table.");
         duckdb
             .delete_all_table_data(tx)

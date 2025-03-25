@@ -68,10 +68,6 @@ impl TableCreator {
 
         self.create_table(tx, primary_keys)?;
 
-        for index in self.indexes_vec() {
-            self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
-        }
-
         let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
 
         let mut duckdb = DuckDB::existing_table(
@@ -79,6 +75,7 @@ impl TableCreator {
             Arc::clone(&self.pool),
             Arc::clone(&self.schema),
             constraints,
+            true,
         );
 
         self.created = true;
@@ -252,6 +249,18 @@ impl TableCreator {
         Ok(())
     }
 
+    pub fn apply_constraints_and_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        self.apply_indexes(tx)?;
+        Ok(())
+    }
+
+    fn apply_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        for index in self.indexes_vec() {
+            self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(level = "debug", skip(self, transaction))]
     fn create_table(
         &self,
@@ -259,12 +268,12 @@ impl TableCreator {
         primary_keys: Vec<String>,
     ) -> super::Result<()> {
         let mut sql = self.get_table_create_statement()?;
+        tracing::debug!("{sql}");
 
         if !primary_keys.is_empty() && !sql.contains("PRIMARY KEY") {
             let primary_key_clause = format!(", PRIMARY KEY ({}));", primary_keys.join(", "));
             sql = sql.replace(");", &primary_key_clause);
         }
-        tracing::debug!("{sql}");
 
         transaction
             .execute(&sql, [])
@@ -367,7 +376,7 @@ impl TableCreator {
             index_builder = index_builder.unique();
         }
         let sql = index_builder.build_postgres();
-        tracing::debug!("{sql}");
+        tracing::debug!("Creating index: {sql}");
 
         transaction
             .execute(&sql, [])
