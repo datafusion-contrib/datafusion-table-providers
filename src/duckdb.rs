@@ -1,5 +1,4 @@
 use crate::sql::sql_provider_datafusion;
-use crate::util::constraints::get_primary_keys_from_constraints;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -32,15 +31,14 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::{AccessMode, DuckdbConnectionManager, Transaction};
+use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
 use snafu::prelude::*;
-use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+use write::DuckDBTableWriterBuilder;
 
-use self::{creator::TableCreator, sql_table::DuckDBTable, write::DuckDBTableWriter};
+use self::sql_table::DuckDBTable;
 
 #[cfg(feature = "duckdb-federation")]
 mod federation;
@@ -48,6 +46,7 @@ mod federation;
 mod creator;
 mod sql_table;
 pub mod write;
+pub use creator::{TableDefinition, TableName};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -143,6 +142,15 @@ pub enum Error {
 
     #[snafu(display("Failed to parse the system time: {source}"))]
     UnableToParseSystemTime { source: std::num::ParseIntError },
+
+    #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
+    MissingReadProvider,
+
+    #[snafu(display("A pool is required to create a DuckDBTableWriter"))]
+    MissingPool,
+
+    #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
+    MissingTableDefinition,
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -357,13 +365,17 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
-        let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::new(pool))
-            .constraints(cmd.constraints.clone())
-            .indexes(indexes.clone())
-            .build();
-        // .create_with_timestamp()
-        // .map_err(to_datafusion_error)?;
+        let table_definition =
+            TableDefinition::new(TableName::new(name.clone()), Arc::clone(&schema))
+                .with_constraints(cmd.constraints.clone())
+                .with_indexes(indexes.clone());
 
+        let table_writer_builder = DuckDBTableWriterBuilder::new()
+            .with_table_definition(table_definition)
+            .with_pool(Arc::new(pool))
+            .set_on_conflict(on_conflict);
+
+        // TODO: re-implement schema validation between tables in the new table->view world
         // If the table is already created, we don't create it again and don't apply primary keys and remove previously created indexes (if any).
         // Thus we verify that primary keys and indexes for the table created match the configuration.
         // let mut table_schema_matches = true;
@@ -405,10 +417,11 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let read_provider: Arc<dyn TableProvider> =
             Arc::new(read_provider.create_federated_table_provider()?);
 
-        Ok(DuckDBTableWriter::create(
-            read_provider,
-            duckdb,
-            on_conflict,
+        Ok(Arc::new(
+            table_writer_builder
+                .with_read_provider(read_provider)
+                .build()
+                .map_err(to_datafusion_error)?,
         ))
     }
 }
@@ -422,10 +435,6 @@ pub struct DuckDB {
     pool: Arc<DuckDbConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
-    table_creator: Option<TableCreator>,
-    // Indicates whether the table has been newly created and is empty
-    is_empty: Arc<AtomicBool>,
-    original_table_name: String,
 }
 
 impl std::fmt::Debug for DuckDB {
@@ -445,36 +454,12 @@ impl DuckDB {
         pool: Arc<DuckDbConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
-        is_empty: bool,
-        original_table_name: String,
     ) -> Self {
         Self {
             table_name,
             pool,
             schema,
             constraints,
-            table_creator: None,
-            is_empty: Arc::new(AtomicBool::new(is_empty)),
-            original_table_name,
-        }
-    }
-
-    #[must_use]
-    pub fn with_creator(mut self, table_creator: TableCreator) -> Self {
-        self.table_creator = Some(table_creator);
-        self
-    }
-
-    #[must_use]
-    pub fn existing_table_like_self(&self, table_name: String) -> Self {
-        Self {
-            table_name,
-            pool: Arc::clone(&self.pool),
-            schema: Arc::clone(&self.schema),
-            constraints: self.constraints.clone(),
-            table_creator: self.table_creator.clone(),
-            is_empty: Arc::new(AtomicBool::new(false)),
-            original_table_name: self.original_table_name.clone(),
         }
     }
 
@@ -522,184 +507,97 @@ impl DuckDB {
         result
     }
 
-    fn insert_table_into(
-        &self,
-        tx: &Transaction<'_>,
-        table_to_insert_into: &DuckDB,
-        on_conflict: Option<&OnConflict>,
-    ) -> Result<()> {
-        let mut insert_sql = format!(
-            r#"INSERT INTO "{}" SELECT * FROM "{}""#,
-            table_to_insert_into.table_name, self.table_name
-        );
+    // pub async fn verify_primary_keys_match(&self) -> Result<bool> {
+    //     let expected_pk_keys_str_map: HashSet<String> =
+    //         get_primary_keys_from_constraints(&self.constraints, &self.schema)
+    //             .into_iter()
+    //             .collect();
 
-        if let Some(on_conflict) = on_conflict {
-            let on_conflict_sql = on_conflict.build_on_conflict_statement(&self.schema);
-            insert_sql.push_str(&format!(" {on_conflict_sql}"));
-        }
-        tracing::debug!("{insert_sql}");
+    //     let mut db_conn = self.connect_sync()?;
 
-        tx.execute(&insert_sql, [])
-            .context(UnableToInsertToDuckDBTableSnafu)?;
+    //     let actual_pk_keys_str_map = TableCreator::get_existing_primary_keys(
+    //         DuckDB::duckdb_conn(&mut db_conn)?,
+    //         &self.table_name,
+    //     )
+    //     .await?;
 
-        Ok(())
-    }
+    //     tracing::debug!(
+    //         "Expected primary keys: {:?}\nActual primary keys: {:?}",
+    //         expected_pk_keys_str_map,
+    //         actual_pk_keys_str_map
+    //     );
 
-    /// Lists the latest internal data table, based on the unix timestamp
-    /// Internal data table names are like `__data_{original_table_name}_{timestamp}`
-    fn get_latest_data_table(&self, transaction: &Transaction<'_>) -> Result<Option<String>> {
-        let sql = format!("select table_name from duckdb_tables() where table_name LIKE '__data_{original_table_name}%'", original_table_name = self.original_table_name);
-        let mut stmt = transaction.prepare(&sql).context(UnableToQueryDataSnafu)?;
-        let mut rows = stmt.query([]).context(UnableToQueryDataSnafu)?;
+    //     let missing_in_actual = expected_pk_keys_str_map
+    //         .difference(&actual_pk_keys_str_map)
+    //         .collect::<Vec<_>>();
+    //     let extra_in_actual = actual_pk_keys_str_map
+    //         .difference(&expected_pk_keys_str_map)
+    //         .collect::<Vec<_>>();
 
-        let mut table_names = Vec::new();
-        while let Some(row) = rows.next().context(UnableToQueryDataSnafu)? {
-            let table_name = row
-                .get::<usize, String>(0)
-                .context(UnableToQueryDataSnafu)?;
-            let Some(timestamp) = table_name.split('_').last() else {
-                continue;
-            };
+    //     if !missing_in_actual.is_empty() {
+    //         tracing::warn!(
+    //             "Missing primary key(s) detected for the table '{name}': {:?}.",
+    //             missing_in_actual.iter().join(", "),
+    //             name = self.table_name
+    //         );
+    //     }
 
-            let timestamp = timestamp
-                .parse::<u64>()
-                .context(UnableToParseSystemTimeSnafu)?;
+    //     if !extra_in_actual.is_empty() {
+    //         tracing::warn!(
+    //             "The table '{name}' has unexpected primary key(s) not defined in the configuration: {:?}.",
+    //             extra_in_actual.iter().join(", "),
+    //             name = self.table_name
+    //         );
+    //     }
 
-            table_names.push((table_name, timestamp));
-        }
+    //     Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    // }
 
-        table_names.sort_by(|a, b| a.1.cmp(&b.1));
+    // async fn verify_indexes_match(&self, indexes: &[(ColumnReference, IndexType)]) -> Result<bool> {
+    //     let expected_indexes_str_map: HashSet<String> = indexes
+    //         .iter()
+    //         .map(|index| TableCreator::get_index_name(&self.table_name, index))
+    //         .collect();
 
-        Ok(table_names.last().map(|(table_name, _)| table_name.clone()))
-    }
+    //     let mut db_conn = self.connect_sync()?;
 
-    fn insert_batch_no_constraints(
-        &self,
-        transaction: &Transaction<'_>,
-        batch: &RecordBatch,
-    ) -> Result<()> {
-        let mut appender = transaction
-            .appender(&self.table_name)
-            .context(UnableToGetAppenderToDuckDBTableSnafu)?;
+    //     let actual_indexes_str_map = TableCreator::get_existing_indexes(
+    //         DuckDB::duckdb_conn(&mut db_conn)?,
+    //         &self.table_name,
+    //     )
+    //     .await?;
 
-        for batch in Self::split_batch(batch) {
-            appender
-                .append_record_batch(batch.clone())
-                .context(UnableToInsertToDuckDBTableSnafu)?;
-        }
+    //     tracing::debug!(
+    //         "Expected indexes: {:?}\nActual indexes: {:?}",
+    //         expected_indexes_str_map,
+    //         actual_indexes_str_map
+    //     );
 
-        appender.flush().context(UnableToInsertToDuckDBTableSnafu)?;
+    //     let missing_in_actual = expected_indexes_str_map
+    //         .difference(&actual_indexes_str_map)
+    //         .collect::<Vec<_>>();
+    //     let extra_in_actual = actual_indexes_str_map
+    //         .difference(&expected_indexes_str_map)
+    //         .collect::<Vec<_>>();
 
-        Ok(())
-    }
+    //     if !missing_in_actual.is_empty() {
+    //         tracing::warn!(
+    //             "Missing index(es) detected for the table '{name}': {:?}.",
+    //             missing_in_actual.iter().join(", "),
+    //             name = self.table_name
+    //         );
+    //     }
+    //     if !extra_in_actual.is_empty() {
+    //         tracing::warn!(
+    //             "Unexpected index(es) detected in table '{name}': {}.\n\
+    //  These indexes are not defined in the configuration.",
+    //             extra_in_actual.iter().join(", "),
+    //             name = self.table_name
+    //         );
+    //     }
 
-    fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> Result<()> {
-        transaction
-            .execute(format!(r#"DELETE FROM "{}""#, self.table_name).as_str(), [])
-            .context(UnableToDeleteAllTableDataSnafu)?;
-
-        Ok(())
-    }
-
-    fn apply_indexes(&self, transaction: &Transaction<'_>) -> Result<()> {
-        if let Some(table_creator) = &self.table_creator {
-            table_creator.apply_indexes(transaction, self.table_name())
-        } else {
-            Ok(())
-        }
-    }
-
-    pub async fn verify_primary_keys_match(&self) -> Result<bool> {
-        let expected_pk_keys_str_map: HashSet<String> =
-            get_primary_keys_from_constraints(&self.constraints, &self.schema)
-                .into_iter()
-                .collect();
-
-        let mut db_conn = self.connect_sync()?;
-
-        let actual_pk_keys_str_map = TableCreator::get_existing_primary_keys(
-            DuckDB::duckdb_conn(&mut db_conn)?,
-            &self.table_name,
-        )
-        .await?;
-
-        tracing::debug!(
-            "Expected primary keys: {:?}\nActual primary keys: {:?}",
-            expected_pk_keys_str_map,
-            actual_pk_keys_str_map
-        );
-
-        let missing_in_actual = expected_pk_keys_str_map
-            .difference(&actual_pk_keys_str_map)
-            .collect::<Vec<_>>();
-        let extra_in_actual = actual_pk_keys_str_map
-            .difference(&expected_pk_keys_str_map)
-            .collect::<Vec<_>>();
-
-        if !missing_in_actual.is_empty() {
-            tracing::warn!(
-                "Missing primary key(s) detected for the table '{name}': {:?}.",
-                missing_in_actual.iter().join(", "),
-                name = self.table_name
-            );
-        }
-
-        if !extra_in_actual.is_empty() {
-            tracing::warn!(
-                "The table '{name}' has unexpected primary key(s) not defined in the configuration: {:?}.",
-                extra_in_actual.iter().join(", "),
-                name = self.table_name
-            );
-        }
-
-        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
-    }
-
-    async fn verify_indexes_match(&self, indexes: &[(ColumnReference, IndexType)]) -> Result<bool> {
-        let expected_indexes_str_map: HashSet<String> = indexes
-            .iter()
-            .map(|index| TableCreator::get_index_name(&self.table_name, index))
-            .collect();
-
-        let mut db_conn = self.connect_sync()?;
-
-        let actual_indexes_str_map = TableCreator::get_existing_indexes(
-            DuckDB::duckdb_conn(&mut db_conn)?,
-            &self.table_name,
-        )
-        .await?;
-
-        tracing::debug!(
-            "Expected indexes: {:?}\nActual indexes: {:?}",
-            expected_indexes_str_map,
-            actual_indexes_str_map
-        );
-
-        let missing_in_actual = expected_indexes_str_map
-            .difference(&actual_indexes_str_map)
-            .collect::<Vec<_>>();
-        let extra_in_actual = actual_indexes_str_map
-            .difference(&expected_indexes_str_map)
-            .collect::<Vec<_>>();
-
-        if !missing_in_actual.is_empty() {
-            tracing::warn!(
-                "Missing index(es) detected for the table '{name}': {:?}.",
-                missing_in_actual.iter().join(", "),
-                name = self.table_name
-            );
-        }
-        if !extra_in_actual.is_empty() {
-            tracing::warn!(
-                "Unexpected index(es) detected in table '{name}': {}.\n\
-     These indexes are not defined in the configuration.",
-                extra_in_actual.iter().join(", "),
-                name = self.table_name
-            );
-        }
-
-        Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
-    }
+    //     Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    // }
 }
 
 fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<String> {
@@ -772,17 +670,14 @@ impl DuckDBTableFactory {
         let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
-        let table_name = table_reference.to_string();
-        let duckdb = DuckDB::existing_table(
-            table_name.clone(),
-            Arc::clone(&self.pool),
-            schema,
-            Constraints::empty(),
-            false,
-            table_name,
-        );
+        let table_name = TableName::from(table_reference);
+        let table_definition = TableDefinition::new(table_name, Arc::clone(&schema));
+        let table_writer_builder = DuckDBTableWriterBuilder::new()
+            .with_read_provider(read_provider)
+            .with_pool(Arc::clone(&self.pool))
+            .with_table_definition(table_definition);
 
-        Ok(DuckDBTableWriter::create(read_provider, duckdb, None))
+        Ok(Arc::new(table_writer_builder.build()?))
     }
 }
 
@@ -839,6 +734,8 @@ async fn apply_memory_limit(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::duckdb::write::DuckDBTableWriter;
+
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::{Constraints, ToDFSchema};
@@ -885,7 +782,7 @@ pub(crate) mod tests {
             .downcast_ref::<DuckDBTableWriter>()
             .expect("cast to DuckDBTableWriter");
 
-        let mut conn_box = writer.duckdb().connect_sync().expect("to get connection");
+        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
         let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
 
         let mut stmt = conn

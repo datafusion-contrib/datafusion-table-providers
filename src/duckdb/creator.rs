@@ -1,16 +1,16 @@
+use crate::sql::arrow_sql_gen::statement::IndexBuilder;
 use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
-use crate::{
-    duckdb::UnableToGetPrimaryKeysOnDuckDBTableSnafu, sql::arrow_sql_gen::statement::IndexBuilder,
-};
+use crate::util::on_conflict::OnConflict;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
+use datafusion::sql::TableReference;
 use duckdb::{vtab::arrow_recordbatch_to_query_params, ToSql, Transaction};
 use snafu::prelude::*;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use super::DuckDB;
 use crate::util::{
@@ -18,345 +18,320 @@ use crate::util::{
     indexes::IndexType,
 };
 
-/// Responsible for creating a `DuckDB` table along with any constraints and indexes
-#[derive(Clone)]
-pub(crate) struct TableCreator {
-    table_name: String,
+#[derive(Debug, Clone)]
+pub struct TableDefinition {
+    name: TableName,
     schema: SchemaRef,
-    pool: Arc<DuckDbConnectionPool>,
     constraints: Option<Constraints>,
     indexes: Vec<(ColumnReference, IndexType)>,
-    created: bool,
 }
 
-impl TableCreator {
-    pub fn new(table_name: String, schema: SchemaRef, pool: Arc<DuckDbConnectionPool>) -> Self {
+#[derive(Clone)]
+pub(crate) struct TableCreator {
+    table_definition: Arc<TableDefinition>,
+    internal_name: TableName,
+    is_internal: bool,
+}
+
+impl TableDefinition {
+    #[must_use]
+    pub(crate) fn new(name: TableName, schema: SchemaRef) -> Self {
         Self {
-            table_name,
+            name,
             schema,
-            pool,
             constraints: None,
             indexes: Vec::new(),
-            created: false,
         }
     }
 
-    pub fn constraints(mut self, constraints: Constraints) -> Self {
+    #[must_use]
+    pub(crate) fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
         self
     }
 
-    pub fn indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+    #[must_use]
+    pub(crate) fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
         self.indexes = indexes;
         self
     }
 
+    pub(crate) fn generate_internal_name(&self) -> super::Result<TableName> {
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context(super::UnableToGetSystemTimeSnafu)?
+            .as_millis();
+        Ok(TableName(format!(
+            "__data_{table_name}_{unix_ms}",
+            table_name = self.name,
+        )))
+    }
+
+    pub(crate) fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
+    }
+
+    pub fn list_internal_tables(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> super::Result<Vec<(TableName, u64)>> {
+        // list all related internal tables, based on the table definition name
+        let sql = format!(
+            "select table_name from duckdb_tables() where table_name LIKE '__data_{table_name}%'",
+            table_name = self.name
+        );
+        let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
+        let mut rows = stmt.query([]).context(super::UnableToQueryDataSnafu)?;
+
+        let mut table_names = Vec::new();
+        while let Some(row) = rows.next().context(super::UnableToQueryDataSnafu)? {
+            let table_name = row
+                .get::<usize, String>(0)
+                .context(super::UnableToQueryDataSnafu)?;
+            let Some(timestamp) = table_name.split('_').last() else {
+                continue; // skip invalid table names
+            };
+
+            let timestamp = timestamp
+                .parse::<u64>()
+                .context(super::UnableToParseSystemTimeSnafu)?;
+
+            table_names.push((table_name, timestamp));
+        }
+
+        table_names.sort_by(|a, b| a.1.cmp(&b.1));
+
+        Ok(table_names
+            .into_iter()
+            .map(|(name, time_created)| (TableName(name), time_created))
+            .collect())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableName(String);
+
+impl Display for TableName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TableName {
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+impl From<TableReference> for TableName {
+    fn from(table_ref: TableReference) -> Self {
+        TableName(table_ref.to_string())
+    }
+}
+
+impl TableCreator {
+    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> super::Result<Self> {
+        let internal_name: TableName = table_definition.generate_internal_name()?;
+        Ok(Self {
+            table_definition,
+            internal_name,
+            is_internal: false,
+        })
+    }
+
+    pub(crate) fn with_internal(mut self, is_internal: bool) -> Self {
+        self.is_internal = is_internal;
+        self
+    }
+
+    pub(crate) fn definition_name(&self) -> &TableName {
+        &self.table_definition.name
+    }
+
+    pub(crate) fn table_name(&self) -> &TableName {
+        if self.is_internal {
+            &self.internal_name
+        } else {
+            &self.table_definition.name
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
+        let mut stmt = tx
+            .prepare("SELECT 1 FROM duckdb_tables() WHERE table_name = ?")
+            .context(super::UnableToQueryDataSnafu)?;
+        let mut rows = stmt
+            .query([self.definition_name().to_string()])
+            .context(super::UnableToQueryDataSnafu)?;
+
+        if rows
+            .next()
+            .context(super::UnableToQueryDataSnafu)?
+            .is_some()
+        {
+            let mut base_table = self.clone();
+            base_table.is_internal = false;
+            Ok(Some(base_table))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
-        self.indexes
+        self.table_definition
+            .indexes
             .iter()
             .map(|(key, ty)| (key.iter().collect(), *ty))
             .collect()
     }
 
-    pub fn build(self) -> DuckDB {
-        let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
-        DuckDB::existing_table(
-            self.table_name.clone(),
-            Arc::clone(&self.pool),
-            Arc::clone(&self.schema),
-            constraints,
-            true,
-            self.table_name.clone(),
-        )
-        .with_creator(self)
-    }
-
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_with_tx(
-        mut self,
+    pub(crate) fn create_table(
+        &self,
+        pool: Arc<DuckDbConnectionPool>,
         tx: &Transaction<'_>,
-        table_name: &str,
-    ) -> super::Result<DuckDB> {
-        assert!(!self.created, "Table already created");
-        let primary_keys = if let Some(constraints) = &self.constraints {
-            get_primary_keys_from_constraints(constraints, &self.schema)
+    ) -> super::Result<()> {
+        let mut db_conn = pool.connect_sync().context(super::DbConnectionPoolSnafu)?;
+        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+
+        // create the table with the supplied table name, or a generated internal name
+        let mut create_stmt = self.get_table_create_statement(duckdb_conn)?;
+        tracing::debug!("{create_stmt}");
+
+        let primary_keys = if let Some(constraints) = &self.table_definition.constraints {
+            get_primary_keys_from_constraints(constraints, &self.table_definition.schema)
         } else {
             Vec::new()
         };
 
-        self.create_table(tx, table_name, primary_keys)?;
+        if !primary_keys.is_empty() && !create_stmt.contains("PRIMARY KEY") {
+            let primary_key_clause = format!(", PRIMARY KEY ({}));", primary_keys.join(", "));
+            create_stmt = create_stmt.replace(");", &primary_key_clause);
+        }
 
-        let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
+        tx.execute(&create_stmt, [])
+            .context(super::UnableToCreateDuckDBTableSnafu)?;
 
-        let mut duckdb = DuckDB::existing_table(
-            table_name.to_string(),
-            Arc::clone(&self.pool),
-            Arc::clone(&self.schema),
-            constraints,
-            true,
-            self.table_name.clone(),
-        );
-
-        self.created = true;
-
-        duckdb.table_creator = Some(self);
-
-        Ok(duckdb)
+        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create(self) -> super::Result<DuckDB> {
-        assert!(!self.created, "Table already created");
-
-        let mut db_conn = Arc::clone(&self.pool)
-            .connect_sync()
-            .context(super::DbConnectionSnafu)?;
-        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
-
-        let tx = duckdb_conn
-            .conn
-            .transaction()
-            .context(super::UnableToBeginTransactionSnafu)?;
-
-        let table_name = self.table_name.clone();
-        let duckdb = self.create_with_tx(&tx, table_name.as_str())?;
-
-        tx.commit().context(super::UnableToCommitTransactionSnafu)?;
-
-        Ok(duckdb)
-    }
-
-    pub fn create_with_timestamp(mut self) -> super::Result<DuckDB> {
-        assert!(!self.created, "Table already created");
-
-        let mut db_conn = Arc::clone(&self.pool)
-            .connect_sync()
-            .context(super::DbConnectionSnafu)?;
-        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
-
-        let tx = duckdb_conn
-            .conn
-            .transaction()
-            .context(super::UnableToBeginTransactionSnafu)?;
-
-        let table_name = self.unix_timestamp_table_name()?;
-        let duckdb = self.create_with_tx(&tx, table_name.as_str())?;
-
-        tx.commit().context(super::UnableToCommitTransactionSnafu)?;
-
-        Ok(duckdb)
-    }
-
-    fn unix_timestamp_table_name(&self) -> super::Result<String> {
-        let unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .context(super::UnableToGetSystemTimeSnafu)?
-            .as_millis();
-        Ok(format!(
-            "__data_{table_name}_{unix_ms}",
-            table_name = self.table_name,
-        ))
-    }
-
-    /// Creates a copy of the `DuckDB` table with the same schema and constraints
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_empty_clone(&self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
-        let new_table_name = self.unix_timestamp_table_name()?;
-        tracing::debug!(
-            "Creating empty table {new_table_name} from {table_name}",
-            table_name = self.table_name,
-        );
-
-        let new_table_creator = TableCreator {
-            table_name: self.table_name.clone(),
-            schema: Arc::clone(&self.schema),
-            pool: Arc::clone(&self.pool),
-            constraints: self.constraints.clone(),
-            indexes: self.indexes.clone(),
-            created: false,
-        };
-
-        new_table_creator.create_with_tx(tx, &new_table_name)
-    }
-
-    #[tracing::instrument(level = "debug", skip(conn))]
-    pub async fn get_existing_primary_keys(
-        conn: &mut DuckDbConnection,
-        table_name: &str,
-    ) -> super::Result<HashSet<String>> {
-        // DuckDB provides convinient querable 'pragma_table_info' table function
-        // Complex table name with schema as part of the name must be quoted as
-        // '"<name>"', otherwise it will be parsed to schema and table name
-        let sql = format!(
-            r#"SELECT name FROM pragma_table_info('{table_name}') WHERE pk = true"#,
-            table_name = quote_identifier(table_name)
-        );
-        tracing::debug!("{sql}");
-
-        let mut stmt = conn
-            .conn
-            .prepare(&sql)
-            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
-
-        let primary_keys_iter = stmt
-            .query_map([], |row| row.get::<usize, String>(0))
-            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
-
-        let mut primary_keys = HashSet::new();
-        for pk in primary_keys_iter {
-            primary_keys.insert(pk.context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
-        }
-
-        Ok(primary_keys)
-    }
-
-    #[tracing::instrument(level = "trace")]
-    pub fn get_index_name(table_name: &str, index: &(ColumnReference, IndexType)) -> String {
-        let mut index_builder = IndexBuilder::new(table_name, index.0.iter().collect());
-        if matches!(index.1, IndexType::Unique) {
-            index_builder = index_builder.unique();
-        }
-        index_builder.index_name()
-    }
-
-    #[tracing::instrument(level = "debug", skip(conn))]
-    pub async fn get_existing_indexes(
-        conn: &mut DuckDbConnection,
-        table_name: &str,
-    ) -> super::Result<HashSet<String>> {
-        let sql = format!(
-            r#"SELECT index_name FROM duckdb_indexes WHERE table_name = '{table_name}'"#,
-            table_name = table_name
-        );
-
-        tracing::debug!("{sql}");
-
-        let mut stmt = conn
-            .conn
-            .prepare(&sql)
-            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
-
-        let indexes_iter = stmt
-            .query_map([], |row| row.get::<usize, String>(0))
-            .context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
-
-        let mut indexes = HashSet::new();
-        for pk in indexes_iter {
-            indexes.insert(pk.context(UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
-        }
-
-        Ok(indexes)
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn delete_table(self, tx: &Transaction<'_>) -> super::Result<()> {
-        assert!(self.created, "Table must be created before deleting");
-        for index in self.indexes_vec() {
-            self.drop_index(tx, index.0)?;
-        }
+    pub(crate) fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        // drop indexes first
+        self.drop_indexes(tx)?;
         self.drop_table(tx)?;
 
         Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn delete_table_named(&self, tx: &Transaction<'_>, table_name: &str) -> super::Result<()> {
-        for index in self.indexes_vec() {
-            self.drop_index_named(tx, table_name, index.0)?;
-        }
-        self.drop_table_named(tx, table_name)?;
+    fn drop_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        // drop this table
+        tx.execute(
+            &format!(r#"DROP TABLE IF EXISTS "{}""#, self.table_name()),
+            [],
+        )
+        .context(super::UnableToDropDuckDBTableSnafu)?;
 
         Ok(())
     }
 
-    /// Consumes the current table and replaces `table_to_replace` with the current table's contents.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn replace_table(
-        mut self,
+    pub(crate) fn insert_into(
+        &self,
+        table: &TableCreator,
         tx: &Transaction<'_>,
-        table_to_replace: &TableCreator,
+        on_conflict: Option<&OnConflict>,
     ) -> super::Result<()> {
-        assert!(
-            self.created,
-            "Table must be created before replacing another table"
+        // insert from this table, into the target table
+        let mut insert_sql = format!(
+            r#"INSERT INTO "{}" SELECT * FROM "{}""#,
+            table.table_name(),
+            self.table_name()
         );
 
-        // Drop indexes and table for the table we want to replace
-        for index in table_to_replace.indexes_vec() {
-            table_to_replace.drop_index(tx, index.0)?;
+        if let Some(on_conflict) = on_conflict {
+            let on_conflict_sql =
+                on_conflict.build_on_conflict_statement(&self.table_definition.schema);
+            insert_sql.push_str(&format!(" {on_conflict_sql}"));
         }
-        // Drop the old table with the name we want to claim
-        table_to_replace.drop_table(tx)?;
+        tracing::debug!("{insert_sql}");
 
-        // DuckDB doesn't support renaming tables with existing indexes, so first drop them, rename the table and recreate them.
-        for index in self.indexes_vec() {
-            self.drop_index(tx, index.0)?;
-        }
-        // Rename our table to the target table name
-        self.rename_table(tx, table_to_replace.table_name.as_str())?;
-        // Update our table name to the target table name so the indexes are created correctly
-        self.table_name.clone_from(&table_to_replace.table_name);
-        // Recreate the indexes, now for our newly renamed table.
-        for index in self.indexes_vec() {
-            self.create_index(
-                tx,
-                &table_to_replace.table_name,
-                index.0,
-                index.1 == IndexType::Unique,
-            )?;
-        }
+        tx.execute(&insert_sql, [])
+            .context(super::UnableToInsertToDuckDBTableSnafu)?;
 
         Ok(())
     }
 
-    pub(crate) fn apply_indexes(
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn create_index(
         &self,
         tx: &Transaction<'_>,
-        table_name: &str,
+        index: (Vec<&str>, IndexType),
     ) -> super::Result<()> {
+        let table_name = self.table_name();
+
+        let unique = index.1 == IndexType::Unique;
+        let columns = index.0;
+        let mut index_builder = IndexBuilder::new(&table_name.to_string(), columns);
+        if unique {
+            index_builder = index_builder.unique();
+        }
+        let sql = index_builder.build_postgres();
+        tracing::debug!("Creating index: {sql}");
+
+        tx.execute(&sql, [])
+            .context(super::UnableToCreateIndexOnDuckDBTableSnafu)?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn create_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        // create indexes on this table
         for index in self.indexes_vec() {
-            self.create_index(tx, table_name, index.0, index.1 == IndexType::Unique)?;
+            self.create_index(tx, index)?;
         }
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn create_table(
-        &self,
-        transaction: &Transaction<'_>,
-        table_name: &str,
-        primary_keys: Vec<String>,
-    ) -> super::Result<()> {
-        let mut sql = self.get_table_create_statement(table_name)?;
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn drop_index(&self, tx: &Transaction<'_>, index: (Vec<&str>, IndexType)) -> super::Result<()> {
+        let table_name = self.table_name();
+        let columns = index.0;
+        let index_name = IndexBuilder::new(&table_name.to_string(), columns).index_name();
+
+        let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
         tracing::debug!("{sql}");
 
-        if !primary_keys.is_empty() && !sql.contains("PRIMARY KEY") {
-            let primary_key_clause = format!(", PRIMARY KEY ({}));", primary_keys.join(", "));
-            sql = sql.replace(");", &primary_key_clause);
-        }
-
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToCreateDuckDBTableSnafu)?;
+        tx.execute(&sql, [])
+            .context(super::UnableToDropIndexOnDuckDBTableSnafu)?;
 
         Ok(())
     }
 
-    /// DuckDB CREATE TABLE statements aren't supported by sea-query - so we create a temporary table
-    /// from an Arrow schema and ask DuckDB for the CREATE TABLE statement.
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn get_table_create_statement(&self, table_name: &str) -> super::Result<String> {
-        let mut db_conn = Arc::clone(&self.pool)
-            .connect_sync()
-            .context(super::DbConnectionSnafu)?;
-        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+    pub(crate) fn drop_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        // drop indexes on this table
+        for index in self.indexes_vec() {
+            self.drop_index(tx, index)?;
+        }
 
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn get_table_create_statement(
+        &self,
+        duckdb_conn: &mut DuckDbConnection,
+    ) -> super::Result<String> {
         let tx = duckdb_conn
             .conn
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
-
-        let empty_record = RecordBatch::new_empty(Arc::clone(&self.schema));
+        let table_name = self.table_name();
+        let empty_record = RecordBatch::new_empty(Arc::clone(&self.table_definition.schema));
 
         let arrow_params = arrow_recordbatch_to_query_params(empty_record);
         let arrow_params_vec: Vec<&dyn ToSql> = arrow_params
@@ -389,105 +364,110 @@ impl TableCreator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn drop_table(&self, transaction: &Transaction<'_>) -> super::Result<()> {
-        let sql = format!(r#"DROP TABLE IF EXISTS "{}""#, self.table_name);
-        tracing::debug!("{sql}");
+    pub(crate) fn list_internal_tables(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> super::Result<Vec<(Self, u64)>> {
+        let tables = self.table_definition.list_internal_tables(tx)?;
 
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToDropDuckDBTableSnafu)?;
+        Ok(tables
+            .into_iter()
+            .filter_map(|(name, time_created)| {
+                if name == self.internal_name {
+                    return None;
+                }
+
+                let internal_table = TableCreator {
+                    table_definition: Arc::clone(&self.table_definition),
+                    internal_name: name,
+                    is_internal: true,
+                };
+                Some((internal_table, time_created))
+            })
+            .collect())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        if !self.is_internal {
+            return Ok(());
+        }
+
+        tx.execute(
+            &format!(
+                "CREATE OR REPLACE VIEW {base_table} AS SELECT * FROM {internal_table}",
+                base_table = quote_identifier(&self.definition_name().to_string()),
+                internal_table = quote_identifier(&self.table_name().to_string())
+            ),
+            [],
+        )
+        .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn drop_table_named(
+    pub(crate) fn current_primary_keys(
         &self,
-        transaction: &Transaction<'_>,
-        table_name: &str,
-    ) -> super::Result<()> {
-        let sql = format!(r#"DROP TABLE IF EXISTS "{}""#, table_name);
-        tracing::debug!("{sql}");
-
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToDropDuckDBTableSnafu)?;
-
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn rename_table(
-        &self,
-        transaction: &Transaction<'_>,
-        new_table_name: &str,
-    ) -> super::Result<()> {
+        tx: &Transaction<'_>,
+    ) -> super::Result<HashSet<String>> {
+        // DuckDB provides convenient queryable 'pragma_table_info' table function
+        // Complex table name with schema as part of the name must be quoted as
+        // '"<name>"', otherwise it will be parsed to schema and table name
         let sql = format!(
-            r#"ALTER TABLE "{}" RENAME TO "{new_table_name}""#,
-            self.table_name
+            "SELECT name FROM pragma_table_info('{table_name}') WHERE pk = true",
+            table_name = quote_identifier(&self.table_name().to_string())
         );
         tracing::debug!("{sql}");
 
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToRenameDuckDBTableSnafu)?;
+        let mut stmt = tx
+            .prepare(&sql)
+            .context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
 
-        Ok(())
-    }
+        let primary_keys_iter = stmt
+            .query_map([], |row| row.get::<usize, String>(0))
+            .context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
 
-    #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn create_index(
-        &self,
-        transaction: &Transaction<'_>,
-        table_name: &str,
-        columns: Vec<&str>,
-        unique: bool,
-    ) -> super::Result<()> {
-        let mut index_builder = IndexBuilder::new(table_name, columns);
-        if unique {
-            index_builder = index_builder.unique();
+        let mut primary_keys = HashSet::new();
+        for pk in primary_keys_iter {
+            primary_keys.insert(pk.context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
         }
-        let sql = index_builder.build_postgres();
-        tracing::debug!("Creating index: {sql}");
 
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToCreateIndexOnDuckDBTableSnafu)?;
-
-        Ok(())
+        Ok(primary_keys)
     }
 
-    #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn drop_index(&self, transaction: &Transaction<'_>, columns: Vec<&str>) -> super::Result<()> {
-        let index_name = IndexBuilder::new(&self.table_name, columns).index_name();
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
+        let sql = format!(
+            "SELECT index_name FROM duckdb_indexes WHERE table_name = '{table_name}'",
+            table_name = &self.table_name().to_string()
+        );
 
-        let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
         tracing::debug!("{sql}");
 
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToDropIndexOnDuckDBTableSnafu)?;
+        let mut stmt = tx
+            .prepare(&sql)
+            .context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
 
-        Ok(())
+        let indexes_iter = stmt
+            .query_map([], |row| row.get::<usize, String>(0))
+            .context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?;
+
+        let mut indexes = HashSet::new();
+        for index in indexes_iter {
+            indexes.insert(index.context(super::UnableToGetPrimaryKeysOnDuckDBTableSnafu)?);
+        }
+
+        Ok(indexes)
     }
 
-    #[tracing::instrument(level = "debug", skip(self, transaction))]
-    fn drop_index_named(
-        &self,
-        transaction: &Transaction<'_>,
-        table_name: &str,
-        columns: Vec<&str>,
-    ) -> super::Result<()> {
-        let index_name = IndexBuilder::new(&table_name, columns).index_name();
-
-        let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
-        tracing::debug!("{sql}");
-
-        transaction
-            .execute(&sql, [])
-            .context(super::UnableToDropIndexOnDuckDBTableSnafu)?;
-
-        Ok(())
+    #[cfg(test)]
+    fn from_table_name(table_definition: Arc<TableDefinition>, table_name: TableName) -> Self {
+        Self {
+            table_definition,
+            internal_name: table_name,
+            is_internal: true,
+        }
     }
 }
 
@@ -549,18 +529,13 @@ pub(crate) mod tests {
 
         let schema = batches[0].schema();
 
-        for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
-            let pool = get_mem_duckdb();
-            let constraints =
-                get_unique_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
-            let created_table = TableCreator::new(
-                "eth.logs".to_string(),
-                Arc::clone(&schema),
-                Arc::clone(&pool),
-            )
-            .constraints(constraints)
-            .indexes(
-                vec![
+        let table_definition = Arc::new(
+            TableDefinition::new(TableName::new("eth.logs"), Arc::clone(&schema))
+                .with_constraints(get_unique_constraints(
+                    &["log_index", "transaction_hash"],
+                    Arc::clone(&schema),
+                ))
+                .with_indexes(vec![
                     (
                         ColumnReference::try_from("block_number").expect("valid column ref"),
                         IndexType::Enabled,
@@ -570,16 +545,18 @@ pub(crate) mod tests {
                             .expect("valid column ref"),
                         IndexType::Unique,
                     ),
-                ]
-                .into_iter()
-                .collect(),
-            )
-            .create()
-            .expect("to create table");
+                ]),
+        );
 
-            let arc_created_table = Arc::new(created_table);
+        for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
+            let pool = get_mem_duckdb();
 
-            let duckdb_sink = DuckDBDataSink::new(arc_created_table, *overwrite, None);
+            let duckdb_sink = DuckDBDataSink::new(
+                Arc::clone(&pool),
+                Arc::clone(&table_definition),
+                *overwrite,
+                None,
+            );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
@@ -603,26 +580,44 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let primary_keys = TableCreator::get_existing_primary_keys(conn, "eth.logs")
-                .await
-                .expect("to get primary keys");
+            let tx = conn
+                .get_underlying_conn_mut()
+                .transaction()
+                .expect("should begin transaction");
+            let internal_tables: Vec<(TableName, u64)> = table_definition
+                .list_internal_tables(&tx)
+                .expect("should list internal tables");
+            assert_eq!(internal_tables.len(), 1);
+
+            let internal_table = internal_tables.first().expect("to get internal table");
+            let internal_table = internal_table.0.clone();
+            let internal_table_creator = TableCreator::from_table_name(
+                Arc::clone(&table_definition),
+                internal_table.clone(),
+            );
+
+            let primary_keys = internal_table_creator
+                .current_primary_keys(&tx)
+                .expect("should get primary keys");
 
             assert_eq!(primary_keys, HashSet::<String>::new());
 
-            let created_indexes_str_map = TableCreator::get_existing_indexes(conn, "eth.logs")
-                .await
-                .expect("to get indexes");
+            let created_indexes_str_map = internal_table_creator
+                .current_indexes(&tx)
+                .expect("should get indexes");
 
             assert_eq!(
                 created_indexes_str_map,
                 vec![
-                    "i_eth.logs_block_number".to_string(),
-                    "i_eth.logs_log_index_transaction_hash".to_string()
+                    format!("i_{internal_table}_block_number"),
+                    format!("i_{internal_table}_log_index_transaction_hash")
                 ]
                 .into_iter()
                 .collect::<HashSet<_>>(),
                 "Indexes must match"
             );
+
+            tx.rollback().expect("should rollback transaction");
         }
     }
 
@@ -632,31 +627,30 @@ pub(crate) mod tests {
         let batches = get_logs_batches().await;
 
         let schema = batches[0].schema();
+        let table_definition = Arc::new(
+            TableDefinition::new(TableName::new("eth.logs"), Arc::clone(&schema))
+                .with_constraints(get_pk_constraints(
+                    &["log_index", "transaction_hash"],
+                    Arc::clone(&schema),
+                ))
+                .with_indexes(
+                    vec![(
+                        ColumnReference::try_from("block_number").expect("valid column ref"),
+                        IndexType::Enabled,
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+        );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
-            let constraints =
-                get_pk_constraints(&["log_index", "transaction_hash"], Arc::clone(&schema));
-            let created_table = TableCreator::new(
-                "eth.logs".to_string(),
-                Arc::clone(&schema),
+            let duckdb_sink = DuckDBDataSink::new(
                 Arc::clone(&pool),
-            )
-            .constraints(constraints)
-            .indexes(
-                vec![(
-                    ColumnReference::try_from("block_number").expect("valid column ref"),
-                    IndexType::Enabled,
-                )]
-                .into_iter()
-                .collect(),
-            )
-            .create()
-            .expect("to create table");
-
-            let arc_created_table = Arc::new(created_table);
-
-            let duckdb_sink = DuckDBDataSink::new(arc_created_table, *overwrite, None);
+                Arc::clone(&table_definition),
+                *overwrite,
+                None,
+            );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
                 .write_all(
@@ -680,23 +674,41 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let create_stmt = conn
+            let tx = conn
                 .get_underlying_conn_mut()
+                .transaction()
+                .expect("should begin transaction");
+
+            let internal_tables = table_definition
+                .list_internal_tables(&tx)
+                .expect("should list internal tables");
+            assert_eq!(internal_tables.len(), 1);
+
+            let internal_table = internal_tables.first().expect("should get internal table");
+            let internal_table = internal_table.0.clone();
+            let internal_table_creator = TableCreator::from_table_name(
+                Arc::clone(&table_definition),
+                internal_table.clone(),
+            );
+
+            let create_stmt = tx
                 .query_row(
-                    "select sql from duckdb_tables() where table_name = 'eth.logs'",
-                    [],
+                    "select sql from duckdb_tables() where table_name = ?",
+                    [internal_table.to_string()],
                     |r| r.get::<usize, String>(0),
                 )
                 .expect("to get create table statement");
 
             assert_eq!(
                 create_stmt,
-                r#"CREATE TABLE "eth.logs"(log_index BIGINT, transaction_hash VARCHAR, transaction_index BIGINT, address VARCHAR, "data" VARCHAR, topics VARCHAR[], block_timestamp BIGINT, block_hash VARCHAR, block_number BIGINT, PRIMARY KEY(log_index, transaction_hash));"#
+                format!(
+                    r#"CREATE TABLE "{internal_table}"(log_index BIGINT, transaction_hash VARCHAR, transaction_index BIGINT, address VARCHAR, "data" VARCHAR, topics VARCHAR[], block_timestamp BIGINT, block_hash VARCHAR, block_number BIGINT, PRIMARY KEY(log_index, transaction_hash));"#,
+                )
             );
 
-            let primary_keys = TableCreator::get_existing_primary_keys(conn, "eth.logs")
-                .await
-                .expect("to get primary keys");
+            let primary_keys = internal_table_creator
+                .current_primary_keys(&tx)
+                .expect("should get primary keys");
 
             assert_eq!(
                 primary_keys,
@@ -705,17 +717,19 @@ pub(crate) mod tests {
                     .collect::<HashSet<_>>()
             );
 
-            let created_indexes_str_map = TableCreator::get_existing_indexes(conn, "eth.logs")
-                .await
-                .expect("to get indexes");
+            let created_indexes_str_map = internal_table_creator
+                .current_indexes(&tx)
+                .expect("should get indexes");
 
             assert_eq!(
                 created_indexes_str_map,
-                vec!["i_eth.logs_block_number".to_string()]
+                vec![format!("i_{internal_table}_block_number")]
                     .into_iter()
                     .collect::<HashSet<_>>(),
                 "Indexes must match"
             );
+
+            tx.rollback().expect("should rollback transaction");
         }
     }
 
