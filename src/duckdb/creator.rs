@@ -522,6 +522,19 @@ pub(crate) mod tests {
         Box::pin(MemoryStream::try_new(batches, schema, None).expect("to get stream"))
     }
 
+    pub(crate) fn init_tracing(default_level: Option<&str>) -> DefaultGuard {
+        let filter = match default_level {
+            Some(level) => EnvFilter::new(level),
+            _ => EnvFilter::new("INFO,datafusion_table_providers=TRACE"),
+        };
+
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_env_filter(filter)
+            .with_ansi(true)
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
     #[tokio::test]
     async fn test_table_creator() {
         let _guard = init_tracing(None);
@@ -733,16 +746,51 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn init_tracing(default_level: Option<&str>) -> DefaultGuard {
-        let filter = match default_level {
-            Some(level) => EnvFilter::new(level),
-            _ => EnvFilter::new("INFO,datafusion_table_providers=TRACE"),
-        };
+    #[tokio::test]
+    #[skip]
+    async fn test_list_related_tables_from_definition() {
+        todo!();
+    }
 
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_env_filter(filter)
-            .with_ansi(true)
-            .finish();
-        tracing::subscriber::set_default(subscriber)
+    #[tokio::test]
+    #[skip]
+    async fn test_list_related_tables_from_creator() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_create_view() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_tables_ddl() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_insert_into_tables() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_indexes() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_indexes_ddl() {
+        todo!();
+    }
+
+    #[tokio::test]
+    #[skip]
+    async fn test_lists_base_table_from_definition() {
+        todo!();
     }
 }
