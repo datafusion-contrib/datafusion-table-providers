@@ -19,6 +19,7 @@ use crate::util::{
 };
 
 /// Responsible for creating a `DuckDB` table along with any constraints and indexes
+#[derive(Clone)]
 pub(crate) struct TableCreator {
     table_name: String,
     schema: SchemaRef,
@@ -57,8 +58,25 @@ impl TableCreator {
             .collect()
     }
 
+    pub fn build(self) -> DuckDB {
+        let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
+        DuckDB::existing_table(
+            self.table_name.clone(),
+            Arc::clone(&self.pool),
+            Arc::clone(&self.schema),
+            constraints,
+            true,
+            self.table_name.clone(),
+        )
+        .with_creator(self)
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn create_with_tx(mut self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
+    pub fn create_with_tx(
+        mut self,
+        tx: &Transaction<'_>,
+        table_name: &str,
+    ) -> super::Result<DuckDB> {
         assert!(!self.created, "Table already created");
         let primary_keys = if let Some(constraints) = &self.constraints {
             get_primary_keys_from_constraints(constraints, &self.schema)
@@ -66,16 +84,17 @@ impl TableCreator {
             Vec::new()
         };
 
-        self.create_table(tx, primary_keys)?;
+        self.create_table(tx, table_name, primary_keys)?;
 
         let constraints = self.constraints.clone().unwrap_or(Constraints::empty());
 
         let mut duckdb = DuckDB::existing_table(
-            self.table_name.clone(),
+            table_name.to_string(),
             Arc::clone(&self.pool),
             Arc::clone(&self.schema),
             constraints,
             true,
+            self.table_name.clone(),
         );
 
         self.created = true;
@@ -99,31 +118,57 @@ impl TableCreator {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
 
-        let duckdb = self.create_with_tx(&tx)?;
+        let table_name = self.table_name.clone();
+        let duckdb = self.create_with_tx(&tx, table_name.as_str())?;
 
         tx.commit().context(super::UnableToCommitTransactionSnafu)?;
 
         Ok(duckdb)
     }
 
+    pub fn create_with_timestamp(mut self) -> super::Result<DuckDB> {
+        assert!(!self.created, "Table already created");
+
+        let mut db_conn = Arc::clone(&self.pool)
+            .connect_sync()
+            .context(super::DbConnectionSnafu)?;
+        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+
+        let tx = duckdb_conn
+            .conn
+            .transaction()
+            .context(super::UnableToBeginTransactionSnafu)?;
+
+        let table_name = self.unix_timestamp_table_name()?;
+        let duckdb = self.create_with_tx(&tx, table_name.as_str())?;
+
+        tx.commit().context(super::UnableToCommitTransactionSnafu)?;
+
+        Ok(duckdb)
+    }
+
+    fn unix_timestamp_table_name(&self) -> super::Result<String> {
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context(super::UnableToGetSystemTimeSnafu)?
+            .as_millis();
+        Ok(format!(
+            "__data_{table_name}_{unix_ms}",
+            table_name = self.table_name,
+        ))
+    }
+
     /// Creates a copy of the `DuckDB` table with the same schema and constraints
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn create_empty_clone(&self, tx: &Transaction<'_>) -> super::Result<DuckDB> {
-        assert!(self.created, "Table must be created before cloning");
-
-        let new_table_name = format!(
-            "{}_spice_{}",
-            self.table_name,
-            &Uuid::new_v4().to_string()[..8]
-        );
+        let new_table_name = self.unix_timestamp_table_name()?;
         tracing::debug!(
-            "Creating empty table {} from {}",
-            new_table_name,
-            self.table_name,
+            "Creating empty table {new_table_name} from {table_name}",
+            table_name = self.table_name,
         );
 
         let new_table_creator = TableCreator {
-            table_name: new_table_name.clone(),
+            table_name: self.table_name.clone(),
             schema: Arc::clone(&self.schema),
             pool: Arc::clone(&self.pool),
             constraints: self.constraints.clone(),
@@ -131,7 +176,7 @@ impl TableCreator {
             created: false,
         };
 
-        new_table_creator.create_with_tx(tx)
+        new_table_creator.create_with_tx(tx, &new_table_name)
     }
 
     #[tracing::instrument(level = "debug", skip(conn))]
@@ -214,6 +259,16 @@ impl TableCreator {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn delete_table_named(&self, tx: &Transaction<'_>, table_name: &str) -> super::Result<()> {
+        for index in self.indexes_vec() {
+            self.drop_index_named(tx, table_name, index.0)?;
+        }
+        self.drop_table_named(tx, table_name)?;
+
+        Ok(())
+    }
+
     /// Consumes the current table and replaces `table_to_replace` with the current table's contents.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn replace_table(
@@ -243,20 +298,24 @@ impl TableCreator {
         self.table_name.clone_from(&table_to_replace.table_name);
         // Recreate the indexes, now for our newly renamed table.
         for index in self.indexes_vec() {
-            self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
+            self.create_index(
+                tx,
+                &table_to_replace.table_name,
+                index.0,
+                index.1 == IndexType::Unique,
+            )?;
         }
 
         Ok(())
     }
 
-    pub fn apply_constraints_and_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
-        self.apply_indexes(tx)?;
-        Ok(())
-    }
-
-    fn apply_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub(crate) fn apply_indexes(
+        &self,
+        tx: &Transaction<'_>,
+        table_name: &str,
+    ) -> super::Result<()> {
         for index in self.indexes_vec() {
-            self.create_index(tx, index.0, index.1 == IndexType::Unique)?;
+            self.create_index(tx, table_name, index.0, index.1 == IndexType::Unique)?;
         }
         Ok(())
     }
@@ -265,9 +324,10 @@ impl TableCreator {
     fn create_table(
         &self,
         transaction: &Transaction<'_>,
+        table_name: &str,
         primary_keys: Vec<String>,
     ) -> super::Result<()> {
-        let mut sql = self.get_table_create_statement()?;
+        let mut sql = self.get_table_create_statement(table_name)?;
         tracing::debug!("{sql}");
 
         if !primary_keys.is_empty() && !sql.contains("PRIMARY KEY") {
@@ -285,7 +345,7 @@ impl TableCreator {
     /// DuckDB CREATE TABLE statements aren't supported by sea-query - so we create a temporary table
     /// from an Arrow schema and ask DuckDB for the CREATE TABLE statement.
     #[tracing::instrument(level = "debug", skip_all)]
-    fn get_table_create_statement(&self) -> super::Result<String> {
+    fn get_table_create_statement(&self, table_name: &str) -> super::Result<String> {
         let mut db_conn = Arc::clone(&self.pool)
             .connect_sync()
             .context(super::DbConnectionSnafu)?;
@@ -304,10 +364,8 @@ impl TableCreator {
             .map(|p| p as &dyn ToSql)
             .collect::<Vec<_>>();
         let arrow_params_ref: &[&dyn ToSql] = &arrow_params_vec;
-        let sql = format!(
-            r#"CREATE TABLE IF NOT EXISTS "{name}" AS SELECT * FROM arrow(?, ?)"#,
-            name = self.table_name
-        );
+        let sql =
+            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM arrow(?, ?)"#,);
         tracing::debug!("{sql}");
 
         tx.execute(&sql, arrow_params_ref)
@@ -315,10 +373,7 @@ impl TableCreator {
 
         let create_stmt = tx
             .query_row(
-                &format!(
-                    "select sql from duckdb_tables() where table_name = '{}'",
-                    self.table_name
-                ),
+                &format!("select sql from duckdb_tables() where table_name = '{table_name}'",),
                 [],
                 |r| r.get::<usize, String>(0),
             )
@@ -336,6 +391,22 @@ impl TableCreator {
     #[tracing::instrument(level = "debug", skip_all)]
     fn drop_table(&self, transaction: &Transaction<'_>) -> super::Result<()> {
         let sql = format!(r#"DROP TABLE IF EXISTS "{}""#, self.table_name);
+        tracing::debug!("{sql}");
+
+        transaction
+            .execute(&sql, [])
+            .context(super::UnableToDropDuckDBTableSnafu)?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn drop_table_named(
+        &self,
+        transaction: &Transaction<'_>,
+        table_name: &str,
+    ) -> super::Result<()> {
+        let sql = format!(r#"DROP TABLE IF EXISTS "{}""#, table_name);
         tracing::debug!("{sql}");
 
         transaction
@@ -368,10 +439,11 @@ impl TableCreator {
     fn create_index(
         &self,
         transaction: &Transaction<'_>,
+        table_name: &str,
         columns: Vec<&str>,
         unique: bool,
     ) -> super::Result<()> {
-        let mut index_builder = IndexBuilder::new(&self.table_name, columns);
+        let mut index_builder = IndexBuilder::new(table_name, columns);
         if unique {
             index_builder = index_builder.unique();
         }
@@ -388,6 +460,25 @@ impl TableCreator {
     #[tracing::instrument(level = "debug", skip(self, transaction))]
     fn drop_index(&self, transaction: &Transaction<'_>, columns: Vec<&str>) -> super::Result<()> {
         let index_name = IndexBuilder::new(&self.table_name, columns).index_name();
+
+        let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
+        tracing::debug!("{sql}");
+
+        transaction
+            .execute(&sql, [])
+            .context(super::UnableToDropIndexOnDuckDBTableSnafu)?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, transaction))]
+    fn drop_index_named(
+        &self,
+        transaction: &Transaction<'_>,
+        table_name: &str,
+        columns: Vec<&str>,
+    ) -> super::Result<()> {
+        let index_name = IndexBuilder::new(&table_name, columns).index_name();
 
         let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
         tracing::debug!("{sql}");

@@ -137,6 +137,12 @@ pub enum Error {
 
     #[snafu(display("Unable to add primary key to table: {source}"))]
     UnableToAddPrimaryKey { source: duckdb::Error },
+
+    #[snafu(display("Failed to get system time since epoch: {source}"))]
+    UnableToGetSystemTime { source: std::time::SystemTimeError },
+
+    #[snafu(display("Failed to parse the system time: {source}"))]
+    UnableToParseSystemTime { source: std::num::ParseIntError },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -273,6 +279,7 @@ type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<Duckd
 
 #[async_trait]
 impl TableProviderFactory for DuckDBTableProviderFactory {
+    #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
         _state: &dyn Session,
@@ -353,31 +360,32 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let duckdb = TableCreator::new(name.clone(), Arc::clone(&schema), Arc::new(pool))
             .constraints(cmd.constraints.clone())
             .indexes(indexes.clone())
-            .create()
-            .map_err(to_datafusion_error)?;
+            .build();
+        // .create_with_timestamp()
+        // .map_err(to_datafusion_error)?;
 
-        // If the table is already created, we don't create it again and don't apply primary keys and remove previosly created indexes (if any).
+        // If the table is already created, we don't create it again and don't apply primary keys and remove previously created indexes (if any).
         // Thus we verify that primary keys and indexes for the table created match the configuration.
-        let mut table_schema_matches = true;
-        table_schema_matches &= duckdb
-            .verify_primary_keys_match()
-            .await
-            .map_err(to_datafusion_error)?;
+        // let mut table_schema_matches = true;
+        // table_schema_matches &= duckdb
+        //     .verify_primary_keys_match()
+        //     .await
+        //     .map_err(to_datafusion_error)?;
 
-        table_schema_matches &= duckdb
-            .verify_indexes_match(&indexes)
-            .await
-            .map_err(to_datafusion_error)?;
+        // table_schema_matches &= duckdb
+        //     .verify_indexes_match(&indexes)
+        //     .await
+        //     .map_err(to_datafusion_error)?;
 
-        if !table_schema_matches {
-            tracing::warn!(
-                "Schema mismatch detected for table '{table_name}' in database '{db_path}'.\n\
-         The local table definition does not match the expected schema.\n\
-         To resolve this issue, drop the existing table. A new table with the correct schema will be created automatically on the next access.",
-                db_path = duckdb.pool.db_path(),
-                table_name = duckdb.table_name
-            );
-        }
+        // if !table_schema_matches {
+        //     tracing::warn!(
+        //         "Schema mismatch detected for table '{table_name}' in database '{db_path}'.\n\
+        //  The local table definition does not match the expected schema.\n\
+        //  To resolve this issue, drop the existing table. A new table with the correct schema will be created automatically on the next access.",
+        //         db_path = duckdb.pool.db_path(),
+        //         table_name = duckdb.table_name
+        //     );
+        // }
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
@@ -417,6 +425,7 @@ pub struct DuckDB {
     table_creator: Option<TableCreator>,
     // Indicates whether the table has been newly created and is empty
     is_empty: Arc<AtomicBool>,
+    original_table_name: String,
 }
 
 impl std::fmt::Debug for DuckDB {
@@ -437,6 +446,7 @@ impl DuckDB {
         schema: SchemaRef,
         constraints: Constraints,
         is_empty: bool,
+        original_table_name: String,
     ) -> Self {
         Self {
             table_name,
@@ -445,6 +455,26 @@ impl DuckDB {
             constraints,
             table_creator: None,
             is_empty: Arc::new(AtomicBool::new(is_empty)),
+            original_table_name,
+        }
+    }
+
+    #[must_use]
+    pub fn with_creator(mut self, table_creator: TableCreator) -> Self {
+        self.table_creator = Some(table_creator);
+        self
+    }
+
+    #[must_use]
+    pub fn existing_table_like_self(&self, table_name: String) -> Self {
+        Self {
+            table_name,
+            pool: Arc::clone(&self.pool),
+            schema: Arc::clone(&self.schema),
+            constraints: self.constraints.clone(),
+            table_creator: self.table_creator.clone(),
+            is_empty: Arc::new(AtomicBool::new(false)),
+            original_table_name: self.original_table_name.clone(),
         }
     }
 
@@ -515,6 +545,34 @@ impl DuckDB {
         Ok(())
     }
 
+    /// Lists the latest internal data table, based on the unix timestamp
+    /// Internal data table names are like `__data_{original_table_name}_{timestamp}`
+    fn get_latest_data_table(&self, transaction: &Transaction<'_>) -> Result<Option<String>> {
+        let sql = format!("select table_name from duckdb_tables() where table_name LIKE '__data_{original_table_name}%'", original_table_name = self.original_table_name);
+        let mut stmt = transaction.prepare(&sql).context(UnableToQueryDataSnafu)?;
+        let mut rows = stmt.query([]).context(UnableToQueryDataSnafu)?;
+
+        let mut table_names = Vec::new();
+        while let Some(row) = rows.next().context(UnableToQueryDataSnafu)? {
+            let table_name = row
+                .get::<usize, String>(0)
+                .context(UnableToQueryDataSnafu)?;
+            let Some(timestamp) = table_name.split('_').last() else {
+                continue;
+            };
+
+            let timestamp = timestamp
+                .parse::<u64>()
+                .context(UnableToParseSystemTimeSnafu)?;
+
+            table_names.push((table_name, timestamp));
+        }
+
+        table_names.sort_by(|a, b| a.1.cmp(&b.1));
+
+        Ok(table_names.last().map(|(table_name, _)| table_name.clone()))
+    }
+
     fn insert_batch_no_constraints(
         &self,
         transaction: &Transaction<'_>,
@@ -543,9 +601,9 @@ impl DuckDB {
         Ok(())
     }
 
-    fn apply_constraints_and_indexes(&self, transaction: &Transaction<'_>) -> Result<()> {
+    fn apply_indexes(&self, transaction: &Transaction<'_>) -> Result<()> {
         if let Some(table_creator) = &self.table_creator {
-            table_creator.apply_constraints_and_indexes(transaction)
+            table_creator.apply_indexes(transaction, self.table_name())
         } else {
             Ok(())
         }
@@ -716,11 +774,12 @@ impl DuckDBTableFactory {
 
         let table_name = table_reference.to_string();
         let duckdb = DuckDB::existing_table(
-            table_name,
+            table_name.clone(),
             Arc::clone(&self.pool),
             schema,
             Constraints::empty(),
             false,
+            table_name,
         );
 
         Ok(DuckDBTableWriter::create(read_provider, duckdb, None))

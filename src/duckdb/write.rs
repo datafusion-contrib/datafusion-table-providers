@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::{any::Any, fmt, sync::Arc};
 
+use crate::duckdb::creator::TableCreator;
 use crate::duckdb::DuckDB;
 use crate::util::{
     constraints,
@@ -122,6 +123,7 @@ impl DataSink for DuckDBDataSink {
         None
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn write_all(
         &self,
         mut data: SendableRecordBatchStream,
@@ -153,59 +155,78 @@ impl DataSink for DuckDBDataSink {
                     .conn
                     .transaction()
                     .context(super::UnableToBeginTransactionSnafu)
-                    .map_err(to_datafusion_error)?;
+                    .map_err(to_retriable_data_write_error)?;
 
-                let initial_load = duckdb.is_empty.load(Ordering::Relaxed);
-
-                let num_rows = match (initial_load, &**duckdb.constraints()) {
-                    (true, _) | (false, &[]) => try_write_all_no_constraints(
-                        Arc::clone(&duckdb),
-                        &tx,
-                        batch_rx,
-                        overwrite,
-                        initial_load,
-                    )?,
-                    (false, _) => try_write_all_with_constraints(
-                        Arc::clone(&duckdb),
-                        &tx,
-                        batch_rx,
-                        overwrite,
-                        on_conflict,
-                    )?,
+                let Some(ref table_creator) = duckdb.table_creator else {
+                    unreachable!();
                 };
+
+                let latest_data_table = duckdb
+                    .get_latest_data_table(&tx)
+                    .map_err(to_retriable_data_write_error)?
+                    .map(|table| duckdb.existing_table_like_self(table));
+
+                let new_table = Arc::new(
+                    table_creator
+                        .create_empty_clone(&tx)
+                        .map_err(to_retriable_data_write_error)?,
+                );
+
+                tracing::debug!("Initial load for {}", new_table.table_name());
+
+                let num_rows = write_to_table(&new_table, &tx, batch_rx)?;
+
+                if matches!(overwrite, InsertOp::Append) {
+                    if let Some(existing_table) = latest_data_table.as_ref() {
+                        existing_table
+                            .insert_table_into(&tx, &new_table, on_conflict.as_ref())
+                            .map_err(to_datafusion_error)?;
+                    } else {
+                        tracing::debug!(
+                            "Append was requested, but no existing table was found to append from."
+                        );
+                    }
+                }
 
                 on_commit_transaction
                     .try_recv()
                     .map_err(to_retriable_data_write_error)?;
+
+                if let Some(existing_table) = latest_data_table {
+                    let table_name = existing_table.table_name();
+                    let Some(ref existing_table_creator) = existing_table.table_creator else {
+                        unreachable!()
+                    };
+
+                    existing_table_creator
+                        .delete_table_named(&tx, table_name)
+                        .map_err(to_datafusion_error)?;
+                }
 
                 tx.commit()
                     .context(super::UnableToCommitTransactionSnafu)
                     .map_err(to_retriable_data_write_error)?;
 
                 // If this was the initial load of the table, we need to apply constraints and indexes.
-                if initial_load {
-                    tracing::debug!(
-                        "Initial load for table {} complete, applying constraints and indexes.",
-                        duckdb.table_name()
-                    );
-                    // Mark the table as no longer empty.
-                    duckdb.is_empty.store(false, Ordering::Relaxed);
+                tracing::debug!(
+                    "Initial load for table {table_name} complete, applying constraints and indexes.",
+                    table_name = new_table.table_name()
+                );
 
-                    let tx = duckdb_conn
-                        .conn
-                        .transaction()
-                        .context(super::UnableToBeginTransactionSnafu)
-                        .map_err(to_datafusion_error)?;
+                let tx = duckdb_conn
+                    .conn
+                    .transaction()
+                    .context(super::UnableToBeginTransactionSnafu)
+                    .map_err(to_datafusion_error)?;
 
-                    // Apply constraints and indexes.
-                    duckdb
-                        .apply_constraints_and_indexes(&tx)
-                        .map_err(to_retriable_data_write_error)?;
+                // Apply constraints and indexes.
+                new_table
+                    .apply_indexes(&tx)
+                    .map_err(to_retriable_data_write_error)?;
 
-                    tx.commit()
-                        .context(super::UnableToCommitTransactionSnafu)
-                        .map_err(to_retriable_data_write_error)?;
-                }
+                tx.commit()
+                    .context(super::UnableToCommitTransactionSnafu)
+                    .map_err(to_retriable_data_write_error)?;
 
                 Ok(num_rows)
             });
@@ -367,6 +388,50 @@ fn try_write_all_no_constraints(
             .insert_batch_no_constraints(tx, &batch)
             .map_err(to_datafusion_error)?;
     }
+
+    Ok(num_rows)
+}
+
+fn write_to_table(
+    duckdb: &Arc<DuckDB>,
+    tx: &Transaction<'_>,
+    mut data_batches: Receiver<RecordBatch>,
+) -> datafusion::common::Result<u64> {
+    let mut num_rows = 0;
+    let mut appender = tx
+        .appender(duckdb.table_name())
+        .context(super::UnableToGetAppenderToDuckDBTableSnafu)
+        .map_err(to_datafusion_error)?;
+
+    while let Some(batch) = data_batches.blocking_recv() {
+        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
+            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
+        })?;
+
+        for batch in DuckDB::split_batch(&batch) {
+            appender
+                .append_record_batch(batch.clone())
+                .context(super::UnableToInsertToDuckDBTableSnafu)
+                .map_err(to_datafusion_error)?;
+        }
+
+        appender
+            .flush()
+            .context(super::UnableToInsertToDuckDBTableSnafu)
+            .map_err(to_datafusion_error)?;
+    }
+
+    let _ = tx
+        .execute(
+            &format!(
+                "CREATE OR REPLACE VIEW {} AS SELECT * FROM {}",
+                duckdb.original_table_name,
+                duckdb.table_name()
+            ),
+            [],
+        )
+        .context(super::UnableToCreateDuckDBTableSnafu)
+        .map_err(to_datafusion_error)?;
 
     Ok(num_rows)
 }
