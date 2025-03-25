@@ -33,6 +33,57 @@ pub enum Error {
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
+pub struct DuckDbConnectionPoolBuilder<'a> {
+    path: String,
+    connection_pool_size: Option<u32>,
+    access_mode: &'a AccessMode,
+}
+
+impl<'a> Default for DuckDbConnectionPoolBuilder<'a> {
+    fn default() -> Self {
+        Self {
+            path: String::default(),
+            connection_pool_size: None,
+            access_mode: &AccessMode::ReadWrite,
+        }
+    }
+}
+
+impl<'a> DuckDbConnectionPoolBuilder<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_connection_pool_size(mut self, size: Option<u32>) -> Self {
+        self.connection_pool_size = size;
+        self
+    }
+
+    pub fn with_access_mode(mut self, access_mode: &'a AccessMode) -> Self {
+        self.access_mode = access_mode;
+        self
+    }
+
+    pub fn with_file_path(mut self, path: &str) -> Self {
+        self.path = path.to_string();
+        self
+    }
+
+    /// Create an in-memory database connection pool
+    pub fn build_memory(self) -> Result<DuckDbConnectionPool> {
+        DuckDbConnectionPool::new_memory_internal(self.connection_pool_size)
+    }
+
+    /// Create a file-based database connection pool
+    pub fn build_file(self) -> Result<DuckDbConnectionPool> {
+        DuckDbConnectionPool::new_file_internal(
+            self.path.as_str(),
+            self.access_mode,
+            self.connection_pool_size,
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct DuckDbConnectionPool {
     path: Arc<str>,
@@ -61,21 +112,7 @@ impl DuckDbConnectionPool {
         self.path.as_ref()
     }
 
-    /// Create a new `DuckDbConnectionPool` from memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `access_mode` - The access mode for the connection pool
-    ///
-    /// # Returns
-    ///
-    /// * A new `DuckDbConnectionPool`
-    ///
-    /// # Errors
-    ///
-    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
-    /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    pub fn new_memory(connection_pool_size: Option<u32>) -> Result<Self> {
+    fn new_memory_internal(connection_pool_size: Option<u32>) -> Result<Self> {
         let config = get_config(&AccessMode::ReadWrite)?;
         let manager =
             DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
@@ -105,22 +142,7 @@ impl DuckDbConnectionPool {
         })
     }
 
-    /// Create a new `DuckDbConnectionPool` from a file.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path to the file
-    /// * `access_mode` - The access mode for the connection pool
-    ///
-    /// # Returns
-    ///
-    /// * A new `DuckDbConnectionPool`
-    ///
-    /// # Errors
-    ///
-    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
-    /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
-    pub fn new_file(
+    fn new_file_internal(
         path: &str,
         access_mode: &AccessMode,
         connection_pool_size: Option<u32>,
@@ -153,6 +175,43 @@ impl DuckDbConnectionPool {
             mode: Mode::File,
             unsupported_type_action: UnsupportedTypeAction::Error,
         })
+    }
+
+    /// Create a new `DuckDbConnectionPool` from memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `access_mode` - The access mode for the connection pool
+    ///
+    /// # Returns
+    ///
+    /// * A new `DuckDbConnectionPool`
+    ///
+    /// # Errors
+    ///
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
+    /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
+    pub fn new_memory() -> Result<Self> {
+        Self::new_memory_internal(None)
+    }
+
+    /// Create a new `DuckDbConnectionPool` from a file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the file
+    /// * `access_mode` - The access mode for the connection pool
+    ///
+    /// # Returns
+    ///
+    /// * A new `DuckDbConnectionPool`
+    ///
+    /// # Errors
+    ///
+    /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
+    /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
+    pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
+        Self::new_file_internal(path, access_mode, None)
     }
 
     #[must_use]
@@ -303,7 +362,7 @@ mod test {
     #[tokio::test]
     async fn test_duckdb_connection_pool() {
         let pool =
-            DuckDbConnectionPool::new_memory(None).expect("DuckDB connection pool to be created");
+            DuckDbConnectionPool::new_memory().expect("DuckDB connection pool to be created");
         let conn = pool
             .connect()
             .await
@@ -326,12 +385,12 @@ mod test {
     async fn test_duckdb_connection_pool_with_attached_databases() {
         let db_base_name = random_db_name();
         let db_attached_name = random_db_name();
-        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite, None)
+        let pool = DuckDbConnectionPool::new_file(&db_base_name, &AccessMode::ReadWrite)
             .expect("DuckDB connection pool to be created")
             .set_attached_databases(&[Arc::from(db_attached_name.as_str())]);
 
         let pool_attached =
-            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite, None)
+            DuckDbConnectionPool::new_file(&db_attached_name, &AccessMode::ReadWrite)
                 .expect("DuckDB connection pool to be created")
                 .set_attached_databases(&[Arc::from(db_base_name.as_str())]);
 

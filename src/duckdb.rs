@@ -16,7 +16,7 @@ use crate::{
             },
             get_schema, DbConnection,
         },
-        duckdbpool::DuckDbConnectionPool,
+        duckdbpool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder},
         DbConnectionPool, DbInstanceKey, Mode,
     },
     UnsupportedTypeAction,
@@ -235,7 +235,9 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_memory(connection_pool_size)
+        let pool = DuckDbConnectionPoolBuilder::default()
+            .with_connection_pool_size(connection_pool_size)
+            .build_memory()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 
@@ -257,10 +259,13 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool =
-            DuckDbConnectionPool::new_file(&db_path, &self.access_mode, connection_pool_size)
-                .context(DbConnectionPoolSnafu)?
-                .with_unsupported_type_action(self.unsupported_type_action);
+        let pool = DuckDbConnectionPoolBuilder::default()
+            .with_access_mode(&self.access_mode)
+            .with_file_path(&db_path)
+            .with_connection_pool_size(connection_pool_size)
+            .build_file()
+            .context(DbConnectionPoolSnafu)?
+            .with_unsupported_type_action(self.unsupported_type_action);
 
         instances.insert(key, pool.clone());
 
