@@ -747,49 +747,49 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_list_related_tables_from_definition() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_list_related_tables_from_creator() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_create_view() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_tables_ddl() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_insert_into_tables() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_indexes() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_indexes_ddl() {
         todo!();
     }
 
     #[tokio::test]
-    #[skip]
+    #[ignore]
     async fn test_lists_base_table_from_definition() {
         todo!();
     }
