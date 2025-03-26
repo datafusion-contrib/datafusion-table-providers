@@ -123,9 +123,17 @@ impl TableDefinition {
             let table_name = row
                 .get::<usize, String>(0)
                 .context(super::UnableToQueryDataSnafu)?;
-            let Some(timestamp) = table_name.split('_').last() else {
+            // __data_{table_name}% could be a subset of another table name, so we need to check if the table name starts with the table definition name
+            let inner_name = table_name.replace("__data_", "");
+            let mut parts = inner_name.split('_');
+            let Some(timestamp) = parts.next_back() else {
                 continue; // skip invalid table names
             };
+
+            let inner_name = parts.join("_");
+            if inner_name != self.name.to_string() {
+                continue;
+            }
 
             let timestamp = timestamp
                 .parse::<u64>()
@@ -1516,5 +1524,61 @@ pub(crate) mod tests {
         assert!(schema.equivalent_names_and_types(&schema2));
 
         tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_internal_tables_exclude_subsets_of_other_tables() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+        let other_definition = Arc::new(TableDefinition::new(
+            RelationName::new("test_table_second"),
+            Arc::clone(&table_definition.schema),
+        ));
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make an internal table for each definition
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let other_table_creator = TableManager::new(Arc::clone(&other_definition))
+            .with_internal(true)
+            .expect("to create table creator");
+
+        other_table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // each table should not list the other as an internal table
+        let first_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("should list internal tables");
+        let second_tables = other_definition
+            .list_internal_tables(&tx)
+            .expect("should list internal tables");
+
+        assert_eq!(first_tables.len(), 1);
+        assert_eq!(second_tables.len(), 1);
+
+        assert_ne!(
+            first_tables.first().expect("should have a table").0,
+            second_tables.first().expect("should have a table").0
+        );
     }
 }
