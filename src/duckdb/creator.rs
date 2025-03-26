@@ -75,8 +75,7 @@ impl TableDefinition {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn name(&self) -> &RelationName {
+    pub fn name(&self) -> &RelationName {
         &self.name
     }
 
