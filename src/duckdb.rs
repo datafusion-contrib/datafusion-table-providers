@@ -637,7 +637,7 @@ async fn apply_temp_directory(
     Ok(())
 }
 
-fn make_initial_table(
+pub(crate) fn make_initial_table(
     table_definition: Arc<TableDefinition>,
     pool: &Arc<DuckDbConnectionPool>,
 ) -> DataFusionResult<()> {

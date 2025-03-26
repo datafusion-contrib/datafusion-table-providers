@@ -725,8 +725,11 @@ impl ViewCreator {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::sql::db_connection_pool::{
-        dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+    use crate::{
+        duckdb::make_initial_table,
+        sql::db_connection_pool::{
+            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+        },
     };
     use arrow::array::RecordBatch;
     use datafusion::{
@@ -828,6 +831,9 @@ pub(crate) mod tests {
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
+
+            make_initial_table(Arc::clone(&table_definition), &pool)
+                .expect("to make initial table");
 
             let duckdb_sink = DuckDBDataSink::new(
                 Arc::clone(&pool),
@@ -938,6 +944,10 @@ pub(crate) mod tests {
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
+
+            make_initial_table(Arc::clone(&table_definition), &pool)
+                .expect("to make initial table");
+
             let duckdb_sink = DuckDBDataSink::new(
                 Arc::clone(&pool),
                 Arc::clone(&table_definition),
