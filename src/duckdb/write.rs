@@ -10,7 +10,7 @@ use crate::util::{
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::Constraints;
+use datafusion::common::{Constraints, SchemaExt};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
@@ -238,35 +238,73 @@ impl DataSink for DuckDBDataSink {
                 let num_rows = write_to_table(&new_table, &tx, batch_rx)
                     .map_err(to_retriable_data_write_error)?;
 
-                // TODO: validate schema of these incoming tables to see if they match?
                 let existing_tables = new_table
                     .list_internal_tables(&tx)
                     .map_err(to_retriable_data_write_error)?;
                 let base_table = new_table
                     .base_table(&tx)
                     .map_err(to_retriable_data_write_error)?;
-                if matches!(overwrite, InsertOp::Append) {
-                    match (existing_tables.last(), base_table.as_ref()) {
-                        (Some((latest_table, _)), None) | (None, Some(latest_table)) => {
-                            tracing::debug!(
-                                "Inserting from {} into {}",
-                                latest_table.table_name(),
-                                new_table.table_name()
-                            );
-                            latest_table
-                                .insert_into(&new_table, &tx, on_conflict.as_ref())
-                                .map_err(to_retriable_data_write_error)?;
-                        }
-                        (None, None) => {
-                            tracing::debug!(
-                                "Append was requested, but no existing table was found to append from."
-                            );
-                        }
-                        _ => {
-                            return Err(DataFusionError::Execution(
-                                "Append was requested, but both an existing table and a base table were found to append from.".to_string(),
-                            ));
-                        }
+                let last_table = match (existing_tables.last(), base_table.as_ref()) {
+                    (Some(internal_table), Some(base_table)) => {
+                        return Err(DataFusionError::Execution(
+                            format!("Failed to insert data for DuckDB - both an internal table and definition base table were found.\nManual table migration is required - delete the table '{internal_table}' or '{base_table}' and try again.",
+                            internal_table = internal_table.0.table_name(),
+                            base_table = base_table.table_name())));
+                    }
+                    (Some((table, _)), None) | (None, Some(table)) => Some(table),
+                    (None, None) => None,
+                };
+
+                if matches!(overwrite, InsertOp::Append) && last_table.is_none() {
+                    tracing::debug!(
+                        "Append was requested, but no existing table was found to append from."
+                    );
+                }
+
+                if let Some(last_table) = last_table {
+                    // compare indexes and primary keys
+                    let primary_keys_match = new_table
+                        .verify_primary_keys_match(last_table, &tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let indexes_match = new_table
+                        .verify_indexes_match(last_table, &tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let last_table_schema = last_table
+                        .current_schema(&tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let new_table_schema = new_table
+                        .current_schema(&tx)
+                        .map_err(to_retriable_data_write_error)?;
+
+                    if !new_table_schema.equivalent_names_and_types(&last_table_schema) {
+                        return Err(DataFusionError::Execution(
+                            "Schema does not match between the new table and the existing table."
+                                .to_string(),
+                        ));
+                    }
+
+                    if !primary_keys_match {
+                        return Err(DataFusionError::Execution(
+                            "Primary keys do not match between the new table and the existing table.".to_string(),
+                        ));
+                    }
+
+                    if !indexes_match {
+                        return Err(DataFusionError::Execution(
+                            "Indexes do not match between the new table and the existing table."
+                                .to_string(),
+                        ));
+                    }
+
+                    if matches!(overwrite, InsertOp::Append) {
+                        tracing::debug!(
+                            "Inserting from {} into {}",
+                            last_table.table_name(),
+                            new_table.table_name()
+                        );
+                        last_table
+                            .insert_into(&new_table, &tx, on_conflict.as_ref())
+                            .map_err(to_retriable_data_write_error)?;
                     }
                 }
 

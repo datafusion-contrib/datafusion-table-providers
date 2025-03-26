@@ -375,30 +375,6 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .with_pool(Arc::new(pool))
             .set_on_conflict(on_conflict);
 
-        // TODO: re-implement schema validation between tables in the new table->view world
-        // If the table is already created, we don't create it again and don't apply primary keys and remove previously created indexes (if any).
-        // Thus we verify that primary keys and indexes for the table created match the configuration.
-        // let mut table_schema_matches = true;
-        // table_schema_matches &= duckdb
-        //     .verify_primary_keys_match()
-        //     .await
-        //     .map_err(to_datafusion_error)?;
-
-        // table_schema_matches &= duckdb
-        //     .verify_indexes_match(&indexes)
-        //     .await
-        //     .map_err(to_datafusion_error)?;
-
-        // if !table_schema_matches {
-        //     tracing::warn!(
-        //         "Schema mismatch detected for table '{table_name}' in database '{db_path}'.\n\
-        //  The local table definition does not match the expected schema.\n\
-        //  To resolve this issue, drop the existing table. A new table with the correct schema will be created automatically on the next access.",
-        //         db_path = duckdb.pool.db_path(),
-        //         table_name = duckdb.table_name
-        //     );
-        // }
-
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
         if let Some(memory_limit) = options.get("memory_limit") {
@@ -506,98 +482,6 @@ impl DuckDB {
             });
         result
     }
-
-    // pub async fn verify_primary_keys_match(&self) -> Result<bool> {
-    //     let expected_pk_keys_str_map: HashSet<String> =
-    //         get_primary_keys_from_constraints(&self.constraints, &self.schema)
-    //             .into_iter()
-    //             .collect();
-
-    //     let mut db_conn = self.connect_sync()?;
-
-    //     let actual_pk_keys_str_map = TableCreator::get_existing_primary_keys(
-    //         DuckDB::duckdb_conn(&mut db_conn)?,
-    //         &self.table_name,
-    //     )
-    //     .await?;
-
-    //     tracing::debug!(
-    //         "Expected primary keys: {:?}\nActual primary keys: {:?}",
-    //         expected_pk_keys_str_map,
-    //         actual_pk_keys_str_map
-    //     );
-
-    //     let missing_in_actual = expected_pk_keys_str_map
-    //         .difference(&actual_pk_keys_str_map)
-    //         .collect::<Vec<_>>();
-    //     let extra_in_actual = actual_pk_keys_str_map
-    //         .difference(&expected_pk_keys_str_map)
-    //         .collect::<Vec<_>>();
-
-    //     if !missing_in_actual.is_empty() {
-    //         tracing::warn!(
-    //             "Missing primary key(s) detected for the table '{name}': {:?}.",
-    //             missing_in_actual.iter().join(", "),
-    //             name = self.table_name
-    //         );
-    //     }
-
-    //     if !extra_in_actual.is_empty() {
-    //         tracing::warn!(
-    //             "The table '{name}' has unexpected primary key(s) not defined in the configuration: {:?}.",
-    //             extra_in_actual.iter().join(", "),
-    //             name = self.table_name
-    //         );
-    //     }
-
-    //     Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
-    // }
-
-    // async fn verify_indexes_match(&self, indexes: &[(ColumnReference, IndexType)]) -> Result<bool> {
-    //     let expected_indexes_str_map: HashSet<String> = indexes
-    //         .iter()
-    //         .map(|index| TableCreator::get_index_name(&self.table_name, index))
-    //         .collect();
-
-    //     let mut db_conn = self.connect_sync()?;
-
-    //     let actual_indexes_str_map = TableCreator::get_existing_indexes(
-    //         DuckDB::duckdb_conn(&mut db_conn)?,
-    //         &self.table_name,
-    //     )
-    //     .await?;
-
-    //     tracing::debug!(
-    //         "Expected indexes: {:?}\nActual indexes: {:?}",
-    //         expected_indexes_str_map,
-    //         actual_indexes_str_map
-    //     );
-
-    //     let missing_in_actual = expected_indexes_str_map
-    //         .difference(&actual_indexes_str_map)
-    //         .collect::<Vec<_>>();
-    //     let extra_in_actual = actual_indexes_str_map
-    //         .difference(&expected_indexes_str_map)
-    //         .collect::<Vec<_>>();
-
-    //     if !missing_in_actual.is_empty() {
-    //         tracing::warn!(
-    //             "Missing index(es) detected for the table '{name}': {:?}.",
-    //             missing_in_actual.iter().join(", "),
-    //             name = self.table_name
-    //         );
-    //     }
-    //     if !extra_in_actual.is_empty() {
-    //         tracing::warn!(
-    //             "Unexpected index(es) detected in table '{name}': {}.\n\
-    //  These indexes are not defined in the configuration.",
-    //             extra_in_actual.iter().join(", "),
-    //             name = self.table_name
-    //         );
-    //     }
-
-    //     Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
-    // }
 }
 
 fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<String> {
