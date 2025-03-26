@@ -101,6 +101,25 @@ impl TableDefinition {
         self.constraints.as_ref()
     }
 
+    /// Returns true if this table definition has a base table matching the exact `RelationName` of the definition
+    ///
+    /// # Errors
+    ///
+    /// If the transaction fails to query for whether the table exists.
+    pub fn has_table(&self, tx: &Transaction<'_>) -> super::Result<bool> {
+        let mut stmt = tx
+            .prepare("SELECT 1 FROM duckdb_tables() WHERE table_name = ?")
+            .context(super::UnableToQueryDataSnafu)?;
+        let mut rows = stmt
+            .query([self.name.to_string()])
+            .context(super::UnableToQueryDataSnafu)?;
+
+        Ok(rows
+            .next()
+            .context(super::UnableToQueryDataSnafu)?
+            .is_some())
+    }
+
     /// List all internal tables related to this table definition.
     ///
     /// # Errors
