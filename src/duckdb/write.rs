@@ -472,6 +472,17 @@ fn insert_overwrite(
     };
 
     if let Some(last_table) = last_table {
+        let should_have_indexes = !last_table.indexes_vec().is_empty();
+        let has_indexes = !last_table
+            .current_indexes(&tx)
+            .map_err(to_retriable_data_write_error)?
+            .is_empty();
+        let is_empty_table = last_table
+            .get_row_count(&tx)
+            .map_err(to_retriable_data_write_error)?
+            == 0;
+        let should_apply_indexes = should_have_indexes && !has_indexes && is_empty_table;
+
         // compare indexes and primary keys
         let primary_keys_match = new_table
             .verify_primary_keys_match(last_table, &tx)
@@ -494,17 +505,19 @@ fn insert_overwrite(
             ));
         }
 
-        if !primary_keys_match {
-            return Err(DataFusionError::Execution(
+        if !should_apply_indexes {
+            if !primary_keys_match {
+                return Err(DataFusionError::Execution(
                 "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
                     .to_string(),
             ));
-        }
+            }
 
-        if !indexes_match {
-            return Err(DataFusionError::Execution(
+            if !indexes_match {
+                return Err(DataFusionError::Execution(
                 "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
             ));
+            }
         }
     }
 
