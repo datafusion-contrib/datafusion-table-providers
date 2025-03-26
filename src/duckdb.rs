@@ -22,6 +22,7 @@ use crate::{
 };
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use creator::TableManager;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
@@ -377,9 +378,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 .with_constraints(cmd.constraints.clone())
                 .with_indexes(indexes.clone());
 
+        let pool = Arc::new(pool);
+        make_initial_table(Arc::new(table_definition.clone()), &pool)?;
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(table_definition)
-            .with_pool(Arc::new(pool))
+            .with_pool(pool)
             .set_on_conflict(on_conflict);
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
@@ -630,6 +634,51 @@ async fn apply_temp_directory(
         &format!("SET {DUCKDB_SETTING_TEMP_DIRECTORY} = '{temp_directory}'"),
         &[],
     )?;
+    Ok(())
+}
+
+fn make_initial_table(
+    table_definition: Arc<TableDefinition>,
+    pool: &Arc<DuckDbConnectionPool>,
+) -> DataFusionResult<()> {
+    let cloned_pool = Arc::clone(&pool);
+    let mut db_conn = Arc::clone(&cloned_pool)
+        .connect_sync()
+        .context(DbConnectionPoolSnafu)
+        .map_err(to_datafusion_error)?;
+
+    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_datafusion_error)?;
+
+    let tx = duckdb_conn
+        .conn
+        .transaction()
+        .context(UnableToBeginTransactionSnafu)
+        .map_err(to_datafusion_error)?;
+
+    let has_table = table_definition
+        .has_table(&tx)
+        .map_err(to_datafusion_error)?;
+    let internal_tables = table_definition
+        .list_internal_tables(&tx)
+        .map_err(to_datafusion_error)?;
+
+    if has_table || !internal_tables.is_empty() {
+        return Ok(());
+    }
+
+    let table_manager = TableManager::new(table_definition);
+
+    table_manager
+        .create_table(cloned_pool, &tx)
+        .map_err(to_datafusion_error)?;
+    table_manager
+        .create_indexes(&tx)
+        .map_err(to_datafusion_error)?;
+
+    tx.commit()
+        .context(UnableToCommitTransactionSnafu)
+        .map_err(to_datafusion_error)?;
+
     Ok(())
 }
 
