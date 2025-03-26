@@ -211,7 +211,7 @@ impl TableManager {
             .collect()
     }
 
-    /// Creates the table for this `TableCreator`. Does not create indexes - use `TableCreator::create_indexes` to apply indexes.
+    /// Creates the table for this `TableManager`. Does not create indexes - use `TableManager::create_indexes` to apply indexes.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn create_table(
         &self,
@@ -397,7 +397,7 @@ impl TableManager {
         Ok(create_stmt)
     }
 
-    /// List all internal tables related to this table creators table definition.
+    /// List all internal tables related to this table manager's table definition.
     /// Excludes itself from the list of tables, if created.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn list_other_internal_tables(
