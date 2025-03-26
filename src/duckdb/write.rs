@@ -221,7 +221,7 @@ impl DataSink for DuckDBDataSink {
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
                 let num_rows = match overwrite {
-                    InsertOp::Overwrite | InsertOp::Replace => insert_overwrite(
+                    InsertOp::Overwrite => insert_overwrite(
                         pool,
                         &table_definition,
                         batch_rx,
@@ -229,7 +229,7 @@ impl DataSink for DuckDBDataSink {
                         on_commit_transaction,
                         schema,
                     )?,
-                    InsertOp::Append => insert_append(
+                    InsertOp::Append | InsertOp::Replace => insert_append(
                         pool,
                         &table_definition,
                         batch_rx,
