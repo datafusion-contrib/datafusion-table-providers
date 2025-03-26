@@ -194,7 +194,6 @@ impl DataSink for DuckDBDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        // let duckdb = Arc::clone(&self.duckdb);
         let pool = Arc::clone(&self.pool);
         let table_definition = Arc::clone(&self.table_definition);
         let overwrite = self.overwrite;
