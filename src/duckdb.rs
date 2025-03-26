@@ -20,7 +20,7 @@ use crate::{
     },
     UnsupportedTypeAction,
 };
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
@@ -34,7 +34,7 @@ use datafusion::{
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
 use snafu::prelude::*;
-use std::{cmp, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use write::DuckDBTableWriterBuilder;
 
@@ -151,6 +151,12 @@ pub enum Error {
 
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
+
+    #[snafu(display("Failed to register Arrow scan view for DuckDB ingestion: {source}"))]
+    UnableToRegisterArrowScanView { source: duckdb::Error },
+
+    #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
+    UnableToDropArrowScanView { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -468,19 +474,6 @@ impl DuckDB {
             .as_any_mut()
             .downcast_mut::<DuckDbConnection>()
             .context(UnableToDowncastDbConnectionSnafu)
-    }
-
-    const MAX_BATCH_SIZE: usize = 2048;
-
-    fn split_batch(batch: &RecordBatch) -> Vec<RecordBatch> {
-        let mut result = vec![];
-        (0..=batch.num_rows())
-            .step_by(Self::MAX_BATCH_SIZE)
-            .for_each(|offset| {
-                let length = cmp::min(Self::MAX_BATCH_SIZE, batch.num_rows() - offset);
-                result.push(batch.slice(offset, length));
-            });
-        result
     }
 }
 

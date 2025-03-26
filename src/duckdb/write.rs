@@ -1,3 +1,4 @@
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
@@ -7,7 +8,10 @@ use crate::util::{
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
+use arrow::array::RecordBatchReader;
+use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::{Constraints, SchemaExt};
@@ -208,6 +212,8 @@ impl DataSink for DuckDBDataSink {
         let (notify_commit_transaction, mut on_commit_transaction) =
             tokio::sync::oneshot::channel();
 
+        let schema = data.schema();
+
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
                 let cloned_pool = Arc::clone(&pool);
@@ -234,7 +240,7 @@ impl DataSink for DuckDBDataSink {
                     .map_err(to_retriable_data_write_error)?;
 
                 tracing::debug!("Initial load for {}", new_table.table_name());
-                let num_rows = write_to_table(&new_table, &tx, batch_rx)
+                let num_rows = write_to_table(&new_table, &tx, schema, batch_rx)
                     .map_err(to_retriable_data_write_error)?;
 
                 let existing_tables = new_table
@@ -434,33 +440,66 @@ impl DisplayAs for DuckDBDataSink {
 fn write_to_table(
     table: &TableCreator,
     tx: &Transaction<'_>,
-    mut data_batches: Receiver<RecordBatch>,
+    schema: SchemaRef,
+    data_batches: Receiver<RecordBatch>,
 ) -> datafusion::common::Result<u64> {
-    let mut num_rows = 0;
-    let mut appender = tx
-        .appender(&table.table_name().to_string())
-        .context(super::UnableToGetAppenderToDuckDBTableSnafu)
+    let stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchReaderFromStream::new(
+        data_batches,
+        schema,
+    )));
+
+    let current_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context(super::UnableToGetSystemTimeSnafu)
+        .map_err(to_datafusion_error)?
+        .as_millis();
+
+    let view_name = format!("__scan_{}_{current_ts}", table.table_name());
+    tx.register_arrow_scan_view(&view_name, &stream)
+        .context(super::UnableToRegisterArrowScanViewSnafu)
         .map_err(to_datafusion_error)?;
 
-    while let Some(batch) = data_batches.blocking_recv() {
-        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
-            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        })?;
-
-        for batch in DuckDB::split_batch(&batch) {
-            appender
-                .append_record_batch(batch.clone())
-                .context(super::UnableToInsertToDuckDBTableSnafu)
-                .map_err(to_datafusion_error)?;
-        }
-    }
-
-    appender
-        .flush()
+    let sql = format!(
+        "INSERT INTO {} SELECT * FROM {view_name}",
+        table.table_name()
+    );
+    let rows = tx
+        .execute(&sql, [])
         .context(super::UnableToInsertToDuckDBTableSnafu)
         .map_err(to_datafusion_error)?;
 
-    Ok(num_rows)
+    // Drop the view
+    let drop_view_sql = format!("DROP VIEW IF EXISTS {view_name}");
+    tx.execute(&drop_view_sql, [])
+        .context(super::UnableToDropArrowScanViewSnafu)
+        .map_err(to_datafusion_error)?;
+
+    Ok(rows as u64)
+}
+
+struct RecordBatchReaderFromStream {
+    stream: Receiver<RecordBatch>,
+    schema: SchemaRef,
+}
+
+impl RecordBatchReaderFromStream {
+    fn new(stream: Receiver<RecordBatch>, schema: SchemaRef) -> Self {
+        Self { stream, schema }
+    }
+}
+
+impl Iterator for RecordBatchReaderFromStream {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stream.blocking_recv().map(Ok)
+    }
+}
+
+impl RecordBatchReader for RecordBatchReaderFromStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }
 
 #[cfg(test)]
