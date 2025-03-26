@@ -19,6 +19,7 @@ use crate::util::{
 };
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct TableDefinition {
     name: TableName,
     schema: SchemaRef,
@@ -26,7 +27,7 @@ pub struct TableDefinition {
     indexes: Vec<(ColumnReference, IndexType)>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct TableCreator {
     table_definition: Arc<TableDefinition>,
     internal_name: TableName,
@@ -746,51 +747,293 @@ pub(crate) mod tests {
         }
     }
 
+    fn get_basic_table_definition() -> Arc<TableDefinition> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        Arc::new(TableDefinition::new(TableName::new("test_table"), schema))
+    }
+
     #[tokio::test]
     #[ignore]
     async fn test_list_related_tables_from_definition() {
-        todo!();
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make 3 internal tables
+        for _ in 0..3 {
+            TableCreator::new(Arc::clone(&table_definition))
+                .expect("to create table creator")
+                .with_internal(true)
+                .create_table(Arc::clone(&pool), &tx)
+                .expect("to create table");
+        }
+
+        // using the table definition, list the names of the internal tables
+        let table_name = table_definition.name.clone();
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("should list internal tables");
+
+        assert_eq!(internal_tables.len(), 3);
+
+        // validate none of the internal tables are the same, they are not equal to the base table
+        let mut seen_tables = vec![];
+        for (internal_table, _) in internal_tables {
+            let internal_name = internal_table.clone();
+            assert_ne!(&internal_name, &table_name);
+            assert!(!seen_tables.contains(&internal_name));
+            seen_tables.push(internal_name);
+        }
+
+        tx.rollback().expect("should rollback transaction");
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_list_related_tables_from_creator() {
-        todo!();
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make 3 internal tables
+        for _ in 0..3 {
+            TableCreator::new(Arc::clone(&table_definition))
+                .expect("to create table creator")
+                .with_internal(true)
+                .create_table(Arc::clone(&pool), &tx)
+                .expect("to create table");
+        }
+
+        // instantiate a new table creator, make it, and list the internal tables
+        let table_creator = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(true);
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let internal_tables = table_creator
+            .list_internal_tables(&tx)
+            .expect("should list internal tables");
+
+        assert_eq!(internal_tables.len(), 3);
+
+        // validate none of the internal tables are the same, they are not equal to the base table, and they are not equal to the internal table that listed them
+        let mut seen_tables = vec![];
+        for (internal_table, _) in &internal_tables {
+            let table_name = internal_table.table_name().clone();
+            assert_ne!(&table_name, table_creator.definition_name());
+            assert_ne!(&table_name, &table_creator.internal_name);
+            assert!(!seen_tables.contains(&table_name));
+            seen_tables.push(table_name);
+        }
+
+        // drop the internal tables except the last one
+        for (internal_table, _) in internal_tables {
+            internal_table.delete_table(&tx).expect("to delete table");
+        }
+
+        // list the internal tables again
+        let internal_tables = table_creator
+            .list_internal_tables(&tx)
+            .expect("should list internal tables");
+
+        assert_eq!(internal_tables.len(), 0);
+
+        tx.rollback().expect("should rollback transaction");
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_create_view() {
-        todo!();
-    }
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_tables_ddl() {
-        todo!();
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make a table
+        let table_creator = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(true);
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // create a view from the internal table
+        table_creator.create_view(&tx).expect("to create view");
+
+        // check if the view exists
+        let view_exists = tx
+            .query_row(
+                "from duckdb_views() select 1 where view_name = ? and not internal",
+                [table_creator.definition_name().to_string()],
+                |r| r.get::<usize, i32>(0),
+            )
+            .expect("to get view");
+
+        assert_eq!(view_exists, 1);
+
+        tx.rollback().expect("should rollback transaction");
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_insert_into_tables() {
-        todo!();
-    }
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_indexes() {
-        todo!();
-    }
+        let table_definition = get_basic_table_definition();
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_indexes_ddl() {
-        todo!();
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make a base table
+        let base_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(false);
+
+        base_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // make an internal table
+        let internal_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(true);
+
+        internal_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // insert some rows directly into the base table
+        let insert_stmt = format!(
+            r#"INSERT INTO "{base_table}" VALUES (1, 'test'), (2, 'test2')"#,
+            base_table = base_table.table_name()
+        );
+
+        tx.execute(&insert_stmt, [])
+            .expect("to insert into base table");
+
+        // insert from the base table into the internal table
+        base_table
+            .insert_into(&internal_table, &tx, None)
+            .expect("to insert into internal table");
+
+        // check if the rows were inserted
+        let rows = tx
+            .query_row(
+                &format!(
+                    r#"SELECT COUNT(1) FROM "{internal_table}""#,
+                    internal_table = internal_table.table_name()
+                ),
+                [],
+                |r| r.get::<usize, u64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(rows, 2);
+
+        tx.rollback().expect("should rollback transaction");
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_lists_base_table_from_definition() {
-        todo!();
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        // make a base table
+        let table_creator = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(false);
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // list the base table from another base table
+        let internal_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(false);
+
+        let base_table = internal_table.base_table(&tx).expect("to get base table");
+
+        assert!(base_table.is_some());
+        assert_eq!(
+            base_table.expect("to be some").table_definition,
+            table_creator.table_definition
+        );
+
+        // list the base table from an internal table
+        let internal_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table creator")
+            .with_internal(true);
+
+        let base_table = internal_table.base_table(&tx).expect("to get base table");
+
+        assert!(base_table.is_some());
+        assert_eq!(
+            base_table.expect("to be some").table_definition,
+            table_creator.table_definition
+        );
+
+        tx.rollback().expect("should rollback transaction");
     }
 }
