@@ -33,7 +33,7 @@ use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use super::creator::{TableCreator, TableDefinition, ViewCreator};
+use super::creator::{TableDefinition, TableManager, ViewCreator};
 use super::{to_datafusion_error, RelationName};
 
 // checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
@@ -339,9 +339,9 @@ fn insert_append(
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
 
-    let append_table = TableCreator::new(Arc::clone(table_definition))
-        .map_err(to_retriable_data_write_error)?
-        .with_internal(false);
+    let append_table = TableManager::new(Arc::clone(table_definition))
+        .with_internal(false)
+        .map_err(to_retriable_data_write_error)?;
 
     let new_table = append_table
         .base_table(&tx)
@@ -447,9 +447,9 @@ fn insert_overwrite(
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
 
-    let new_table = TableCreator::new(Arc::clone(table_definition))
-        .map_err(to_retriable_data_write_error)?
-        .with_internal(true);
+    let new_table = TableManager::new(Arc::clone(table_definition))
+        .with_internal(true)
+        .map_err(to_retriable_data_write_error)?;
 
     new_table
         .create_table(cloned_pool, &tx)
@@ -563,7 +563,7 @@ fn insert_overwrite(
 #[allow(clippy::doc_markdown)]
 /// Writes a stream of ``RecordBatch``es to a DuckDB table.
 fn write_to_table(
-    table: &TableCreator,
+    table: &TableManager,
     tx: &Transaction<'_>,
     schema: SchemaRef,
     data_batches: Receiver<RecordBatch>,
@@ -720,9 +720,9 @@ mod test {
         let tx = duckdb.conn.transaction().expect("to begin transaction");
 
         // make an existing table to overwrite
-        let overwrite_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table")
-            .with_internal(false);
+        let overwrite_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
 
         overwrite_table
             .create_table(Arc::clone(&pool), &tx)
@@ -786,7 +786,7 @@ mod test {
         assert_eq!(rows, 2);
 
         let table_creator =
-            TableCreator::from_table_name(Arc::clone(&table_definition), table_name);
+            TableManager::from_table_name(Arc::clone(&table_definition), table_name);
         let base_table = table_creator.base_table(&tx).expect("to get base table");
 
         assert!(base_table.is_none()); // base table should get deleted
@@ -825,9 +825,9 @@ mod test {
         let tx = duckdb.conn.transaction().expect("to begin transaction");
 
         // make an existing table to overwrite
-        let overwrite_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table")
-            .with_internal(true);
+        let overwrite_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table");
 
         overwrite_table
             .create_table(Arc::clone(&pool), &tx)
@@ -924,9 +924,9 @@ mod test {
         let table_definition = get_basic_table_definition();
 
         // make an existing table to append from
-        let append_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table")
-            .with_internal(false);
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
 
         append_table
             .create_table(Arc::clone(&pool), &tx)
@@ -1012,9 +1012,9 @@ mod test {
         let table_definition = get_basic_table_definition();
 
         // make an existing table to append from
-        let append_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table")
-            .with_internal(false);
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
 
         let duckdb_sink = DuckDBDataSink::new(
             Arc::clone(&pool),
@@ -1103,9 +1103,9 @@ mod test {
         );
 
         // make an existing table to append from
-        let append_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table")
-            .with_internal(false);
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
 
         let duckdb_sink = DuckDBDataSink::new(
             Arc::clone(&pool),

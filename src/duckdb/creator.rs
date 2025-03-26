@@ -145,26 +145,28 @@ impl TableDefinition {
 
 /// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
 #[derive(Debug, Clone)]
-pub(crate) struct TableCreator {
+pub(crate) struct TableManager {
     table_definition: Arc<TableDefinition>,
-    internal_name: RelationName,
-    is_internal: bool,
+    internal_name: Option<RelationName>,
 }
 
-impl TableCreator {
-    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> super::Result<Self> {
-        let internal_name: RelationName = table_definition.generate_internal_name()?;
-        Ok(Self {
+impl TableManager {
+    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> Self {
+        Self {
             table_definition,
-            internal_name,
-            is_internal: false,
-        })
+            internal_name: None,
+        }
     }
 
     /// Set the internal flag for the table creator.
-    pub(crate) fn with_internal(mut self, is_internal: bool) -> Self {
-        self.is_internal = is_internal;
-        self
+    pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
+        if is_internal {
+            self.internal_name = Some(self.table_definition.generate_internal_name()?);
+        } else {
+            self.internal_name = None;
+        }
+
+        Ok(self)
     }
 
     pub(crate) fn definition_name(&self) -> &RelationName {
@@ -173,11 +175,9 @@ impl TableCreator {
 
     /// Returns the canonical name for this table, which is the internal name if the table is internal, or the table name if it is not.
     pub(crate) fn table_name(&self) -> &RelationName {
-        if self.is_internal {
-            &self.internal_name
-        } else {
-            &self.table_definition.name
-        }
+        self.internal_name
+            .as_ref()
+            .unwrap_or_else(|| &self.table_definition.name)
     }
 
     /// Searches if a table by the name specified in the table definition exists in the database.
@@ -196,9 +196,8 @@ impl TableCreator {
             .context(super::UnableToQueryDataSnafu)?
             .is_some()
         {
-            let mut base_table = self.clone();
-            base_table.is_internal = false;
-            Ok(Some(base_table))
+            let base_table = self.clone();
+            Ok(Some(base_table.with_internal(false)?))
         } else {
             Ok(None)
         }
@@ -269,7 +268,7 @@ impl TableCreator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn insert_into(
         &self,
-        table: &TableCreator,
+        table: &TableManager,
         tx: &Transaction<'_>,
         on_conflict: Option<&OnConflict>,
     ) -> super::Result<u64> {
@@ -334,7 +333,7 @@ impl TableCreator {
     #[tracing::instrument(level = "debug", skip_all)]
     fn drop_index(&self, tx: &Transaction<'_>, index: (Vec<&str>, IndexType)) -> super::Result<()> {
         let table_name = self.table_name();
-        let index_name = TableCreator::get_index_name(table_name, &index);
+        let index_name = TableManager::get_index_name(table_name, &index);
 
         let sql = format!(r#"DROP INDEX IF EXISTS "{index_name}""#);
         tracing::debug!("{sql}");
@@ -410,14 +409,15 @@ impl TableCreator {
         Ok(tables
             .into_iter()
             .filter_map(|(name, time_created)| {
-                if name == self.internal_name {
-                    return None;
+                if let Some(internal_name) = &self.internal_name {
+                    if name == *internal_name {
+                        return None;
+                    }
                 }
 
-                let internal_table = TableCreator {
+                let internal_table = TableManager {
                     table_definition: Arc::clone(&self.table_definition),
-                    internal_name: name,
-                    is_internal: true,
+                    internal_name: Some(name),
                 };
                 Some((internal_table, time_created))
             })
@@ -427,7 +427,7 @@ impl TableCreator {
     /// If this table is an internal table, creates a view with the table definition name targeting this table.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
-        if !self.is_internal {
+        if self.internal_name.is_none() {
             return Ok(());
         }
 
@@ -508,15 +508,14 @@ impl TableCreator {
     ) -> Self {
         Self {
             table_definition,
-            internal_name: table_name,
-            is_internal: true,
+            internal_name: Some(table_name),
         }
     }
 
     /// Verifies that the primary keys match between this table creator and another table creator.
     pub(crate) fn verify_primary_keys_match(
         &self,
-        other_table: &TableCreator,
+        other_table: &TableManager,
         tx: &Transaction<'_>,
     ) -> super::Result<bool> {
         let expected_pk_keys_str_map =
@@ -565,13 +564,13 @@ impl TableCreator {
     /// Verifies that the indexes match between this table creator and another table creator.
     pub(crate) fn verify_indexes_match(
         &self,
-        other_table: &TableCreator,
+        other_table: &TableManager,
         tx: &Transaction<'_>,
     ) -> super::Result<bool> {
         let expected_indexes_str_map: HashSet<String> = self
             .indexes_vec()
             .iter()
-            .map(|index| TableCreator::get_index_name(self.table_name(), index))
+            .map(|index| TableManager::get_index_name(self.table_name(), index))
             .collect();
 
         let actual_indexes_str_map = other_table.current_indexes(tx)?;
@@ -645,7 +644,7 @@ impl ViewCreator {
 
     pub(crate) fn insert_into(
         &self,
-        table: &TableCreator,
+        table: &TableManager,
         tx: &Transaction<'_>,
         on_conflict: Option<&OnConflict>,
     ) -> super::Result<u64> {
@@ -833,11 +832,11 @@ pub(crate) mod tests {
                 let internal_table = internal_tables.first().expect("to get internal table");
                 let internal_table = internal_table.0.clone();
 
-                TableCreator::from_table_name(Arc::clone(&table_definition), internal_table.clone())
+                TableManager::from_table_name(Arc::clone(&table_definition), internal_table.clone())
             } else {
-                let table_creator = TableCreator::new(Arc::clone(&table_definition))
-                    .expect("to create table creator")
-                    .with_internal(false);
+                let table_creator = TableManager::new(Arc::clone(&table_definition))
+                    .with_internal(false)
+                    .expect("to create table creator");
 
                 let base_table = table_creator.base_table(&tx).expect("to get base table");
                 assert!(base_table.is_some());
@@ -943,11 +942,11 @@ pub(crate) mod tests {
                 let internal_table = internal_tables.first().expect("to get internal table");
                 let internal_table = internal_table.0.clone();
 
-                TableCreator::from_table_name(Arc::clone(&table_definition), internal_table.clone())
+                TableManager::from_table_name(Arc::clone(&table_definition), internal_table.clone())
             } else {
-                let table_creator = TableCreator::new(Arc::clone(&table_definition))
-                    .expect("to create table creator")
-                    .with_internal(false);
+                let table_creator = TableManager::new(Arc::clone(&table_definition))
+                    .with_internal(false)
+                    .expect("to create table creator");
 
                 let base_table = table_creator.base_table(&tx).expect("to get base table");
                 assert!(base_table.is_some());
@@ -1019,9 +1018,9 @@ pub(crate) mod tests {
 
         // make 3 internal tables
         for _ in 0..3 {
-            TableCreator::new(Arc::clone(&table_definition))
-                .expect("to create table creator")
+            TableManager::new(Arc::clone(&table_definition))
                 .with_internal(true)
+                .expect("to create table creator")
                 .create_table(Arc::clone(&pool), &tx)
                 .expect("to create table");
         }
@@ -1070,17 +1069,17 @@ pub(crate) mod tests {
 
         // make 3 internal tables
         for _ in 0..3 {
-            TableCreator::new(Arc::clone(&table_definition))
-                .expect("to create table creator")
+            TableManager::new(Arc::clone(&table_definition))
                 .with_internal(true)
+                .expect("to create table creator")
                 .create_table(Arc::clone(&pool), &tx)
                 .expect("to create table");
         }
 
         // instantiate a new table creator, make it, and list the internal tables
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
@@ -1097,7 +1096,7 @@ pub(crate) mod tests {
         for (internal_table, _) in &internal_tables {
             let table_name = internal_table.table_name().clone();
             assert_ne!(&table_name, table_creator.definition_name());
-            assert_ne!(&table_name, &table_creator.internal_name);
+            assert_ne!(Some(&table_name), table_creator.internal_name.as_ref());
             assert!(!seen_tables.contains(&table_name));
             seen_tables.push(table_name);
         }
@@ -1135,9 +1134,9 @@ pub(crate) mod tests {
             .expect("should begin transaction");
 
         // make a table
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
@@ -1178,18 +1177,18 @@ pub(crate) mod tests {
             .expect("should begin transaction");
 
         // make a base table
-        let base_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(false);
+        let base_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
 
         base_table
             .create_table(Arc::clone(&pool), &tx)
             .expect("to create table");
 
         // make an internal table
-        let internal_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let internal_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         internal_table
             .create_table(Arc::clone(&pool), &tx)
@@ -1244,18 +1243,18 @@ pub(crate) mod tests {
             .expect("should begin transaction");
 
         // make a base table
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(false);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
             .expect("to create table");
 
         // list the base table from another base table
-        let internal_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(false);
+        let internal_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
 
         let base_table = internal_table.base_table(&tx).expect("to get base table");
 
@@ -1266,9 +1265,9 @@ pub(crate) mod tests {
         );
 
         // list the base table from an internal table
-        let internal_table = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let internal_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         let base_table = internal_table.base_table(&tx).expect("to get base table");
 
@@ -1307,17 +1306,17 @@ pub(crate) mod tests {
             .expect("should begin transaction");
 
         // make 2 internal tables which should have the same indexes
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
             .expect("to create table");
 
-        let table_creator2 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator2 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator2
             .create_table(Arc::clone(&pool), &tx)
@@ -1332,9 +1331,9 @@ pub(crate) mod tests {
         // make another table that does not match
         let table_definition = get_basic_table_definition();
 
-        let table_creator3 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator3 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator3
             .create_table(Arc::clone(&pool), &tx)
@@ -1347,9 +1346,9 @@ pub(crate) mod tests {
         assert!(!primary_keys_match);
 
         // validate that 2 empty tables return true
-        let table_creator4 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator4 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator4
             .create_table(Arc::clone(&pool), &tx)
@@ -1397,9 +1396,9 @@ pub(crate) mod tests {
             .expect("should begin transaction");
 
         // make 2 internal tables which should have the same indexes
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
@@ -1409,9 +1408,9 @@ pub(crate) mod tests {
             .create_indexes(&tx)
             .expect("to create indexes");
 
-        let table_creator2 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator2 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator2
             .create_table(Arc::clone(&pool), &tx)
@@ -1430,9 +1429,9 @@ pub(crate) mod tests {
         // make another table that does not match
         let table_definition = get_basic_table_definition();
 
-        let table_creator3 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator3 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator3
             .create_table(Arc::clone(&pool), &tx)
@@ -1449,9 +1448,9 @@ pub(crate) mod tests {
         assert!(!indexes_match);
 
         // validate that 2 empty tables return true
-        let table_creator4 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator4 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator4
             .create_table(Arc::clone(&pool), &tx)
@@ -1487,9 +1486,9 @@ pub(crate) mod tests {
             .transaction()
             .expect("should begin transaction");
 
-        let table_creator = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator
             .create_table(Arc::clone(&pool), &tx)
@@ -1502,9 +1501,9 @@ pub(crate) mod tests {
         assert!(schema.equivalent_names_and_types(&table_definition.schema));
 
         // schemas between different tables are equivalent
-        let table_creator2 = TableCreator::new(Arc::clone(&table_definition))
-            .expect("to create table creator")
-            .with_internal(true);
+        let table_creator2 = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
 
         table_creator2
             .create_table(Arc::clone(&pool), &tx)
