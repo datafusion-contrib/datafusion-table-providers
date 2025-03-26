@@ -504,7 +504,7 @@ impl RecordBatchReader for RecordBatchReaderFromStream {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::{Int64Array, StringArray};
+    use arrow::array::{Int64Array, StringArray};
     use datafusion_physical_plan::memory::MemoryStream;
 
     use super::*;
