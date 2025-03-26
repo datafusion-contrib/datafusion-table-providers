@@ -671,9 +671,6 @@ fn make_initial_table(
     table_manager
         .create_table(cloned_pool, &tx)
         .map_err(to_datafusion_error)?;
-    table_manager
-        .create_indexes(&tx)
-        .map_err(to_datafusion_error)?;
 
     tx.commit()
         .context(UnableToCommitTransactionSnafu)

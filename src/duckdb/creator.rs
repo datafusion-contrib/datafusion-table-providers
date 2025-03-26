@@ -230,7 +230,7 @@ impl TableManager {
         }
     }
 
-    fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
+    pub(crate) fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
         self.table_definition
             .indexes
             .iter()
@@ -655,6 +655,18 @@ impl TableManager {
             .query_arrow([])
             .context(super::UnableToQueryDataSnafu)?;
         Ok(result.get_schema())
+    }
+
+    pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
+        let sql = format!(
+            "SELECT COUNT(1) FROM {table_name}",
+            table_name = quote_identifier(&self.table_name().to_string())
+        );
+        let count = tx
+            .query_row(&sql, [], |r| r.get::<usize, u64>(0))
+            .context(super::UnableToQueryDataSnafu)?;
+
+        Ok(count)
     }
 }
 

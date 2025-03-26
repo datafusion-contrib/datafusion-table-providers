@@ -325,7 +325,6 @@ fn insert_append(
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    let cloned_pool = Arc::clone(&pool);
     let mut db_conn = pool
         .connect_sync()
         .context(super::DbConnectionPoolSnafu)
@@ -343,16 +342,16 @@ fn insert_append(
         .with_internal(false)
         .map_err(to_retriable_data_write_error)?;
 
-    let new_table = append_table
-        .base_table(&tx)
+    let should_have_indexes = !append_table.indexes_vec().is_empty();
+    let has_indexes = !append_table
+        .current_indexes(&tx)
         .map_err(to_retriable_data_write_error)?
-        .is_none();
-
-    if new_table {
-        append_table
-            .create_table(cloned_pool, &tx)
-            .map_err(to_retriable_data_write_error)?;
-    }
+        .is_empty();
+    let is_empty_table = append_table
+        .get_row_count(&tx)
+        .map_err(to_retriable_data_write_error)?
+        == 0;
+    let should_apply_indexes = should_have_indexes && !has_indexes && is_empty_table;
 
     let append_table_schema = append_table
         .current_schema(&tx)
@@ -387,7 +386,7 @@ fn insert_append(
         .map_err(to_datafusion_error)?;
 
     // apply indexes if new table
-    if new_table {
+    if should_apply_indexes {
         tracing::debug!(
             "Load for table {table_name} complete, applying constraints and indexes.",
             table_name = append_table.table_name()
