@@ -19,25 +19,43 @@ use crate::util::{
     indexes::IndexType,
 };
 
+/// A newtype for a relation name, to better control the inputs for the `TableDefinition`, `TableCreator`, and `ViewCreator`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationName(String);
+
+impl Display for RelationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl RelationName {
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+impl From<TableReference> for RelationName {
+    fn from(table_ref: TableReference) -> Self {
+        RelationName(table_ref.to_string())
+    }
+}
+
+/// A table definition, which includes the table name, schema, constraints, and indexes.
+/// This is used to store the definition of a table for a dataset, and can be re-used to create one or more tables (like internal data tables).
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct TableDefinition {
-    name: TableName,
+    name: RelationName,
     schema: SchemaRef,
     constraints: Option<Constraints>,
     indexes: Vec<(ColumnReference, IndexType)>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct TableCreator {
-    table_definition: Arc<TableDefinition>,
-    internal_name: TableName,
-    is_internal: bool,
-}
-
 impl TableDefinition {
     #[must_use]
-    pub(crate) fn new(name: TableName, schema: SchemaRef) -> Self {
+    pub(crate) fn new(name: RelationName, schema: SchemaRef) -> Self {
         Self {
             name,
             schema,
@@ -59,7 +77,7 @@ impl TableDefinition {
     }
 
     #[cfg(test)]
-    pub(crate) fn name(&self) -> &TableName {
+    pub(crate) fn name(&self) -> &RelationName {
         &self.name
     }
 
@@ -68,12 +86,13 @@ impl TableDefinition {
         Arc::clone(&self.schema)
     }
 
-    pub(crate) fn generate_internal_name(&self) -> super::Result<TableName> {
+    /// For an internal table, generate a unique name based on the table definition name and the current system time.
+    pub(crate) fn generate_internal_name(&self) -> super::Result<RelationName> {
         let unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .context(super::UnableToGetSystemTimeSnafu)?
             .as_millis();
-        Ok(TableName(format!(
+        Ok(RelationName(format!(
             "__data_{table_name}_{unix_ms}",
             table_name = self.name,
         )))
@@ -83,10 +102,15 @@ impl TableDefinition {
         self.constraints.as_ref()
     }
 
+    /// List all internal tables related to this table definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal tables cannot be listed.
     pub fn list_internal_tables(
         &self,
         tx: &Transaction<'_>,
-    ) -> super::Result<Vec<(TableName, u64)>> {
+    ) -> super::Result<Vec<(RelationName, u64)>> {
         // list all related internal tables, based on the table definition name
         let sql = format!(
             "select table_name from duckdb_tables() where table_name LIKE '__data_{table_name}%'",
@@ -115,36 +139,22 @@ impl TableDefinition {
 
         Ok(table_names
             .into_iter()
-            .map(|(name, time_created)| (TableName(name), time_created))
+            .map(|(name, time_created)| (RelationName(name), time_created))
             .collect())
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TableName(String);
-
-impl Display for TableName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TableName {
-    #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-}
-
-impl From<TableReference> for TableName {
-    fn from(table_ref: TableReference) -> Self {
-        TableName(table_ref.to_string())
-    }
+/// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
+#[derive(Debug, Clone)]
+pub(crate) struct TableCreator {
+    table_definition: Arc<TableDefinition>,
+    internal_name: RelationName,
+    is_internal: bool,
 }
 
 impl TableCreator {
     pub(crate) fn new(table_definition: Arc<TableDefinition>) -> super::Result<Self> {
-        let internal_name: TableName = table_definition.generate_internal_name()?;
+        let internal_name: RelationName = table_definition.generate_internal_name()?;
         Ok(Self {
             table_definition,
             internal_name,
@@ -152,16 +162,18 @@ impl TableCreator {
         })
     }
 
+    /// Set the internal flag for the table creator.
     pub(crate) fn with_internal(mut self, is_internal: bool) -> Self {
         self.is_internal = is_internal;
         self
     }
 
-    pub(crate) fn definition_name(&self) -> &TableName {
+    pub(crate) fn definition_name(&self) -> &RelationName {
         &self.table_definition.name
     }
 
-    pub(crate) fn table_name(&self) -> &TableName {
+    /// Returns the canonical name for this table, which is the internal name if the table is internal, or the table name if it is not.
+    pub(crate) fn table_name(&self) -> &RelationName {
         if self.is_internal {
             &self.internal_name
         } else {
@@ -169,6 +181,8 @@ impl TableCreator {
         }
     }
 
+    /// Searches if a table by the name specified in the table definition exists in the database.
+    /// Returns None if the table does not exist, or an instance of a `TableCreator` for the base table if it does.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
         let mut stmt = tx
@@ -199,6 +213,7 @@ impl TableCreator {
             .collect()
     }
 
+    /// Creates the table for this `TableCreator`. Does not create indexes - use `TableCreator::create_indexes` to apply indexes.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn create_table(
         &self,
@@ -229,6 +244,7 @@ impl TableCreator {
         Ok(())
     }
 
+    /// Drops indexes from the table, then drops the table itself.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop indexes first
@@ -250,13 +266,14 @@ impl TableCreator {
         Ok(())
     }
 
+    /// Inserts data from this table into the target table.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn insert_into(
         &self,
         table: &TableCreator,
         tx: &Transaction<'_>,
         on_conflict: Option<&OnConflict>,
-    ) -> super::Result<()> {
+    ) -> super::Result<u64> {
         // insert from this table, into the target table
         let mut insert_sql = format!(
             r#"INSERT INTO "{}" SELECT * FROM "{}""#,
@@ -271,13 +288,14 @@ impl TableCreator {
         }
         tracing::debug!("{insert_sql}");
 
-        tx.execute(&insert_sql, [])
+        let rows = tx
+            .execute(&insert_sql, [])
             .context(super::UnableToInsertToDuckDBTableSnafu)?;
 
-        Ok(())
+        Ok(rows as u64)
     }
 
-    fn get_index_name(table_name: &TableName, index: &(Vec<&str>, IndexType)) -> String {
+    fn get_index_name(table_name: &RelationName, index: &(Vec<&str>, IndexType)) -> String {
         let index_builder = IndexBuilder::new(&table_name.to_string(), index.0.clone());
         index_builder.index_name()
     }
@@ -337,6 +355,8 @@ impl TableCreator {
         Ok(())
     }
 
+    /// DuckDB CREATE TABLE statements aren't supported by sea-query - so we create a temporary table
+    /// from an Arrow schema and ask DuckDB for the CREATE TABLE statement.
     #[tracing::instrument(level = "debug", skip_all)]
     fn get_table_create_statement(
         &self,
@@ -379,6 +399,8 @@ impl TableCreator {
         Ok(create_stmt)
     }
 
+    /// List all internal tables related to this table creators table definition.
+    /// Excludes itself from the list of tables, if created.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn list_other_internal_tables(
         &self,
@@ -403,6 +425,7 @@ impl TableCreator {
             .collect())
     }
 
+    /// If this table is an internal table, creates a view with the table definition name targeting this table.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
         if !self.is_internal {
@@ -422,6 +445,7 @@ impl TableCreator {
         Ok(())
     }
 
+    /// Returns the current primary keys in database for this table.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn current_primary_keys(
         &self,
@@ -452,6 +476,7 @@ impl TableCreator {
         Ok(primary_keys)
     }
 
+    /// Returns the current indexes in database for this table.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
         let sql = format!(
@@ -478,7 +503,10 @@ impl TableCreator {
     }
 
     #[cfg(test)]
-    fn from_table_name(table_definition: Arc<TableDefinition>, table_name: TableName) -> Self {
+    pub(crate) fn from_table_name(
+        table_definition: Arc<TableDefinition>,
+        table_name: RelationName,
+    ) -> Self {
         Self {
             table_definition,
             internal_name: table_name,
@@ -486,6 +514,7 @@ impl TableCreator {
         }
     }
 
+    /// Verifies that the primary keys match between this table creator and another table creator.
     pub(crate) fn verify_primary_keys_match(
         &self,
         other_table: &TableCreator,
@@ -534,6 +563,7 @@ impl TableCreator {
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
     }
 
+    /// Verifies that the indexes match between this table creator and another table creator.
     pub(crate) fn verify_indexes_match(
         &self,
         other_table: &TableCreator,
@@ -589,16 +619,70 @@ impl TableCreator {
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
     }
 
+    /// Returns the current schema in database for this table.
     pub(crate) fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
         let sql = format!(
             "SELECT * FROM {table_name} LIMIT 0",
-            table_name = self.table_name()
+            table_name = quote_identifier(&self.table_name().to_string())
         );
         let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
         let result: duckdb::Arrow<'_> = stmt
             .query_arrow([])
             .context(super::UnableToQueryDataSnafu)?;
         Ok(result.get_schema())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ViewCreator {
+    name: RelationName,
+}
+
+impl ViewCreator {
+    #[must_use]
+    pub(crate) fn from_name(name: RelationName) -> Self {
+        Self { name }
+    }
+
+    pub(crate) fn insert_into(
+        &self,
+        table: &TableCreator,
+        tx: &Transaction<'_>,
+        on_conflict: Option<&OnConflict>,
+    ) -> super::Result<u64> {
+        // insert from this view, into the target table
+        let mut insert_sql = format!(
+            r#"INSERT INTO "{table_name}" SELECT * FROM "{view_name}""#,
+            view_name = self.name,
+            table_name = table.table_name()
+        );
+
+        if let Some(on_conflict) = on_conflict {
+            let on_conflict_sql =
+                on_conflict.build_on_conflict_statement(&table.table_definition.schema);
+            insert_sql.push_str(&format!(" {on_conflict_sql}"));
+        }
+        tracing::debug!("{insert_sql}");
+
+        let rows = tx
+            .execute(&insert_sql, [])
+            .context(super::UnableToInsertToDuckDBTableSnafu)?;
+
+        Ok(rows as u64)
+    }
+
+    pub(crate) fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
+        // drop this view
+        tx.execute(
+            &format!(
+                r#"DROP VIEW IF EXISTS "{view_name}""#,
+                view_name = self.name
+            ),
+            [],
+        )
+        .context(super::UnableToDropDuckDBTableSnafu)?;
+
+        Ok(())
     }
 }
 
@@ -667,6 +751,18 @@ pub(crate) mod tests {
         tracing::subscriber::set_default(subscriber)
     }
 
+    pub(crate) fn get_basic_table_definition() -> Arc<TableDefinition> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        Arc::new(TableDefinition::new(
+            RelationName::new("test_table"),
+            schema,
+        ))
+    }
+
     #[tokio::test]
     async fn test_table_creator() {
         let _guard = init_tracing(None);
@@ -675,7 +771,7 @@ pub(crate) mod tests {
         let schema = batches[0].schema();
 
         let table_definition = Arc::new(
-            TableDefinition::new(TableName::new("eth.logs"), Arc::clone(&schema))
+            TableDefinition::new(RelationName::new("eth.logs"), Arc::clone(&schema))
                 .with_constraints(get_unique_constraints(
                     &["log_index", "transaction_hash"],
                     Arc::clone(&schema),
@@ -729,33 +825,47 @@ pub(crate) mod tests {
                 .get_underlying_conn_mut()
                 .transaction()
                 .expect("should begin transaction");
-            let internal_tables: Vec<(TableName, u64)> = table_definition
-                .list_internal_tables(&tx)
-                .expect("should list internal tables");
-            assert_eq!(internal_tables.len(), 1);
+            let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
+                let internal_tables: Vec<(RelationName, u64)> = table_definition
+                    .list_internal_tables(&tx)
+                    .expect("should list internal tables");
+                assert_eq!(internal_tables.len(), 1);
 
-            let internal_table = internal_tables.first().expect("to get internal table");
-            let internal_table = internal_table.0.clone();
-            let internal_table_creator = TableCreator::from_table_name(
-                Arc::clone(&table_definition),
-                internal_table.clone(),
-            );
+                let internal_table = internal_tables.first().expect("to get internal table");
+                let internal_table = internal_table.0.clone();
 
-            let primary_keys = internal_table_creator
+                TableCreator::from_table_name(Arc::clone(&table_definition), internal_table.clone())
+            } else {
+                let table_creator = TableCreator::new(Arc::clone(&table_definition))
+                    .expect("to create table creator")
+                    .with_internal(false);
+
+                let base_table = table_creator.base_table(&tx).expect("to get base table");
+                assert!(base_table.is_some());
+                table_creator
+            };
+
+            let primary_keys = table_creator
                 .current_primary_keys(&tx)
                 .expect("should get primary keys");
 
             assert_eq!(primary_keys, HashSet::<String>::new());
 
-            let created_indexes_str_map = internal_table_creator
+            let created_indexes_str_map = table_creator
                 .current_indexes(&tx)
                 .expect("should get indexes");
 
             assert_eq!(
                 created_indexes_str_map,
                 vec![
-                    format!("i_{internal_table}_block_number"),
-                    format!("i_{internal_table}_log_index_transaction_hash")
+                    format!(
+                        "i_{table_name}_block_number",
+                        table_name = table_creator.table_name()
+                    ),
+                    format!(
+                        "i_{table_name}_log_index_transaction_hash",
+                        table_name = table_creator.table_name()
+                    )
                 ]
                 .into_iter()
                 .collect::<HashSet<_>>(),
@@ -766,6 +876,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_table_creator_primary_key() {
         let _guard = init_tracing(None);
@@ -773,7 +884,7 @@ pub(crate) mod tests {
 
         let schema = batches[0].schema();
         let table_definition = Arc::new(
-            TableDefinition::new(TableName::new("eth.logs"), Arc::clone(&schema))
+            TableDefinition::new(RelationName::new("eth.logs"), Arc::clone(&schema))
                 .with_constraints(get_pk_constraints(
                     &["log_index", "transaction_hash"],
                     Arc::clone(&schema),
@@ -824,22 +935,30 @@ pub(crate) mod tests {
                 .transaction()
                 .expect("should begin transaction");
 
-            let internal_tables = table_definition
-                .list_internal_tables(&tx)
-                .expect("should list internal tables");
-            assert_eq!(internal_tables.len(), 1);
+            let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
+                let internal_tables: Vec<(RelationName, u64)> = table_definition
+                    .list_internal_tables(&tx)
+                    .expect("should list internal tables");
+                assert_eq!(internal_tables.len(), 1);
 
-            let internal_table = internal_tables.first().expect("should get internal table");
-            let internal_table = internal_table.0.clone();
-            let internal_table_creator = TableCreator::from_table_name(
-                Arc::clone(&table_definition),
-                internal_table.clone(),
-            );
+                let internal_table = internal_tables.first().expect("to get internal table");
+                let internal_table = internal_table.0.clone();
+
+                TableCreator::from_table_name(Arc::clone(&table_definition), internal_table.clone())
+            } else {
+                let table_creator = TableCreator::new(Arc::clone(&table_definition))
+                    .expect("to create table creator")
+                    .with_internal(false);
+
+                let base_table = table_creator.base_table(&tx).expect("to get base table");
+                assert!(base_table.is_some());
+                table_creator
+            };
 
             let create_stmt = tx
                 .query_row(
                     "select sql from duckdb_tables() where table_name = ?",
-                    [internal_table.to_string()],
+                    [table_creator.table_name().to_string()],
                     |r| r.get::<usize, String>(0),
                 )
                 .expect("to get create table statement");
@@ -847,11 +966,12 @@ pub(crate) mod tests {
             assert_eq!(
                 create_stmt,
                 format!(
-                    r#"CREATE TABLE "{internal_table}"(log_index BIGINT, transaction_hash VARCHAR, transaction_index BIGINT, address VARCHAR, "data" VARCHAR, topics VARCHAR[], block_timestamp BIGINT, block_hash VARCHAR, block_number BIGINT, PRIMARY KEY(log_index, transaction_hash));"#,
+                    r#"CREATE TABLE "{table_name}"(log_index BIGINT, transaction_hash VARCHAR, transaction_index BIGINT, address VARCHAR, "data" VARCHAR, topics VARCHAR[], block_timestamp BIGINT, block_hash VARCHAR, block_number BIGINT, PRIMARY KEY(log_index, transaction_hash));"#,
+                    table_name = table_creator.table_name(),
                 )
             );
 
-            let primary_keys = internal_table_creator
+            let primary_keys = table_creator
                 .current_primary_keys(&tx)
                 .expect("should get primary keys");
 
@@ -862,29 +982,23 @@ pub(crate) mod tests {
                     .collect::<HashSet<_>>()
             );
 
-            let created_indexes_str_map = internal_table_creator
+            let created_indexes_str_map = table_creator
                 .current_indexes(&tx)
                 .expect("should get indexes");
 
             assert_eq!(
                 created_indexes_str_map,
-                vec![format!("i_{internal_table}_block_number")]
-                    .into_iter()
-                    .collect::<HashSet<_>>(),
+                vec![format!(
+                    "i_{table_name}_block_number",
+                    table_name = table_creator.table_name()
+                )]
+                .into_iter()
+                .collect::<HashSet<_>>(),
                 "Indexes must match"
             );
 
             tx.rollback().expect("should rollback transaction");
         }
-    }
-
-    pub(crate) fn get_basic_table_definition() -> Arc<TableDefinition> {
-        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
-            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
-            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
-        ]));
-
-        Arc::new(TableDefinition::new(TableName::new("test_table"), schema))
     }
 
     #[tokio::test]
@@ -1179,7 +1293,7 @@ pub(crate) mod tests {
         ]));
 
         let table_definition = Arc::new(
-            TableDefinition::new(TableName::new("test_table"), Arc::clone(&schema))
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
                 .with_constraints(get_pk_constraints(&["id"], Arc::clone(&schema))),
         );
 
@@ -1262,14 +1376,15 @@ pub(crate) mod tests {
         ]));
 
         let table_definition = Arc::new(
-            TableDefinition::new(TableName::new("test_table"), Arc::clone(&schema)).with_indexes(
-                vec![(
-                    ColumnReference::try_from("id").expect("valid column ref"),
-                    IndexType::Enabled,
-                )]
-                .into_iter()
-                .collect(),
-            ),
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(
+                    vec![(
+                        ColumnReference::try_from("id").expect("valid column ref"),
+                        IndexType::Enabled,
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
         );
 
         let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");

@@ -46,7 +46,7 @@ mod federation;
 mod creator;
 mod sql_table;
 pub mod write;
-pub use creator::{TableDefinition, TableName};
+pub use creator::{RelationName, TableDefinition};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -372,7 +372,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let table_definition =
-            TableDefinition::new(TableName::new(name.clone()), Arc::clone(&schema))
+            TableDefinition::new(RelationName::new(name.clone()), Arc::clone(&schema))
                 .with_constraints(cmd.constraints.clone())
                 .with_indexes(indexes.clone());
 
@@ -547,7 +547,7 @@ impl DuckDBTableFactory {
         let read_provider = Self::table_provider(self, table_reference.clone()).await?;
         let schema = read_provider.schema();
 
-        let table_name = TableName::from(table_reference);
+        let table_name = RelationName::from(table_reference);
         let table_definition = TableDefinition::new(table_name, Arc::clone(&schema));
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_read_provider(read_provider)
