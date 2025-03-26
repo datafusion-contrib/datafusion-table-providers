@@ -75,6 +75,7 @@ impl TableDefinition {
         self
     }
 
+    #[must_use]
     pub fn name(&self) -> &RelationName {
         &self.name
     }
