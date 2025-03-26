@@ -230,7 +230,7 @@ impl TableManager {
         }
     }
 
-    fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
+    pub(crate) fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
         self.table_definition
             .indexes
             .iter()
@@ -656,6 +656,18 @@ impl TableManager {
             .context(super::UnableToQueryDataSnafu)?;
         Ok(result.get_schema())
     }
+
+    pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
+        let sql = format!(
+            "SELECT COUNT(1) FROM {table_name}",
+            table_name = quote_identifier(&self.table_name().to_string())
+        );
+        let count = tx
+            .query_row(&sql, [], |r| r.get::<usize, u64>(0))
+            .context(super::UnableToQueryDataSnafu)?;
+
+        Ok(count)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -713,8 +725,11 @@ impl ViewCreator {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::sql::db_connection_pool::{
-        dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+    use crate::{
+        duckdb::make_initial_table,
+        sql::db_connection_pool::{
+            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
+        },
     };
     use arrow::array::RecordBatch;
     use datafusion::{
@@ -816,6 +831,9 @@ pub(crate) mod tests {
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
+
+            make_initial_table(Arc::clone(&table_definition), &pool)
+                .expect("to make initial table");
 
             let duckdb_sink = DuckDBDataSink::new(
                 Arc::clone(&pool),
@@ -926,6 +944,10 @@ pub(crate) mod tests {
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
             let pool = get_mem_duckdb();
+
+            make_initial_table(Arc::clone(&table_definition), &pool)
+                .expect("to make initial table");
+
             let duckdb_sink = DuckDBDataSink::new(
                 Arc::clone(&pool),
                 Arc::clone(&table_definition),

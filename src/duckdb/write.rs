@@ -325,7 +325,6 @@ fn insert_append(
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    let cloned_pool = Arc::clone(&pool);
     let mut db_conn = pool
         .connect_sync()
         .context(super::DbConnectionPoolSnafu)
@@ -343,16 +342,16 @@ fn insert_append(
         .with_internal(false)
         .map_err(to_retriable_data_write_error)?;
 
-    let new_table = append_table
-        .base_table(&tx)
+    let should_have_indexes = !append_table.indexes_vec().is_empty();
+    let has_indexes = !append_table
+        .current_indexes(&tx)
         .map_err(to_retriable_data_write_error)?
-        .is_none();
-
-    if new_table {
-        append_table
-            .create_table(cloned_pool, &tx)
-            .map_err(to_retriable_data_write_error)?;
-    }
+        .is_empty();
+    let is_empty_table = append_table
+        .get_row_count(&tx)
+        .map_err(to_retriable_data_write_error)?
+        == 0;
+    let should_apply_indexes = should_have_indexes && !has_indexes && is_empty_table;
 
     let append_table_schema = append_table
         .current_schema(&tx)
@@ -387,7 +386,7 @@ fn insert_append(
         .map_err(to_datafusion_error)?;
 
     // apply indexes if new table
-    if new_table {
+    if should_apply_indexes {
         tracing::debug!(
             "Load for table {table_name} complete, applying constraints and indexes.",
             table_name = append_table.table_name()
@@ -473,6 +472,17 @@ fn insert_overwrite(
     };
 
     if let Some(last_table) = last_table {
+        let should_have_indexes = !last_table.indexes_vec().is_empty();
+        let has_indexes = !last_table
+            .current_indexes(&tx)
+            .map_err(to_retriable_data_write_error)?
+            .is_empty();
+        let is_empty_table = last_table
+            .get_row_count(&tx)
+            .map_err(to_retriable_data_write_error)?
+            == 0;
+        let should_apply_indexes = should_have_indexes && !has_indexes && is_empty_table;
+
         // compare indexes and primary keys
         let primary_keys_match = new_table
             .verify_primary_keys_match(last_table, &tx)
@@ -495,17 +505,19 @@ fn insert_overwrite(
             ));
         }
 
-        if !primary_keys_match {
-            return Err(DataFusionError::Execution(
+        if !should_apply_indexes {
+            if !primary_keys_match {
+                return Err(DataFusionError::Execution(
                 "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
                     .to_string(),
             ));
-        }
+            }
 
-        if !indexes_match {
-            return Err(DataFusionError::Execution(
+            if !indexes_match {
+                return Err(DataFusionError::Execution(
                 "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
             ));
+            }
         }
     }
 
@@ -1000,90 +1012,18 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_write_to_table_append_without_previous_table() {
-        // Test scenario: Write to a table with append mode without a previous table
-        // Expected behavior: Data sink creates a new base table, writes data to it.
+    async fn test_write_to_table_append_with_previous_table_needs_indexes() {
+        // Test scenario: Write to a table with append mode with a previous table
+        // Expected behavior: Data sink appends data to the existing table. No new internal table should be created.
+        // The existing table is re-used.
 
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
 
         let cloned_pool = Arc::clone(&pool);
-
-        let table_definition = get_basic_table_definition();
-
-        // make an existing table to append from
-        let append_table = TableManager::new(Arc::clone(&table_definition))
-            .with_internal(false)
-            .expect("to create table");
-
-        let duckdb_sink = DuckDBDataSink::new(
-            Arc::clone(&pool),
-            Arc::clone(&table_definition),
-            InsertOp::Append,
-            None,
-        );
-        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
-
-        // id, name
-        // 1, "a"
-        // 2, "b"
-        let batches = vec![RecordBatch::try_new(
-            Arc::clone(&table_definition.schema()),
-            vec![
-                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
-                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
-            ],
-        )
-        .expect("should create a record batch")];
-
-        let stream = Box::pin(
-            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
-        );
-
-        data_sink
-            .write_all(stream, &Arc::new(TaskContext::default()))
-            .await
-            .expect("to write all");
-
         let mut conn = cloned_pool.connect_sync().expect("to connect");
         let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
         let tx = duckdb.conn.transaction().expect("to begin transaction");
-
-        let internal_tables = table_definition
-            .list_internal_tables(&tx)
-            .expect("to list internal tables");
-        assert_eq!(internal_tables.len(), 0);
-
-        let base_table = append_table
-            .base_table(&tx)
-            .expect("to get base table")
-            .expect("should have a base table");
-
-        let rows = tx
-            .query_row(
-                &format!(
-                    "SELECT COUNT(1) FROM {table_name}",
-                    table_name = base_table.table_name()
-                ),
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("to get count");
-        assert_eq!(rows, 2);
-
-        tx.rollback().expect("to rollback");
-    }
-
-    #[tokio::test]
-    async fn test_write_to_append_without_previous_table_with_indexes() {
-        // Test scenario: Write to a table with append mode without a previous table with indexes
-        // Expected behavior: Data sink creates a new base table, writes data to it.
-        // The table should have indexes applied.
-
-        let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
-
-        let cloned_pool = Arc::clone(&pool);
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
@@ -1107,6 +1047,14 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
+        append_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        // don't apply indexes, and leave the table empty to simulate a new table from TableProviderFactory::create()
+
+        tx.commit().expect("to commit");
+
         let duckdb_sink = DuckDBDataSink::new(
             Arc::clone(&pool),
             Arc::clone(&table_definition),
@@ -1136,8 +1084,6 @@ mod test {
             .await
             .expect("to write all");
 
-        let mut conn = cloned_pool.connect_sync().expect("to connect");
-        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
         let tx = duckdb.conn.transaction().expect("to begin transaction");
 
         let internal_tables = table_definition
@@ -1162,7 +1108,7 @@ mod test {
             .expect("to get count");
         assert_eq!(rows, 2);
 
-        // should have 1 index
+        // at this point, indexes should be applied
         let indexes = append_table.current_indexes(&tx).expect("to get indexes");
         assert_eq!(indexes.len(), 1);
 
