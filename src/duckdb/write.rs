@@ -483,13 +483,6 @@ fn insert_overwrite(
             == 0;
         let should_apply_indexes = should_have_indexes && !has_indexes && is_empty_table;
 
-        // compare indexes and primary keys
-        let primary_keys_match = new_table
-            .verify_primary_keys_match(last_table, &tx)
-            .map_err(to_retriable_data_write_error)?;
-        let indexes_match = new_table
-            .verify_indexes_match(last_table, &tx)
-            .map_err(to_retriable_data_write_error)?;
         let last_table_schema = last_table
             .current_schema(&tx)
             .map_err(to_retriable_data_write_error)?;
@@ -506,17 +499,25 @@ fn insert_overwrite(
         }
 
         if !should_apply_indexes {
+            // compare indexes and primary keys
+            let primary_keys_match = new_table
+                .verify_primary_keys_match(last_table, &tx)
+                .map_err(to_retriable_data_write_error)?;
+            let indexes_match = new_table
+                .verify_indexes_match(last_table, &tx)
+                .map_err(to_retriable_data_write_error)?;
+
             if !primary_keys_match {
                 return Err(DataFusionError::Execution(
-                "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
-                    .to_string(),
-            ));
+                    "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
+                        .to_string(),
+                ));
             }
 
             if !indexes_match {
                 return Err(DataFusionError::Execution(
-                "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
-            ));
+                    "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
+                ));
             }
         }
     }
