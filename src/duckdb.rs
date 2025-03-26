@@ -183,6 +183,7 @@ const DUCKDB_DB_PATH_PARAM: &str = "open";
 const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 const DUCKDB_SETTING_MEMORY_LIMIT: &str = "memory_limit";
+const DUCKDB_SETTING_TEMP_DIRECTORY: &str = "temp_directory";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
@@ -383,8 +384,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
-        if let Some(memory_limit) = options.get("memory_limit") {
+        if let Some(memory_limit) = options.get(DUCKDB_SETTING_MEMORY_LIMIT) {
             apply_memory_limit(&dyn_pool, memory_limit).await?;
+        }
+
+        if let Some(temp_directory) = options.get(DUCKDB_SETTING_TEMP_DIRECTORY) {
+            apply_temp_directory(&dyn_pool, temp_directory).await?;
         }
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
@@ -609,6 +614,25 @@ async fn apply_memory_limit(
     Ok(())
 }
 
+async fn apply_temp_directory(
+    pool: &Arc<DynDuckDbConnectionPool>,
+    temp_directory: &str,
+) -> DataFusionResult<()> {
+    tracing::debug!("Setting DuckDB temp directory to {temp_directory}");
+
+    let db_conn = pool.connect().await?;
+    let Some(conn) = db_conn.as_sync() else {
+        return Err(to_datafusion_error(Error::DbConnectionError {
+            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
+        }));
+    };
+    conn.execute(
+        &format!("SET {DUCKDB_SETTING_TEMP_DIRECTORY} = '{temp_directory}'"),
+        &[],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::duckdb::write::DuckDBTableWriter;
@@ -676,6 +700,67 @@ pub(crate) mod tests {
         assert_eq!(
             memory_limit, "123.0 MiB",
             "Memory limit must be set to 123.0 MiB"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_temp_directory() {
+        let table_name = TableReference::bare("test_table_temp_dir");
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Int32, false)]);
+
+        let test_temp_directory = "/tmp/duckdb_test_temp";
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+        options.insert(
+            "temp_directory".to_string(),
+            test_temp_directory.to_string(),
+        );
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name,
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+
+        let table_provider = factory
+            .create(&ctx.state(), &cmd)
+            .await
+            .expect("table provider created");
+
+        let writer = table_provider
+            .as_any()
+            .downcast_ref::<DuckDBTableWriter>()
+            .expect("cast to DuckDBTableWriter");
+
+        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
+        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+
+        let mut stmt = conn
+            .conn
+            .prepare("SELECT value FROM duckdb_settings() WHERE name = 'temp_directory'")
+            .expect("to prepare statement");
+
+        let temp_directory = stmt
+            .query_row([], |row| row.get::<usize, String>(0))
+            .expect("to query temp directory");
+
+        println!("Temp directory: {temp_directory}");
+
+        assert_eq!(
+            temp_directory, test_temp_directory,
+            "Temp directory must be set to {test_temp_directory}"
         );
     }
 }
