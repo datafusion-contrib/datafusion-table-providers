@@ -44,8 +44,7 @@ impl From<TableReference> for RelationName {
 
 /// A table definition, which includes the table name, schema, constraints, and indexes.
 /// This is used to store the definition of a table for a dataset, and can be re-used to create one or more tables (like internal data tables).
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableDefinition {
     name: RelationName,
     schema: SchemaRef,
