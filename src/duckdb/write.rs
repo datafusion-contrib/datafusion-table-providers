@@ -248,6 +248,11 @@ impl DataSink for DuckDBDataSink {
                 if matches!(overwrite, InsertOp::Append) {
                     match (existing_tables.last(), base_table.as_ref()) {
                         (Some((latest_table, _)), None) | (None, Some(latest_table)) => {
+                            tracing::debug!(
+                                "Inserting from {} into {}",
+                                latest_table.table_name(),
+                                new_table.table_name()
+                            );
                             latest_table
                                 .insert_into(&new_table, &tx, on_conflict.as_ref())
                                 .map_err(to_retriable_data_write_error)?;
@@ -419,4 +424,177 @@ fn write_to_table(
         .map_err(to_datafusion_error)?;
 
     Ok(num_rows)
+}
+
+#[cfg(test)]
+mod test {
+    use arrow_array::{Int64Array, StringArray};
+    use datafusion_physical_plan::memory::MemoryStream;
+
+    use super::*;
+    use crate::duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing};
+
+    #[tokio::test]
+    async fn test_write_to_table_overwrite() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_append() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let cloned_pool = Arc::clone(&pool);
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let table_definition = get_basic_table_definition();
+
+        // make an existing table to append from
+        let append_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table")
+            .with_internal(true);
+
+        append_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        tx.execute(
+            &format!(
+                "INSERT INTO {table_name} VALUES (3, 'c')",
+                table_name = append_table.table_name()
+            ),
+            [],
+        )
+        .expect("to insert");
+
+        tx.commit().expect("to commit");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 3);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 3);
+
+        tx.rollback().expect("to rollback");
+    }
 }

@@ -57,6 +57,16 @@ impl TableDefinition {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn name(&self) -> &TableName {
+        &self.name
+    }
+
+    #[cfg(test)]
+    pub(crate) fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
     pub(crate) fn generate_internal_name(&self) -> super::Result<TableName> {
         let unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -494,7 +504,7 @@ pub(crate) mod tests {
 
     use super::*;
 
-    fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
+    pub(crate) fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
         Arc::new(
             DuckDbConnectionPool::new_memory().expect("to get a memory duckdb connection pool"),
         )
@@ -747,7 +757,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn get_basic_table_definition() -> Arc<TableDefinition> {
+    pub(crate) fn get_basic_table_definition() -> Arc<TableDefinition> {
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -757,7 +767,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_list_related_tables_from_definition() {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
@@ -791,6 +800,11 @@ pub(crate) mod tests {
 
         assert_eq!(internal_tables.len(), 3);
 
+        // validate the first table is the oldest, and the last table is the newest
+        let first_table = internal_tables.first().expect("to get first table");
+        let last_table = internal_tables.last().expect("to get last table");
+        assert!(first_table.1 < last_table.1);
+
         // validate none of the internal tables are the same, they are not equal to the base table
         let mut seen_tables = vec![];
         for (internal_table, _) in internal_tables {
@@ -804,7 +818,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_list_related_tables_from_creator() {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
@@ -871,7 +884,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_create_view() {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
@@ -915,7 +927,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_insert_into_tables() {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
@@ -982,7 +993,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_lists_base_table_from_definition() {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
