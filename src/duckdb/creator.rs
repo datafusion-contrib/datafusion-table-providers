@@ -380,7 +380,7 @@ impl TableCreator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn list_internal_tables(
+    pub(crate) fn list_other_internal_tables(
         &self,
         tx: &Transaction<'_>,
     ) -> super::Result<Vec<(Self, u64)>> {
@@ -974,7 +974,7 @@ pub(crate) mod tests {
             .expect("to create table");
 
         let internal_tables = table_creator
-            .list_internal_tables(&tx)
+            .list_other_internal_tables(&tx)
             .expect("should list internal tables");
 
         assert_eq!(internal_tables.len(), 3);
@@ -996,7 +996,7 @@ pub(crate) mod tests {
 
         // list the internal tables again
         let internal_tables = table_creator
-            .list_internal_tables(&tx)
+            .list_other_internal_tables(&tx)
             .expect("should list internal tables");
 
         assert_eq!(internal_tables.len(), 0);

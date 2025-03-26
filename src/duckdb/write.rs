@@ -239,7 +239,7 @@ impl DataSink for DuckDBDataSink {
                     .map_err(to_retriable_data_write_error)?;
 
                 let existing_tables = new_table
-                    .list_internal_tables(&tx)
+                    .list_other_internal_tables(&tx)
                     .map_err(to_retriable_data_write_error)?;
                 let base_table = new_table
                     .base_table(&tx)
