@@ -49,5 +49,9 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     duckdb::init_module(&duckdb)?;
     m.add_submodule(&duckdb)?;
 
+    let odbc = PyModule::new(py, "odbc")?;
+    odbc::init_module(&odbc)?;
+    m.add_submodule(&odbc)?;
+
     Ok(())
 }

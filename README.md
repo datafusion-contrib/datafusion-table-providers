@@ -113,7 +113,22 @@ cargo run --example flight-sql --features flight
 apt-get install unixodbc-dev libsqliteodbc
 # or
 # brew install unixodbc & brew install sqliteodbc
-# If you use ARM Mac, please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1
 
 cargo run --example odbc_sqlite --features odbc
 ```
+
+#### ARM Mac
+
+Please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1 for reference.
+
+Steps:
+1. Install unixodbc and sqliteodbc by `brew install unixodbc sqliteodbc`.
+2. Find local sqliteodbc driver path by running `brew info sqliteodbc`. The path might look like `/opt/homebrew/Cellar/sqliteodbc/0.99991`.
+3. Set up odbc config file at `~/.odbcinst.ini` with your local sqliteodbc path.
+Example config file:
+```
+[SQLite3]
+Description = SQLite3 ODBC Driver
+Driver      = /opt/homebrew/Cellar/sqliteodbc/0.99991/lib/libsqlite3odbc.dylib
+```
+4. Test configuration by running `odbcinst -q -d -n SQLite3`. If the path is printed out correctly, then you are all set.
