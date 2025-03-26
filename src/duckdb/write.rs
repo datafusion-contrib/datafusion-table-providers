@@ -14,7 +14,7 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::Constraints;
+use datafusion::common::{Constraints, SchemaExt};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
@@ -198,7 +198,6 @@ impl DataSink for DuckDBDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        // let duckdb = Arc::clone(&self.duckdb);
         let pool = Arc::clone(&self.pool);
         let table_definition = Arc::clone(&self.table_definition);
         let overwrite = self.overwrite;
@@ -244,30 +243,73 @@ impl DataSink for DuckDBDataSink {
                 let num_rows = write_to_table(&new_table, &tx, schema, batch_rx)
                     .map_err(to_retriable_data_write_error)?;
 
-                // TODO: validate schema of these incoming tables to see if they match?
                 let existing_tables = new_table
-                    .list_internal_tables(&tx)
+                    .list_other_internal_tables(&tx)
                     .map_err(to_retriable_data_write_error)?;
                 let base_table = new_table
                     .base_table(&tx)
                     .map_err(to_retriable_data_write_error)?;
-                if matches!(overwrite, InsertOp::Append) {
-                    match (existing_tables.last(), base_table.as_ref()) {
-                        (Some((latest_table, _)), None) | (None, Some(latest_table)) => {
-                            latest_table
-                                .insert_into(&new_table, &tx, on_conflict.as_ref())
-                                .map_err(to_retriable_data_write_error)?;
-                        }
-                        (None, None) => {
-                            tracing::debug!(
-                                "Append was requested, but no existing table was found to append from."
-                            );
-                        }
-                        _ => {
-                            return Err(DataFusionError::Execution(
-                                "Append was requested, but both an existing table and a base table were found to append from.".to_string(),
-                            ));
-                        }
+                let last_table = match (existing_tables.last(), base_table.as_ref()) {
+                    (Some(internal_table), Some(base_table)) => {
+                        return Err(DataFusionError::Execution(
+                            format!("Failed to insert data for DuckDB - both an internal table and definition base table were found.\nManual table migration is required - delete the table '{internal_table}' or '{base_table}' and try again.",
+                            internal_table = internal_table.0.table_name(),
+                            base_table = base_table.table_name())));
+                    }
+                    (Some((table, _)), None) | (None, Some(table)) => Some(table),
+                    (None, None) => None,
+                };
+
+                if matches!(overwrite, InsertOp::Append) && last_table.is_none() {
+                    tracing::debug!(
+                        "Append was requested, but no existing table was found to append from."
+                    );
+                }
+
+                if let Some(last_table) = last_table {
+                    // compare indexes and primary keys
+                    let primary_keys_match = new_table
+                        .verify_primary_keys_match(last_table, &tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let indexes_match = new_table
+                        .verify_indexes_match(last_table, &tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let last_table_schema = last_table
+                        .current_schema(&tx)
+                        .map_err(to_retriable_data_write_error)?;
+                    let new_table_schema = new_table
+                        .current_schema(&tx)
+                        .map_err(to_retriable_data_write_error)?;
+
+                    if !new_table_schema.equivalent_names_and_types(&last_table_schema) {
+                        return Err(DataFusionError::Execution(
+                            "Schema does not match between the new table and the existing table."
+                                .to_string(),
+                        ));
+                    }
+
+                    if !primary_keys_match {
+                        return Err(DataFusionError::Execution(
+                            "Primary keys do not match between the new table and the existing table.".to_string(),
+                        ));
+                    }
+
+                    if !indexes_match {
+                        return Err(DataFusionError::Execution(
+                            "Indexes do not match between the new table and the existing table."
+                                .to_string(),
+                        ));
+                    }
+
+                    if matches!(overwrite, InsertOp::Append) {
+                        tracing::debug!(
+                            "Inserting from {} into {}",
+                            last_table.table_name(),
+                            new_table.table_name()
+                        );
+                        last_table
+                            .insert_into(&new_table, &tx, on_conflict.as_ref())
+                            .map_err(to_retriable_data_write_error)?;
                     }
                 }
 
@@ -457,5 +499,178 @@ impl Iterator for RecordBatchReaderFromStream {
 impl RecordBatchReader for RecordBatchReaderFromStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow_array::{Int64Array, StringArray};
+    use datafusion_physical_plan::memory::MemoryStream;
+
+    use super::*;
+    use crate::duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing};
+
+    #[tokio::test]
+    async fn test_write_to_table_overwrite() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_append() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let cloned_pool = Arc::clone(&pool);
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let table_definition = get_basic_table_definition();
+
+        // make an existing table to append from
+        let append_table = TableCreator::new(Arc::clone(&table_definition))
+            .expect("to create table")
+            .with_internal(true);
+
+        append_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        tx.execute(
+            &format!(
+                "INSERT INTO {table_name} VALUES (3, 'c')",
+                table_name = append_table.table_name()
+            ),
+            [],
+        )
+        .expect("to insert");
+
+        tx.commit().expect("to commit");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 3);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 3);
+
+        tx.rollback().expect("to rollback");
     }
 }
