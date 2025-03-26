@@ -152,10 +152,10 @@ pub enum Error {
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
 
-    #[snafu(display("Unexpected error during data ingestion for a DuckDB table.\nUnable to register arrow scan view: {source}"))]
+    #[snafu(display("Failed to register Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToRegisterArrowScanView { source: duckdb::Error },
 
-    #[snafu(display("Unexpected error during data ingestion for a DuckDB table.\nUnable to drop arrow scan view: {source}"))]
+    #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToDropArrowScanView { source: duckdb::Error },
 }
 
