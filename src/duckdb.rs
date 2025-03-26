@@ -641,7 +641,7 @@ fn make_initial_table(
     table_definition: Arc<TableDefinition>,
     pool: &Arc<DuckDbConnectionPool>,
 ) -> DataFusionResult<()> {
-    let cloned_pool = Arc::clone(&pool);
+    let cloned_pool = Arc::clone(pool);
     let mut db_conn = Arc::clone(&cloned_pool)
         .connect_sync()
         .context(DbConnectionPoolSnafu)
