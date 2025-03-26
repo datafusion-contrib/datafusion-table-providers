@@ -1,16 +1,20 @@
-use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
+use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
+use arrow::array::RecordBatchReader;
+use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::Constraints;
+use datafusion::common::{Constraints, SchemaExt};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
@@ -29,30 +33,100 @@ use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use super::to_datafusion_error;
+use super::creator::{TableDefinition, TableManager, ViewCreator};
+use super::{to_datafusion_error, RelationName};
+
+// checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
+// e.g. List(Field { name: 'a', data_type: Int32 }) != List(Field { name: 'b', data_type: Int32 })
+// but, in this case, they are actually equivalent because the field name does not matter for the schema.
+// related: https://github.com/apache/arrow-rs/issues/6733#issuecomment-2482582556
+const SCHEMA_EQUIVALENCE_ENABLED: bool = false;
+
+#[derive(Default)]
+pub struct DuckDBTableWriterBuilder {
+    read_provider: Option<Arc<dyn TableProvider>>,
+    pool: Option<Arc<DuckDbConnectionPool>>,
+    on_conflict: Option<OnConflict>,
+    table_definition: Option<TableDefinition>,
+}
+
+impl DuckDBTableWriterBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_read_provider(mut self, read_provider: Arc<dyn TableProvider>) -> Self {
+        self.read_provider = Some(read_provider);
+        self
+    }
+
+    #[must_use]
+    pub fn with_pool(mut self, pool: Arc<DuckDbConnectionPool>) -> Self {
+        self.pool = Some(pool);
+        self
+    }
+
+    #[must_use]
+    pub fn set_on_conflict(mut self, on_conflict: Option<OnConflict>) -> Self {
+        self.on_conflict = on_conflict;
+        self
+    }
+
+    #[must_use]
+    pub fn with_table_definition(mut self, table_definition: TableDefinition) -> Self {
+        self.table_definition = Some(table_definition);
+        self
+    }
+
+    /// Builds a `DuckDBTableWriter` from the provided configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the required fields are missing:
+    /// - `read_provider`
+    /// - `pool`
+    /// - `table_definition`
+    pub fn build(self) -> super::Result<DuckDBTableWriter> {
+        let Some(read_provider) = self.read_provider else {
+            return Err(super::Error::MissingReadProvider);
+        };
+
+        let Some(pool) = self.pool else {
+            return Err(super::Error::MissingPool);
+        };
+
+        let Some(table_definition) = self.table_definition else {
+            return Err(super::Error::MissingTableDefinition);
+        };
+
+        Ok(DuckDBTableWriter {
+            read_provider,
+            on_conflict: self.on_conflict,
+            table_definition: Arc::new(table_definition),
+            pool,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
-    duckdb: Arc<DuckDB>,
+    pool: Arc<DuckDbConnectionPool>,
+    table_definition: Arc<TableDefinition>,
     on_conflict: Option<OnConflict>,
 }
 
 impl DuckDBTableWriter {
-    pub fn create(
-        read_provider: Arc<dyn TableProvider>,
-        duckdb: DuckDB,
-        on_conflict: Option<OnConflict>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            read_provider,
-            duckdb: Arc::new(duckdb),
-            on_conflict,
-        })
+    #[must_use]
+    pub fn pool(&self) -> Arc<DuckDbConnectionPool> {
+        Arc::clone(&self.pool)
     }
 
-    pub fn duckdb(&self) -> Arc<DuckDB> {
-        Arc::clone(&self.duckdb)
+    #[must_use]
+    pub fn table_definition(&self) -> Arc<TableDefinition> {
+        Arc::clone(&self.table_definition)
     }
 }
 
@@ -71,7 +145,7 @@ impl TableProvider for DuckDBTableWriter {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        Some(self.duckdb.constraints())
+        self.table_definition.constraints()
     }
 
     async fn scan(
@@ -95,7 +169,8 @@ impl TableProvider for DuckDBTableWriter {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(DuckDBDataSink::new(
-                Arc::clone(&self.duckdb),
+                Arc::clone(&self.pool),
+                Arc::clone(&self.table_definition),
                 overwrite,
                 self.on_conflict.clone(),
             )),
@@ -107,7 +182,8 @@ impl TableProvider for DuckDBTableWriter {
 
 #[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
-    duckdb: Arc<DuckDB>,
+    pool: Arc<DuckDbConnectionPool>,
+    table_definition: Arc<TableDefinition>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
 }
@@ -127,7 +203,8 @@ impl DataSink for DuckDBDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let duckdb = Arc::clone(&self.duckdb);
+        let pool = Arc::clone(&self.pool);
+        let table_definition = Arc::clone(&self.table_definition);
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
 
@@ -137,75 +214,30 @@ impl DataSink for DuckDBDataSink {
         let (batch_tx, batch_rx): (Sender<RecordBatch>, Receiver<RecordBatch>) = mpsc::channel(100);
 
         // Since the main task/stream can be dropped or fail, we use a oneshot channel to signal that all data is received and we should commit the transaction
-        let (notify_commit_transaction, mut on_commit_transaction) =
-            tokio::sync::oneshot::channel();
+        let (notify_commit_transaction, on_commit_transaction) = tokio::sync::oneshot::channel();
+
+        let schema = data.schema();
 
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
-                let mut db_conn = duckdb
-                    .connect_sync()
-                    .map_err(to_retriable_data_write_error)?;
-
-                let duckdb_conn =
-                    DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
-
-                let tx = duckdb_conn
-                    .conn
-                    .transaction()
-                    .context(super::UnableToBeginTransactionSnafu)
-                    .map_err(to_datafusion_error)?;
-
-                let initial_load = duckdb.is_empty.load(Ordering::Relaxed);
-
-                let num_rows = match (initial_load, &**duckdb.constraints()) {
-                    (true, _) | (false, &[]) => try_write_all_no_constraints(
-                        Arc::clone(&duckdb),
-                        &tx,
+                let num_rows = match overwrite {
+                    InsertOp::Overwrite => insert_overwrite(
+                        pool,
+                        &table_definition,
                         batch_rx,
-                        overwrite,
-                        initial_load,
+                        on_conflict.as_ref(),
+                        on_commit_transaction,
+                        schema,
                     )?,
-                    (false, _) => try_write_all_with_constraints(
-                        Arc::clone(&duckdb),
-                        &tx,
+                    InsertOp::Append | InsertOp::Replace => insert_append(
+                        pool,
+                        &table_definition,
                         batch_rx,
-                        overwrite,
-                        on_conflict,
+                        on_conflict.as_ref(),
+                        on_commit_transaction,
+                        schema,
                     )?,
                 };
-
-                on_commit_transaction
-                    .try_recv()
-                    .map_err(to_retriable_data_write_error)?;
-
-                tx.commit()
-                    .context(super::UnableToCommitTransactionSnafu)
-                    .map_err(to_retriable_data_write_error)?;
-
-                // If this was the initial load of the table, we need to apply constraints and indexes.
-                if initial_load {
-                    tracing::debug!(
-                        "Initial load for table {} complete, applying constraints and indexes.",
-                        duckdb.table_name()
-                    );
-                    // Mark the table as no longer empty.
-                    duckdb.is_empty.store(false, Ordering::Relaxed);
-
-                    let tx = duckdb_conn
-                        .conn
-                        .transaction()
-                        .context(super::UnableToBeginTransactionSnafu)
-                        .map_err(to_datafusion_error)?;
-
-                    // Apply constraints and indexes.
-                    duckdb
-                        .apply_constraints_and_indexes(&tx)
-                        .map_err(to_retriable_data_write_error)?;
-
-                    tx.commit()
-                        .context(super::UnableToCommitTransactionSnafu)
-                        .map_err(to_retriable_data_write_error)?;
-                }
 
                 Ok(num_rows)
             });
@@ -213,13 +245,12 @@ impl DataSink for DuckDBDataSink {
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            constraints::validate_batch_with_constraints(
-                &[batch.clone()],
-                self.duckdb.constraints(),
-            )
-            .await
-            .context(super::ConstraintViolationSnafu)
-            .map_err(to_datafusion_error)?;
+            if let Some(constraints) = self.table_definition.constraints() {
+                constraints::validate_batch_with_constraints(&[batch.clone()], constraints)
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+            }
 
             if let Err(send_error) = batch_tx.send(batch).await {
                 match duckdb_write_handle.await {
@@ -260,12 +291,14 @@ impl DataSink for DuckDBDataSink {
 
 impl DuckDBDataSink {
     pub(crate) fn new(
-        duckdb: Arc<DuckDB>,
+        pool: Arc<DuckDbConnectionPool>,
+        table_definition: Arc<TableDefinition>,
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
     ) -> Self {
         Self {
-            duckdb,
+            pool,
+            table_definition,
             overwrite,
             on_conflict,
         }
@@ -284,89 +317,855 @@ impl DisplayAs for DuckDBDataSink {
     }
 }
 
-/// If there are constraints on the `DuckDB` table, we need to create an empty copy of the target table, write to that table copy and then depending on
-/// if the mode is overwrite or not, insert into the target table or drop the target table and rename the current table.
-///
-/// See: <https://duckdb.org/docs/sql/indexes#over-eager-unique-constraint-checking>
-fn try_write_all_with_constraints(
-    duckdb: Arc<DuckDB>,
-    tx: &Transaction<'_>,
-    mut data_batches: Receiver<RecordBatch>,
-    overwrite: InsertOp,
-    on_conflict: Option<OnConflict>,
+fn insert_append(
+    pool: Arc<DuckDbConnectionPool>,
+    table_definition: &Arc<TableDefinition>,
+    batch_rx: Receiver<RecordBatch>,
+    on_conflict: Option<&OnConflict>,
+    mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
+    schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    // We want to clone the current table into our insert table
-    let Some(ref orig_table_creator) = duckdb.table_creator else {
+    let cloned_pool = Arc::clone(&pool);
+    let mut db_conn = pool
+        .connect_sync()
+        .context(super::DbConnectionPoolSnafu)
+        .map_err(to_retriable_data_write_error)?;
+
+    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
+
+    let tx = duckdb_conn
+        .conn
+        .transaction()
+        .context(super::UnableToBeginTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
+
+    let append_table = TableManager::new(Arc::clone(table_definition))
+        .with_internal(false)
+        .map_err(to_retriable_data_write_error)?;
+
+    let new_table = append_table
+        .base_table(&tx)
+        .map_err(to_retriable_data_write_error)?
+        .is_none();
+
+    if new_table {
+        append_table
+            .create_table(cloned_pool, &tx)
+            .map_err(to_retriable_data_write_error)?;
+    }
+
+    let append_table_schema = append_table
+        .current_schema(&tx)
+        .map_err(to_retriable_data_write_error)?;
+
+    if SCHEMA_EQUIVALENCE_ENABLED && !schema.equivalent_names_and_types(&append_table_schema) {
         return Err(DataFusionError::Execution(
-            "Expected table with constraints to have a table creator".to_string(),
+            "Schema of the append table does not match the schema of the new append data."
+                .to_string(),
         ));
-    };
+    }
 
-    let mut num_rows = 0;
+    tracing::debug!(
+        "Append load for {table_name}",
+        table_name = append_table.table_name()
+    );
+    let num_rows = write_to_table(&append_table, &tx, schema, batch_rx, on_conflict)
+        .map_err(to_retriable_data_write_error)?;
 
-    let mut insert_table = orig_table_creator
-        .create_empty_clone(tx)
+    on_commit_transaction
+        .try_recv()
+        .map_err(to_retriable_data_write_error)?;
+
+    tx.commit()
+        .context(super::UnableToCommitTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
+
+    let tx = duckdb_conn
+        .conn
+        .transaction()
+        .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_datafusion_error)?;
 
-    let Some(insert_table_creator) = insert_table.table_creator.take() else {
-        unreachable!()
-    };
+    // apply indexes if new table
+    if new_table {
+        tracing::debug!(
+            "Load for table {table_name} complete, applying constraints and indexes.",
+            table_name = append_table.table_name()
+        );
 
-    while let Some(batch) = data_batches.blocking_recv() {
-        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
-            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        })?;
-
-        tracing::debug!("Inserting {} rows into cloned table.", batch.num_rows());
-        insert_table
-            .insert_batch_no_constraints(tx, &batch)
-            .map_err(to_datafusion_error)?;
+        append_table
+            .create_indexes(&tx)
+            .map_err(to_retriable_data_write_error)?;
     }
 
-    if matches!(overwrite, InsertOp::Overwrite) {
-        insert_table_creator
-            .replace_table(tx, orig_table_creator)
-            .map_err(to_datafusion_error)?;
-    } else {
-        insert_table
-            .insert_table_into(tx, &duckdb, on_conflict.as_ref())
-            .map_err(to_datafusion_error)?;
-        insert_table_creator
-            .delete_table(tx)
-            .map_err(to_datafusion_error)?;
+    let primary_keys_match = append_table
+        .verify_primary_keys_match(&append_table, &tx)
+        .map_err(to_retriable_data_write_error)?;
+    let indexes_match = append_table
+        .verify_indexes_match(&append_table, &tx)
+        .map_err(to_retriable_data_write_error)?;
+
+    if !primary_keys_match {
+        return Err(DataFusionError::Execution(
+            "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table.".to_string(),
+        ));
     }
+
+    if !indexes_match {
+        return Err(DataFusionError::Execution(
+            "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
+        ));
+    }
+
+    tx.commit()
+        .context(super::UnableToCommitTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
 
     Ok(num_rows)
 }
 
-/// If there are no constraints on the `DuckDB` table, we can do a simple single transaction write.
-fn try_write_all_no_constraints(
-    duckdb: Arc<DuckDB>,
-    tx: &Transaction<'_>,
-    mut data_batches: Receiver<RecordBatch>,
-    overwrite: InsertOp,
-    initial_load: bool,
+#[allow(clippy::too_many_lines)]
+fn insert_overwrite(
+    pool: Arc<DuckDbConnectionPool>,
+    table_definition: &Arc<TableDefinition>,
+    batch_rx: Receiver<RecordBatch>,
+    on_conflict: Option<&OnConflict>,
+    mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
+    schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    let mut num_rows = 0;
+    let cloned_pool = Arc::clone(&pool);
+    let mut db_conn = pool
+        .connect_sync()
+        .context(super::DbConnectionPoolSnafu)
+        .map_err(to_retriable_data_write_error)?;
 
-    if !initial_load && matches!(overwrite, InsertOp::Overwrite) {
-        tracing::debug!("Deleting all data from table.");
-        duckdb
-            .delete_all_table_data(tx)
-            .map_err(to_datafusion_error)?;
+    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
+
+    let tx = duckdb_conn
+        .conn
+        .transaction()
+        .context(super::UnableToBeginTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
+
+    let new_table = TableManager::new(Arc::clone(table_definition))
+        .with_internal(true)
+        .map_err(to_retriable_data_write_error)?;
+
+    new_table
+        .create_table(cloned_pool, &tx)
+        .map_err(to_retriable_data_write_error)?;
+
+    let existing_tables = new_table
+        .list_other_internal_tables(&tx)
+        .map_err(to_retriable_data_write_error)?;
+    let base_table = new_table
+        .base_table(&tx)
+        .map_err(to_retriable_data_write_error)?;
+    let last_table = match (existing_tables.last(), base_table.as_ref()) {
+        (Some(internal_table), Some(base_table)) => {
+            return Err(DataFusionError::Execution(
+                format!("Failed to insert data for DuckDB - both an internal table and definition base table were found.\nManual table migration is required - delete the table '{internal_table}' or '{base_table}' and try again.",
+                internal_table = internal_table.0.table_name(),
+                base_table = base_table.table_name())));
+        }
+        (Some((table, _)), None) | (None, Some(table)) => Some(table),
+        (None, None) => None,
+    };
+
+    if let Some(last_table) = last_table {
+        // compare indexes and primary keys
+        let primary_keys_match = new_table
+            .verify_primary_keys_match(last_table, &tx)
+            .map_err(to_retriable_data_write_error)?;
+        let indexes_match = new_table
+            .verify_indexes_match(last_table, &tx)
+            .map_err(to_retriable_data_write_error)?;
+        let last_table_schema = last_table
+            .current_schema(&tx)
+            .map_err(to_retriable_data_write_error)?;
+        let new_table_schema = new_table
+            .current_schema(&tx)
+            .map_err(to_retriable_data_write_error)?;
+
+        if SCHEMA_EQUIVALENCE_ENABLED
+            && !new_table_schema.equivalent_names_and_types(&last_table_schema)
+        {
+            return Err(DataFusionError::Execution(
+                "Schema does not match between the new table and the existing table.".to_string(),
+            ));
+        }
+
+        if !primary_keys_match {
+            return Err(DataFusionError::Execution(
+                "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
+                    .to_string(),
+            ));
+        }
+
+        if !indexes_match {
+            return Err(DataFusionError::Execution(
+                "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
+            ));
+        }
     }
 
-    while let Some(batch) = data_batches.blocking_recv() {
-        num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
-            DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
-        })?;
+    tracing::debug!("Initial load for {}", new_table.table_name());
+    let num_rows = write_to_table(&new_table, &tx, schema, batch_rx, on_conflict)
+        .map_err(to_retriable_data_write_error)?;
 
-        tracing::debug!("Inserting {} rows into table.", batch.num_rows());
+    on_commit_transaction
+        .try_recv()
+        .map_err(to_retriable_data_write_error)?;
 
-        duckdb
-            .insert_batch_no_constraints(tx, &batch)
-            .map_err(to_datafusion_error)?;
+    if let Some(base_table) = base_table {
+        base_table
+            .delete_table(&tx)
+            .map_err(to_retriable_data_write_error)?;
     }
+
+    new_table
+        .create_view(&tx)
+        .map_err(to_retriable_data_write_error)?;
+
+    tx.commit()
+        .context(super::UnableToCommitTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
+
+    tracing::debug!(
+        "Load for table {table_name} complete, applying constraints and indexes.",
+        table_name = new_table.table_name()
+    );
+
+    let tx = duckdb_conn
+        .conn
+        .transaction()
+        .context(super::UnableToBeginTransactionSnafu)
+        .map_err(to_datafusion_error)?;
+
+    for (table, _) in existing_tables {
+        table
+            .delete_table(&tx)
+            .map_err(to_retriable_data_write_error)?;
+    }
+
+    // Apply constraints and indexes.
+    new_table
+        .create_indexes(&tx)
+        .map_err(to_retriable_data_write_error)?;
+
+    tx.commit()
+        .context(super::UnableToCommitTransactionSnafu)
+        .map_err(to_retriable_data_write_error)?;
 
     Ok(num_rows)
+}
+
+#[allow(clippy::doc_markdown)]
+/// Writes a stream of ``RecordBatch``es to a DuckDB table.
+fn write_to_table(
+    table: &TableManager,
+    tx: &Transaction<'_>,
+    schema: SchemaRef,
+    data_batches: Receiver<RecordBatch>,
+    on_conflict: Option<&OnConflict>,
+) -> datafusion::common::Result<u64> {
+    let stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchReaderFromStream::new(
+        data_batches,
+        schema,
+    )));
+
+    let current_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context(super::UnableToGetSystemTimeSnafu)
+        .map_err(to_datafusion_error)?
+        .as_millis();
+
+    let view_name = format!("__scan_{}_{current_ts}", table.table_name());
+    tx.register_arrow_scan_view(&view_name, &stream)
+        .context(super::UnableToRegisterArrowScanViewSnafu)
+        .map_err(to_datafusion_error)?;
+
+    let view = ViewCreator::from_name(RelationName::new(view_name));
+    let rows = view
+        .insert_into(table, tx, on_conflict)
+        .map_err(to_datafusion_error)?;
+    view.drop(tx).map_err(to_datafusion_error)?;
+
+    Ok(rows as u64)
+}
+
+struct RecordBatchReaderFromStream {
+    stream: Receiver<RecordBatch>,
+    schema: SchemaRef,
+}
+
+impl RecordBatchReaderFromStream {
+    fn new(stream: Receiver<RecordBatch>, schema: SchemaRef) -> Self {
+        Self { stream, schema }
+    }
+}
+
+impl Iterator for RecordBatchReaderFromStream {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stream.blocking_recv().map(Ok)
+    }
+}
+
+impl RecordBatchReader for RecordBatchReaderFromStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow::array::{Int64Array, StringArray};
+    use datafusion_physical_plan::memory::MemoryStream;
+
+    use super::*;
+    use crate::{
+        duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+        util::{column_reference::ColumnReference, indexes::IndexType},
+    };
+
+    #[tokio::test]
+    async fn test_write_to_table_overwrite_without_previous_table() {
+        // Test scenario: Write to a table with overwrite mode without a previous table
+        // Expected behavior: Data sink creates a new internal table, writes data to it, and creates a view with the table definition name
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_overwrite_with_previous_base_table() {
+        // Test scenario: Write to a table with overwrite mode with a previous base table
+        // Expected behavior: Data sink creates a new internal table, writes data to it.
+        // Before creating the view, the base table needs to get dropped as we need to create a view with the same name.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let cloned_pool = Arc::clone(&pool);
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        // make an existing table to overwrite
+        let overwrite_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
+
+        overwrite_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        tx.execute(
+            &format!(
+                "INSERT INTO {table_name} VALUES (3, 'c')",
+                table_name = overwrite_table.table_name()
+            ),
+            [],
+        )
+        .expect("to insert");
+
+        tx.commit().expect("to commit");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        let table_creator =
+            TableManager::from_table_name(Arc::clone(&table_definition), table_name);
+        let base_table = table_creator.base_table(&tx).expect("to get base table");
+
+        assert!(base_table.is_none()); // base table should get deleted
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_overwrite_with_previous_internal_table() {
+        // Test scenario: Write to a table with overwrite mode with a previous base table
+        // Expected behavior: Data sink creates a new internal table, writes data to it.
+        // Before creating the view, the base table needs to get dropped as we need to create a view with the same name.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let cloned_pool = Arc::clone(&pool);
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        // make an existing table to overwrite
+        let overwrite_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table");
+
+        overwrite_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        tx.execute(
+            &format!(
+                "INSERT INTO {table_name} VALUES (3, 'c')",
+                table_name = overwrite_table.table_name()
+            ),
+            [],
+        )
+        .expect("to insert");
+
+        tx.commit().expect("to commit");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+        let mut internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 1);
+
+        let table_name = internal_tables.pop().expect("should have a table").0;
+
+        let rows = tx
+            .query_row(&format!("SELECT COUNT(1) FROM {table_name}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        // expect a view to be created with the table definition name
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+
+        assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_append_with_previous_table() {
+        // Test scenario: Write to a table with append mode with a previous table
+        // Expected behavior: Data sink appends data to the existing table. No new internal table should be created.
+        // The existing table is re-used.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let cloned_pool = Arc::clone(&pool);
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let table_definition = get_basic_table_definition();
+
+        // make an existing table to append from
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
+
+        append_table
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        tx.execute(
+            &format!(
+                "INSERT INTO {table_name} VALUES (3, 'c')",
+                table_name = append_table.table_name()
+            ),
+            [],
+        )
+        .expect("to insert");
+
+        tx.commit().expect("to commit");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 0);
+
+        let base_table = append_table
+            .base_table(&tx)
+            .expect("to get base table")
+            .expect("should have a base table");
+
+        let rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {table_name}",
+                    table_name = base_table.table_name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+        assert_eq!(rows, 3);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_append_without_previous_table() {
+        // Test scenario: Write to a table with append mode without a previous table
+        // Expected behavior: Data sink creates a new base table, writes data to it.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let cloned_pool = Arc::clone(&pool);
+
+        let table_definition = get_basic_table_definition();
+
+        // make an existing table to append from
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 0);
+
+        let base_table = append_table
+            .base_table(&tx)
+            .expect("to get base table")
+            .expect("should have a base table");
+
+        let rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {table_name}",
+                    table_name = base_table.table_name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_append_without_previous_table_with_indexes() {
+        // Test scenario: Write to a table with append mode without a previous table with indexes
+        // Expected behavior: Data sink creates a new base table, writes data to it.
+        // The table should have indexes applied.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let cloned_pool = Arc::clone(&pool);
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(
+                    vec![(
+                        ColumnReference::try_from("id").expect("valid column ref"),
+                        IndexType::Enabled,
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+        );
+
+        // make an existing table to append from
+        let append_table = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table");
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // id, name
+        // 1, "a"
+        // 2, "b"
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        let mut conn = cloned_pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(internal_tables.len(), 0);
+
+        let base_table = append_table
+            .base_table(&tx)
+            .expect("to get base table")
+            .expect("should have a base table");
+
+        let rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {table_name}",
+                    table_name = base_table.table_name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+        assert_eq!(rows, 2);
+
+        // should have 1 index
+        let indexes = append_table.current_indexes(&tx).expect("to get indexes");
+        assert_eq!(indexes.len(), 1);
+
+        tx.rollback().expect("to rollback");
+    }
 }
