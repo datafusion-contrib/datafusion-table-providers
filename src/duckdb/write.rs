@@ -407,13 +407,13 @@ fn insert_append(
 
     if !primary_keys_match {
         return Err(DataFusionError::Execution(
-            "Primary keys do not match between the new table and the existing table.".to_string(),
+            "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table.".to_string(),
         ));
     }
 
     if !indexes_match {
         return Err(DataFusionError::Execution(
-            "Indexes do not match between the new table and the existing table.".to_string(),
+            "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
         ));
     }
 
@@ -497,14 +497,14 @@ fn insert_overwrite(
 
         if !primary_keys_match {
             return Err(DataFusionError::Execution(
-                "Primary keys do not match between the new table and the existing table."
+                "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
                     .to_string(),
             ));
         }
 
         if !indexes_match {
             return Err(DataFusionError::Execution(
-                "Indexes do not match between the new table and the existing table.".to_string(),
+                "Indexes do not match between the new table and the existing table.\nEnsure index configuration is the same as the existing table, or manually migrate the table.".to_string(),
             ));
         }
     }
