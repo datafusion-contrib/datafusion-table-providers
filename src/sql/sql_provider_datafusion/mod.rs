@@ -437,7 +437,7 @@ mod tests {
                         Box<dyn DuckDBSyncParameter>,
                     > + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory(None)?)
+            > = Arc::new(DuckDbConnectionPool::new_memory()?)
                 as Arc<
                     dyn DbConnectionPool<
                             r2d2::PooledConnection<DuckdbConnectionManager>,
@@ -472,7 +472,7 @@ mod tests {
                         Box<dyn DuckDBSyncParameter>,
                     > + Send
                     + Sync,
-            > = Arc::new(DuckDbConnectionPool::new_memory(None)?)
+            > = Arc::new(DuckDbConnectionPool::new_memory()?)
                 as Arc<
                     dyn DbConnectionPool<
                             r2d2::PooledConnection<DuckdbConnectionManager>,

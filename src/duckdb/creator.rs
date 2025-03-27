@@ -751,7 +751,7 @@ pub(crate) mod tests {
 
     pub(crate) fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
         Arc::new(
-            DuckDbConnectionPool::new_memory(None).expect("to get a memory duckdb connection pool"),
+            DuckDbConnectionPool::new_memory().expect("to get a memory duckdb connection pool"),
         )
     }
 
