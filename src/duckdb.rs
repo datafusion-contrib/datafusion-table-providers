@@ -250,9 +250,23 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(
+    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
+        self.get_or_init_memory_instance_with_size_config(None, None)
+            .await
+    }
+
+    pub async fn get_or_init_file_instance(
         &self,
-        connection_pool_size: Option<u32>,
+        db_path: impl Into<Arc<str>>,
+    ) -> Result<DuckDbConnectionPool> {
+        self.get_or_init_file_instance_with_size_config(db_path, None, None)
+            .await
+    }
+
+    pub async fn get_or_init_memory_instance_with_size_config(
+        &self,
+        max_size: Option<u32>,
+        min_idle: Option<u32>,
     ) -> Result<DuckDbConnectionPool> {
         let key = DbInstanceKey::memory();
         let mut instances = self.instances.lock().await;
@@ -261,8 +275,17 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPoolBuilder::default()
-            .with_connection_pool_size(connection_pool_size)
+        let mut pool_builder = DuckDbConnectionPoolBuilder::default();
+
+        if max_size.is_some() {
+            pool_builder = pool_builder.with_max_size(max_size);
+        }
+
+        if min_idle.is_some() {
+            pool_builder = pool_builder.with_min_idle(min_idle);
+        }
+
+        let pool = pool_builder
             .build_memory()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
@@ -272,10 +295,11 @@ impl DuckDBTableProviderFactory {
         Ok(pool)
     }
 
-    pub async fn get_or_init_file_instance(
+    pub async fn get_or_init_file_instance_with_size_config(
         &self,
         db_path: impl Into<Arc<str>>,
-        connection_pool_size: Option<u32>,
+        max_size: Option<u32>,
+        min_idle: Option<u32>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path = db_path.into();
         let key = DbInstanceKey::file(Arc::clone(&db_path));
@@ -285,10 +309,19 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPoolBuilder::default()
+        let mut pool_builder = DuckDbConnectionPoolBuilder::default()
             .with_access_mode(&self.access_mode)
-            .with_file_path(&db_path)
-            .with_connection_pool_size(connection_pool_size)
+            .with_file_path(&db_path);
+
+        if max_size.is_some() {
+            pool_builder = pool_builder.with_max_size(max_size);
+        }
+
+        if min_idle.is_some() {
+            pool_builder = pool_builder.with_min_idle(min_idle);
+        }
+
+        let pool = pool_builder
             .build_file()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
@@ -362,12 +395,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path, None)
+                self.get_or_init_file_instance(db_path)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance(None)
+                .get_or_init_memory_instance()
                 .await
                 .map_err(to_datafusion_error)?,
         };

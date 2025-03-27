@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use duckdb::{vtab::arrow::ArrowVTab, AccessMode, DuckdbConnectionManager};
 use snafu::{prelude::*, ResultExt};
-use std::{cmp::max, sync::Arc};
+use std::sync::Arc;
 
 use super::{
     dbconnection::duckdbconn::{DuckDBAttachments, DuckDBParameter},
@@ -14,8 +14,6 @@ use crate::{
     },
     UnsupportedTypeAction,
 };
-
-const DEFAULT_MIN_IDLE_CONNECTIONS: u32 = 10;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -35,16 +33,18 @@ pub enum Error {
 
 pub struct DuckDbConnectionPoolBuilder<'a> {
     path: String,
-    connection_pool_size: Option<u32>,
+    max_size: Option<u32>,
     access_mode: &'a AccessMode,
+    min_idle: Option<u32>,
 }
 
 impl<'a> Default for DuckDbConnectionPoolBuilder<'a> {
     fn default() -> Self {
         Self {
             path: String::default(),
-            connection_pool_size: None,
+            max_size: None,
             access_mode: &AccessMode::ReadWrite,
+            min_idle: None,
         }
     }
 }
@@ -54,8 +54,8 @@ impl<'a> DuckDbConnectionPoolBuilder<'a> {
         Self::default()
     }
 
-    pub fn with_connection_pool_size(mut self, size: Option<u32>) -> Self {
-        self.connection_pool_size = size;
+    pub fn with_max_size(mut self, size: Option<u32>) -> Self {
+        self.max_size = size;
         self
     }
 
@@ -69,9 +69,14 @@ impl<'a> DuckDbConnectionPoolBuilder<'a> {
         self
     }
 
+    pub fn with_min_idle(mut self, min_idle: Option<u32>) -> Self {
+        self.min_idle = min_idle;
+        self
+    }
+
     /// Create an in-memory database connection pool
     pub fn build_memory(self) -> Result<DuckDbConnectionPool> {
-        DuckDbConnectionPool::new_memory_internal(self.connection_pool_size)
+        DuckDbConnectionPool::new_memory_internal(self.max_size, self.min_idle)
     }
 
     /// Create a file-based database connection pool
@@ -79,7 +84,8 @@ impl<'a> DuckDbConnectionPoolBuilder<'a> {
         DuckDbConnectionPool::new_file_internal(
             self.path.as_str(),
             self.access_mode,
-            self.connection_pool_size,
+            self.max_size,
+            self.min_idle,
         )
     }
 }
@@ -112,18 +118,20 @@ impl DuckDbConnectionPool {
         self.path.as_ref()
     }
 
-    fn new_memory_internal(connection_pool_size: Option<u32>) -> Result<Self> {
+    fn new_memory_internal(max_size: Option<u32>, min_idle: Option<u32>) -> Result<Self> {
         let config = get_config(&AccessMode::ReadWrite)?;
         let manager =
             DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
 
         let mut pool_builder = r2d2::Pool::builder();
-        if let Some(size) = connection_pool_size {
-            let max_size = max(DEFAULT_MIN_IDLE_CONNECTIONS, size);
-            pool_builder = pool_builder
-                .max_size(max_size)
-                .min_idle(Some(DEFAULT_MIN_IDLE_CONNECTIONS));
+
+        if let Some(size) = max_size {
+            pool_builder = pool_builder.max_size(size)
         }
+        if min_idle.is_some() {
+            pool_builder = pool_builder.min_idle(min_idle)
+        }
+
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
@@ -145,19 +153,22 @@ impl DuckDbConnectionPool {
     fn new_file_internal(
         path: &str,
         access_mode: &AccessMode,
-        connection_pool_size: Option<u32>,
+        max_size: Option<u32>,
+        min_idle: Option<u32>,
     ) -> Result<Self> {
         let config = get_config(access_mode)?;
         let manager = DuckdbConnectionManager::file_with_flags(path, config)
             .context(DuckDBConnectionSnafu)?;
 
         let mut pool_builder = r2d2::Pool::builder();
-        if let Some(size) = connection_pool_size {
-            let max_size = max(DEFAULT_MIN_IDLE_CONNECTIONS, size);
-            pool_builder = pool_builder
-                .max_size(max_size)
-                .min_idle(Some(DEFAULT_MIN_IDLE_CONNECTIONS));
+
+        if let Some(size) = max_size {
+            pool_builder = pool_builder.max_size(size)
         }
+        if min_idle.is_some() {
+            pool_builder = pool_builder.min_idle(min_idle)
+        }
+
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
 
         let conn = pool.get().context(ConnectionPoolSnafu)?;
@@ -192,7 +203,7 @@ impl DuckDbConnectionPool {
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
     pub fn new_memory() -> Result<Self> {
-        Self::new_memory_internal(None)
+        Self::new_memory_internal(None, None)
     }
 
     /// Create a new `DuckDbConnectionPool` from a file.
@@ -211,7 +222,7 @@ impl DuckDbConnectionPool {
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
     pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
-        Self::new_file_internal(path, access_mode, None)
+        Self::new_file_internal(path, access_mode, None, None)
     }
 
     #[must_use]
