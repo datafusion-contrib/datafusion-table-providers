@@ -158,6 +158,9 @@ pub enum Error {
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToDropArrowScanView { source: duckdb::Error },
+
+    #[snafu(display("DuckDB file path missing for initializing File Mode DuckDB instance"))]
+    FilePathMissing,
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -251,7 +254,8 @@ impl DuckDBTableProviderFactory {
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
-        self.get_or_init_memory_instance_with_size_config(None, None)
+        let pool_builder = DuckDbConnectionPoolBuilder::memory();
+        self.get_or_init_instance_with_builder(Mode::Memory, pool_builder)
             .await
     }
 
@@ -259,71 +263,36 @@ impl DuckDBTableProviderFactory {
         &self,
         db_path: impl Into<Arc<str>>,
     ) -> Result<DuckDbConnectionPool> {
-        self.get_or_init_file_instance_with_size_config(db_path, None, None)
-            .await
-    }
-
-    pub async fn get_or_init_memory_instance_with_size_config(
-        &self,
-        max_size: Option<u32>,
-        min_idle: Option<u32>,
-    ) -> Result<DuckDbConnectionPool> {
-        let key = DbInstanceKey::memory();
-        let mut instances = self.instances.lock().await;
-
-        if let Some(instance) = instances.get(&key) {
-            return Ok(instance.clone());
-        }
-
-        let mut pool_builder = DuckDbConnectionPoolBuilder::memory();
-
-        if max_size.is_some() {
-            pool_builder = pool_builder.with_max_size(max_size);
-        }
-
-        if min_idle.is_some() {
-            pool_builder = pool_builder.with_min_idle(min_idle);
-        }
-
-        let pool = pool_builder
-            .build()
-            .context(DbConnectionPoolSnafu)?
-            .with_unsupported_type_action(self.unsupported_type_action);
-
-        instances.insert(key, pool.clone());
-
-        Ok(pool)
-    }
-
-    pub async fn get_or_init_file_instance_with_size_config(
-        &self,
-        db_path: impl Into<Arc<str>>,
-        max_size: Option<u32>,
-        min_idle: Option<u32>,
-    ) -> Result<DuckDbConnectionPool> {
-        let db_path = db_path.into();
-        let key = DbInstanceKey::file(Arc::clone(&db_path));
-        let mut instances = self.instances.lock().await;
-
-        if let Some(instance) = instances.get(&key) {
-            return Ok(instance.clone());
-        }
+        let db_path: Arc<str> = db_path.into();
 
         let access_mode = match &self.access_mode {
             AccessMode::ReadOnly => AccessMode::ReadOnly,
             AccessMode::ReadWrite => AccessMode::ReadWrite,
             AccessMode::Automatic => AccessMode::Automatic,
         };
-
-        let mut pool_builder =
+        let pool_builder =
             DuckDbConnectionPoolBuilder::file(&db_path).with_access_mode(access_mode);
 
-        if max_size.is_some() {
-            pool_builder = pool_builder.with_max_size(max_size);
-        }
+        self.get_or_init_instance_with_builder(Mode::File, pool_builder)
+            .await
+    }
 
-        if min_idle.is_some() {
-            pool_builder = pool_builder.with_min_idle(min_idle);
+    pub async fn get_or_init_instance_with_builder(
+        &self,
+        mode: Mode,
+        pool_builder: DuckDbConnectionPoolBuilder,
+    ) -> Result<DuckDbConnectionPool> {
+        let key = match mode {
+            Mode::File => {
+                let path = pool_builder.get_path();
+                DbInstanceKey::file(path.into())
+            }
+            Mode::Memory => DbInstanceKey::memory(),
+        };
+        let mut instances = self.instances.lock().await;
+
+        if let Some(instance) = instances.get(&key) {
+            return Ok(instance.clone());
         }
 
         let pool = pool_builder

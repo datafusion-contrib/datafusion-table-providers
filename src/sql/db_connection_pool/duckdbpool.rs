@@ -60,6 +60,10 @@ impl DuckDbConnectionPoolBuilder {
         }
     }
 
+    pub fn get_path(&self) -> String {
+        self.path.clone()
+    }
+
     pub fn with_max_size(mut self, size: Option<u32>) -> Self {
         self.max_size = size;
         self
