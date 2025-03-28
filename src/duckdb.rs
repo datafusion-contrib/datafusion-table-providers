@@ -275,7 +275,7 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let mut pool_builder = DuckDbConnectionPoolBuilder::default();
+        let mut pool_builder = DuckDbConnectionPoolBuilder::default().memory();
 
         if max_size.is_some() {
             pool_builder = pool_builder.with_max_size(max_size);
@@ -286,7 +286,7 @@ impl DuckDBTableProviderFactory {
         }
 
         let pool = pool_builder
-            .build_memory()
+            .build()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 
@@ -309,9 +309,16 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
+        let access_mode = match &self.access_mode {
+            AccessMode::ReadOnly => AccessMode::ReadOnly,
+            AccessMode::ReadWrite => AccessMode::ReadWrite,
+            AccessMode::Automatic => AccessMode::Automatic,
+        };
+
         let mut pool_builder = DuckDbConnectionPoolBuilder::default()
-            .with_access_mode(&self.access_mode)
-            .with_file_path(&db_path);
+            .with_access_mode(access_mode)
+            .with_file_path(&db_path)
+            .file();
 
         if max_size.is_some() {
             pool_builder = pool_builder.with_max_size(max_size);
@@ -322,7 +329,7 @@ impl DuckDBTableProviderFactory {
         }
 
         let pool = pool_builder
-            .build_file()
+            .build()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 

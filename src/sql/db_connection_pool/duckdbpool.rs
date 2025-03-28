@@ -31,25 +31,27 @@ pub enum Error {
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
-pub struct DuckDbConnectionPoolBuilder<'a> {
+pub struct DuckDbConnectionPoolBuilder {
     path: String,
     max_size: Option<u32>,
-    access_mode: &'a AccessMode,
+    access_mode: AccessMode,
     min_idle: Option<u32>,
+    mode: Mode,
 }
 
-impl<'a> Default for DuckDbConnectionPoolBuilder<'a> {
+impl Default for DuckDbConnectionPoolBuilder {
     fn default() -> Self {
         Self {
             path: String::default(),
             max_size: None,
-            access_mode: &AccessMode::ReadWrite,
+            access_mode: AccessMode::ReadWrite,
             min_idle: None,
+            mode: Mode::Memory,
         }
     }
 }
 
-impl<'a> DuckDbConnectionPoolBuilder<'a> {
+impl DuckDbConnectionPoolBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -59,7 +61,7 @@ impl<'a> DuckDbConnectionPoolBuilder<'a> {
         self
     }
 
-    pub fn with_access_mode(mut self, access_mode: &'a AccessMode) -> Self {
+    pub fn with_access_mode(mut self, access_mode: AccessMode) -> Self {
         self.access_mode = access_mode;
         self
     }
@@ -74,19 +76,26 @@ impl<'a> DuckDbConnectionPoolBuilder<'a> {
         self
     }
 
-    /// Create an in-memory database connection pool
-    pub fn build_memory(self) -> Result<DuckDbConnectionPool> {
-        DuckDbConnectionPool::new_memory_internal(self.max_size, self.min_idle)
+    pub fn memory(mut self) -> Self {
+        self.mode = Mode::Memory;
+        self
     }
 
-    /// Create a file-based database connection pool
-    pub fn build_file(self) -> Result<DuckDbConnectionPool> {
-        DuckDbConnectionPool::new_file_internal(
-            self.path.as_str(),
-            self.access_mode,
-            self.max_size,
-            self.min_idle,
-        )
+    pub fn file(mut self) -> Self {
+        self.mode = Mode::File;
+        self
+    }
+
+    pub fn build(self) -> Result<DuckDbConnectionPool> {
+        match self.mode {
+            Mode::Memory => DuckDbConnectionPool::new_memory_internal(self.max_size, self.min_idle),
+            Mode::File => DuckDbConnectionPool::new_file_internal(
+                self.path.as_str(),
+                &self.access_mode,
+                self.max_size,
+                self.min_idle,
+            ),
+        }
     }
 }
 
