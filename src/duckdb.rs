@@ -158,9 +158,6 @@ pub enum Error {
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToDropArrowScanView { source: duckdb::Error },
-
-    #[snafu(display("DuckDB file path missing for initializing File Mode DuckDB instance"))]
-    FilePathMissing,
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
