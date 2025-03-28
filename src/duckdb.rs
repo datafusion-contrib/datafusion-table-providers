@@ -15,7 +15,7 @@ use crate::{
             },
             get_schema, DbConnection,
         },
-        duckdbpool::DuckDbConnectionPool,
+        duckdbpool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder},
         DbConnectionPool, DbInstanceKey, Mode,
     },
     UnsupportedTypeAction,
@@ -251,35 +251,48 @@ impl DuckDBTableProviderFactory {
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
-        let key = DbInstanceKey::memory();
-        let mut instances = self.instances.lock().await;
-
-        if let Some(instance) = instances.get(&key) {
-            return Ok(instance.clone());
-        }
-
-        let pool = DuckDbConnectionPool::new_memory()
-            .context(DbConnectionPoolSnafu)?
-            .with_unsupported_type_action(self.unsupported_type_action);
-
-        instances.insert(key, pool.clone());
-
-        Ok(pool)
+        let pool_builder = DuckDbConnectionPoolBuilder::memory();
+        self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
     ) -> Result<DuckDbConnectionPool> {
-        let db_path = db_path.into();
-        let key = DbInstanceKey::file(Arc::clone(&db_path));
+        let db_path: Arc<str> = db_path.into();
+        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+
+        self.get_or_init_instance_with_builder(pool_builder).await
+    }
+
+    pub async fn get_or_init_instance_with_builder(
+        &self,
+        pool_builder: DuckDbConnectionPoolBuilder,
+    ) -> Result<DuckDbConnectionPool> {
+        let mode = pool_builder.get_mode();
+        let key = match mode {
+            Mode::File => {
+                let path = pool_builder.get_path();
+                DbInstanceKey::file(path.into())
+            }
+            Mode::Memory => DbInstanceKey::memory(),
+        };
+
+        let access_mode = match &self.access_mode {
+            AccessMode::ReadOnly => AccessMode::ReadOnly,
+            AccessMode::ReadWrite => AccessMode::ReadWrite,
+            AccessMode::Automatic => AccessMode::Automatic,
+        };
+        let pool_builder = pool_builder.with_access_mode(access_mode);
+
         let mut instances = self.instances.lock().await;
 
         if let Some(instance) = instances.get(&key) {
             return Ok(instance.clone());
         }
 
-        let pool = DuckDbConnectionPool::new_file(&db_path, &self.access_mode)
+        let pool = pool_builder
+            .build()
             .context(DbConnectionPoolSnafu)?
             .with_unsupported_type_action(self.unsupported_type_action);
 
