@@ -255,8 +255,7 @@ impl DuckDBTableProviderFactory {
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
         let pool_builder = DuckDbConnectionPoolBuilder::memory();
-        self.get_or_init_instance_with_builder(Mode::Memory, pool_builder)
-            .await
+        self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_file_instance(
@@ -264,24 +263,16 @@ impl DuckDBTableProviderFactory {
         db_path: impl Into<Arc<str>>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path: Arc<str> = db_path.into();
+        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
 
-        let access_mode = match &self.access_mode {
-            AccessMode::ReadOnly => AccessMode::ReadOnly,
-            AccessMode::ReadWrite => AccessMode::ReadWrite,
-            AccessMode::Automatic => AccessMode::Automatic,
-        };
-        let pool_builder =
-            DuckDbConnectionPoolBuilder::file(&db_path).with_access_mode(access_mode);
-
-        self.get_or_init_instance_with_builder(Mode::File, pool_builder)
-            .await
+        self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_instance_with_builder(
         &self,
-        mode: Mode,
         pool_builder: DuckDbConnectionPoolBuilder,
     ) -> Result<DuckDbConnectionPool> {
+        let mode = pool_builder.get_mode();
         let key = match mode {
             Mode::File => {
                 let path = pool_builder.get_path();
@@ -289,6 +280,14 @@ impl DuckDBTableProviderFactory {
             }
             Mode::Memory => DbInstanceKey::memory(),
         };
+
+        let access_mode = match &self.access_mode {
+            AccessMode::ReadOnly => AccessMode::ReadOnly,
+            AccessMode::ReadWrite => AccessMode::ReadWrite,
+            AccessMode::Automatic => AccessMode::Automatic,
+        };
+        let pool_builder = pool_builder.with_access_mode(access_mode);
+
         let mut instances = self.instances.lock().await;
 
         if let Some(instance) = instances.get(&key) {

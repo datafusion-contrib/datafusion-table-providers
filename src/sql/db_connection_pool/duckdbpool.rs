@@ -64,6 +64,10 @@ impl DuckDbConnectionPoolBuilder {
         self.path.clone()
     }
 
+    pub fn get_mode(&self) -> Mode {
+        self.mode
+    }
+
     pub fn with_max_size(mut self, size: Option<u32>) -> Self {
         self.max_size = size;
         self
