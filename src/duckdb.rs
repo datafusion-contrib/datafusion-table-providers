@@ -275,7 +275,7 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
-        let mut pool_builder = DuckDbConnectionPoolBuilder::default().memory();
+        let mut pool_builder = DuckDbConnectionPoolBuilder::memory();
 
         if max_size.is_some() {
             pool_builder = pool_builder.with_max_size(max_size);
@@ -315,10 +315,8 @@ impl DuckDBTableProviderFactory {
             AccessMode::Automatic => AccessMode::Automatic,
         };
 
-        let mut pool_builder = DuckDbConnectionPoolBuilder::default()
-            .with_access_mode(access_mode)
-            .with_file_path(&db_path)
-            .file();
+        let mut pool_builder =
+            DuckDbConnectionPoolBuilder::file(&db_path).with_access_mode(access_mode);
 
         if max_size.is_some() {
             pool_builder = pool_builder.with_max_size(max_size);

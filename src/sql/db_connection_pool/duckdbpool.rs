@@ -39,8 +39,8 @@ pub struct DuckDbConnectionPoolBuilder {
     mode: Mode,
 }
 
-impl Default for DuckDbConnectionPoolBuilder {
-    fn default() -> Self {
+impl DuckDbConnectionPoolBuilder {
+    pub fn memory() -> Self {
         Self {
             path: String::default(),
             max_size: None,
@@ -49,11 +49,15 @@ impl Default for DuckDbConnectionPoolBuilder {
             mode: Mode::Memory,
         }
     }
-}
 
-impl DuckDbConnectionPoolBuilder {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn file(path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            max_size: None,
+            access_mode: AccessMode::ReadWrite,
+            min_idle: None,
+            mode: Mode::File,
+        }
     }
 
     pub fn with_max_size(mut self, size: Option<u32>) -> Self {
@@ -66,35 +70,80 @@ impl DuckDbConnectionPoolBuilder {
         self
     }
 
-    pub fn with_file_path(mut self, path: &str) -> Self {
-        self.path = path.to_string();
-        self
-    }
-
     pub fn with_min_idle(mut self, min_idle: Option<u32>) -> Self {
         self.min_idle = min_idle;
         self
     }
 
-    pub fn memory(mut self) -> Self {
-        self.mode = Mode::Memory;
-        self
+    fn build_memory_pool(&self) -> Result<DuckDbConnectionPool> {
+        let config = get_config(&AccessMode::ReadWrite)?;
+        let manager =
+            DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
+
+        let mut pool_builder = r2d2::Pool::builder();
+
+        if let Some(size) = self.max_size {
+            pool_builder = pool_builder.max_size(size)
+        }
+        if self.min_idle.is_some() {
+            pool_builder = pool_builder.min_idle(self.min_idle)
+        }
+
+        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
+
+        let conn = pool.get().context(ConnectionPoolSnafu)?;
+        conn.register_table_function::<ArrowVTab>("arrow")
+            .context(DuckDBConnectionSnafu)?;
+
+        test_connection(&conn)?;
+
+        Ok(DuckDbConnectionPool {
+            path: ":memory:".into(),
+            pool,
+            join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
+            attached_databases: Vec::new(),
+            mode: Mode::Memory,
+            unsupported_type_action: UnsupportedTypeAction::Error,
+        })
     }
 
-    pub fn file(mut self) -> Self {
-        self.mode = Mode::File;
-        self
+    fn build_file_pool(&self) -> Result<DuckDbConnectionPool> {
+        let config = get_config(&self.access_mode)?;
+        let manager = DuckdbConnectionManager::file_with_flags(&self.path, config)
+            .context(DuckDBConnectionSnafu)?;
+
+        let mut pool_builder = r2d2::Pool::builder();
+
+        if let Some(size) = self.max_size {
+            pool_builder = pool_builder.max_size(size)
+        }
+        if self.min_idle.is_some() {
+            pool_builder = pool_builder.min_idle(self.min_idle)
+        }
+
+        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
+
+        let conn = pool.get().context(ConnectionPoolSnafu)?;
+        conn.register_table_function::<ArrowVTab>("arrow")
+            .context(DuckDBConnectionSnafu)?;
+
+        test_connection(&conn)?;
+
+        Ok(DuckDbConnectionPool {
+            path: self.path.as_str().into(),
+            pool,
+            // Allow join-push down for any other instances that connect to the same underlying file.
+            join_push_down: JoinPushDown::AllowedFor(self.path.clone()),
+            attached_databases: Vec::new(),
+            mode: Mode::File,
+            unsupported_type_action: UnsupportedTypeAction::Error,
+        })
     }
 
     pub fn build(self) -> Result<DuckDbConnectionPool> {
         match self.mode {
-            Mode::Memory => DuckDbConnectionPool::new_memory_internal(self.max_size, self.min_idle),
-            Mode::File => DuckDbConnectionPool::new_file_internal(
-                self.path.as_str(),
-                &self.access_mode,
-                self.max_size,
-                self.min_idle,
-            ),
+            Mode::Memory => self.build_memory_pool(),
+            Mode::File => self.build_file_pool(),
         }
     }
 }
@@ -127,76 +176,6 @@ impl DuckDbConnectionPool {
         self.path.as_ref()
     }
 
-    fn new_memory_internal(max_size: Option<u32>, min_idle: Option<u32>) -> Result<Self> {
-        let config = get_config(&AccessMode::ReadWrite)?;
-        let manager =
-            DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
-
-        let mut pool_builder = r2d2::Pool::builder();
-
-        if let Some(size) = max_size {
-            pool_builder = pool_builder.max_size(size)
-        }
-        if min_idle.is_some() {
-            pool_builder = pool_builder.min_idle(min_idle)
-        }
-
-        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
-
-        let conn = pool.get().context(ConnectionPoolSnafu)?;
-        conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBConnectionSnafu)?;
-
-        test_connection(&conn)?;
-
-        Ok(DuckDbConnectionPool {
-            path: ":memory:".into(),
-            pool,
-            join_push_down: JoinPushDown::AllowedFor(":memory:".to_string()),
-            attached_databases: Vec::new(),
-            mode: Mode::Memory,
-            unsupported_type_action: UnsupportedTypeAction::Error,
-        })
-    }
-
-    fn new_file_internal(
-        path: &str,
-        access_mode: &AccessMode,
-        max_size: Option<u32>,
-        min_idle: Option<u32>,
-    ) -> Result<Self> {
-        let config = get_config(access_mode)?;
-        let manager = DuckdbConnectionManager::file_with_flags(path, config)
-            .context(DuckDBConnectionSnafu)?;
-
-        let mut pool_builder = r2d2::Pool::builder();
-
-        if let Some(size) = max_size {
-            pool_builder = pool_builder.max_size(size)
-        }
-        if min_idle.is_some() {
-            pool_builder = pool_builder.min_idle(min_idle)
-        }
-
-        let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
-
-        let conn = pool.get().context(ConnectionPoolSnafu)?;
-        conn.register_table_function::<ArrowVTab>("arrow")
-            .context(DuckDBConnectionSnafu)?;
-
-        test_connection(&conn)?;
-
-        Ok(DuckDbConnectionPool {
-            path: path.into(),
-            pool,
-            // Allow join-push down for any other instances that connect to the same underlying file.
-            join_push_down: JoinPushDown::AllowedFor(path.to_string()),
-            attached_databases: Vec::new(),
-            mode: Mode::File,
-            unsupported_type_action: UnsupportedTypeAction::Error,
-        })
-    }
-
     /// Create a new `DuckDbConnectionPool` from memory.
     ///
     /// # Arguments
@@ -212,7 +191,7 @@ impl DuckDbConnectionPool {
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
     pub fn new_memory() -> Result<Self> {
-        Self::new_memory_internal(None, None)
+        DuckDbConnectionPoolBuilder::memory().build()
     }
 
     /// Create a new `DuckDbConnectionPool` from a file.
@@ -231,7 +210,14 @@ impl DuckDbConnectionPool {
     /// * `DuckDBConnectionSnafu` - If there is an error creating the connection pool
     /// * `ConnectionPoolSnafu` - If there is an error creating the connection pool
     pub fn new_file(path: &str, access_mode: &AccessMode) -> Result<Self> {
-        Self::new_file_internal(path, access_mode, None, None)
+        let access_mode = match access_mode {
+            AccessMode::Automatic => AccessMode::Automatic,
+            AccessMode::ReadOnly => AccessMode::ReadOnly,
+            AccessMode::ReadWrite => AccessMode::ReadWrite,
+        };
+        DuckDbConnectionPoolBuilder::file(path)
+            .with_access_mode(access_mode)
+            .build()
     }
 
     #[must_use]
