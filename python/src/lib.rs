@@ -61,5 +61,9 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     postgres::init_module(&postgres)?;
     m.add_submodule(&postgres)?;
 
+    let flight = PyModule::new(py, "flight")?;
+    flight::init_module(&flight)?;
+    m.add_submodule(&flight)?;
+
     Ok(())
 }

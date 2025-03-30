@@ -111,7 +111,7 @@ brew install roapi
 # cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
 roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet &
 
-cargo run --example flight-sql --features flight
+cargo run -p datafusion-table-providers --example flight-sql --no-default-features --features flight
 ```
 
 ### ODBC

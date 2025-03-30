@@ -15,9 +15,10 @@ doc = false
 
 [dependencies]
 arrow = { workspace = true }
+arrow-flight = {workspace = true}
 datafusion = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
-datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb", "odbc", "mysql", "postgres"] }
+datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb", "odbc", "mysql", "postgres", "flight"] }
 pyo3 = { version = "0.23" }
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 duckdb = { workspace = true }
