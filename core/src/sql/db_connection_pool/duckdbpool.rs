@@ -54,7 +54,6 @@ impl std::fmt::Debug for DuckDbConnectionPool {
 }
 
 impl DuckDbConnectionPool {
-
     /// Get the dataset path. Returns `:memory:` if the in memory database is used.
     pub fn db_path(&self) -> &str {
         self.path.as_ref()
@@ -266,7 +265,6 @@ mod test {
 
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
-    use std::sync::Arc;
 
     fn random_db_name() -> String {
         let mut rng = rand::rng();

@@ -18,10 +18,9 @@ use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
-use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 
-use crate::sql::db_connection_pool::runtime::get_tokio_runtime;
+use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 
@@ -442,13 +441,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             )))
         };
 
-        // If calling directly from Rust, there is already tokio runtime so no
-        // additional work is needed. If calling from Python FFI, there's no existing
-        // tokio runtime, so we need to start a new one.
-        match Handle::try_current() {
-            Ok(_) => create_stream(),
-            Err(_) => get_tokio_runtime().block_on(async { create_stream() }),
-        }
+        run_sync_with_tokio(create_stream)
     }
 
     fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {

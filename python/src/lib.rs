@@ -53,5 +53,13 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     odbc::init_module(&odbc)?;
     m.add_submodule(&odbc)?;
 
+    let mysql = PyModule::new(py, "mysql")?;
+    mysql::init_module(&mysql)?;
+    m.add_submodule(&mysql)?;
+
+    let postgres = PyModule::new(py, "postgres")?;
+    postgres::init_module(&postgres)?;
+    m.add_submodule(&postgres)?;
+
     Ok(())
 }

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::sql::db_connection_pool::{
     dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
-    runtime::get_tokio_runtime,
+    runtime::run_async_with_tokio,
     DbConnectionPool,
 };
 use arrow_odbc::arrow_schema_from;
@@ -249,10 +249,7 @@ where
                 Box::pin(RecordBatchStreamAdapter::new(schema, output_stream));
             Ok(result)
         };
-        match Handle::try_current() {
-            Ok(_) => create_stream().await,
-            Err(_) => get_tokio_runtime().block_on(async { create_stream().await }),
-        }
+        run_async_with_tokio(create_stream).await
     }
 
     async fn execute(&self, query: &str, params: &[ODBCParameter]) -> Result<u64> {

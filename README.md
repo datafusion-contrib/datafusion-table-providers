@@ -69,7 +69,11 @@ EOF
 ```
 
 ```bash
+# If running from core/ folder
 cargo run --example postgres --features postgres
+# If running from main repo folder
+cargo run -p datafusion-table-providers --example postgres --no-default-features --features postgres
+
 ```
 
 ### MySQL
@@ -93,7 +97,10 @@ EOF
 ```
 
 ```bash
+# If run from core/ folder
 cargo run --example mysql --features mysql
+# If run from main repo folder
+cargo run -p datafusion-table-providers --example mysql --no-default-features --features mysql
 ```
 
 ### Flight SQL
@@ -108,7 +115,6 @@ cargo run --example flight-sql --features flight
 ```
 
 ### ODBC
-
 ```bash
 apt-get install unixodbc-dev libsqliteodbc
 # or
