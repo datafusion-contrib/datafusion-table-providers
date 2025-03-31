@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use crate::{
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},

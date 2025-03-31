@@ -20,7 +20,7 @@ async fn main() {
     // - arg3: Connection timeout duration
     let sqlite_pool = Arc::new(
         SqliteConnectionPoolFactory::new(
-            "examples/sqlite_example.db",
+            "core/examples/sqlite_example.db",
             Mode::File,
             Duration::from_millis(5000),
         )
