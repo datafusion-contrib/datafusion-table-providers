@@ -185,6 +185,7 @@ const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
 const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 const DUCKDB_SETTING_MEMORY_LIMIT: &str = "memory_limit";
 const DUCKDB_SETTING_TEMP_DIRECTORY: &str = "temp_directory";
+const DUCKDB_SETTING_PRESERVE_INSERTION_ORDER: &str = "preserve_insertion_order";
 
 impl DuckDBTableProviderFactory {
     #[must_use]
@@ -407,6 +408,11 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         if let Some(temp_directory) = options.get(DUCKDB_SETTING_TEMP_DIRECTORY) {
             apply_temp_directory(&dyn_pool, temp_directory).await?;
+        }
+
+        if let Some(preserve_insertion_order) = options.get(DUCKDB_SETTING_PRESERVE_INSERTION_ORDER)
+        {
+            apply_preserve_insertion_order(&dyn_pool, preserve_insertion_order).await?;
         }
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
@@ -650,6 +656,25 @@ async fn apply_temp_directory(
     Ok(())
 }
 
+async fn apply_preserve_insertion_order(
+    pool: &Arc<DynDuckDbConnectionPool>,
+    preserve_insertion_order: &str,
+) -> DataFusionResult<()> {
+    tracing::debug!("Setting DuckDB preserve insertion order to {preserve_insertion_order}");
+
+    let db_conn = pool.connect().await?;
+    let Some(conn) = db_conn.as_sync() else {
+        return Err(to_datafusion_error(Error::DbConnectionError {
+            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
+        }));
+    };
+    conn.execute(
+        &format!("SET {DUCKDB_SETTING_PRESERVE_INSERTION_ORDER} = {preserve_insertion_order}"),
+        &[],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn make_initial_table(
     table_definition: Arc<TableDefinition>,
     pool: &Arc<DuckDbConnectionPool>,
@@ -821,5 +846,155 @@ pub(crate) mod tests {
             temp_directory, test_temp_directory,
             "Temp directory must be set to {test_temp_directory}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_preserve_insertion_order_true() {
+        let table_name = TableReference::bare("test_table_preserve_order_true");
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Int32, false)]);
+
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+        options.insert("preserve_insertion_order".to_string(), "true".to_string());
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name,
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+
+        let table_provider = factory
+            .create(&ctx.state(), &cmd)
+            .await
+            .expect("table provider created");
+
+        let writer = table_provider
+            .as_any()
+            .downcast_ref::<DuckDBTableWriter>()
+            .expect("cast to DuckDBTableWriter");
+
+        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
+        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+
+        let mut stmt = conn
+            .conn
+            .prepare("SELECT value FROM duckdb_settings() WHERE name = 'preserve_insertion_order'")
+            .expect("to prepare statement");
+
+        let preserve_order = stmt
+            .query_row([], |row| row.get::<usize, String>(0))
+            .expect("to query preserve_insertion_order");
+
+        assert_eq!(
+            preserve_order, "true",
+            "preserve_insertion_order must be set to true"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_preserve_insertion_order_false() {
+        let table_name = TableReference::bare("test_table_preserve_order_false");
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Int32, false)]);
+
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+        options.insert("preserve_insertion_order".to_string(), "false".to_string());
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name,
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+
+        let table_provider = factory
+            .create(&ctx.state(), &cmd)
+            .await
+            .expect("table provider created");
+
+        let writer = table_provider
+            .as_any()
+            .downcast_ref::<DuckDBTableWriter>()
+            .expect("cast to DuckDBTableWriter");
+
+        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
+        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+
+        let mut stmt = conn
+            .conn
+            .prepare("SELECT value FROM duckdb_settings() WHERE name = 'preserve_insertion_order'")
+            .expect("to prepare statement");
+
+        let preserve_order = stmt
+            .query_row([], |row| row.get::<usize, String>(0))
+            .expect("to query preserve_insertion_order");
+
+        assert_eq!(
+            preserve_order, "false",
+            "preserve_insertion_order must be set to false"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_invalid_preserve_insertion_order() {
+        let table_name = TableReference::bare("test_table_preserve_order_invalid");
+        let schema = Schema::new(vec![Field::new("dummy", DataType::Int32, false)]);
+
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+        options.insert(
+            "preserve_insertion_order".to_string(),
+            "invalid".to_string(),
+        );
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name,
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+
+        let result = factory.create(&ctx.state(), &cmd).await;
+        assert!(
+            result.is_err(),
+            "Should fail with invalid preserve_insertion_order value"
+        );
+        if let Err(e) = result {
+            assert_eq!(e.to_string(), "External error: Query execution failed.\nInvalid Input Error: Failed to cast value: Could not convert string 'invalid' to BOOL\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/");
+        }
     }
 }
