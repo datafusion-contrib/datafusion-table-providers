@@ -49,5 +49,21 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     duckdb::init_module(&duckdb)?;
     m.add_submodule(&duckdb)?;
 
+    let odbc = PyModule::new(py, "odbc")?;
+    odbc::init_module(&odbc)?;
+    m.add_submodule(&odbc)?;
+
+    let mysql = PyModule::new(py, "mysql")?;
+    mysql::init_module(&mysql)?;
+    m.add_submodule(&mysql)?;
+
+    let postgres = PyModule::new(py, "postgres")?;
+    postgres::init_module(&postgres)?;
+    m.add_submodule(&postgres)?;
+
+    let flight = PyModule::new(py, "flight")?;
+    flight::init_module(&flight)?;
+    m.add_submodule(&flight)?;
+
     Ok(())
 }

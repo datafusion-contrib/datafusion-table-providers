@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{DataType, Field};
@@ -18,9 +18,9 @@ use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
-use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::Sender;
 
+use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 
@@ -282,13 +282,6 @@ impl DbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParamet
     }
 }
 
-fn get_tokio_runtime() -> &'static Runtime {
-    // TODO: this function is a repetition of python/src/utils.rs::get_tokio_runtime.
-    // Think about how to refactor it
-    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
-}
-
 impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     for DuckDbConnection
 {
@@ -448,13 +441,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             )))
         };
 
-        // If calling directly from Rust, there is already tokio runtime so no
-        // additional work is needed. If calling from Python FFI, there's no existing
-        // tokio runtime, so we need to start a new one.
-        match Handle::try_current() {
-            Ok(_) => create_stream(),
-            Err(_) => get_tokio_runtime().block_on(async { create_stream() }),
-        }
+        run_sync_with_tokio(create_stream)
     }
 
     fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {

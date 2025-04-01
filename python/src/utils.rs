@@ -1,6 +1,9 @@
 use pyo3::{exceptions::PyException, prelude::*};
 use std::{future::Future, sync::OnceLock};
 
+use pyo3::types::PyDict;
+use std::collections::HashMap;
+
 pub(crate) struct TokioRuntime(tokio::runtime::Runtime);
 
 #[inline]
@@ -21,4 +24,14 @@ where
 
 pub fn to_pyerr<T: ToString>(err: T) -> PyErr {
     PyException::new_err(err.to_string())
+}
+
+pub fn pydict_to_hashmap(pydict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    for (key, value) in pydict.iter() {
+        let key_str: String = key.extract()?;
+        let value_str: String = value.extract()?;
+        map.insert(key_str, value_str);
+    }
+    Ok(map)
 }
