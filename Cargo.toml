@@ -40,12 +40,12 @@ arrow-flight = { version = "54.2.1", features = [
 arrow-schema = { version = "54.2.1", features = ["serde"] }
 arrow-json = "54.2.1"
 arrow-odbc = { version = "=15.1.1" }
-datafusion = { version = "45", default-features = false }
-datafusion-expr = { version = "45" }
+datafusion = { version = "46", default-features = false }
+datafusion-expr = { version = "46" }
 datafusion-federation = { version = "=0.3.6" }
-datafusion-ffi = { version = "45" }
-datafusion-proto = { version = "45" }
-datafusion-physical-expr = { version = "45" }
-datafusion-physical-plan = { version = "45" }
+datafusion-ffi = { version = "46" }
+datafusion-proto = { version = "46" }
+datafusion-physical-expr = { version = "46" }
+datafusion-physical-plan = { version = "46" }
 datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.2.1" }
