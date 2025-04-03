@@ -31,8 +31,8 @@ async fn main() {
     let postgres_params = to_secret_map(HashMap::from([
         ("host".to_string(), "localhost".to_string()),
         ("user".to_string(), "postgres".to_string()),
-        ("db".to_string(), "postgres_db".to_string()),
-        ("pass".to_string(), "password".to_string()),
+        ("db".to_string(), "postgres".to_string()),
+        ("pass".to_string(), "postgres".to_string()),
         ("port".to_string(), "5432".to_string()),
         ("sslmode".to_string(), "disable".to_string()),
     ]));
@@ -50,16 +50,44 @@ async fn main() {
         .await
         .expect("to create table provider");
 
+    let companies_view = table_factory
+        .table_provider(TableReference::bare("companies_view"))
+        .await
+        .expect("to create table provider for view");
+
+    let companies_materialized_view = table_factory
+        .table_provider(TableReference::bare("companies_materialized_view"))
+        .await
+        .expect("to create table provider for materialized view");
+
     let ctx = SessionContext::new();
 
     // It's not required that the name registed in DataFusion matches the table name in DuckDB.
     ctx.register_table("companies", companies_table)
         .expect("to register table");
+    ctx.register_table("companies_view", companies_view)
+        .expect("to register view");
+    ctx.register_table("companies_materialized_view", companies_materialized_view)
+        .expect("to register materialized view");
 
     let df = ctx
         .sql("SELECT * FROM companies")
         .await
         .expect("select failed");
+
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT * FROM companies_view")
+        .await
+        .expect("select from view failed");
+
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT * FROM companies_materialized_view")
+        .await
+        .expect("select from materialized view failed");
 
     df.show().await.expect("show failed");
 }
