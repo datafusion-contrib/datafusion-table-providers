@@ -52,3 +52,9 @@ CREATE TABLE example_table (
     -- Custom composite type
     composite_col complex_type
 );
+
+CREATE VIEW example_view AS
+SELECT * FROM example_table;
+
+CREATE MATERIALIZED VIEW example_materialized_view AS
+SELECT * FROM example_table;

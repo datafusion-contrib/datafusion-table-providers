@@ -147,54 +147,32 @@ async fn test_postgres_view_schema_inference() {
             .await
             .expect("unable to create Postgres connection pool"),
     );
-
     let pg_conn = postgres_pool
         .connect_direct()
         .await
         .expect("to connect to postgres");
 
-    let create_table_sql = "
-        CREATE TABLE test_table_for_view (
-            id INT NOT NULL,
-            name TEXT
-        );
-    ";
-    pg_conn
-        .conn
-        .execute(create_table_sql, &[])
-        .await
-        .expect("to create table");
-
-    // Create a view over the table.
-    let create_view_sql = "
-        CREATE VIEW test_view AS
-        SELECT * FROM test_table_for_view;
-    ";
-    pg_conn
-        .conn
-        .execute(create_view_sql, &[])
-        .await
-        .expect("to create view");
+    for cmd in COMPLEX_TABLE_SQL.split(";") {
+        if cmd.trim().is_empty() {
+            continue;
+        }
+        pg_conn
+            .conn
+            .execute(cmd, &[])
+            .await
+            .expect("executing SQL from complex_table.sql");
+    }
 
     let table_factory = PostgresTableFactory::new(postgres_pool.clone());
     let table_provider = table_factory
-        .table_provider(TableReference::bare("test_view"))
+        .table_provider(TableReference::bare("example_view"))
         .await
         .expect("to create table provider for view");
 
-    // Even though the base table column "id" is defined NOT NULL,
-    // the view’s inferred schema will mark it as nullable.
-    let expected_schema: SchemaRef = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("name", DataType::Utf8, true),
-    ]));
+    let pretty_schema = format!("{:#?}", table_provider.schema());
+    insta::assert_snapshot!(pretty_schema);
 
-    assert_eq!(
-        table_provider.schema(),
-        expected_schema,
-        "The inferred schema from the view should have all fields nullable."
-    );
-
+    // Tear down
     container
         .remove()
         .await
@@ -213,54 +191,32 @@ async fn test_postgres_materialized_view_schema_inference() {
             .await
             .expect("unable to create Postgres connection pool"),
     );
-
     let pg_conn = postgres_pool
         .connect_direct()
         .await
         .expect("to connect to postgres");
 
-    let create_table_sql = "
-        CREATE TABLE test_table_for_mat_view (
-            id INT NOT NULL,
-            name TEXT
-        );
-    ";
-    pg_conn
-        .conn
-        .execute(create_table_sql, &[])
-        .await
-        .expect("to create table");
-
-    // Create a materialized view based on that table.
-    let create_mv_sql = "
-        CREATE MATERIALIZED VIEW test_materialized_view AS
-        SELECT * FROM test_table_for_mat_view;
-    ";
-    pg_conn
-        .conn
-        .execute(create_mv_sql, &[])
-        .await
-        .expect("to create materialized view");
+    for cmd in COMPLEX_TABLE_SQL.split(";") {
+        if cmd.trim().is_empty() {
+            continue;
+        }
+        pg_conn
+            .conn
+            .execute(cmd, &[])
+            .await
+            .expect("executing SQL from complex_table.sql");
+    }
 
     let table_factory = PostgresTableFactory::new(postgres_pool);
     let table_provider = table_factory
-        .table_provider(TableReference::bare("test_materialized_view"))
+        .table_provider(TableReference::bare("example_materialized_view"))
         .await
         .expect("to create table provider for materialized view");
 
-    // The inferred schema for the materialized view will report both columns as nullable,
-    // even though "id" was NOT NULL in the base table.
-    let expected_schema: SchemaRef = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("name", DataType::Utf8, true),
-    ]));
+    let pretty_schema = format!("{:#?}", table_provider.schema());
+    insta::assert_snapshot!(pretty_schema);
 
-    assert_eq!(
-        table_provider.schema(),
-        expected_schema,
-        "The inferred schema from the materialized view should have all fields nullable."
-    );
-
+    // Tear down
     container
         .remove()
         .await
