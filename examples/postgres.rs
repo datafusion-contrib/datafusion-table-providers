@@ -32,7 +32,7 @@ async fn main() {
         ("host".to_string(), "localhost".to_string()),
         ("user".to_string(), "postgres".to_string()),
         ("db".to_string(), "postgres_db".to_string()),
-        ("pass".to_string(), "postgres".to_string()),
+        ("pass".to_string(), "password".to_string()),
         ("port".to_string(), "5432".to_string()),
         ("sslmode".to_string(), "disable".to_string()),
     ]));
