@@ -31,7 +31,7 @@ async fn main() {
     let postgres_params = to_secret_map(HashMap::from([
         ("host".to_string(), "localhost".to_string()),
         ("user".to_string(), "postgres".to_string()),
-        ("db".to_string(), "postgres".to_string()),
+        ("db".to_string(), "postgres_db".to_string()),
         ("pass".to_string(), "postgres".to_string()),
         ("port".to_string(), "5432".to_string()),
         ("sslmode".to_string(), "disable".to_string()),
