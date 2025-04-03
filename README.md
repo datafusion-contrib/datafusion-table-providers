@@ -51,7 +51,18 @@ CREATE TABLE companies (
   name VARCHAR(100)
 );
 
-INSERT INTO companies (id, name) VALUES (1, 'Acme Corporation');
+INSERT INTO companies (id, name) VALUES
+    (1, 'Acme Corporation'),
+    (2, 'Widget Inc.'),
+    (3, 'Gizmo Corp.'),
+    (4, 'Tech Solutions'),
+    (5, 'Data Innovations');
+
+CREATE VIEW companies_view AS
+  SELECT id, name FROM companies;
+
+CREATE MATERIALIZED VIEW companies_materialized_view AS
+  SELECT id, name FROM companies;
 EOF
 ```
 

@@ -31,16 +31,16 @@ use super::Result;
 
 const SCHEMA_QUERY: &str = r"
 WITH custom_type_details AS (
-SELECT 
+SELECT
 t.typname,
 t.typtype,
-CASE 
-    WHEN t.typtype = 'e' THEN 
+CASE
+    WHEN t.typtype = 'e' THEN
         jsonb_build_object(
             'type', 'enum',
             'values', (
                 SELECT jsonb_agg(e.enumlabel ORDER BY e.enumsortorder)
-                FROM pg_enum e 
+                FROM pg_enum e
                 WHERE e.enumtypid = t.oid
             )
         )
@@ -50,69 +50,57 @@ CASE
             'attributes', (
                 SELECT jsonb_agg(
                     jsonb_build_object(
-                        'name', a.attname,
-                        'type', pg_catalog.format_type(a.atttypid, a.atttypmod)
+                        'name', a2.attname,
+                        'type', pg_catalog.format_type(a2.atttypid, a2.atttypmod)
                     )
-                    ORDER BY a.attnum
+                    ORDER BY a2.attnum
                 )
-                FROM pg_attribute a
-                WHERE a.attrelid = t.typrelid 
-                AND a.attnum > 0 
-                AND NOT a.attisdropped
+                FROM pg_attribute a2
+                WHERE a2.attrelid = t.typrelid
+                AND a2.attnum > 0
+                AND NOT a2.attisdropped
             )
         )
 END as type_details
 FROM pg_type t
-WHERE t.typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+JOIN pg_namespace n ON t.typnamespace = n.oid
+WHERE n.nspname = $1
 )
-SELECT 
-c.column_name,
-CASE 
-WHEN c.data_type = 'USER-DEFINED' THEN
-    CASE 
-        WHEN t.typtype = 'e' THEN 'enum'
-        WHEN t.typtype = 'c' THEN 'composite'
-        ELSE c.data_type
-    END
-WHEN c.data_type = 'ARRAY' THEN
-    'array'
-ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
-END as data_type,
-c.is_nullable,
-CASE 
-WHEN c.data_type = 'ARRAY' THEN
-    jsonb_build_object(
+SELECT
+    a.attname AS column_name,
+    CASE
+    -- when an array type is encountered, label as 'array'
+    WHEN t.typcategory = 'A' THEN 'array'
+    -- if it’s a user-defined enum or composite type then output that specific string
+    WHEN t.typtype = 'e' THEN 'enum'
+    WHEN t.typtype = 'c' THEN 'composite'
+    ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
+    END AS data_type,
+    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+    CASE
+    WHEN t.typcategory = 'A' THEN
+        jsonb_build_object(
         'type', 'array',
         'element_type', (
             SELECT pg_catalog.format_type(et.oid, a.atttypmod)
-            FROM pg_type t
-            JOIN pg_type et ON t.typelem = et.oid
-            WHERE t.typname = c.udt_name
+            FROM pg_type t2
+            JOIN pg_type et ON t2.typelem = et.oid
+            WHERE t2.oid = a.atttypid
         )
-    )
-ELSE td.type_details
-END as type_details
-FROM 
-information_schema.columns c
-LEFT JOIN custom_type_details td ON td.typname = c.udt_name
-LEFT JOIN pg_type t ON t.typname = c.udt_name
-LEFT JOIN pg_attribute a ON 
-a.attrelid = (
-    SELECT oid 
-    FROM pg_class 
-    WHERE relname = c.table_name 
-    AND relnamespace = (
-        SELECT oid 
-        FROM pg_namespace 
-        WHERE nspname = c.table_schema
-    )
-)
-AND a.attname = c.column_name
-WHERE 
-c.table_schema = $1
-AND c.table_name = $2
-ORDER BY 
-c.ordinal_position;
+        )
+    ELSE custom.type_details
+    END AS type_details
+FROM pg_class cls
+JOIN pg_namespace ns ON cls.relnamespace = ns.oid
+JOIN pg_attribute a ON a.attrelid = cls.oid
+LEFT JOIN pg_type t ON t.oid = a.atttypid
+LEFT JOIN custom_type_details custom ON custom.typname = t.typname
+WHERE ns.nspname = $1
+    AND cls.relname = $2
+    AND cls.relkind IN ('r','v','m')  -- covers tables, normal views, & materialized views
+    AND a.attnum > 0
+    AND NOT a.attisdropped
+ORDER BY a.attnum;
 ";
 
 #[derive(Debug, Snafu)]
