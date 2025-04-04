@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use mysql_async::{
     prelude::{Queryable, ToValue},
-    DriverError, Opts, Params, Row, SslOpts,
+    DriverError, Metrics, Opts, Params, Row, SslOpts,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{ResultExt, Snafu};
@@ -50,6 +50,7 @@ pub enum Error {
     UnknownMySQLDatabase { message: String },
 }
 
+#[derive(Debug, Clone)]
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
     join_push_down: JoinPushDown,
@@ -195,6 +196,10 @@ impl MySQLConnectionPool {
             .context(MySQLConnectionSnafu)?;
 
         Ok(MySQLConnection::new(conn))
+    }
+
+    pub fn metrics(&self) -> Arc<Metrics> {
+        self.pool.metrics()
     }
 }
 

@@ -35,7 +35,7 @@ duckdb = { version = "1", features = [
 ], optional = true }
 fallible-iterator = "0.3.0"
 futures = "0.3.30"
-mysql_async = { version = "0.34.1", features = ["native-tls-tls", "chrono"], optional = true }
+mysql_async = { version = "0.35.1", features = ["native-tls-tls", "chrono", "hdrhistogram", "bigdecimal", "time"], optional = true }
 prost = { version = "0.13.2", optional = true }
 rand = "0.8.5"
 r2d2 = { version = "0.8.10", optional = true }

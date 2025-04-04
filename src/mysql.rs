@@ -14,16 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::sql_provider_datafusion::{self};
 use datafusion::{datasource::TableProvider, sql::TableReference};
-use mysql_async::prelude::ToValue;
 use snafu::prelude::*;
 use sql_table::MySQLTable;
 use std::sync::Arc;
-
-pub type MySQLConnectionPool =
-    dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> + Send + Sync;
 
 pub mod federation;
 pub(crate) mod mysql_window;
