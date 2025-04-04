@@ -20,7 +20,7 @@ use datafusion::{
     sql::TableReference,
 };
 
-impl<T, P> MySQLTable<T, P> {
+impl MySQLTable {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
@@ -61,7 +61,7 @@ fn mysql_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionE
 }
 
 #[async_trait]
-impl<T, P> SQLExecutor for MySQLTable<T, P> {
+impl SQLExecutor for MySQLTable {
     fn name(&self) -> &str {
         self.base_table.name()
     }
