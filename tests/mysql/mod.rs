@@ -1,7 +1,8 @@
 use datafusion::execution::context::SessionContext;
-use datafusion_table_providers::{
-    mysql::MySQLConnectionPool, sql::sql_provider_datafusion::SqlTable,
+use datafusion_table_providers::sql::{
+    db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
 };
+use mysql_async::prelude::ToValue;
 use rstest::rstest;
 use std::sync::Arc;
 
@@ -636,7 +637,12 @@ async fn arrow_mysql_one_way(
         .expect("MySQL table data should be inserted");
 
     // Register datafusion table, test mysql row -> arrow conversion
-    let sqltable_pool: Arc<MySQLConnectionPool> = Arc::new(pool);
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(pool);
     let table = SqlTable::new("mysql", &sqltable_pool, table_name, None)
         .await
         .expect("Table should be created");
