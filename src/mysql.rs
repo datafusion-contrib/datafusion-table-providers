@@ -17,6 +17,7 @@ limitations under the License.
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::sql_provider_datafusion::{self};
 use datafusion::{datasource::TableProvider, sql::TableReference};
+use mysql_async::Metrics;
 use snafu::prelude::*;
 use sql_table::MySQLTable;
 use std::sync::Arc;
@@ -63,5 +64,9 @@ impl MySQLTableFactory {
         );
 
         Ok(table_provider)
+    }
+
+    pub fn conn_pool_metrics(&self) -> Arc<Metrics> {
+        self.pool.metrics()
     }
 }
