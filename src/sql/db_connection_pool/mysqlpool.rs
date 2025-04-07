@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use mysql_async::{
     prelude::{Queryable, ToValue},
     DriverError, Metrics, Opts, Params, PoolConstraints, PoolOpts, Row, SslOpts,
+    DEFAULT_POOL_CONSTRAINTS,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{ResultExt, Snafu};
@@ -111,21 +112,19 @@ impl MySQLConnectionPool {
                     connection_string.tcp_port(mysql_tcp_port.parse::<u16>().unwrap_or(3306));
             }
 
-            // Default to 10 connections in the pool, with a max of 100
-            // This mirrors the default behavior of the `mysql_async` crate
             let pool_min = params
                 .get("pool_min")
                 .map(SecretBox::expose_secret)
-                .unwrap_or("10")
+                .unwrap_or_default()
                 .parse::<usize>()
-                .unwrap_or(10);
+                .unwrap_or(DEFAULT_POOL_CONSTRAINTS.min());
 
             let pool_max = params
                 .get("pool_max")
                 .map(SecretBox::expose_secret)
-                .unwrap_or("100")
+                .unwrap_or_default()
                 .parse::<usize>()
-                .unwrap_or(100);
+                .unwrap_or(DEFAULT_POOL_CONSTRAINTS.max());
 
             connection_string = connection_string
                 .pool_opts(PoolOpts::default().with_constraints(
