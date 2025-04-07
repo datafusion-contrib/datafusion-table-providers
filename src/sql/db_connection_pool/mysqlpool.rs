@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use mysql_async::{
     prelude::{Queryable, ToValue},
-    DriverError, Metrics, Opts, Params, Row, SslOpts,
+    DriverError, Metrics, Opts, Params, PoolConstraints, PoolOpts, Row, SslOpts,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{ResultExt, Snafu};
@@ -70,6 +70,8 @@ impl MySQLConnectionPool {
     ///   * `tcp_port` - The TCP port to use when connecting to the MySQL database.
     ///   * `sslmode` - The SSL mode to use when connecting to the MySQL database. Can be "disabled", "required", or "preferred".
     ///   * `sslrootcert` - The path to the root certificate to use when connecting to the MySQL database.
+    ///   * `pool_min` - The minimum number of connections to keep open in the pool, lazily created when requested.
+    ///   * `pool_max` - The maximum number of connections to allow in the pool.
     ///
     /// # Errors
     ///
@@ -108,6 +110,27 @@ impl MySQLConnectionPool {
                 connection_string =
                     connection_string.tcp_port(mysql_tcp_port.parse::<u16>().unwrap_or(3306));
             }
+
+            // Default to 10 connections in the pool, with a max of 100
+            // This mirrors the default behavior of the `mysql_async` crate
+            let pool_min = params
+                .get("pool_min")
+                .map(SecretBox::expose_secret)
+                .unwrap_or("10")
+                .parse::<usize>()
+                .unwrap_or(10);
+
+            let pool_max = params
+                .get("pool_max")
+                .map(SecretBox::expose_secret)
+                .unwrap_or("100")
+                .parse::<usize>()
+                .unwrap_or(100);
+
+            connection_string = connection_string
+                .pool_opts(PoolOpts::default().with_constraints(
+                    PoolConstraints::new(pool_min, pool_max).unwrap_or_default(),
+                ));
         }
 
         if let Some(mysql_sslmode) = params.get("sslmode").map(SecretBox::expose_secret) {
