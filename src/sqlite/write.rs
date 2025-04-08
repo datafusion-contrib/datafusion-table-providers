@@ -93,8 +93,8 @@ impl TableProvider for SqliteTableWriter {
                 Arc::clone(&self.sqlite),
                 overwrite,
                 self.on_conflict.clone(),
+                self.schema(),
             )),
-            self.schema(),
             None,
         )) as _)
     }
@@ -105,6 +105,7 @@ struct SqliteDataSink {
     sqlite: Arc<Sqlite>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
+    schema: SchemaRef,
 }
 
 #[async_trait]
@@ -115,6 +116,10 @@ impl DataSink for SqliteDataSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(
@@ -223,11 +228,17 @@ impl DataSink for SqliteDataSink {
 }
 
 impl SqliteDataSink {
-    fn new(sqlite: Arc<Sqlite>, overwrite: InsertOp, on_conflict: Option<OnConflict>) -> Self {
+    fn new(
+        sqlite: Arc<Sqlite>,
+        overwrite: InsertOp,
+        on_conflict: Option<OnConflict>,
+        schema: SchemaRef,
+    ) -> Self {
         Self {
             sqlite,
             overwrite,
             on_conflict,
+            schema,
         }
     }
 }

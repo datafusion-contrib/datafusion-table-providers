@@ -240,6 +240,7 @@ impl SQLiteIntervalVisitor {
             over: None,
             within_group: Vec::new(),
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         });
 
         Expr::Cast {
@@ -409,6 +410,7 @@ mod test {
                 over: None,
                 within_group: Vec::new(),
                 parameters: ast::FunctionArguments::None,
+                uses_odbc_syntax: false,
             })),
             data_type: ast::DataType::Text,
             format: None,
@@ -458,6 +460,7 @@ mod test {
                 over: None,
                 within_group: Vec::new(),
                 parameters: ast::FunctionArguments::None,
+                uses_odbc_syntax: false,
             })),
             data_type: ast::DataType::Text,
             format: None,

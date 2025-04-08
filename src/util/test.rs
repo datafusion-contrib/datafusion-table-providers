@@ -8,8 +8,9 @@ use datafusion::{
     physical_expr::EquivalenceProperties,
     physical_plan::{
         common,
+        execution_plan::{Boundedness, EmissionType},
         stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
-        DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 
@@ -59,7 +60,8 @@ impl MockExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }

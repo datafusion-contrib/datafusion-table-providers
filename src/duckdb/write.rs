@@ -173,8 +173,8 @@ impl TableProvider for DuckDBTableWriter {
                 Arc::clone(&self.table_definition),
                 overwrite,
                 self.on_conflict.clone(),
+                self.schema(),
             )),
-            self.schema(),
             None,
         )) as _)
     }
@@ -186,6 +186,7 @@ pub(crate) struct DuckDBDataSink {
     table_definition: Arc<TableDefinition>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
+    schema: SchemaRef,
 }
 
 #[async_trait]
@@ -196,6 +197,10 @@ impl DataSink for DuckDBDataSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(
@@ -295,12 +300,14 @@ impl DuckDBDataSink {
         table_definition: Arc<TableDefinition>,
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
+        schema: SchemaRef,
     ) -> Self {
         Self {
             pool,
             table_definition,
             overwrite,
             on_conflict,
+            schema,
         }
     }
 }
@@ -658,6 +665,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -757,6 +765,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -862,6 +871,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -961,6 +971,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Append,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -1061,6 +1072,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Append,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
