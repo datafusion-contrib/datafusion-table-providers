@@ -193,13 +193,12 @@ async fn flight_stream(
     for loc in partition.locations.iter() {
         let get_client = || async { flight_client(loc, grpc_headers.as_ref(), &size_limits).await };
         let client = run_async_with_tokio(get_client).await?;
-        // let client = flight_client(loc, grpc_headers.as_ref(), &size_limits).await?;
         match try_fetch_stream(client, &partition.ticket, schema.clone()).await {
             Ok(stream) => return Ok(stream),
             Err(e) => errors.push(Box::new(e)),
         }
     }
-    let err = errors.into_iter().last().unwrap_or_else(|| {
+    let err = errors.into_iter().next_back().unwrap_or_else(|| {
         Box::new(FlightError::ProtocolError(format!(
             "No available location for endpoint {:?}",
             partition.locations
