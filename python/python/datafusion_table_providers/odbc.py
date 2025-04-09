@@ -23,7 +23,7 @@ class ODBCTableFactory:
     """ODBC table factory."""
 
     def __init__(self, params: dict) -> None:
-        """Create am odbc table factory."""
+        """Create an odbc table factory."""
         self._raw = _internal.odbc.RawODBCTableFactory(params)
 
     def get_table(self, table_reference: str) -> Any:
