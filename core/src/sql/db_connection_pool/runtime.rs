@@ -28,7 +28,6 @@ where
 {
     match Handle::try_current() {
         Ok(_) => f().await,
-        // Err(_) => get_tokio_runtime().0.block_on(f()),
         Err(_) => execute_in_tokio(f),
     }
 }
