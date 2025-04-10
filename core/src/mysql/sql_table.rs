@@ -1,8 +1,10 @@
+use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::MySqlDialect;
 use futures::TryStreamExt;
+use mysql_async::prelude::ToValue;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
@@ -22,11 +24,12 @@ use datafusion::{
     sql::TableReference,
 };
 
-pub struct MySQLTable<T: 'static, P: 'static> {
-    pub(crate) base_table: SqlTable<T, P>,
+pub struct MySQLTable {
+    pool: Arc<MySQLConnectionPool>,
+    pub(crate) base_table: SqlTable<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
 }
 
-impl<T, P> std::fmt::Debug for MySQLTable<T, P> {
+impl std::fmt::Debug for MySQLTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MySQLTable")
             .field("base_table", &self.base_table)
@@ -34,16 +37,25 @@ impl<T, P> std::fmt::Debug for MySQLTable<T, P> {
     }
 }
 
-impl<T, P> MySQLTable<T, P> {
+impl MySQLTable {
     pub async fn new(
-        pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
     ) -> Result<Self, sql_provider_datafusion::Error> {
-        let base_table = SqlTable::new("mysql", pool, table_reference)
+        let dyn_pool = Arc::clone(pool)
+            as Arc<
+                dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+                    + Send
+                    + Sync,
+            >;
+        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference)
             .await?
             .with_dialect(Arc::new(MySqlDialect {}));
 
-        Ok(Self { base_table })
+        Ok(Self {
+            pool: Arc::clone(pool),
+            base_table,
+        })
     }
 
     fn create_physical_plan(
@@ -57,14 +69,14 @@ impl<T, P> MySQLTable<T, P> {
         Ok(Arc::new(MySQLSQLExec::new(
             projections,
             schema,
-            self.base_table.clone_pool(),
+            Arc::clone(&self.pool),
             sql,
         )?))
     }
 }
 
 #[async_trait]
-impl<T, P> TableProvider for MySQLTable<T, P> {
+impl TableProvider for MySQLTable {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -95,22 +107,21 @@ impl<T, P> TableProvider for MySQLTable<T, P> {
     }
 }
 
-impl<T, P> Display for MySQLTable<T, P> {
+impl Display for MySQLTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MySQLTable {}", self.base_table.name())
     }
 }
 
-#[derive(Clone)]
-struct MySQLSQLExec<T, P> {
-    base_exec: SqlExec<T, P>,
+struct MySQLSQLExec {
+    base_exec: SqlExec<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
 }
 
-impl<T, P> MySQLSQLExec<T, P> {
+impl MySQLSQLExec {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<MySQLConnectionPool>,
         sql: String,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(projections, schema, pool, sql)?;
@@ -123,21 +134,21 @@ impl<T, P> MySQLSQLExec<T, P> {
     }
 }
 
-impl<T, P> std::fmt::Debug for MySQLSQLExec<T, P> {
+impl std::fmt::Debug for MySQLSQLExec {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "MySQLSQLExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for MySQLSQLExec<T, P> {
+impl DisplayAs for MySQLSQLExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "MySQLSQLExec sql={sql}")
     }
 }
 
-impl<T: 'static, P: 'static> ExecutionPlan for MySQLSQLExec<T, P> {
+impl ExecutionPlan for MySQLSQLExec {
     fn name(&self) -> &'static str {
         "MySQLSQLExec"
     }

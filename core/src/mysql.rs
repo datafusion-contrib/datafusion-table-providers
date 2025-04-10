@@ -18,8 +18,7 @@ use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, Ins
 use crate::sql::db_connection_pool::dbconnection::mysqlconn::MySQLConnection;
 use crate::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
-use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::db_connection_pool::{self, mysqlpool};
+use crate::sql::db_connection_pool::{self, mysqlpool, DbConnectionPool};
 use crate::sql::sql_provider_datafusion::{self, SqlTable};
 use crate::util::{
     self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
@@ -36,7 +35,7 @@ use datafusion::{
     error::DataFusionError, logical_expr::CreateExternalTable, sql::TableReference,
 };
 use mysql_async::prelude::{Queryable, ToValue};
-use mysql_async::TxOpts;
+use mysql_async::{Metrics, TxOpts};
 use sea_query::{Alias, DeleteStatement, MysqlQueryBuilder};
 use snafu::prelude::*;
 use sql_table::MySQLTable;
@@ -125,9 +124,8 @@ impl MySQLTableFactory {
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
-        let dyn_pool: Arc<DynMySQLConnectionPool> = pool;
         let table_provider = Arc::new(
-            MySQLTable::new(&dyn_pool, table_reference)
+            MySQLTable::new(&pool, table_reference)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
@@ -158,6 +156,10 @@ impl MySQLTableFactory {
         );
 
         Ok(MySQLTableWriter::create(read_provider, mysql, None))
+    }
+
+    pub fn conn_pool_metrics(&self) -> Arc<Metrics> {
+        self.pool.metrics()
     }
 }
 

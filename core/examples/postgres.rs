@@ -76,6 +76,21 @@ async fn main() {
     )
     .expect("failed to register table");
 
+    let companies_view = table_factory
+        .table_provider(TableReference::bare("companies_view"))
+        .await
+        .expect("to create table provider for view");
+
+    let companies_materialized_view = table_factory
+        .table_provider(TableReference::bare("companies_materialized_view"))
+        .await
+        .expect("to create table provider for materialized view");
+
+    ctx.register_table("companies_view", companies_view)
+        .expect("to register view");
+    ctx.register_table("companies_materialized_view", companies_materialized_view)
+        .expect("to register materialized view");
+
     // Query Example 1: Query the renamed table through default catalog
     let df = ctx
         .sql("SELECT * FROM datafusion.public.companies_v2")
@@ -88,5 +103,19 @@ async fn main() {
         .sql("SELECT * FROM postgres.public.companies")
         .await
         .expect("select failed");
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT * FROM companies_view")
+        .await
+        .expect("select from view failed");
+
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT * FROM companies_materialized_view")
+        .await
+        .expect("select from materialized view failed");
+
     df.show().await.expect("show failed");
 }

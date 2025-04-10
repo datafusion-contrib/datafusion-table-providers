@@ -38,6 +38,14 @@ pub(super) fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
         "mysql_sslmode".to_string(),
         SecretString::from("disabled".to_string()),
     );
+    params.insert(
+        "mysql_pool_min".to_string(),
+        SecretString::from("1".to_string()),
+    );
+    params.insert(
+        "mysql_pool_max".to_string(),
+        SecretString::from("10".to_string()),
+    );
     params
 }
 
