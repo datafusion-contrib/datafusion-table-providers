@@ -95,7 +95,7 @@ tonic = { version = "0.12", optional = true, features = [
 tracing = "0.1"
 trust-dns-resolver = "0.23.2"
 url = "2.5.4"
-uuid = { version = "1.11", optional = true }
+uuid = { version = "1.16", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -105,7 +105,7 @@ insta = { version = "1.42.0", features = ["filters"] }
 prost = { version = "0.13" }
 rand = "0.9"
 reqwest = "0.12"
-rstest = "0.24.0"
+rstest = "0.25.0"
 test-log = { version = "0.2", features = ["trace"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
