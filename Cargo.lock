@@ -415,14 +415,14 @@ dependencies = [
 
 [[package]]
 name = "arrow-odbc"
-version = "15.1.1"
+version = "16.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49b1136f1476bd241f020a6379643742b2071d1ad28c5bf56679edd86211189b"
+checksum = "df5c9eaa58d98c0ba1d2a1a57c1fc2daa8ed25283c54a9b3b7daaf818f473914"
 dependencies = [
  "arrow",
  "chrono",
  "log",
- "odbc-api 11.1.1",
+ "odbc-api",
  "thiserror 2.0.12",
 ]
 
@@ -1911,7 +1911,7 @@ dependencies = [
  "mysql_async",
  "native-tls",
  "num-bigint",
- "odbc-api 12.0.0",
+ "odbc-api",
  "pem",
  "postgres-native-tls",
  "prost",
@@ -3827,20 +3827,6 @@ dependencies = [
  "tracing",
  "url",
  "walkdir",
-]
-
-[[package]]
-name = "odbc-api"
-version = "11.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c285198749d5fe2cc75db87bd7356daedceb311c5435ce8d314bf85bf0164a9"
-dependencies = [
- "atoi",
- "log",
- "odbc-sys",
- "thiserror 2.0.12",
- "widestring",
- "winit",
 ]
 
 [[package]]
