@@ -8,7 +8,7 @@ use super::column_reference::{self, ColumnReference};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display(r#"Invalid column reference: {source}"#))]
+    #[snafu(display("Invalid column reference: {source}"))]
     InvalidColumnReference { source: column_reference::Error },
 
     #[snafu(display("Expected do_nothing or upsert, found: {token}"))]

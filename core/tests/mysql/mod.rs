@@ -1,8 +1,8 @@
-use crate::arrow_record_batch_gen::*;
 use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
-use datafusion_table_providers::{
-    mysql::DynMySQLConnectionPool, sql::sql_provider_datafusion::SqlTable,
+use datafusion_table_providers::sql::{
+    db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
 };
+use mysql_async::prelude::ToValue;
 use rstest::{fixture, rstest};
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use arrow::{
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
+use crate::arrow_record_batch_gen::*;
 use crate::docker::RunningContainer;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
@@ -648,7 +649,12 @@ async fn arrow_mysql_one_way(
         .expect("MySQL table data should be inserted");
 
     // Register datafusion table, test mysql row -> arrow conversion
-    let sqltable_pool: Arc<DynMySQLConnectionPool> = Arc::new(pool);
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(pool);
     let table = SqlTable::new("mysql", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
