@@ -1,5 +1,7 @@
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{DataType, Field};
@@ -64,7 +66,7 @@ pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 
 #[derive(Debug)]
 pub struct DuckDBAttachments {
-    attachments: Vec<Arc<str>>,
+    attachments: HashSet<Arc<str>>,
     search_path: Arc<str>,
     random_id: String,
 }
@@ -74,9 +76,10 @@ impl DuckDBAttachments {
     #[must_use]
     pub fn new(id: &str, attachments: &[Arc<str>]) -> Self {
         let random_id = Alphanumeric.sample_string(&mut rand::rng(), 8);
-        let search_path = Self::get_search_path(id, &random_id, attachments);
+        let attachments: HashSet<Arc<str>> = attachments.iter().cloned().collect();
+        let search_path = Self::get_search_path(id, &random_id, &attachments);
         Self {
-            attachments: attachments.to_owned(),
+            attachments,
             search_path,
             random_id,
         }
@@ -85,7 +88,7 @@ impl DuckDBAttachments {
     /// Returns the search path for the given database and attachments.
     /// The given database needs to be included separately, as search path by default do not include the main database.
     #[must_use]
-    pub fn get_search_path(id: &str, random_id: &str, attachments: &[Arc<str>]) -> Arc<str> {
+    fn get_search_path(id: &str, random_id: &str, attachments: &HashSet<Arc<str>>) -> Arc<str> {
         // search path includes the main database and all attached databases
         let mut search_path: Vec<Arc<str>> = vec![id.into()];
 
@@ -132,15 +135,13 @@ impl DuckDBAttachments {
             std::fs::metadata(db.as_ref()).context(UnableToAttachDatabaseSnafu {
                 path: Arc::clone(db),
             })?;
+            let sql = format!(
+                "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
+                Self::get_attachment_name(&self.random_id, i)
+            );
+            tracing::trace!("Attaching {db} using: {sql}");
 
-            conn.execute(
-                &format!(
-                    "ATTACH IF NOT EXISTS '{db}' AS {} (READ_ONLY)",
-                    Self::get_attachment_name(&self.random_id, i)
-                ),
-                [],
-            )
-            .context(DuckDBConnectionSnafu)?;
+            conn.execute(&sql, []).context(DuckDBConnectionSnafu)?;
         }
 
         self.set_search_path(conn)?;
@@ -519,6 +520,7 @@ pub fn is_table_function(table_reference: &TableReference) -> bool {
 #[cfg(test)]
 mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -658,5 +660,132 @@ mod tests {
                 .expect("should rebuild schema successfully");
 
         assert_eq!(rebuilt_schema, expected_rebuilt_schema);
+    }
+
+    #[test]
+    fn test_duckdb_attachments_deduplication() {
+        let db1 = Arc::from("db1.duckdb");
+        let db2 = Arc::from("db2.duckdb");
+        let db3 = Arc::from("db3.duckdb");
+
+        // Create attachments with duplicates
+        let attachments = vec![
+            Arc::clone(&db1),
+            Arc::clone(&db2),
+            Arc::clone(&db1), // duplicate of db1
+            Arc::clone(&db3),
+            Arc::clone(&db2), // duplicate of db2
+        ];
+
+        let duckdb_attachments = DuckDBAttachments::new("main_db", &attachments);
+
+        // Verify that duplicates are removed
+        assert_eq!(duckdb_attachments.attachments.len(), 3);
+        assert!(duckdb_attachments.attachments.contains(&db1));
+        assert!(duckdb_attachments.attachments.contains(&db2));
+        assert!(duckdb_attachments.attachments.contains(&db3));
+    }
+
+    #[test]
+    fn test_duckdb_attachments_search_path() {
+        let db1 = Arc::from("db1.duckdb");
+        let db2 = Arc::from("db2.duckdb");
+        let db3 = Arc::from("db3.duckdb");
+
+        // Create attachments with duplicates
+        let attachments = vec![
+            Arc::clone(&db1),
+            Arc::clone(&db2),
+            Arc::clone(&db1), // duplicate of db1
+            Arc::clone(&db3),
+            Arc::clone(&db2), // duplicate of db2
+        ];
+
+        let duckdb_attachments = DuckDBAttachments::new("main_db", &attachments);
+
+        // Verify that the search path contains the main database and unique attachments
+        let search_path = duckdb_attachments.search_path.to_string();
+        assert!(search_path.starts_with("main_db"));
+        assert!(search_path.contains("attachment_"));
+        assert_eq!(search_path.split(',').count(), 4); // main_db + 3 unique attachments
+    }
+
+    #[test]
+    fn test_duckdb_attachments_empty() {
+        let duckdb_attachments = DuckDBAttachments::new("main_db", &[]);
+
+        // Verify empty attachments
+        assert!(duckdb_attachments.attachments.is_empty());
+
+        // Verify search path only contains main database
+        let search_path = duckdb_attachments.search_path.to_string();
+        assert_eq!(search_path, "main_db");
+    }
+
+    #[test]
+    fn test_duckdb_attachments_with_real_files() -> Result<()> {
+        // Create a temporary directory for our test files
+        let temp_dir = tempdir()?;
+        let db1_path = temp_dir.path().join("db1.duckdb");
+        let db2_path = temp_dir.path().join("db2.duckdb");
+
+        // Create two test databases with some data
+        {
+            let conn1 = Connection::open(&db1_path)?;
+            conn1.execute("CREATE TABLE test1 (id INTEGER, name VARCHAR)", [])?;
+            conn1.execute("INSERT INTO test1 VALUES (1, 'test1_1')", [])?;
+
+            let conn2 = Connection::open(&db2_path)?;
+            conn2.execute("CREATE TABLE test2 (id INTEGER, name VARCHAR)", [])?;
+            conn2.execute("INSERT INTO test2 VALUES (2, 'test2_1')", [])?;
+        }
+
+        // Create attachments with duplicates
+        let attachments = vec![
+            Arc::from(db1_path.to_str().unwrap()),
+            Arc::from(db2_path.to_str().unwrap()),
+            Arc::from(db1_path.to_str().unwrap()), // duplicate of db1
+        ];
+
+        // Create a new in-memory DuckDB connection
+        let conn = Connection::open_in_memory()?;
+
+        // Create DuckDBAttachments and attach the databases
+        let duckdb_attachments = DuckDBAttachments::new("main", &attachments);
+        duckdb_attachments.attach(&conn)?;
+
+        // Verify we can query data from both databases
+        let result1: (i64, String) = conn
+            .query_row("SELECT * FROM test1 LIMIT 1", [], |row| {
+                Ok((
+                    row.get::<_, i64>(0).expect("to get i64"),
+                    row.get::<_, String>(1).expect("to get string"),
+                ))
+            })
+            .expect("to get result");
+        let result2: (i64, String) = conn
+            .query_row("SELECT * FROM test2 LIMIT 1", [], |row| {
+                Ok((
+                    row.get::<_, i64>(0).expect("to get i64"),
+                    row.get::<_, String>(1).expect("to get string"),
+                ))
+            })
+            .expect("to get result");
+
+        assert_eq!(result1, (1, "test1_1".to_string()));
+        assert_eq!(result2, (2, "test2_1".to_string()));
+
+        // Verify the search path
+        let search_path: String = conn
+            .query_row("SELECT current_setting('search_path');", [], |row| {
+                Ok(row.get::<_, String>(0).expect("to get string"))
+            })
+            .expect("to get search path");
+        assert!(search_path.contains("main"));
+        assert!(search_path.contains("attachment_"));
+
+        // Clean up
+        duckdb_attachments.detach(&conn)?;
+        Ok(())
     }
 }
