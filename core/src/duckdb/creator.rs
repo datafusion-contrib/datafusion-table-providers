@@ -840,6 +840,7 @@ pub(crate) mod tests {
                 Arc::clone(&table_definition),
                 *overwrite,
                 None,
+                table_definition.schema(),
             );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
@@ -953,6 +954,7 @@ pub(crate) mod tests {
                 Arc::clone(&table_definition),
                 *overwrite,
                 None,
+                table_definition.schema(),
             );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink

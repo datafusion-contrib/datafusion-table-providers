@@ -13,7 +13,6 @@ use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use arrow_schema::ArrowError;
 use async_trait::async_trait;
-use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{Constraints, SchemaExt};
 use datafusion::logical_expr::dml::InsertOp;
@@ -178,7 +177,7 @@ impl TableProvider for DuckDBTableWriter {
             Arc::new(DuckDBDataSink::new(
                 Arc::clone(&self.pool),
                 Arc::clone(&self.table_definition),
-                overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),
@@ -649,7 +648,7 @@ impl RecordBatchReader for RecordBatchReaderFromStream {
 #[cfg(test)]
 mod test {
     use arrow::array::{Int64Array, StringArray};
-    use datafusion_physical_plan::memory::MemoryStream;
+    use datafusion::physical_plan::memory::MemoryStream;
 
     use super::*;
     use crate::{
@@ -672,6 +671,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -771,6 +771,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -876,6 +877,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Overwrite,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -975,6 +977,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Append,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -1075,6 +1078,7 @@ mod test {
             Arc::clone(&table_definition),
             InsertOp::Append,
             None,
+            table_definition.schema(),
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 

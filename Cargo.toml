@@ -48,4 +48,4 @@ datafusion-proto = { version = "46" }
 datafusion-physical-expr = { version = "46" }
 datafusion-physical-plan = { version = "46" }
 datafusion-table-providers = { path = "core" }
-duckdb = { version = "=1.2.1" }
+duckdb = { version = "=1.2.1", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488

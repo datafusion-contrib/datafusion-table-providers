@@ -69,10 +69,8 @@ impl MySQLTable {
         Ok(Arc::new(MySQLSQLExec::new(
             projections,
             schema,
-            &self.base_table.table_reference,
             Arc::clone(&self.pool),
-            filters,
-            limit,
+            sql,
         )?))
     }
 }
@@ -123,10 +121,8 @@ impl MySQLSQLExec {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<MySQLConnectionPool>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(projections, schema, pool, sql)?;
 

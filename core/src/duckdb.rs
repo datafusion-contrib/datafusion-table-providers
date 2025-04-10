@@ -1,5 +1,4 @@
 use crate::sql::sql_provider_datafusion;
-use crate::util::constraints::get_primary_keys_from_constraints;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -36,10 +35,7 @@ use datafusion::{
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
 use snafu::prelude::*;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use write::DuckDBTableWriterBuilder;
 
@@ -403,29 +399,6 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             .with_table_definition(table_definition)
             .with_pool(pool)
             .set_on_conflict(on_conflict);
-
-        // If the table is already created, we don't create it again and don't apply primary keys and remove previosly created indexes (if any).
-        // Thus we verify that primary keys and indexes for the table created match the configuration.
-        let mut table_schema_matches = true;
-        table_schema_matches &= duckdb
-            .verify_primary_keys_match()
-            .await
-            .map_err(to_datafusion_error)?;
-
-        table_schema_matches &= duckdb
-            .verify_indexes_match(&indexes)
-            .await
-            .map_err(to_datafusion_error)?;
-
-        if !table_schema_matches {
-            tracing::warn!(
-                "Schema mismatch detected for table '{table_name}' in database '{db_path}'.\n\
-         The local table definition does not match the expected schema.\n\
-         To resolve this issue, drop the existing table. A new table with the correct schema will be created automatically on the next access.",
-                db_path = duckdb.pool.db_path(),
-                table_name = duckdb.table_name
-            );
-        }
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 

@@ -1,9 +1,9 @@
-use datafusion::execution::context::SessionContext;
+use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
 use datafusion_table_providers::sql::{
     db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
 };
 use mysql_async::prelude::ToValue;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use std::sync::Arc;
 
 use arrow::{
@@ -13,6 +13,7 @@ use arrow::{
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
+use crate::arrow_record_batch_gen::*;
 use crate::docker::RunningContainer;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
