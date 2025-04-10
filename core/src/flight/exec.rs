@@ -196,7 +196,7 @@ async fn flight_stream(
             Err(e) => errors.push(Box::new(e)),
         }
     }
-    let err = errors.into_iter().last().unwrap_or_else(|| {
+    let err = errors.into_iter().next_back().unwrap_or_else(|| {
         Box::new(FlightError::ProtocolError(format!(
             "No available location for endpoint {:?}",
             partition.locations

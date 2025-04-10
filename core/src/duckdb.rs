@@ -616,12 +616,12 @@ impl DuckDB {
             );
         }
         if !extra_in_actual.is_empty() {
-           tracing::warn!(
-    "Unexpected index(es) detected in table '{name}': {}.\n\
+            tracing::warn!(
+                "Unexpected index(es) detected in table '{name}': {}.\n\
      These indexes are not defined in the configuration.",
-    extra_in_actual.iter().join(", "),
-    name = self.table_name
-);
+                extra_in_actual.iter().join(", "),
+                name = self.table_name
+            );
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
@@ -785,7 +785,7 @@ pub(crate) mod tests {
         let ctx = SessionContext::new();
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
-            name: table_name.into(),
+            name: table_name,
             location: "".to_string(),
             file_type: "".to_string(),
             table_partition_cols: vec![],

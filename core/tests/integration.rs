@@ -2,7 +2,7 @@ use rand::Rng;
 
 mod arrow_record_batch_gen;
 mod docker;
-#[cfg(feature = "duckdb")]
+#[cfg(all(feature = "duckdb", feature = "federation"))]
 mod duckdb;
 #[cfg(feature = "flight")]
 mod flight;

@@ -3,11 +3,11 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use rstest::rstest;
@@ -43,10 +43,14 @@ async fn arrow_duckdb_round_trip(
 
     let ctx = SessionContext::new();
 
-    let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-        .expect("memory exec created");
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
         .await
         .expect("insert plan created");
 
