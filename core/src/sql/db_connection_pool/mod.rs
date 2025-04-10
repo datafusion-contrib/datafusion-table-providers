@@ -11,6 +11,7 @@ pub mod mysqlpool;
 pub mod odbcpool;
 #[cfg(feature = "postgres")]
 pub mod postgrespool;
+pub mod runtime;
 #[cfg(feature = "sqlite")]
 pub mod sqlitepool;
 

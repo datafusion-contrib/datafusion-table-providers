@@ -360,7 +360,6 @@ mod test {
 
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
-    use std::sync::Arc;
 
     fn random_db_name() -> String {
         let mut rng = rand::rng();

@@ -24,6 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::flight::{flight_channel, to_df_err, FlightMetadata, FlightProperties, SizeLimits};
+use crate::sql::db_connection_pool::runtime::run_async_with_tokio;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
@@ -190,7 +191,8 @@ async fn flight_stream(
 ) -> Result<SendableRecordBatchStream> {
     let mut errors: Vec<Box<dyn Error + Send + Sync>> = vec![];
     for loc in partition.locations.iter() {
-        let client = flight_client(loc, grpc_headers.as_ref(), &size_limits).await?;
+        let get_client = || async { flight_client(loc, grpc_headers.as_ref(), &size_limits).await };
+        let client = run_async_with_tokio(get_client).await?;
         match try_fetch_stream(client, &partition.ticket, schema.clone()).await {
             Ok(stream) => return Ok(stream),
             Err(e) => errors.push(Box::new(e)),

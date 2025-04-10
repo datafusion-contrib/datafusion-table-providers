@@ -1946,6 +1946,7 @@ name = "datafusion-table-providers-python"
 version = "0.3.0"
 dependencies = [
  "arrow",
+ "arrow-flight",
  "datafusion",
  "datafusion-ffi",
  "datafusion-table-providers",

@@ -27,7 +27,7 @@ let ctx = SessionContext::with_state(state);
 - Flight SQL
 - ODBC
 
-## Examples
+## Examples (in Rust)
 
 Run the included examples to see how to use the table providers:
 
@@ -45,6 +45,7 @@ cargo run --example duckdb_function --features duckdb
 ### SQLite
 
 ```bash
+# Run from repo folder
 cargo run --example sqlite --features sqlite
 ```
 
@@ -80,7 +81,9 @@ EOF
 ```
 
 ```bash
-cargo run --example postgres --features postgres
+# Run from repo folder
+cargo run -p datafusion-table-providers --example postgres --features postgres
+
 ```
 
 ### MySQL
@@ -104,7 +107,8 @@ EOF
 ```
 
 ```bash
-cargo run --example mysql --features mysql
+# Run from repo folder
+cargo run -p datafusion-table-providers --example mysql --features mysql
 ```
 
 ### Flight SQL
@@ -115,16 +119,37 @@ brew install roapi
 # cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
 roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet &
 
-cargo run --example flight-sql --features flight
+# Run from repo folder
+cargo run -p datafusion-table-providers --example flight-sql --features flight
 ```
 
 ### ODBC
-
 ```bash
 apt-get install unixodbc-dev libsqliteodbc
 # or
 # brew install unixodbc & brew install sqliteodbc
-# If you use ARM Mac, please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1
 
 cargo run --example odbc_sqlite --features odbc
 ```
+
+#### ARM Mac
+
+Please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1 for reference.
+
+Steps:
+1. Install unixodbc and sqliteodbc by `brew install unixodbc sqliteodbc`.
+2. Find local sqliteodbc driver path by running `brew info sqliteodbc`. The path might look like `/opt/homebrew/Cellar/sqliteodbc/0.99991`.
+3. Set up odbc config file at `~/.odbcinst.ini` with your local sqliteodbc path.
+Example config file:
+```
+[SQLite3]
+Description = SQLite3 ODBC Driver
+Driver      = /opt/homebrew/Cellar/sqliteodbc/0.99991/lib/libsqlite3odbc.dylib
+```
+4. Test configuration by running `odbcinst -q -d -n SQLite3`. If the path is printed out correctly, then you are all set.
+
+## Examples (in Python)
+1. Start a Python venv
+2. Enter into venv
+3. Inside python/ folder, run `maturin develop`.
+4. Inside python/examples/ folder, run the corresponding test using `python3 [file_name]`.

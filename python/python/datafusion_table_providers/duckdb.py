@@ -46,7 +46,7 @@ class DuckDBTableFactory:
         if path == ":memory:" or path == "":
             self._raw = _internal.duckdb.RawDuckDBTableFactory.new_memory()
         else:
-            self._raw = _internal.duckdb.RawDuckDBTableFactory.new_file(path, str(access_mode))
+            self._raw = _internal.duckdb.RawDuckDBTableFactory.new_file(path, access_mode.value)
 
     def tables(self) -> List[str]:
         """Get all the table names."""
