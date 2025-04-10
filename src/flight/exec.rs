@@ -33,10 +33,9 @@ use datafusion::common::Result;
 use datafusion::common::{project_schema, DataFusionError};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
-};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tonic::metadata::{AsciiMetadataKey, MetadataMap};
@@ -81,15 +80,18 @@ impl FlightExec {
 
 impl From<FlightConfig> for FlightExec {
     fn from(config: FlightConfig) -> Self {
-        let exec_mode = if config.properties.unbounded_stream {
-            ExecutionMode::Unbounded
+        let boundedness = if config.properties.unbounded_stream {
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            }
         } else {
-            ExecutionMode::Bounded
+            Boundedness::Bounded
         };
         let plan_properties = PlanProperties::new(
             EquivalenceProperties::new(config.schema.clone()),
             Partitioning::UnknownPartitioning(config.partitions.len()),
-            exec_mode,
+            EmissionType::Incremental,
+            boundedness,
         );
         let mut mm = MetadataMap::new();
         for (k, v) in config.properties.grpc_headers.iter() {
