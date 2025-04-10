@@ -1,5 +1,5 @@
 use crate::arrow_record_batch_gen::*;
-use datafusion::execution::context::SessionContext;
+use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
 use datafusion_table_providers::{
     mysql::DynMySQLConnectionPool, sql::sql_provider_datafusion::SqlTable,
 };
@@ -20,7 +20,6 @@ use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::memory::MemoryExec;
 #[cfg(feature = "mysql-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
@@ -708,10 +707,14 @@ async fn arrow_mysql_round_trip(
         .expect("table provider created");
 
     let ctx = SessionContext::new();
-    let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-        .expect("memory exec created");
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Overwrite)
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Overwrite)
         .await
         .expect("insert plan created");
 

@@ -3,12 +3,14 @@ use arrow::{
     array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
+use datafusion::{
+    common::{Constraints, ToDFSchema},
+    datasource::memory::MemorySourceConfig,
+};
 #[cfg(feature = "postgres-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
@@ -55,10 +57,14 @@ async fn arrow_postgres_round_trip(
         .expect("table provider created");
 
     let ctx = SessionContext::new();
-    let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-        .expect("memory exec created");
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
         .await
         .expect("insert plan created");
 
