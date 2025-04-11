@@ -40,12 +40,15 @@ arrow-flight = { version = "54.2.1", features = [
 arrow-schema = { version = "54.2.1", features = ["serde"] }
 arrow-json = "54.2.1"
 arrow-odbc = { version = "16" }
-datafusion = { version = "46", default-features = false }
-datafusion-expr = { version = "46" }
+datafusion = { version = "45", default-features = false }
+datafusion-expr = { version = "45" }
 datafusion-federation = { version = "=0.3.7" }
-datafusion-ffi = { version = "46" }
-datafusion-proto = { version = "46" }
-datafusion-physical-expr = { version = "46" }
-datafusion-physical-plan = { version = "46" }
+datafusion-ffi = { version = "45" }
+datafusion-proto = { version = "45" }
+datafusion-physical-expr = { version = "45" }
+datafusion-physical-plan = { version = "45" }
 datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.2.1", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
+
+[patch.crates-io]
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "e7f982d4794f07c1f715bd86f1d0d08012c7d0fe" } # phillip/250411-merge-upstream
