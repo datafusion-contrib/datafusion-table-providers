@@ -3132,9 +3132,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.30.1"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
+checksum = "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f"
 dependencies = [
  "cc",
  "pkg-config",
@@ -4620,9 +4620,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.32.1"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e"
+checksum = "b838eba278d213a8beaf485bd313fd580ca4505a00d5871caeb1457c55322cae"
 dependencies = [
  "bitflags 2.9.0",
  "fallible-iterator 0.3.0",
@@ -5522,9 +5522,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-rusqlite"
-version = "0.6.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b65501378eb676f400c57991f42cbd0986827ab5c5200c53f206d710fb32a945"
+checksum = "c2cc5f712424f089fc6549afe39773e9f8914ce170c45b546be24830b482b127"
 dependencies = [
  "crossbeam-channel",
  "rusqlite",
