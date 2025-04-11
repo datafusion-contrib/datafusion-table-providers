@@ -4819,9 +4819,8 @@ checksum = "04c565b551bafbef4157586fa379538366e4385d42082f255bfd96e4fe8519da"
 
 [[package]]
 name = "sea-query"
-version = "0.32.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a24d8b9fcd2674a6c878a3d871f4f1380c6c43cc3718728ac96864d888458e"
+version = "0.32.0-rc.1"
+source = "git+https://github.com/spiceai/sea-query.git?rev=213b6b876068f58159ebdd5852604a021afaebf9#213b6b876068f58159ebdd5852604a021afaebf9"
 dependencies = [
  "bigdecimal",
  "chrono",
@@ -4833,16 +4832,14 @@ dependencies = [
 
 [[package]]
 name = "sea-query-derive"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae0cbad6ab996955664982739354128c58d16e126114fe88c2a493642502aab"
+version = "0.4.1"
+source = "git+https://github.com/spiceai/sea-query.git?rev=213b6b876068f58159ebdd5852604a021afaebf9#213b6b876068f58159ebdd5852604a021afaebf9"
 dependencies = [
- "darling",
  "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
- "thiserror 2.0.12",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

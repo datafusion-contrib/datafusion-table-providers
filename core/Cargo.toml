@@ -64,15 +64,7 @@ prost = { version = "0.13", optional = true }
 rand = { version = "0.9" }
 r2d2 = { version = "0.8", optional = true }
 rusqlite = { version = "0.31", optional = true }
-sea-query = { version = "0.32", features = [
-  "backend-sqlite",
-  "backend-postgres",
-  "postgres-array",
-  "with-rust_decimal",
-  "with-bigdecimal",
-  "with-time",
-  "with-chrono",
-] }
+sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
 secrecy = "0.10.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
