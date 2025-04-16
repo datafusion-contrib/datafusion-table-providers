@@ -17,11 +17,14 @@ use datafusion::{
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
-use std::fmt::{Display, Formatter};
 use std::{any::Any, fmt, sync::Arc};
+use std::{
+    fmt::{Display, Formatter},
+    sync::LazyLock,
+};
 
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::{DataType, Field, Schema, SchemaRef},
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
@@ -238,6 +241,9 @@ impl<T, P> Display for SqlTable<T, P> {
     }
 }
 
+static ONE_COLUMN_SCHEMA: LazyLock<SchemaRef> =
+    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new("1", DataType::Int64, false)])));
+
 pub fn project_schema_safe(
     schema: &SchemaRef,
     projection: Option<&Vec<usize>>,
@@ -245,7 +251,10 @@ pub fn project_schema_safe(
     let schema = match projection {
         Some(columns) => {
             if columns.is_empty() {
-                Arc::clone(schema)
+                // If the projection is Some([]) then it gets unparsed as `SELECT 1`, so return a schema with a single Int64 column.
+                //
+                // See: <https://github.com/apache/datafusion/blob/83ce79c39412a4f150167d00e40ea05948c4870f/datafusion/sql/src/unparser/plan.rs#L998>
+                Arc::clone(&ONE_COLUMN_SCHEMA)
             } else {
                 Arc::new(schema.project(columns)?)
             }
