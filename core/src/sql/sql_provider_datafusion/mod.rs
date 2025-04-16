@@ -242,7 +242,7 @@ impl<T, P> Display for SqlTable<T, P> {
 }
 
 static ONE_COLUMN_SCHEMA: LazyLock<SchemaRef> =
-    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new("1", DataType::Int64, false)])));
+    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new("1", DataType::Int64, true)])));
 
 pub fn project_schema_safe(
     schema: &SchemaRef,
