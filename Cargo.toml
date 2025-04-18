@@ -40,7 +40,7 @@ arrow-flight = { version = "54.2.1", features = [
 arrow-schema = { version = "54.2.1", features = ["serde"] }
 arrow-json = "54.2.1"
 arrow-odbc = { version = "16" }
-datafusion = { version = "46", default-features = false }
+datafusion = { version = "46", default-features = false, features = ["parquet"] }
 datafusion-expr = { version = "46" }
 datafusion-federation = { version = "=0.3.7" }
 datafusion-ffi = { version = "46" }
