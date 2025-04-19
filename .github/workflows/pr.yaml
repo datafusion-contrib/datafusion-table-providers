@@ -113,6 +113,6 @@ jobs:
       - name: Run Python tests
         run: |
           cd python/python
-          maturin develop
-          cd tests
-          python -m pytest tests/
+          uv sync
+          uv run --no-project maturin develop --uv
+          uv run --no-project pytest -v tests/
