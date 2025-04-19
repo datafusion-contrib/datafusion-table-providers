@@ -84,7 +84,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
         "bit" | "bit varying" => Ok(DataType::Binary),
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
-        "xml" | "json" => Ok(DataType::LargeUtf8),
+        "xml" | "json" => Ok(DataType::Utf8),
         "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
         "array" => parse_array_type(context),
         "anyarray" => Ok(DataType::List(Arc::new(Field::new(
@@ -101,7 +101,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
 
         // `jsonb` is currently not supported, but if the user has set the `UnsupportedTypeAction` to `String` we'll return `Utf8`.
         "jsonb" if context.unsupported_type_action == UnsupportedTypeAction::String => {
-            Ok(DataType::LargeUtf8)
+            Ok(DataType::Utf8)
         }
         _ => Err(ArrowError::ParseError(format!(
             "Unsupported PostgreSQL type: {}",
@@ -509,7 +509,7 @@ mod tests {
         // Test JSON types
         assert_eq!(
             pg_data_type_to_arrow_type("json", &context).expect("Failed to convert json"),
-            DataType::LargeUtf8
+            DataType::Utf8
         );
 
         let jsonb_context = context
@@ -517,7 +517,7 @@ mod tests {
             .with_unsupported_type_action(UnsupportedTypeAction::String);
         assert_eq!(
             pg_data_type_to_arrow_type("jsonb", &jsonb_context).expect("Failed to convert jsonb"),
-            DataType::LargeUtf8
+            DataType::Utf8
         );
 
         // Test UUID type
