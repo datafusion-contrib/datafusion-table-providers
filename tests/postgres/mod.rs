@@ -281,7 +281,7 @@ async fn test_postgres_jsonb_type(port: usize) {
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "data",
-        DataType::LargeUtf8,
+        DataType::Utf8,
         true,
     )]));
 
@@ -304,7 +304,7 @@ async fn test_postgres_jsonb_type(port: usize) {
 
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(arrow::array::LargeStringArray::from(
+        vec![Arc::new(arrow::array::StringArray::from(
             expected_values,
         ))],
     )
