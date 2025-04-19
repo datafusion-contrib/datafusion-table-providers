@@ -2,11 +2,15 @@ use crate::sql::arrow_sql_gen::statement::IndexBuilder;
 use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::util::on_conflict::OnConflict;
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{
+    array::{RecordBatch, RecordBatchIterator, RecordBatchReader},
+    datatypes::SchemaRef,
+    ffi_stream::FFI_ArrowArrayStream,
+};
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::sql::TableReference;
-use duckdb::{vtab::arrow_recordbatch_to_query_params, ToSql, Transaction};
+use duckdb::Transaction;
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
@@ -392,19 +396,20 @@ impl TableManager {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
-        let empty_record = RecordBatch::new_empty(Arc::clone(&self.table_definition.schema));
+        let record_batch_reader =
+            create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));
+        let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
 
-        let arrow_params = arrow_recordbatch_to_query_params(empty_record);
-        let arrow_params_vec: Vec<&dyn ToSql> = arrow_params
-            .iter()
-            .map(|p| p as &dyn ToSql)
-            .collect::<Vec<_>>();
-        let arrow_params_ref: &[&dyn ToSql] = &arrow_params_vec;
-        let sql =
-            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM arrow(?, ?)"#,);
+        let temp_view_name = format!("__empty_table_view_{table_name}");
+        tx.register_arrow_scan_view(&temp_view_name, &stream)
+            .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
+
+        let sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM {temp_view_name}"#,
+        );
         tracing::debug!("{sql}");
 
-        tx.execute(&sql, arrow_params_ref)
+        tx.execute(&sql, [])
             .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         let create_stmt = tx
@@ -417,6 +422,8 @@ impl TableManager {
 
         // DuckDB doesn't add IF NOT EXISTS to CREATE TABLE statements, so we add it here.
         let create_stmt = create_stmt.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS");
+
+        tracing::trace!("{create_stmt}");
 
         tx.rollback()
             .context(super::UnableToRollbackTransactionSnafu)?;
@@ -668,6 +675,12 @@ impl TableManager {
 
         Ok(count)
     }
+}
+
+fn create_empty_record_batch_reader(schema: SchemaRef) -> impl RecordBatchReader {
+    let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
+    let batches = vec![empty_batch];
+    RecordBatchIterator::new(batches.into_iter().map(Ok), schema)
 }
 
 #[derive(Debug, Clone)]

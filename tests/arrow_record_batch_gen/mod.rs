@@ -687,6 +687,28 @@ pub(crate) fn get_arrow_dictionary_array_record_batch() -> (RecordBatch, SchemaR
     (record_batch, schema)
 }
 
+pub(crate) fn get_arrow_map_record_batch() -> (RecordBatch, SchemaRef) {
+    let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+    let values_data = UInt32Array::from(vec![
+        Some(0u32),
+        None,
+        Some(20),
+        Some(30),
+        None,
+        Some(50),
+        Some(60),
+        Some(70),
+    ]);
+    // Construct a buffer for value offsets, for the nested array:
+    //  [[a, b, c], [d, e, f], [g, h]]
+    let entry_offsets = [0, 3, 6, 8];
+    let map_array = MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets).expect("Failed to create MapArray");
+    let schema = Arc::new(Schema::new(vec![Field::new("map_array", map_array.data_type().clone(), true)]));
+    let rb = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(map_array)]).expect("Failed to created arrow Map array record batch");
+    (rb, schema)
+
+}
+
 // Custom Test Case for Sqlite <-> Arrow Decimal Roundtrip
 // SQLite supports up to 16 precision for decimal numbers through REAL type, conforming to IEEE 754 Binary-64 format - https://www.sqlite.org/floatingpoint.html
 pub(crate) fn get_sqlite_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
