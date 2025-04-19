@@ -6,6 +6,8 @@ on:
     branches:
       - main
       - spiceai
+      # TODO: remove this once we have fully tested the python integration tests
+      - python-integration-test
 
 jobs:
   lint:
@@ -107,3 +109,10 @@ jobs:
 
       - name: Run tests
         run: make test
+
+      - name: Run Python tests
+        run: |
+          cd python/python
+          maturin develop
+          cd tests
+          python -m pytest tests/

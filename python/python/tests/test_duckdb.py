@@ -1,0 +1,59 @@
+import unittest
+import os
+from datafusion import SessionContext
+from datafusion_table_providers import duckdb
+
+class TestDuckDBIntegration(unittest.TestCase):
+    def setUp(self):
+        """Set up the test environment"""
+        self.ctx = SessionContext()
+        self.db_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "core", "examples", "duckdb_example.db")
+        self.pool_readonly = duckdb.DuckDBTableFactory(self.db_path, duckdb.AccessMode.ReadOnly)
+        self.pool_readwrite = duckdb.DuckDBTableFactory(self.db_path)
+
+    def test_table_factory_creation(self):
+        """Test creating a DuckDB table factory"""
+        self.assertIsNotNone(self.pool_readonly)
+
+    def test_get_tables(self):
+        """Test retrieving tables from the database"""
+        tables = self.pool_readonly.tables()
+        self.assertIsInstance(tables, list)
+        self.assertTrue(len(tables) == 2)
+        self.assertEqual(tables, ["companies", "projects"])
+        
+    def test_query_companies(self):
+        """Test querying companies table with SQL"""
+        table_name = "companies"
+        self.ctx.register_table_provider(table_name, self.pool_readonly.get_table("companies"))
+        
+        # Run SQL query to select Microsoft row
+        df = self.ctx.sql("SELECT name FROM companies WHERE ticker = 'MSFT'")
+        result = df.collect()
+        
+        # Verify single row returned with name = Microsoft
+        self.assertEqual(len(result), 1)
+        self.assertEqual(str(result[0]['name'][0]), "Microsoft")
+        
+    def test_write_fails_readonly(self):
+        """Test that writing fails when database is opened read-only"""
+        table_name = "companies"
+        self.ctx.register_table_provider(table_name, self.pool_readonly.get_table("companies"))
+        
+        with self.assertRaises(Exception):
+            tmp = self.ctx.sql("INSERT INTO companies VALUES (3, 'Test Corp', 'TEST')")
+            tmp.collect() # this will trigger the execution of the query
+
+    def test_write_fails_readwrite(self):
+        """Test that writing fails when database is opened read-only"""
+        # Insertion fails because duckdb does not implement write operations even when
+        # database is opened in read-write mode.
+        table_name = "companies"
+        self.ctx.register_table_provider(table_name, self.pool_readwrite.get_table("companies"))
+        
+        with self.assertRaises(Exception):
+            tmp = self.ctx.sql("INSERT INTO companies VALUES (3, 'Test Corp', 'TEST')")
+            tmp.collect()
+
+if __name__ == '__main__':
+    unittest.main() 
