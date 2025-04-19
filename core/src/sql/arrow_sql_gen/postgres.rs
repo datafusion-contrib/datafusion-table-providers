@@ -356,7 +356,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
                     };
-                    let Some(builder) = builder.as_any_mut().downcast_mut::<LargeStringBuilder>()
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<StringBuilder>()
                     else {
                         return FailedToDowncastBuilderSnafu {
                             postgres_type: format!("{postgres_type}"),
@@ -889,7 +889,7 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
         Type::BYTEA => Ok(Some(DataType::Binary)),
         Type::BOOL => Ok(Some(DataType::Boolean)),
         // Schema validation will only allow JSONB columns when `UnsupportedTypeAction` is set to `String`, so it is safe to handle JSONB here as strings.
-        Type::JSON | Type::JSONB => Ok(Some(DataType::LargeUtf8)),
+        Type::JSON | Type::JSONB => Ok(Some(DataType::Utf8)),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
         Type::NUMERIC => Ok(None),
         Type::TIMESTAMPTZ => Ok(Some(DataType::Timestamp(
