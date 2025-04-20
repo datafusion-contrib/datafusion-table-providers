@@ -1,6 +1,6 @@
 [build-system]
 requires = ["maturin>=1.5.1,<1.6.0"]
-build-backend = "[maturin]"
+build-backend = "maturin"
 
 [project]
 name = "datafusion_table_providers"
@@ -57,3 +57,14 @@ max-doc-length = 88
 "dev/*" = ["D"]
 "benchmarks/*" = ["D", "F"]
 "docs/*" = ["D"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.8.1",
+    "numpy>1.25.0",
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.23.3",
+    "ruff>=0.9.1",
+    "toml>=0.10.2",
+    "pygithub==2.5.0",
+]

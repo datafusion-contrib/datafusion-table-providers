@@ -112,7 +112,8 @@ jobs:
 
       - name: Run Python tests
         run: |
-          cd python/python
-          uv sync
+          cd python
+          uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
-          uv run --no-project pytest -v tests/
+          cd python/tests
+          uv run --no-project pytest -v .

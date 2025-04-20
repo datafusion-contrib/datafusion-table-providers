@@ -20,7 +20,7 @@ class TestDuckDBIntegration(unittest.TestCase):
 
     def test_query_companies(self):
         """Test querying companies table with SQL"""
-        self.ctx.register_table_provider("companies", self.pool.get_table("companies"))
+        self.ctx.register_table_provider("companies", self.pool_readonly.get_table("companies"))
         
         # Run SQL query to select Microsoft row
         df = self.ctx.sql("SELECT name FROM companies WHERE ticker = 'MSFT'")
@@ -32,8 +32,8 @@ class TestDuckDBIntegration(unittest.TestCase):
 
     def test_complex_query(self):
         """Test querying companies table with SQL"""
-        self.ctx.register_table_provider("companies", self.pool.get_table("companies"))
-        self.ctx.register_table_provider("projects", self.pool.get_table("projects"))
+        self.ctx.register_table_provider("companies", self.pool_readonly.get_table("companies"))
+        self.ctx.register_table_provider("projects", self.pool_readonly.get_table("projects"))
         
         # Run SQL query to select Microsoft row
         df = self.ctx.sql(
