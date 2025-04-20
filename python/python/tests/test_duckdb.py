@@ -57,7 +57,7 @@ class TestDuckDBIntegration(unittest.TestCase):
             tmp.collect() # this will trigger the execution of the query
 
     def test_write_fails_readwrite(self):
-        """Test that writing fails when database is opened read-only"""
+        """Test that writing fails because it is not supported"""
         # Insertion fails because duckdb does not implement write operations even when
         # database is opened in read-write mode.
         table_name = "companies"
@@ -66,6 +66,3 @@ class TestDuckDBIntegration(unittest.TestCase):
         with self.assertRaises(Exception):
             tmp = self.ctx.sql("INSERT INTO companies VALUES (3, 'Test Corp', 'TEST')")
             tmp.collect()
-
-if __name__ == '__main__':
-    unittest.main() 

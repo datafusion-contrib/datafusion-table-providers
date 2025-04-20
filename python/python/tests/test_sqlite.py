@@ -47,14 +47,10 @@ class TestsqliteIntegration(unittest.TestCase):
         self.assertEqual(str(result[0]['project_name'][0]), "DataFusion")
         
     def test_write_fails(self):
-        """Test that writing fails when database is opened read-only"""
+        """Test that writing fails because it is not supported"""
         table_name = "companies"
         self.ctx.register_table_provider(table_name, self.pool.get_table("companies"))
         
         with self.assertRaises(Exception):
             tmp = self.ctx.sql("INSERT INTO companies VALUES (3, 'Test Corp', 'TEST')")
             tmp.collect() # this will trigger the execution of the query
-
-
-if __name__ == '__main__':
-    unittest.main() 
