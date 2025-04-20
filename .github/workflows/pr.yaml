@@ -68,6 +68,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+            enable-cache: true
+
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}

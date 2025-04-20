@@ -16,8 +16,9 @@ class TestFlightIntegration:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        # 10s timeout is required to ensure the server is running and data is loaded
-        time.sleep(10)
+        # 20s timeout is required to ensure the server is running and data is loaded
+        # The timeout is determined by empirical testing
+        time.sleep(20)
 
     @classmethod 
     def teardown_class(self):
