@@ -706,7 +706,6 @@ pub(crate) fn get_arrow_map_record_batch() -> (RecordBatch, SchemaRef) {
     let schema = Arc::new(Schema::new(vec![Field::new("map_array", map_array.data_type().clone(), true)]));
     let rb = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(map_array)]).expect("Failed to created arrow Map array record batch");
     (rb, schema)
-
 }
 
 // Custom Test Case for Sqlite <-> Arrow Decimal Roundtrip

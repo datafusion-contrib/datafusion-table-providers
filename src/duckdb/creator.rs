@@ -400,12 +400,17 @@ impl TableManager {
             create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));
         let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
 
-        let temp_view_name = format!("__empty_table_view_{table_name}");
-        tx.register_arrow_scan_view(&temp_view_name, &stream)
+        let current_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context(super::UnableToGetSystemTimeSnafu)?
+            .as_millis();
+
+        let view_name = format!("__scan_{}_{current_ts}", table_name);
+        tx.register_arrow_scan_view(&view_name, &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
         let sql = format!(
-            r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM {temp_view_name}"#,
+            r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,
         );
         tracing::debug!("{sql}");
 
