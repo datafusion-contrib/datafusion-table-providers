@@ -114,10 +114,14 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Run Python tests
+      - name: Build Python package
         run: |
           cd python
           uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
+          cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
+
+      - name: Run Python tests
+        run: |
           cd python/tests
           uv run --no-project pytest -v .
