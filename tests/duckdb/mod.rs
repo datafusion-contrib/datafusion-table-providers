@@ -87,9 +87,9 @@ async fn arrow_duckdb_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-#[ignore] // External(UnableToCreateDuckDBTable { source: DuckDBFailure(Error { code: Unknown, extended_code: 1 }, Some("Invalid Input Error: Data type \"Decimal256(76, 10)\" not yet supported by ArrowVTab")) })
+#[ignore] // DuckDB does not support Decimal256 / duckdb_arrow_scan failed to register view
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // External(DataWriteError { source: External(UnableToInsertToDuckDBTable { source: DuckDBFailure(Error { code: Unknown, extended_code: 1 }, Some("Conversion Error: Could not convert Interval to Microsecond")) }) })
+#[ignore] // Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[ignore] // TimeUnit::Nanosecond is not correctly supported; written values are zeros
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
