@@ -123,5 +123,5 @@ jobs:
 
       - name: Run Python tests
         run: |
-          cd python/tests
+          cd python/python/tests
           uv run --no-project pytest -v .
