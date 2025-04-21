@@ -242,6 +242,7 @@ dev = [
     { name = "maturin" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pyarrow" },
     { name = "pygithub" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -256,6 +257,7 @@ requires-dist = [{ name = "datafusion", specifier = ">=45.0.0" }]
 dev = [
     { name = "maturin", specifier = ">=1.8.1" },
     { name = "numpy", specifier = ">1.25.0" },
+    { name = "pyarrow", specifier = ">=19.0.1" },
     { name = "pygithub", specifier = "==2.5.0" },
     { name = "pytest", specifier = ">=7.4.4" },
     { name = "pytest-asyncio", specifier = ">=0.23.3" },
