@@ -125,13 +125,12 @@ jobs:
 
       - name: Install ODBC & Sqlite
         run: |
-          sudo apt-get install -y unixodbc-dev
+          sudo apt-get install -y unixodbc-dev libsqliteodbc
           sudo apt-get install -y libsqlite3-dev
 
       - name: Build Python package
         run: |
           cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
-          sudo apt-get install -y sqliteodbc
           cd python
           uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
