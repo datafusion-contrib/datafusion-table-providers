@@ -68,10 +68,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-            enable-cache: true
-
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
@@ -114,6 +110,24 @@ jobs:
       - name: Run tests
         run: make test
 
+  python-integration-test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+            enable-cache: true
+
+      - name: Install ODBC & Sqlite
+        run: |
+          sudo apt-get install -y unixodbc-dev
+          sudo apt-get install -y libsqlite3-dev
+
       - name: Build Python package
         run: |
           cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
@@ -122,6 +136,7 @@ jobs:
           uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
 
+  
       - name: Run Python tests
         run: |
           cd python/python/tests
