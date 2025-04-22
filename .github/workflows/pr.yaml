@@ -123,14 +123,14 @@ jobs:
         with:
             enable-cache: true
 
-      - name: Install ODBC & Sqlite
+      - name: Install ODBC, Sqlite and Roapi
         run: |
           sudo apt-get install -y unixodbc-dev libsqliteodbc
           sudo apt-get install -y libsqlite3-dev
+          cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
 
       - name: Build Python package
         run: |
-          cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
           cd python
           uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
