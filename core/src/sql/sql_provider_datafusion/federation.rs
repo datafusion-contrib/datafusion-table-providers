@@ -1,6 +1,8 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
-use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion_federation::sql::{
+    RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -25,9 +27,9 @@ impl<T, P> SqlTable<T, P> {
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            RemoteTableRef::try_from(table_name)?,
             schema,
-        )?))
+        )))
     }
 
     pub fn create_federated_table_provider(

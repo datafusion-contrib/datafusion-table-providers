@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::{AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion_federation::sql::{
+    AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
 use snafu::ResultExt;
@@ -29,9 +31,9 @@ impl<T, P> SQLiteTable<T, P> {
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            RemoteTableRef::try_from(table_name)?,
             schema,
-        )?))
+        )))
     }
 
     pub fn create_federated_table_provider(

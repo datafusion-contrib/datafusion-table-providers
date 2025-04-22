@@ -19,6 +19,6 @@ arrow-flight = {workspace = true}
 datafusion = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true, features = ["sqlite", "duckdb", "odbc", "mysql", "postgres", "flight"] }
-pyo3 = { version = "0.23" }
+pyo3 = { version = "0.24.2" }
 tokio = { version = "1.44", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 duckdb = { workspace = true }
