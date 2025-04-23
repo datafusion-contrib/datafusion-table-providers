@@ -156,6 +156,7 @@ impl<T, P> SqlTable<T, P> {
         )?))
     }
 
+    #[cfg(feature = "federation")]
     // Return the current memory location of the object as a unique identifier
     fn unique_id(&self) -> usize {
         std::ptr::from_ref(self) as usize
@@ -186,6 +187,7 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
+    #[cfg(feature = "federation")]
     fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
         match &self.dialect {
             Some(dialect) => Arc::clone(dialect),
