@@ -22,12 +22,12 @@ impl<T, P> SqlTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.table_reference.to_quoted_string();
+        let table_reference = self.table_reference.clone();
         let schema = Arc::clone(&self.schema);
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::try_from(table_name)?,
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
