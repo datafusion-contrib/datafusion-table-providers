@@ -73,6 +73,10 @@ class TestMySQLIntegration:
 
     def test_query_companies(self):
         """Test querying companies table with SQL"""
-        print("Running test_query_companies")
         table_name = "companies"
         self.ctx.register_table_provider(table_name, self.pool.get_table("companies"))
+        query = "SELECT * FROM companies"
+        df = self.ctx.sql(query).collect()
+        assert df is not None
+        name_column = df[0]['name']
+        assert str(name_column[0]) == "Acme Corporation"

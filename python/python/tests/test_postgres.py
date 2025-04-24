@@ -13,7 +13,7 @@ def run_docker_container():
         stderr=subprocess.PIPE
     )
     if result.returncode != 0:
-        print(f"Failed to start postgres container: {result.stderr.decode()}")
+        raise RuntimeError(f"Failed to start postgres container: {result.stderr.decode()}")
 
 def create_table_and_insert_data():
     """Create a table and insert data into postgres"""
@@ -37,25 +37,20 @@ def create_table_and_insert_data():
         SELECT id, name FROM companies;
     """
     
-    # Execute the SQL commands inside the Docker container
     result = subprocess.run(
         ["docker", "exec", "-i", "postgres", "psql", "-U", "postgres", "-d", "postgres_db"],
-        input=sql_commands.encode(),  # Pass SQL commands to stdin
+        input=sql_commands.encode(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
     
-    # Check if the SQL execution was successful
     if result.returncode != 0:
-        print(f"Error executing SQL commands: {result.stderr.decode()}")
-    else:
-        print(f"SQL commands executed successfully:\n{result.stdout.decode()}")
+        raise RuntimeError(f"Error executing SQL commands: {result.stderr.decode()}")
 
-def stop_and_remove_container():
-    """Stop and remove the postgres container after use"""
-    subprocess.run(["docker", "stop", "postgres"])
-    subprocess.run(["docker", "rm", "postgres"])
-    print("postgres container stopped and removed.")
+def stop_and_remove_container() -> None:
+    """Stop and remove the postgres container after use."""
+    subprocess.run(["docker", "stop", "postgres"], check=True)
+    subprocess.run(["docker", "rm", "postgres"], check=True)
 
 
 class TestPostgresIntegration:
@@ -87,7 +82,27 @@ class TestPostgresIntegration:
         assert tables == ["companies"]
 
     def test_query_companies(self):
-        """Test querying companies table with SQL"""
-        print("Running test_query_companies")
+        """Test querying companies table with SQL."""
         table_name = "companies"
         self.ctx.register_table_provider(table_name, self.pool.get_table("companies"))
+        
+        # Test basic query
+        query = "SELECT * FROM companies ORDER BY id"
+        result = self.ctx.sql(query).collect()
+        assert result is not None
+        
+        # Test data integrity
+        record_batch = result[0]
+        name_column = record_batch["name"]
+        
+        expected_companies = [
+            "Acme Corporation",
+            "Widget Inc.",
+            "Gizmo Corp.",
+            "Tech Solutions",
+            "Data Innovations"
+        ]
+        
+        assert len(name_column) == len(expected_companies)
+        for i, expected in enumerate(expected_companies):
+            assert str(name_column[i]) == expected
