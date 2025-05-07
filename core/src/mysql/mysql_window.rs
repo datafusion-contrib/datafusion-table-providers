@@ -1,4 +1,6 @@
-use datafusion::sql::sqlparser::ast::{Expr, Function, Ident, VisitorMut, WindowType};
+use datafusion::sql::sqlparser::ast::{
+    Expr, Function, Ident, ObjectNamePart, VisitorMut, WindowType,
+};
 use std::ops::ControlFlow;
 
 #[derive(PartialEq, Eq)]
@@ -41,7 +43,7 @@ impl VisitorMut for MySQLWindowVisitor {
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
         if let Expr::Function(func) = expr {
-            if let Some(Ident { value, .. }) = func.name.0.first() {
+            if let Some(ObjectNamePart::Identifier(Ident { value, .. })) = func.name.0.first() {
                 // match for some scalars that support window functions
                 // all of them need to remove nulls first/last, but only rank removes the frame clause
                 if let Some(func_type) = FunctionType::from_str(value) {
@@ -58,7 +60,7 @@ impl MySQLWindowVisitor {
     pub fn remove_nulls_first_last(func: &mut Function) {
         if let Some(WindowType::WindowSpec(spec)) = func.over.as_mut() {
             for order_by in &mut spec.order_by {
-                order_by.nulls_first = None; // nulls first/last are not supported in MySQL
+                order_by.options.nulls_first = None; // nulls first/last are not supported in MySQL
             }
         }
     }
@@ -83,11 +85,11 @@ mod test {
     #[test]
     fn test_remove_frame_clause() {
         let mut func = Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "RANK".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             args: ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(ast::WindowSpec {
                 window_name: None,
@@ -96,8 +98,10 @@ mod test {
                     expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
                         Token::Char('*'),
                     ))),
-                    asc: None,
-                    nulls_first: Some(true),
+                    options: sqlparser::ast::OrderByOptions {
+                        asc: None,
+                        nulls_first: Some(true),
+                    },
                     with_fill: None,
                 }],
                 window_frame: Some(WindowFrame {
@@ -120,8 +124,10 @@ mod test {
                 expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
                     Token::Char('*'),
                 ))),
-                asc: None,
-                nulls_first: Some(true),
+                options: sqlparser::ast::OrderByOptions {
+                    asc: None,
+                    nulls_first: Some(true),
+                },
                 with_fill: None,
             }],
             window_frame: None,
@@ -135,11 +141,11 @@ mod test {
     #[test]
     fn test_remove_nulls_first_last() {
         let mut func = Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName(vec![ObjectNamePart::Identifier(Ident {
                 value: "RANK".to_string(),
                 quote_style: None,
                 span: Span::empty(),
-            }]),
+            })]),
             args: sqlparser::ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
                 window_name: None,
@@ -148,8 +154,10 @@ mod test {
                     expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
                         Token::Char('*'),
                     ))),
-                    asc: None,
-                    nulls_first: Some(true),
+                    options: sqlparser::ast::OrderByOptions {
+                        asc: None,
+                        nulls_first: Some(true),
+                    },
                     with_fill: None,
                 }],
                 window_frame: Some(WindowFrame {
@@ -172,8 +180,10 @@ mod test {
                 expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
                     Token::Char('*'),
                 ))),
-                asc: None,
-                nulls_first: None,
+                options: sqlparser::ast::OrderByOptions {
+                    asc: None,
+                    nulls_first: None,
+                },
                 with_fill: None,
             }],
             window_frame: Some(WindowFrame {

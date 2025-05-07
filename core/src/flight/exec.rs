@@ -268,7 +268,7 @@ fn find_matching_column(
 impl DisplayAs for FlightExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => write!(
+            DisplayFormatType::Default | DisplayFormatType::TreeRender => write!(
                 f,
                 "FlightExec: origin={}, streams={}",
                 self.config.origin,
