@@ -23,8 +23,8 @@ impl VisitorMut for SQLiteBetweenVisitor {
     }
 }
 
-/// This AST visitor is used to convert BETWEEN expressions into decimal_cmp expressions.
-/// This is necessary with SQLite because some floating point values are not accurately comparable when used in the <low> or <high> position of the BETWEEN expression.
+/// This AST visitor is used to convert BETWEEN expressions into `decimal_cmp` expressions.
+/// This is necessary with `SQLite` because some floating point values are not accurately comparable when used in the <low> or <high> position of the BETWEEN expression.
 /// For example, `BETWEEN 0.06+0.01` will cause a floating point precision error that returns invalid results.
 ///
 /// This visitor instead converts the expression into two equivalent `decimal_cmp` expressions, for accurate arbitrary precision comparisons.
