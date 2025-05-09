@@ -25,12 +25,14 @@ use datafusion::{
 
 pub struct SQLiteTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
+    pub(crate) decimal_between: bool,
 }
 
 impl<T, P> std::fmt::Debug for SQLiteTable<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SQLiteTable")
             .field("base_table", &self.base_table)
+            .field("decimal_between", &self.decimal_between)
             .finish()
     }
 }
@@ -50,7 +52,16 @@ impl<T, P> SQLiteTable<T, P> {
         )
         .with_dialect(Arc::new(SqliteDialect {}));
 
-        Self { base_table }
+        Self {
+            base_table,
+            decimal_between: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
+        self.decimal_between = decimal_between;
+        self
     }
 
     fn create_physical_plan(
