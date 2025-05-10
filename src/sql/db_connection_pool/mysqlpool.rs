@@ -49,6 +49,9 @@ pub enum Error {
 
     #[snafu(display("{message}\nEnsure the given MySQL database exists"))]
     UnknownMySQLDatabase { message: String },
+
+    #[snafu(display("Unsupported value: '{value}' for 'character_set_results'. Only 'utf8mb3' and 'utf8mb4' are supported."))]
+    InvalidCharacterSetResults { value: String },
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +162,24 @@ impl MySQLConnectionPool {
         let ssl_opts = get_ssl_opts(ssl_mode, ssl_rootcert_path);
 
         connection_string = connection_string.ssl_opts(ssl_opts);
+
+        if let Some(mysql_character_set_results) = params
+            .get("character_set_results")
+            .map(SecretBox::expose_secret)
+        {
+            match mysql_character_set_results {
+                "utf8mb3" | "utf8mb4" => {
+                    connection_string = connection_string.setup(vec![format!(
+                        "SET character_set_results = {mysql_character_set_results}"
+                    )]);
+                }
+                _ => {
+                    return Err(Error::InvalidCharacterSetResults {
+                        value: mysql_character_set_results.to_string(),
+                    })
+                }
+            }
+        }
 
         let opts = mysql_async::Opts::from(connection_string);
 
