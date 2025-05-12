@@ -49,9 +49,6 @@ pub enum Error {
 
     #[snafu(display("{message}\nEnsure the given MySQL database exists"))]
     UnknownMySQLDatabase { message: String },
-
-    #[snafu(display("Unsupported value: '{value}' for 'character_set_results'. Only 'utf8mb3' and 'utf8mb4' are supported."))]
-    InvalidCharacterSetResults { value: String },
 }
 
 #[derive(Debug, Clone)]
