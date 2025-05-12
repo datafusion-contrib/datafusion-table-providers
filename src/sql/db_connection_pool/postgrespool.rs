@@ -365,7 +365,7 @@ where
     E: std::fmt::Display,
 {
     fn sink(&self, error: E) {
-        tracing::error!("Postgres Connection Error: {:?}", error);
+        tracing::debug!("Postgres Pool Error: {}", error);
     }
 
     fn boxed_clone(&self) -> Box<dyn ErrorSink<E>> {
