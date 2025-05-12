@@ -60,6 +60,13 @@ pub struct MySQLConnectionPool {
     join_push_down: JoinPushDown,
 }
 
+const SETUP_QUERIES: [&str; 4] = [
+    "SET time_zone = '+00:00'",
+    "SET character_set_results = 'utf8mb4'",
+    "SET character_set_client = 'utf8mb4'",
+    "SET character_set_connection = 'utf8mb4'",
+];
+
 impl MySQLConnectionPool {
     /// Creates a new instance of `MySQLConnectionPool`.
     ///
@@ -163,23 +170,7 @@ impl MySQLConnectionPool {
 
         connection_string = connection_string.ssl_opts(ssl_opts);
 
-        if let Some(mysql_character_set_results) = params
-            .get("character_set_results")
-            .map(SecretBox::expose_secret)
-        {
-            match mysql_character_set_results {
-                "utf8mb3" | "utf8mb4" => {
-                    connection_string = connection_string.setup(vec![format!(
-                        "SET character_set_results = {mysql_character_set_results}"
-                    )]);
-                }
-                _ => {
-                    return Err(Error::InvalidCharacterSetResults {
-                        value: mysql_character_set_results.to_string(),
-                    })
-                }
-            }
-        }
+        connection_string = connection_string.setup(SETUP_QUERIES.to_vec());
 
         let opts = mysql_async::Opts::from(connection_string);
 
@@ -230,13 +221,7 @@ impl MySQLConnectionPool {
     /// Returns an error if there is a problem creating the connection pool.
     pub async fn connect_direct(&self) -> super::Result<MySQLConnection> {
         let pool = Arc::clone(&self.pool);
-        let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
-
-        // Set MySQL session default time zone to UTC to match Datafusion
-        let _: Vec<Row> = conn
-            .exec("SET time_zone = '+00:00'", Params::Empty)
-            .await
-            .context(MySQLConnectionSnafu)?;
+        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
         Ok(MySQLConnection::new(conn))
     }
@@ -300,13 +285,7 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
     ) -> super::Result<Box<dyn DbConnection<mysql_async::Conn, &'static (dyn ToValue + Sync)>>>
     {
         let pool = Arc::clone(&self.pool);
-        let mut conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
-
-        // Set MySQL session default time zone to UTC to match Datafusion
-        let _: Vec<Row> = conn
-            .exec("SET time_zone = '+00:00'", Params::Empty)
-            .await
-            .context(MySQLConnectionSnafu)?;
+        let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
         Ok(Box::new(MySQLConnection::new(conn)))
     }
