@@ -28,11 +28,17 @@ impl RawTableProvider {
     }
 }
 
+#[cfg(feature = "duckdb")]
 pub mod duckdb;
+#[cfg(feature = "flight")]
 pub mod flight;
+#[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "odbc")]
 pub mod odbc;
+#[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod utils;
 
@@ -41,29 +47,47 @@ pub mod utils;
 fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RawTableProvider>()?;
 
-    let sqlite = PyModule::new(py, "sqlite")?;
-    sqlite::init_module(&sqlite)?;
-    m.add_submodule(&sqlite)?;
+    #[cfg(feature = "sqlite")]
+    {
+        let sqlite = PyModule::new(py, "sqlite")?;
+        sqlite::init_module(&sqlite)?;
+        m.add_submodule(&sqlite)?;
+    }
 
-    let duckdb = PyModule::new(py, "duckdb")?;
-    duckdb::init_module(&duckdb)?;
-    m.add_submodule(&duckdb)?;
+    #[cfg(feature = "duckdb")]
+    {
+        let duckdb = PyModule::new(py, "duckdb")?;
+        duckdb::init_module(&duckdb)?;
+        m.add_submodule(&duckdb)?;
+    }
 
-    let odbc = PyModule::new(py, "odbc")?;
-    odbc::init_module(&odbc)?;
-    m.add_submodule(&odbc)?;
+    #[cfg(feature = "odbc")]
+    {
+        let odbc = PyModule::new(py, "odbc")?;
+        odbc::init_module(&odbc)?;
+        m.add_submodule(&odbc)?;
+    }
 
-    let mysql = PyModule::new(py, "mysql")?;
-    mysql::init_module(&mysql)?;
-    m.add_submodule(&mysql)?;
+    #[cfg(feature = "mysql")]
+    {
+        let mysql = PyModule::new(py, "mysql")?;
+        mysql::init_module(&mysql)?;
+        m.add_submodule(&mysql)?;
+    }
 
-    let postgres = PyModule::new(py, "postgres")?;
-    postgres::init_module(&postgres)?;
-    m.add_submodule(&postgres)?;
+    #[cfg(feature = "postgres")]
+    {
+        let postgres = PyModule::new(py, "postgres")?;
+        postgres::init_module(&postgres)?;
+        m.add_submodule(&postgres)?;
+    }
 
-    let flight = PyModule::new(py, "flight")?;
-    flight::init_module(&flight)?;
-    m.add_submodule(&flight)?;
+    #[cfg(feature = "flight")]
+    {
+        let flight = PyModule::new(py, "flight")?;
+        flight::init_module(&flight)?;
+        m.add_submodule(&flight)?;
+    }
 
     Ok(())
 }
