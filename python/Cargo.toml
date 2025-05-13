@@ -24,6 +24,7 @@ tokio = { version = "1.44", features = ["macros", "rt", "rt-multi-thread", "sync
 duckdb = { workspace = true, optional = true}
 
 [features]
+default = ["duckdb", "sqlite", "mysql", "postgres", "odbc", "flight"]
 duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]
 sqlite = ["datafusion-table-providers/sqlite-federation"]
 mysql = ["datafusion-table-providers/mysql-federation"]
