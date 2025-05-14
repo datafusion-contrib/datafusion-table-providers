@@ -20,7 +20,7 @@ datafusion = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true }
 pyo3 = { version = "0.23" }
-tokio = { version = "1.44", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.45", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 duckdb = { workspace = true, optional = true}
 
 [features]
