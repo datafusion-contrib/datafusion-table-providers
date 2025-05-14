@@ -10,6 +10,7 @@ use futures::TryStreamExt;
 use snafu::ResultExt;
 use std::sync::Arc;
 
+use super::between::SQLiteBetweenVisitor;
 use super::sql_table::SQLiteTable;
 use super::sqlite_interval::SQLiteIntervalVisitor;
 use datafusion::{
@@ -43,22 +44,29 @@ impl<T, P> SQLiteTable<T, P> {
             self,
         ))
     }
-}
 
-#[allow(clippy::unnecessary_wraps)]
-fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionError> {
-    match ast {
-        ast::Statement::Query(query) => {
-            let mut new_query = query.clone();
+    fn sqlite_ast_analyzer(&self) -> AstAnalyzer {
+        let decimal_between = self.decimal_between;
+        Box::new(move |ast| {
+            match ast {
+                ast::Statement::Query(query) => {
+                    let mut new_query = query.clone();
 
-            // iterate over the query and find any INTERVAL statements
-            // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
-            let mut interval_visitor = SQLiteIntervalVisitor::default();
-            new_query.visit(&mut interval_visitor);
+                    // iterate over the query and find any INTERVAL statements
+                    // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
+                    let mut interval_visitor = SQLiteIntervalVisitor::default();
+                    new_query.visit(&mut interval_visitor);
 
-            Ok(ast::Statement::Query(new_query))
-        }
-        _ => Ok(ast),
+                    if decimal_between {
+                        let mut between_visitor = SQLiteBetweenVisitor::default();
+                        new_query.visit(&mut between_visitor);
+                    }
+
+                    Ok(ast::Statement::Query(new_query))
+                }
+                _ => Ok(ast),
+            }
+        })
     }
 }
 
@@ -77,7 +85,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(Box::new(sqlite_ast_analyzer))
+        Some(self.sqlite_ast_analyzer())
     }
 
     fn execute(
