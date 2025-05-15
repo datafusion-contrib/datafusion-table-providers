@@ -19,8 +19,7 @@ bytes = { version = "1.7.1", optional = true }
 byte-unit = { version = "5.1.4", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
-# pending next arrow-rs release which resolves chrono's quarter() conflict https://github.com/apache/arrow-rs/commit/2fddf85afcd20110ce783ed5b4cdeb82293da30b 
-chrono = "=0.4.39"
+chrono = "0.4"
 datafusion = "45"
 datafusion-expr = { version = "45", optional = true }
 datafusion-physical-expr = { version = "45", optional = true }
