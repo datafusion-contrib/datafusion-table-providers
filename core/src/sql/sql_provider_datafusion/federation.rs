@@ -15,10 +15,25 @@ use datafusion::{
     arrow::datatypes::SchemaRef,
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream},
-    sql::{unparser::dialect::Dialect, TableReference},
+    sql::{
+        unparser::dialect::{DefaultDialect, Dialect},
+        TableReference,
+    },
 };
 
 impl<T, P> SqlTable<T, P> {
+    // Return the current memory location of the object as a unique identifier
+    fn unique_id(&self) -> usize {
+        std::ptr::from_ref(self) as usize
+    }
+
+    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
+    }
+
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
