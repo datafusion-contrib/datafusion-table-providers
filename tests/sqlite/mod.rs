@@ -40,9 +40,12 @@ async fn arrow_sqlite_round_trip(
     // Create sqlite table from arrow records and insert arrow records
     let schema = Arc::clone(&arrow_record.schema());
     let create_table_stmts = CreateTableBuilder::new(schema, table_name).build_sqlite();
-    let insert_table_stmt = InsertBuilder::new(&TableReference::from(table_name), vec![arrow_record.clone()])
-        .build_sqlite(None)
-        .expect("SQLite insert statement should be constructed");
+    let insert_table_stmt = InsertBuilder::new(
+        &TableReference::from(table_name),
+        vec![arrow_record.clone()],
+    )
+    .build_sqlite(None)
+    .expect("SQLite insert statement should be constructed");
 
     // Test arrow -> Sqlite row coverage
     let _ = conn
@@ -59,8 +62,11 @@ async fn arrow_sqlite_round_trip(
 
     // Perform the test twice: first, simulate a request without a known schema;
     // then, test result conversion with a known projected schema (matching the test RecordBatch).
-    for projected_schema in vec![None, Some(arrow_record.schema())] {
-        if ctx.table_exist(table_name).expect("should be able to check if table exists") {
+    for projected_schema in [None, Some(arrow_record.schema())] {
+        if ctx
+            .table_exist(table_name)
+            .expect("should be able to check if table exists")
+        {
             ctx.deregister_table(table_name)
                 .expect("Table should be deregistered");
         }

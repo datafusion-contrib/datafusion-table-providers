@@ -3,12 +3,14 @@ use arrow::{
     array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion::common::{Constraints, ToDFSchema};
-use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
+use datafusion::{
+    common::{Constraints, ToDFSchema},
+    datasource::source::DataSourceExec,
+};
+use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::{
     postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
@@ -53,8 +55,10 @@ async fn arrow_postgres_round_trip(
         .expect("table provider created");
 
     let ctx = SessionContext::new();
-    let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-        .expect("memory exec created");
+    let mem_exec = DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
+            .expect("memory source config created"),
+    ));
     let insert_plan = table_provider
         .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
         .await
@@ -279,11 +283,7 @@ async fn test_postgres_jsonb_type(port: usize) {
     ('{"nested": {"key": "value"}}');
     "#;
 
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "data",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
 
     // Parse and re-serialize the JSON to ensure consistent ordering
     let expected_values = vec![
@@ -304,9 +304,7 @@ async fn test_postgres_jsonb_type(port: usize) {
 
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(arrow::array::StringArray::from(
-            expected_values,
-        ))],
+        vec![Arc::new(arrow::array::StringArray::from(expected_values))],
     )
     .expect("Failed to create arrow record batch");
 

@@ -3,11 +3,12 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use rstest::rstest;
@@ -43,8 +44,10 @@ async fn arrow_duckdb_round_trip(
 
     let ctx = SessionContext::new();
 
-    let mem_exec = MemoryExec::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-        .expect("memory exec created");
+    let mem_exec = DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
+            .expect("memory source config created"),
+    ));
     let insert_plan = table_provider
         .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
         .await
@@ -89,7 +92,8 @@ async fn arrow_duckdb_round_trip(
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
 #[ignore] // DuckDB does not support Decimal256 / duckdb_arrow_scan failed to register view
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
+#[ignore]
+// Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[ignore] // TimeUnit::Nanosecond is not correctly supported; written values are zeros
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
