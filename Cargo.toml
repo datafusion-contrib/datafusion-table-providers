@@ -77,7 +77,7 @@ rstest = "0.22.0"
 geozero = { version = "0.13.0", features = ["with-wkb"] }
 tokio-stream = { version = "0.1.15", features = ["net"] }
 insta = { version = "1.40.0", features = ["filters"] }
-datafusion-physical-plan = { version = "45" }
+datafusion-physical-plan = { version = "46" }
 tempfile = "3.8.1"
 
 [features]
