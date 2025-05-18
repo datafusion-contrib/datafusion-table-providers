@@ -53,6 +53,20 @@ pub mod sql_table;
 pub mod write;
 
 #[derive(Debug, Snafu)]
+pub enum InsertIntoTableError {
+    #[snafu(display("InsertIntoTableError: {source}"))]
+    Rusqlite { source: rusqlite::Error },
+    #[snafu(display("InsertIntoTableError: No message to commit transaction has been received."))]
+    ChannelReceive,
+}
+
+impl From<rusqlite::Error> for InsertIntoTableError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Rusqlite { source }
+    }
+}
+
+#[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("DbConnectionError: {source}"))]
     DbConnectionError {
@@ -77,7 +91,7 @@ pub enum Error {
     UnableToInsertIntoTable { source: rusqlite::Error },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
-    UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error },
+    UnableToInsertIntoTableAsync { source: InsertIntoTableError },
 
     #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
     DiskFull {},
@@ -488,7 +502,7 @@ impl Sqlite {
             .call(move |conn| {
                 let mut stmt = conn.prepare(&sql)?;
                 let exists = stmt.query_row([], |row| row.get(0))?;
-                Ok(exists)
+                Ok::<bool, rusqlite::Error>(exists)
             })
             .await
             .unwrap_or(false)

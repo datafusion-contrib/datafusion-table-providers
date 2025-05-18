@@ -189,9 +189,7 @@ impl DataSink for SqliteDataSink {
                 }
 
                 if on_commit_transaction.try_recv().is_err() {
-                    return Err(tokio_rusqlite::Error::Other(
-                        "No message to commit transaction has been received.".into(),
-                    ));
+                    return Err(super::InsertIntoTableError::ChannelReceive);
                 }
 
                 transaction.commit()?;
@@ -199,18 +197,17 @@ impl DataSink for SqliteDataSink {
                 Ok(())
             })
             .await
-            .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(|e| {
-                if let super::Error::UnableToInsertIntoTableAsync {
+                if let tokio_rusqlite::Error::Error(super::InsertIntoTableError::Rusqlite {
                     source:
-                        tokio_rusqlite::Error::Rusqlite(rusqlite::Error::SqliteFailure(
+                        rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error {
                                 code: rusqlite::ffi::ErrorCode::DiskFull,
                                 ..
                             },
                             _,
-                        )),
-                } = e
+                        ),
+                }) = e
                 {
                     DataFusionError::External(super::Error::DiskFull {}.into())
                 } else {

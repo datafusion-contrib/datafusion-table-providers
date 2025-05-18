@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use rusqlite::ToSql;
 use snafu::{prelude::*, ResultExt};
-use tokio_rusqlite::{Connection, ToSql};
+use tokio_rusqlite::Connection;
 
 use super::{DbConnectionPool, Result};
 use crate::sql::db_connection_pool::{

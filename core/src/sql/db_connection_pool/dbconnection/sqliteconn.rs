@@ -3,6 +3,7 @@ use std::any::Any;
 use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
+use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_trait::async_trait;
@@ -29,10 +30,34 @@ pub enum Error {
     ConversionError {
         source: crate::sql::arrow_sql_gen::sqlite::Error,
     },
+
+    #[snafu(display("Yet unknown tokio_rusqlite error"))]
+    Unknown,
 }
 
 pub struct SqliteConnection {
     pub conn: Connection,
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::QueryError { source }
+    }
+}
+
+impl From<tokio_rusqlite::Error> for Error {
+    fn from(source: tokio_rusqlite::Error) -> Self {
+        match source {
+            tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionError {
+                source: tokio_rusqlite::Error::ConnectionClosed,
+            },
+            tokio_rusqlite::Error::Close(_) => Error::ConnectionError {
+                source: tokio_rusqlite::Error::ConnectionClosed,
+            },
+            tokio_rusqlite::Error::Error(err) => err.into(),
+            _ => Error::Unknown,
+        }
+    }
 }
 
 impl SchemaValidator for SqliteConnection {
@@ -98,7 +123,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
                 )?;
                 let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
                 let tables: Result<Vec<_>, rusqlite::Error> = rows.collect();
-                Ok(tables?)
+                Ok::<Vec<String>, Error>(tables?)
             })
             .await
             .boxed()
@@ -119,14 +144,15 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         let schema: SchemaRef = self
             .conn
             .call(move |conn| {
+                // TODO: make it work on empty tables with col.decl_type()
+                // from rusqlite feature column_decltype
                 let mut stmt = conn.prepare(&format!("SELECT * FROM {table_reference} LIMIT 1"))?;
                 let column_count = stmt.column_count();
                 let rows = stmt.query([])?;
                 let rec = rows_to_arrow(rows, column_count, None)
-                    .context(ConversionSnafu)
-                    .map_err(to_tokio_rusqlite_error)?;
+                    .map_err(|e| Error::ConversionError { source: e })?;
                 let schema = rec.schema();
-                Ok(schema)
+                Ok::<SchemaRef, Error>(schema)
             })
             .await
             .boxed()
@@ -155,12 +181,10 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
                 let rows = stmt.raw_query();
 
                 let rec = rows_to_arrow(rows, column_count, projected_schema)
-                    .context(ConversionSnafu)
-                    .map_err(to_tokio_rusqlite_error)?;
-                Ok(rec)
+                    .map_err(|err| Error::ConversionError { source: err })?;
+                Ok::<RecordBatch, Error>(rec)
             })
-            .await
-            .context(ConnectionSnafu)?;
+            .await?;
 
         let schema = rec.schema();
         let recs = if rec.num_rows() > 0 {
@@ -189,8 +213,4 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
             .context(ConnectionSnafu)?;
         Ok(rows_modified as u64)
     }
-}
-
-fn to_tokio_rusqlite_error(e: impl Into<Error>) -> tokio_rusqlite::Error {
-    tokio_rusqlite::Error::Other(Box::new(e.into()))
 }
