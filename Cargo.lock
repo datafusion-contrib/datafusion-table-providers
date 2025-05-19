@@ -424,7 +424,7 @@ dependencies = [
  "arrow",
  "chrono",
  "log",
- "odbc-api",
+ "odbc-api 12.2.0",
  "thiserror 2.0.12",
 ]
 
@@ -1871,7 +1871,7 @@ dependencies = [
  "mysql_async",
  "native-tls",
  "num-bigint",
- "odbc-api",
+ "odbc-api 13.0.0",
  "pem",
  "postgres-native-tls",
  "prost",
@@ -3752,9 +3752,23 @@ dependencies = [
 
 [[package]]
 name = "odbc-api"
-version = "12.0.2"
+version = "12.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20858521ab3d206ed0932b9a4288ae45af056e5edadbe8d4fd8b9d5b1c7c949f"
+checksum = "cfa6c3cbfe5253d35eb3f55414d8b3447748febf8589d1895839976f508462d1"
+dependencies = [
+ "atoi",
+ "log",
+ "odbc-sys",
+ "thiserror 2.0.12",
+ "widestring",
+ "winit",
+]
+
+[[package]]
+name = "odbc-api"
+version = "13.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "755f32a0f5eb3410febdf649d531d753c39a7f3b12b0233b6080cf0c1ea45c3a"
 dependencies = [
  "atoi",
  "log",
@@ -6449,9 +6463,9 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winit"
-version = "0.30.9"
+version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a809eacf18c8eca8b6635091543f02a5a06ddf3dad846398795460e6e0ae3cc0"
+checksum = "b0d05bd8908e14618c9609471db04007e644fd9cce6529756046cfc577f9155e"
 dependencies = [
  "android-activity",
  "atomic-waker",
