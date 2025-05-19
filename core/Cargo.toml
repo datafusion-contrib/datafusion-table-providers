@@ -99,7 +99,7 @@ uuid = { version = "1.16", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
-bollard = "0.18.1"
+bollard = "0.19.0"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
 insta = { version = "1.43.1", features = ["filters"] }
 prost = { version = "0.13" }
