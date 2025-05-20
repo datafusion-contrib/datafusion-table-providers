@@ -148,6 +148,7 @@ impl<T, P> SqlTable<T, P> {
             filters,
             limit,
             self.engine,
+            self.dialect.clone(),
         )?))
     }
 
@@ -222,6 +223,7 @@ pub struct SqlExec<T, P> {
     limit: Option<usize>,
     properties: PlanProperties,
     engine: Option<Engine>,
+    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
 pub fn project_schema_safe(
@@ -250,6 +252,7 @@ impl<T, P> SqlExec<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
         engine: Option<Engine>,
+        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projections)?;
 
@@ -266,6 +269,7 @@ impl<T, P> SqlExec<T, P> {
                 Boundedness::Bounded,
             ),
             engine,
+            dialect,
         })
     }
     #[must_use]
@@ -274,15 +278,25 @@ impl<T, P> SqlExec<T, P> {
     }
 
     pub fn sql(&self) -> Result<String> {
+        let quote = |name| {
+            let quote = self
+                .dialect
+                .as_ref()
+                .and_then(|d| d.identifier_quote_style(name))
+                .unwrap_or('"');
+            format!("{quote}{name}{quote}")
+        };
+
         let columns = self
             .projected_schema
             .fields()
             .iter()
             .map(|f| {
+                let name = f.name();
                 if let Some(Engine::ODBC) = self.engine {
-                    f.name().to_owned()
+                    name.to_owned()
                 } else {
-                    format!("\"{}\"", f.name())
+                    quote(name)
                 }
             })
             .collect::<Vec<_>>()
@@ -297,7 +311,7 @@ impl<T, P> SqlExec<T, P> {
             String::new()
         } else {
             let dialect = self.engine.map_or(
-                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+                self.dialect.clone().unwrap_or(Arc::new(DefaultDialect {})),
                 |e| e.dialect(),
             );
             let unparser = Unparser::new(dialect.as_ref());
@@ -311,9 +325,10 @@ impl<T, P> SqlExec<T, P> {
             format!("WHERE {}", filter_expr.join(" AND "))
         };
 
+        let table_reference = quote(self.table_reference.table());
+
         Ok(format!(
             "SELECT {columns} FROM {table_reference} {where_expr} {limit_expr}",
-            table_reference = self.table_reference.to_quoted_string()
         ))
     }
 }
@@ -398,27 +413,49 @@ pub fn to_execution_error(
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, sync::Arc};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::sql::unparser::dialect::CustomDialectBuilder;
+    use db_connection_pool::DummyDbConnectionPool;
 
-    use datafusion::execution::context::SessionContext;
-    use datafusion::sql::TableReference;
-    use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Dispatch};
-
-    use crate::sql::sql_provider_datafusion::SqlTable;
-
-    fn setup_tracing() -> DefaultGuard {
-        let subscriber: tracing_subscriber::FmtSubscriber = tracing_subscriber::fmt()
-            .with_max_level(LevelFilter::DEBUG)
-            .finish();
-
-        let dispatch = Dispatch::new(subscriber);
-        tracing::dispatcher::set_default(&dispatch)
-    }
+    use super::*;
 
     #[test]
-    fn test_references() {
-        let table_ref = TableReference::bare("test");
-        assert_eq!(format!("{table_ref}"), "test");
+    fn test_sql_exec_backtick_dialect() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        let table_reference = TableReference::bare("my_table");
+
+        let dialect = CustomDialectBuilder::new()
+            .with_identifier_quote_style('`')
+            .build();
+
+        let sql_exec = SqlExec::<(), ()>::new(
+            None, // No projections
+            &schema,
+            &table_reference,
+            Arc::new(DummyDbConnectionPool),
+            &[],
+            None,
+            None,
+            Some(Arc::new(dialect)),
+        )
+        .expect("Failed to create SqlExec");
+
+        // Generate SQL
+        let sql = sql_exec.sql().expect("Failed to generate SQL");
+
+        // Expected SQL with backtick-quoted identifiers
+        let expected_sql = "SELECT `id`, `name` FROM `my_table`";
+
+        // Assert the generated SQL matches the expected output
+        assert_eq!(
+            sql.trim(),
+            expected_sql,
+            "SQL output does not match expected backtick-quoted format"
+        );
     }
 
     #[cfg(feature = "duckdb")]
@@ -428,10 +465,28 @@ mod tests {
             DuckDBSyncParameter, DuckDbConnection,
         };
         use crate::sql::db_connection_pool::{duckdbpool::DuckDbConnectionPool, DbConnectionPool};
+        use datafusion::prelude::SessionContext;
+        use datafusion::sql::TableReference;
         use duckdb::DuckdbConnectionManager;
+        use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Dispatch};
+
+        fn setup_tracing() -> DefaultGuard {
+            let subscriber: tracing_subscriber::FmtSubscriber = tracing_subscriber::fmt()
+                .with_max_level(LevelFilter::DEBUG)
+                .finish();
+
+            let dispatch = Dispatch::new(subscriber);
+            tracing::dispatcher::set_default(&dispatch)
+        }
+
+        #[test]
+        fn test_references() {
+            let table_ref = TableReference::bare("test");
+            assert_eq!(format!("{table_ref}"), "test");
+        }
 
         #[tokio::test]
-        async fn test_duckdb_table() -> Result<(), Box<dyn Error + Send + Sync>> {
+        async fn test_duckdb_table() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let t = setup_tracing();
             let ctx = SessionContext::new();
             let pool: Arc<
@@ -466,7 +521,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_duckdb_table_filter() -> Result<(), Box<dyn Error + Send + Sync>> {
+        async fn test_duckdb_table_filter() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+        {
             let t = setup_tracing();
             let ctx = SessionContext::new();
             let pool: Arc<

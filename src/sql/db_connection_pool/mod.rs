@@ -68,3 +68,18 @@ impl DbInstanceKey {
         DbInstanceKey::File(path)
     }
 }
+
+#[cfg(test)]
+pub(crate) struct DummyDbConnectionPool;
+
+#[cfg(test)]
+#[async_trait]
+impl DbConnectionPool<(), ()> for DummyDbConnectionPool {
+    async fn connect(&self) -> Result<Box<dyn DbConnection<(), ()>>> {
+        Ok(Box::new(dbconnection::DummyDbConnection(())))
+    }
+
+    fn join_push_down(&self) -> JoinPushDown {
+        JoinPushDown::Disallow
+    }
+}

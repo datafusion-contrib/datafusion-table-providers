@@ -136,6 +136,7 @@ impl MySQLSQLExec {
             filters,
             limit,
             Some(Engine::MySQL),
+            None,
         )?;
 
         Ok(Self { base_exec })

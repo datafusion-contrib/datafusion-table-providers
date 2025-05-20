@@ -142,6 +142,7 @@ impl<T, P> SQLiteSqlExec<T, P> {
             filters,
             limit,
             Some(Engine::SQLite),
+            None,
         )?;
 
         Ok(Self { base_exec })

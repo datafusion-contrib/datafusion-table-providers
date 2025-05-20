@@ -143,6 +143,7 @@ impl<T, P> DuckSqlExec<T, P> {
             filters,
             limit,
             Some(Engine::DuckDB),
+            None,
         )?;
 
         Ok(Self {

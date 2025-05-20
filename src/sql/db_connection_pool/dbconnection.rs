@@ -167,3 +167,17 @@ pub async fn query_arrow<T, P>(
         return Err(Error::UnableToDowncastConnection {});
     }
 }
+
+#[cfg(test)]
+pub(crate) struct DummyDbConnection(pub ());
+
+#[cfg(test)]
+impl DbConnection<(), ()> for DummyDbConnection {
+    fn as_any(&self) -> &dyn Any {
+        &self.0
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        &mut self.0
+    }
+}
