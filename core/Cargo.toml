@@ -65,7 +65,8 @@ prost = { version = "0.13", optional = true }
 rand = { version = "0.9" }
 r2d2 = { version = "0.8", optional = true }
 rusqlite = { version = "0.35", optional = true }
-sea-query = { version = "0.32", features = [
+sea-query = { version = "0.32", default-features = false, features = [
+  "backend-mysql",
   "backend-sqlite",
   "backend-postgres",
   "postgres-array",

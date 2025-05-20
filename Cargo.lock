@@ -5067,22 +5067,7 @@ dependencies = [
  "chrono",
  "inherent",
  "rust_decimal",
- "sea-query-derive",
  "time",
-]
-
-[[package]]
-name = "sea-query-derive"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae0cbad6ab996955664982739354128c58d16e126114fe88c2a493642502aab"
-dependencies = [
- "darling",
- "heck 0.4.1",
- "proc-macro2",
- "quote",
- "syn 2.0.101",
- "thiserror 2.0.12",
 ]
 
 [[package]]
