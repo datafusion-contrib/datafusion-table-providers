@@ -5,15 +5,14 @@ use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
     common::Constraints,
-    datasource::{TableProvider, TableType},
+    datasource::{
+        sink::{DataSink, DataSinkExec},
+        TableProvider, TableType,
+    },
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{dml::InsertOp, Expr},
-    physical_plan::{
-        insert::{DataSink, DataSinkExec},
-        metrics::MetricsSet,
-        DisplayAs, DisplayFormatType, ExecutionPlan,
-    },
+    physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use futures::StreamExt;
 use snafu::prelude::*;
