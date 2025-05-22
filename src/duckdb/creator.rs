@@ -749,11 +749,7 @@ pub(crate) mod tests {
     };
     use arrow::array::RecordBatch;
     use datafusion::{
-        common::SchemaExt,
-        execution::{SendableRecordBatchStream, TaskContext},
-        logical_expr::dml::InsertOp,
-        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-        physical_plan::{insert::DataSink, memory::MemoryStream},
+        common::SchemaExt, datasource::sink::DataSink, execution::{SendableRecordBatchStream, TaskContext}, logical_expr::dml::InsertOp, parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder, physical_plan::memory::MemoryStream
     };
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;

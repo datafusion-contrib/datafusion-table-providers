@@ -75,11 +75,22 @@ impl SQLiteBetweenVisitor {
 
     fn between_value_is_numeric(expr: &mut Expr) -> bool {
         match expr {
-            Expr::Value(ast::Value::Number(_, _)) => true,
+            Expr::Value(ast::ValueWithSpan {
+                value: ast::Value::Number(_, _),
+                ..
+            }) => true,
             Expr::BinaryOp { left, op, right } => {
                 if matches!(op, BinaryOperator::Plus | BinaryOperator::Minus) {
-                    if let Expr::Value(ast::Value::Number(_, _)) = left.as_ref() {
-                        if let Expr::Value(ast::Value::Number(_, _)) = right.as_ref() {
+                    if let Expr::Value(ast::ValueWithSpan {
+                        value: ast::Value::Number(_, _),
+                        ..
+                    }) = left.as_ref()
+                    {
+                        if let Expr::Value(ast::ValueWithSpan {
+                            value: ast::Value::Number(_, _),
+                            ..
+                        }) = right.as_ref()
+                        {
                             return true;
                         }
                     }
@@ -93,14 +104,19 @@ impl SQLiteBetweenVisitor {
 
     fn wrap_numeric_values_in_decimal(expr: &mut Expr) {
         match expr {
-            Expr::Value(ast::Value::Number(s, _)) => {
+            Expr::Value(ast::ValueWithSpan {
+                value: ast::Value::Number(s, _),
+                ..
+            }) => {
                 // if expr is a numeric literal, wrap it in a decimal scalar
                 *expr = Expr::Function(ast::Function {
-                    name: ast::ObjectName(vec![Ident::new("decimal")]),
+                    name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                        "decimal",
+                    ))]),
                     args: ast::FunctionArguments::List(FunctionArgumentList {
                         duplicate_treatment: None,
                         args: vec![FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                            ast::Value::SingleQuotedString(s.clone()),
+                            ast::Value::SingleQuotedString(s.clone()).into(),
                         )))],
                         clauses: Vec::new(),
                     }),
@@ -147,9 +163,11 @@ impl SQLiteBetweenVisitor {
         comparison_expr: &mut Expr,
         comparison_op: BinaryOperator,
     ) -> Expr {
-        let right = Expr::Value(ast::Value::Number("0".to_string(), false));
+        let right = Expr::Value(ast::Value::Number("0".to_string(), false).into());
         let left = Expr::Function(ast::Function {
-            name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+            name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                "decimal_cmp",
+            ))]),
             args: ast::FunctionArguments::List(FunctionArgumentList {
                 duplicate_treatment: None,
                 args: vec![
@@ -182,10 +200,16 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn test_rebuild_between_into_decimal_cmp() {
         let mut expr = Expr::Between {
-            expr: Box::new(Expr::Value(ast::Value::Number("1".to_string(), false))),
+            expr: Box::new(Expr::Value(
+                ast::Value::Number("1".to_string(), false).into(),
+            )),
             negated: false,
-            low: Box::new(Expr::Value(ast::Value::Number("2".to_string(), false))),
-            high: Box::new(Expr::Value(ast::Value::Number("3".to_string(), false))),
+            low: Box::new(Expr::Value(
+                ast::Value::Number("2".to_string(), false).into(),
+            )),
+            high: Box::new(Expr::Value(
+                ast::Value::Number("3".to_string(), false).into(),
+            )),
         };
 
         SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
@@ -195,21 +219,26 @@ mod test {
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false)
+                                    ast::Value::Number("1".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("2".to_string())
+                                                        .into()
                                                 ),),
                                             )],
                                             clauses: Vec::new(),
@@ -233,29 +262,33 @@ mod test {
                         within_group: Vec::<ast::OrderByExpr>::new(),
                     })),
                     op: BinaryOperator::GtEq,
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
                 op: BinaryOperator::And,
                 right: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false)
+                                    ast::Value::Number("1".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("3".to_string())
+                                                        .into()
                                                 ),),
                                             )],
                                             clauses: Vec::new(),
@@ -279,10 +312,9 @@ mod test {
                         within_group: Vec::<ast::OrderByExpr>::new(),
                     })),
                     op: BinaryOperator::LtEq,
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
             }
         );
@@ -292,14 +324,22 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn test_rebuild_between_numeric_low_binary_op() {
         let mut expr = Expr::Between {
-            expr: Box::new(Expr::Value(ast::Value::Number("10".to_string(), false))),
+            expr: Box::new(Expr::Value(
+                ast::Value::Number("10".to_string(), false).into(),
+            )),
             negated: false,
             low: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Value(ast::Value::Number("1".to_string(), false))),
+                left: Box::new(Expr::Value(
+                    ast::Value::Number("1".to_string(), false).into(),
+                )),
                 op: BinaryOperator::Plus,
-                right: Box::new(Expr::Value(ast::Value::Number("2".to_string(), false))),
+                right: Box::new(Expr::Value(
+                    ast::Value::Number("2".to_string(), false).into(),
+                )),
             }),
-            high: Box::new(Expr::Value(ast::Value::Number("20".to_string(), false))),
+            high: Box::new(Expr::Value(
+                ast::Value::Number("20".to_string(), false).into(),
+            )),
         };
 
         SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
@@ -309,21 +349,26 @@ mod test {
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("10".to_string(), false)
+                                    ast::Value::Number("10".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::BinaryOp {
                                     left: Box::new(Expr::Function(ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("1".to_string())
+                                                        .into()
                                                 ))
                                             )],
                                             clauses: Vec::new(),
@@ -337,12 +382,15 @@ mod test {
                                     })),
                                     op: BinaryOperator::Plus,
                                     right: Box::new(Expr::Function(ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("2".to_string())
+                                                        .into()
                                                 ))
                                             )],
                                             clauses: Vec::new(),
@@ -366,24 +414,27 @@ mod test {
                         within_group: Vec::new(),
                     })),
                     op: BinaryOperator::GtEq,
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
                 op: BinaryOperator::And,
                 right: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("10".to_string(), false)
+                                    ast::Value::Number("10".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
@@ -391,6 +442,7 @@ mod test {
                                                     ast::Value::SingleQuotedString(
                                                         "20".to_string()
                                                     )
+                                                    .into()
                                                 ),),
                                             )],
                                             clauses: Vec::new(),
@@ -414,10 +466,9 @@ mod test {
                         within_group: Vec::new(),
                     })),
                     op: BinaryOperator::LtEq,
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
             }
         );
@@ -427,10 +478,16 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn test_rebuild_not_between_into_decimal_cmp() {
         let mut expr = Expr::Between {
-            expr: Box::new(Expr::Value(ast::Value::Number("1".to_string(), false))),
+            expr: Box::new(Expr::Value(
+                ast::Value::Number("1".to_string(), false).into(),
+            )),
             negated: true,
-            low: Box::new(Expr::Value(ast::Value::Number("2".to_string(), false))),
-            high: Box::new(Expr::Value(ast::Value::Number("3".to_string(), false))),
+            low: Box::new(Expr::Value(
+                ast::Value::Number("2".to_string(), false).into(),
+            )),
+            high: Box::new(Expr::Value(
+                ast::Value::Number("3".to_string(), false).into(),
+            )),
         };
 
         SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
@@ -440,21 +497,26 @@ mod test {
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false)
+                                    ast::Value::Number("1".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("2".to_string())
+                                                        .into()
                                                 ),),
                                             )],
                                             clauses: Vec::new(),
@@ -478,29 +540,33 @@ mod test {
                         within_group: Vec::new(),
                     })),
                     op: BinaryOperator::Lt, // Negated: GtEq becomes Lt
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
                 op: BinaryOperator::And,
                 right: Box::new(Expr::BinaryOp {
                     left: Box::new(Expr::Function(ast::Function {
-                        name: ast::ObjectName(vec![Ident::new("decimal_cmp")]),
+                        name: ast::ObjectName(vec![ast::ObjectNamePart::Identifier(Ident::new(
+                            "decimal_cmp"
+                        ))]),
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false)
+                                    ast::Value::Number("1".to_string(), false).into()
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
-                                        name: ast::ObjectName(vec![Ident::new("decimal")]),
+                                        name: ast::ObjectName(vec![
+                                            ast::ObjectNamePart::Identifier(Ident::new("decimal"))
+                                        ]),
                                         args: ast::FunctionArguments::List(FunctionArgumentList {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
                                                     ast::Value::SingleQuotedString("3".to_string())
+                                                        .into()
                                                 ),),
                                             )],
                                             clauses: Vec::new(),
@@ -524,10 +590,9 @@ mod test {
                         within_group: Vec::new(),
                     })),
                     op: BinaryOperator::Gt, // Negated: LtEq becomes Gt
-                    right: Box::<Expr>::from(Expr::Value(ast::Value::Number(
-                        "0".to_string(),
-                        false
-                    ))),
+                    right: Box::<Expr>::from(Expr::Value(
+                        ast::Value::Number("0".to_string(), false).into()
+                    )),
                 }),
             }
         );
@@ -536,10 +601,16 @@ mod test {
     #[test]
     fn test_rebuild_between_string_low_not_modified() {
         let original_expr = Expr::Between {
-            expr: Box::new(Expr::Value(ast::Value::Number("1".to_string(), false))),
+            expr: Box::new(Expr::Value(
+                ast::Value::Number("1".to_string(), false).into(),
+            )),
             negated: false,
-            low: Box::new(Expr::Value(ast::Value::SingleQuotedString("2".to_string()))),
-            high: Box::new(Expr::Value(ast::Value::Number("3".to_string(), false))),
+            low: Box::new(Expr::Value(
+                ast::Value::SingleQuotedString("2".to_string()).into(),
+            )),
+            high: Box::new(Expr::Value(
+                ast::Value::Number("3".to_string(), false).into(),
+            )),
         };
         let mut expr = original_expr.clone();
 

@@ -271,8 +271,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion::{
         logical_expr::{
-            expr::{InList, ScalarFunction},
-            ColumnarValue, Expr, Like, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+            expr::{InList, ScalarFunction}, ColumnarValue, Expr, Like, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility
         },
         prelude::col,
         scalar::ScalarValue,
@@ -374,7 +373,7 @@ mod tests {
                 Ok(DataType::Utf8)
             }
 
-            fn invoke(&self, _args: &[ColumnarValue]) -> datafusion::error::Result<ColumnarValue> {
+            fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> datafusion::error::Result<ColumnarValue> {
                 Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
             }
         }
