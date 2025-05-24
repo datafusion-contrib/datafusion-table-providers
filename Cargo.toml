@@ -81,7 +81,7 @@ datafusion-physical-plan = { version = "46" }
 tempfile = "3.8.1"
 
 [features]
-mysql = ["dep:mysql_async", "dep:async-stream"]
+mysql = ["dep:mysql_async", "dep:async-stream", "dep:arrow-schema"]
 postgres = ["dep:tokio-postgres", "dep:uuid", "dep:postgres-native-tls", "dep:bb8", "dep:bb8-postgres", "dep:native-tls", "dep:pem", "dep:async-stream", "dep:arrow-schema"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 duckdb = ["dep:duckdb", "dep:r2d2", "dep:uuid", "dep:dyn-clone", "dep:async-stream", "dep:arrow-schema", "dep:byte-unit"]
