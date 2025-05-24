@@ -16,12 +16,15 @@ limitations under the License.
 
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::sql_provider_datafusion::{self};
+use datafusion::sql::unparser::dialect::Dialect;
 use datafusion::{datasource::TableProvider, sql::TableReference};
 use mysql_async::Metrics;
 use snafu::prelude::*;
 use sql_table::MySQLTable;
 use std::sync::Arc;
 
+pub mod builder;
+pub mod dialect;
 pub mod federation;
 pub(crate) mod mysql_window;
 pub mod sql_table;
@@ -38,12 +41,22 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct MySQLTableFactory {
     pool: Arc<MySQLConnectionPool>,
+    dialect: Option<Arc<dyn Dialect>>,
 }
 
 impl MySQLTableFactory {
     #[must_use]
     pub fn new(pool: Arc<MySQLConnectionPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            dialect: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect>) -> Self {
+        self.dialect = Some(dialect);
+        self
     }
 
     pub async fn table_provider(
@@ -51,8 +64,16 @@ impl MySQLTableFactory {
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
+
+        let mut builder = MySQLTable::builder(&pool, table_reference);
+
+        if let Some(dialect) = &self.dialect {
+            builder = builder.with_dialect(Arc::clone(dialect));
+        }
+
         let table_provider = Arc::new(
-            MySQLTable::new(&pool, table_reference)
+            builder
+                .build()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );

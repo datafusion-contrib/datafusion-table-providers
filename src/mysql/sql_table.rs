@@ -1,16 +1,14 @@
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
-use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::sql::unparser::dialect::MySqlDialect;
 use futures::TryStreamExt;
 use mysql_async::prelude::ToValue;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::sql::sql_provider_datafusion::{
-    self, get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
+    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -25,8 +23,10 @@ use datafusion::{
     sql::TableReference,
 };
 
+use super::builder::MySQLTableBuilder;
+
 pub struct MySQLTable {
-    pool: Arc<MySQLConnectionPool>,
+    pub(crate) pool: Arc<MySQLConnectionPool>,
     pub(crate) base_table: SqlTable<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
 }
 
@@ -39,24 +39,11 @@ impl std::fmt::Debug for MySQLTable {
 }
 
 impl MySQLTable {
-    pub async fn new(
+    pub fn builder(
         pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
-    ) -> Result<Self, sql_provider_datafusion::Error> {
-        let dyn_pool = Arc::clone(pool)
-            as Arc<
-                dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
-                    + Send
-                    + Sync,
-            >;
-        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference, None)
-            .await?
-            .with_dialect(Arc::new(MySqlDialect {}));
-
-        Ok(Self {
-            pool: Arc::clone(pool),
-            base_table,
-        })
+    ) -> MySQLTableBuilder {
+        MySQLTableBuilder::new(Arc::clone(pool), table_reference.into())
     }
 
     fn create_physical_plan(
