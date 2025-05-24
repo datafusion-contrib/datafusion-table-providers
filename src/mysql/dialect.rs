@@ -3,15 +3,18 @@ use std::sync::Arc;
 use arrow_schema::TimeUnit;
 use datafusion::{
     common::HashMap,
-    sql::unparser::{
-        dialect::{
-            DateFieldExtractStyle, Dialect, IntervalStyle, MySqlDialect as DFMySqlDialect,
-            ScalarFnToSqlHandler,
+    logical_expr::Expr,
+    sql::{
+        sqlparser::ast,
+        unparser::{
+            dialect::{
+                DateFieldExtractStyle, Dialect, IntervalStyle, MySqlDialect as DFMySqlDialect,
+                ScalarFnToSqlHandler,
+            },
+            Unparser,
         },
-        Unparser,
     },
 };
-use datafusion_expr::{sqlparser::ast, Expr};
 
 pub struct MySqlDialect {
     inner: DFMySqlDialect,
