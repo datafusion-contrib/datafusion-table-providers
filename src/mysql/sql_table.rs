@@ -8,7 +8,7 @@ use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::sql::sql_provider_datafusion::{
-    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
+    self, get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -39,6 +39,13 @@ impl std::fmt::Debug for MySQLTable {
 }
 
 impl MySQLTable {
+    pub async fn new(
+        pool: &Arc<MySQLConnectionPool>,
+        table_reference: impl Into<TableReference>,
+    ) -> Result<Self, sql_provider_datafusion::Error> {
+        Self::builder(pool, table_reference).build().await
+    }
+
     pub fn builder(
         pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
