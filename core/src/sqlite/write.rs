@@ -3,6 +3,7 @@ use std::{any::Any, fmt, sync::Arc};
 use async_trait::async_trait;
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
+use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::{
     catalog::Session,
     common::Constraints,
@@ -76,6 +77,13 @@ impl TableProvider for SqliteTableWriter {
         self.read_provider
             .scan(state, projection, filters, limit)
             .await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>, DataFusionError> {
+        self.read_provider.supports_filters_pushdown(filters)
     }
 
     async fn insert_into(
