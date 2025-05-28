@@ -409,9 +409,8 @@ impl TableManager {
         tx.register_arrow_scan_view(&view_name, &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
-        let sql = format!(
-            r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,
-        );
+        let sql =
+            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,);
         tracing::debug!("{sql}");
 
         tx.execute(&sql, [])
@@ -750,10 +749,11 @@ pub(crate) mod tests {
     use arrow::array::RecordBatch;
     use datafusion::{
         common::SchemaExt,
+        datasource::sink::DataSink,
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-        physical_plan::{insert::DataSink, memory::MemoryStream},
+        physical_plan::memory::MemoryStream,
     };
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
