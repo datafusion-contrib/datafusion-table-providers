@@ -31,7 +31,7 @@ impl MySQLTable {
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name.into(),
+            table_name,
             schema,
         )))
     }
