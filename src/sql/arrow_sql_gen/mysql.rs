@@ -1,20 +1,21 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal256Builder, Decimal128Builder, Float32Builder,
-        Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeBinaryBuilder,
-        LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions,
-        StringBuilder, Time64NanosecondBuilder, StringDictionaryBuilder, TimestampMicrosecondBuilder, UInt64Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, Date32Builder, Decimal128Builder, Decimal256Builder,
+        Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
+        LargeBinaryBuilder, LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions,
+        StringBuilder, StringDictionaryBuilder, Time64NanosecondBuilder,
+        TimestampMicrosecondBuilder, UInt64Builder,
     },
     datatypes::{i256, DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit, UInt16Type},
 };
 use bigdecimal::BigDecimal;
+use bigdecimal::ToPrimitive;
 use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
 use time::PrimitiveDateTime;
-use bigdecimal::ToPrimitive;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -70,11 +71,12 @@ macro_rules! handle_primitive_type {
             }
             .fail();
         };
-        let v = handle_null_error($row.get_opt::<$value_ty, usize>($index).transpose())
-            .context(FailedToGetRowValueSnafu {
+        let v = handle_null_error($row.get_opt::<$value_ty, usize>($index).transpose()).context(
+            FailedToGetRowValueSnafu {
                 column: $column_name,
-                mysql_type: $type 
-            })?;
+                mysql_type: $type,
+            },
+        )?;
 
         match v {
             Some(v) => builder.append_value(v),
@@ -208,10 +210,26 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     );
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_SHORT | ColumnType::MYSQL_TYPE_YEAR) => {
-                    handle_primitive_type!(builder, column_type, Int16Builder, i16, row, i, column_name);
+                    handle_primitive_type!(
+                        builder,
+                        column_type,
+                        Int16Builder,
+                        i16,
+                        row,
+                        i,
+                        column_name
+                    );
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_INT24 | ColumnType::MYSQL_TYPE_LONG) => {
-                    handle_primitive_type!(builder, column_type, Int32Builder, i32, row, i, column_name);
+                    handle_primitive_type!(
+                        builder,
+                        column_type,
+                        Int32Builder,
+                        i32,
+                        row,
+                        i,
+                        column_name
+                    );
                 }
                 ColumnType::MYSQL_TYPE_LONGLONG => {
                     handle_primitive_type!(
@@ -258,65 +276,69 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
                     match arrow_field.data_type() {
                         DataType::Decimal128(_, _) => {
-                            let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal128Builder>()
-                            else {
-                                return FailedToDowncastBuilderSnafu {
-                                    mysql_type: format!("{mysql_type:?}"),
-                               }
-                               .fail();
-                           };
-                           let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
-                               .context(FailedToGetRowValueSnafu {
-                                    column: column_name,
-                                    mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
-                                })?;
-       
-                            let scale = match &val {
-                                Some(val) => val.fractional_digit_count(),
-                                None => 0,
-                            };
-       
-                            let Some(val) = val else {
-                                builder.append_null();
-                                continue;
-                            };
-       
-                            let Some(val) = to_decimal_128(&val, scale) else {
-                                return FailedToConvertBigDecimalToI128Snafu { big_decimal: val }.fail();
-                            };
-       
-                            builder.append_value(val);
-                        }
-                        DataType::Decimal256(_, _) => {
-                            let Some(builder) = builder.as_any_mut().downcast_mut::<Decimal256Builder>()
+                            let Some(builder) =
+                                builder.as_any_mut().downcast_mut::<Decimal128Builder>()
                             else {
                                 return FailedToDowncastBuilderSnafu {
                                     mysql_type: format!("{mysql_type:?}"),
                                 }
                                 .fail();
                             };
-        
-                            let val = handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
-                                .context(FailedToGetRowValueSnafu {
-                                    column: column_name,
-                                    mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
-                                })?;
-        
+                            let val =
+                                handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
+                                    .context(FailedToGetRowValueSnafu {
+                                        column: column_name,
+                                        mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
+                                    })?;
+
+                            let scale = match &val {
+                                Some(val) => val.fractional_digit_count(),
+                                None => 0,
+                            };
+
                             let Some(val) = val else {
                                 builder.append_null();
                                 continue;
                             };
-        
+
+                            let Some(val) = to_decimal_128(&val, scale) else {
+                                return FailedToConvertBigDecimalToI128Snafu { big_decimal: val }
+                                    .fail();
+                            };
+
+                            builder.append_value(val);
+                        }
+                        DataType::Decimal256(_, _) => {
+                            let Some(builder) =
+                                builder.as_any_mut().downcast_mut::<Decimal256Builder>()
+                            else {
+                                return FailedToDowncastBuilderSnafu {
+                                    mysql_type: format!("{mysql_type:?}"),
+                                }
+                                .fail();
+                            };
+
+                            let val =
+                                handle_null_error(row.get_opt::<BigDecimal, usize>(i).transpose())
+                                    .context(FailedToGetRowValueSnafu {
+                                        column: column_name,
+                                        mysql_type: ColumnType::MYSQL_TYPE_DECIMAL,
+                                    })?;
+
+                            let Some(val) = val else {
+                                builder.append_null();
+                                continue;
+                            };
+
                             let val = to_decimal_256(&val);
-        
+
                             builder.append_value(val);
                         }
                         // ColumnType::MYSQL_TYPE_DECIMAL & ColumnType::MYSQL_TYPE_NEWDECIMAL are only mapped to Decimal128/Decimal256 in `map_column_to_data_type` function
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
-                column_type @ (ColumnType::MYSQL_TYPE_VARCHAR
-                | ColumnType::MYSQL_TYPE_JSON) => {
+                column_type @ (ColumnType::MYSQL_TYPE_VARCHAR | ColumnType::MYSQL_TYPE_JSON) => {
                     handle_primitive_type!(
                         builder,
                         column_type,
@@ -340,7 +362,6 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             row,
                             i,
                             column_name
-                            
                         ),
                         (true, false) => handle_primitive_type!(
                             builder,
@@ -437,8 +458,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                         .fail();
                     };
-                
-                    let v = match handle_null_error(row.get_opt::<NaiveDate, usize>(i).transpose()) {
+
+                    let v = match handle_null_error(row.get_opt::<NaiveDate, usize>(i).transpose())
+                    {
                         Ok(v) => v,
                         Err(err) => {
                             // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
@@ -504,7 +526,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                         .fail();
                     };
-                    let v = match handle_null_error(row.get_opt::<PrimitiveDateTime, usize>(i).transpose()) {
+                    let v = match handle_null_error(
+                        row.get_opt::<PrimitiveDateTime, usize>(i).transpose(),
+                    ) {
                         Ok(v) => v,
                         Err(err) => {
                             // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
@@ -518,7 +542,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                                 });
                             }
                         }
-                    };               
+                    };
 
                     match v {
                         Some(v) => {
@@ -567,7 +591,7 @@ pub fn map_column_to_data_type(
         ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
             if column_decimal_precision.unwrap_or_default() > 38 {
                 return Some(DataType::Decimal256(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default()));
-            } 
+            }
             Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default()))
         },
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME => {
@@ -610,7 +634,7 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_TIMESTAMP2
         | ColumnType::MYSQL_TYPE_DATETIME2
         | ColumnType::MYSQL_TYPE_TIME2
-        | ColumnType::MYSQL_TYPE_LONG_BLOB 
+        | ColumnType::MYSQL_TYPE_LONG_BLOB
         | ColumnType::MYSQL_TYPE_TINY_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_GEOMETRY

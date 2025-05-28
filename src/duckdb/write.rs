@@ -15,17 +15,14 @@ use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::{Constraints, SchemaExt};
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::Expr,
-    physical_plan::{
-        insert::{DataSink, DataSinkExec},
-        metrics::MetricsSet,
-        DisplayAs, DisplayFormatType, ExecutionPlan,
-    },
+    physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use duckdb::Transaction;
 use futures::StreamExt;
@@ -642,6 +639,7 @@ impl RecordBatchReader for RecordBatchReaderFromStream {
 #[cfg(test)]
 mod test {
     use arrow::array::{Int64Array, StringArray};
+    use datafusion::datasource::sink::DataSink;
     use datafusion_physical_plan::memory::MemoryStream;
 
     use super::*;

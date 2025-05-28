@@ -702,9 +702,16 @@ pub(crate) fn get_arrow_map_record_batch() -> (RecordBatch, SchemaRef) {
     // Construct a buffer for value offsets, for the nested array:
     //  [[a, b, c], [d, e, f], [g, h]]
     let entry_offsets = [0, 3, 6, 8];
-    let map_array = MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets).expect("Failed to create MapArray");
-    let schema = Arc::new(Schema::new(vec![Field::new("map_array", map_array.data_type().clone(), true)]));
-    let rb = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(map_array)]).expect("Failed to created arrow Map array record batch");
+    let map_array =
+        MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+            .expect("Failed to create MapArray");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "map_array",
+        map_array.data_type().clone(),
+        true,
+    )]));
+    let rb = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(map_array)])
+        .expect("Failed to created arrow Map array record batch");
     (rb, schema)
 }
 

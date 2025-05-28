@@ -156,7 +156,9 @@ pub enum Error {
     #[snafu(display("Failed to register Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToRegisterArrowScanView { source: duckdb::Error },
 
-    #[snafu(display("Failed to register Arrow scan view to build table creation statement: {source}"))]
+    #[snafu(display(
+        "Failed to register Arrow scan view to build table creation statement: {source}"
+    ))]
     UnableToRegisterArrowScanViewForTableCreation { source: duckdb::Error },
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
