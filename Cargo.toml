@@ -6,7 +6,7 @@ edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
 
 [dependencies]
-arrow = "55"
+arrow = { version = "55", features = ["ffi"] }
 arrow-array = { version = "55", optional = true }
 arrow-flight = { version = "55", optional = true, features = ["flight-sql-experimental", "tls"] }
 arrow-schema = { version = "55", optional = true, features = ["serde"] }
