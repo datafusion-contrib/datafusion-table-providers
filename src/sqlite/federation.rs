@@ -4,8 +4,11 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
+use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
+use datafusion_federation::sql::{
+    ast_analyzer::AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource,
+};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
-use datafusion_federation_sql::{AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource};
 use futures::TryStreamExt;
 use snafu::ResultExt;
 use std::sync::Arc;
@@ -25,14 +28,14 @@ impl<T, P> SQLiteTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.to_quoted_string();
+        let table_name = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
             table_name,
             schema,
-        )?))
+        )))
     }
 
     pub fn create_federated_table_provider(
@@ -45,7 +48,7 @@ impl<T, P> SQLiteTable<T, P> {
         ))
     }
 
-    fn sqlite_ast_analyzer(&self) -> AstAnalyzer {
+    fn sqlite_ast_analyzer(&self) -> AstAnalyzerRule {
         let decimal_between = self.decimal_between;
         Box::new(move |ast| {
             match ast {
@@ -85,7 +88,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(self.sqlite_ast_analyzer())
+        Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
     }
 
     fn execute(
