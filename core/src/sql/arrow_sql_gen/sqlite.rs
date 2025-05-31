@@ -21,10 +21,13 @@ use arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
         Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
-        RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder, UInt32Builder,
-        UInt64Builder, UInt8Builder,
+        PrimitiveBuilder, RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder,
+        UInt32Builder, UInt64Builder, UInt8Builder,
     },
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{
+        DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    },
 };
 use rusqlite::{types::Type, Row, Rows};
 use snafu::prelude::*;
@@ -164,6 +167,7 @@ fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => DataType::Binary,
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => DataType::Float64,
         DataType::Duration(_) => DataType::Int64,
+        DataType::Timestamp(t, tz) => DataType::Timestamp(*t, tz.clone()),
 
         // Timestamp, Date32, Date64, Time32, Time64, List, Struct, Union, Dictionary, Map
         _ => DataType::Utf8,
@@ -183,6 +187,19 @@ macro_rules! append_value {
             Some(value) => builder.append_value(value),
             None => builder.append_null(),
         }
+    }};
+}
+
+macro_rules! append_ts_value {
+    ($builder:expr, $row:expr, $index:expr, $ts_builder:ty) => {{
+        append_value!(
+            $builder,
+            $row,
+            $index,
+            i64,
+            PrimitiveBuilder<$ts_builder>,
+            Type::Integer
+        )
     }};
 }
 
@@ -228,6 +245,16 @@ fn add_row_to_builders(
             }
 
             DataType::Binary => append_value!(builder, row, i, Vec<u8>, BinaryBuilder, Type::Blob),
+            DataType::Timestamp(unit, ref _tz) => match unit {
+                TimeUnit::Second => append_ts_value!(builder, row, i, TimestampSecondType),
+                TimeUnit::Millisecond => {
+                    append_ts_value!(builder, row, i, TimestampMillisecondType)
+                }
+                TimeUnit::Microsecond => {
+                    append_ts_value!(builder, row, i, TimestampMicrosecondType)
+                }
+                TimeUnit::Nanosecond => append_ts_value!(builder, row, i, TimestampNanosecondType),
+            },
             _ => {
                 unimplemented!("Unsupported data type {arrow_type} for column index {i}")
             }
