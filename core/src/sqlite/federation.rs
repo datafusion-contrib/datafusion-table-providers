@@ -4,8 +4,10 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
+use datafusion_federation::sql::ast_analyzer::AstAnalyzer;
 use datafusion_federation::sql::{
-    AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    ast_analyzer::AstAnalyzerRule, RemoteTableRef, SQLExecutor, SQLFederationProvider,
+    SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -45,22 +47,24 @@ impl<T, P> SQLiteTable<T, P> {
             self,
         ))
     }
-}
 
-#[allow(clippy::unnecessary_wraps)]
-fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionError> {
-    match ast {
-        ast::Statement::Query(query) => {
-            let mut new_query = query.clone();
+    fn sqlite_ast_analyzer(&self) -> AstAnalyzerRule {
+        Box::new(move |ast| {
+            match ast {
+                ast::Statement::Query(query) => {
+                    let mut new_query = query.clone();
 
-            // iterate over the query and find any INTERVAL statements
-            // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
-            let mut interval_visitor = SQLiteIntervalVisitor::default();
-            new_query.visit(&mut interval_visitor);
+                    // iterate over the query and find any INTERVAL statements
+                    // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
+                    let mut interval_visitor = SQLiteIntervalVisitor::default();
+                    #[allow(unused_must_use)]
+                    new_query.visit(&mut interval_visitor);
 
-            Ok(ast::Statement::Query(new_query))
-        }
-        _ => Ok(ast),
+                    Ok(ast::Statement::Query(new_query))
+                }
+                _ => Ok(ast),
+            }
+        })
     }
 }
 
@@ -79,7 +83,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(Box::new(sqlite_ast_analyzer))
+        Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
     }
 
     fn execute(

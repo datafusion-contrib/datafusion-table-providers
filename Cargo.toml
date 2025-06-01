@@ -16,10 +16,7 @@
 # under the License.
 
 [workspace]
-members = [
-    "core",
-    "python",
-]
+members = ["core", "python"]
 resolver = "2"
 
 [workspace.package]
@@ -33,10 +30,7 @@ description = "Extend the capabilities of DataFusion to support additional data 
 [workspace.dependencies]
 arrow = "55.0.0"
 arrow-array = { version = "55.0.0" }
-arrow-flight = { version = "55.0.0", features = [
-  "flight-sql-experimental",
-  "tls",
-] }
+arrow-flight = { version = "55.0.0", features = ["flight-sql-experimental", "tls"] }
 arrow-schema = { version = "55.0.0", features = ["serde"] }
 arrow-json = "55.0.0"
 arrow-odbc = { version = "16.0.1" }
@@ -48,4 +42,7 @@ datafusion-proto = { version = "47" }
 datafusion-physical-expr = { version = "47" }
 datafusion-physical-plan = { version = "47" }
 datafusion-table-providers = { path = "core" }
-duckdb = { version = "=1.2.1", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "69ae7518ee093a1b070e9e4e6f011ef353431086" } # spiceai-1.1.3-backported-arrow-55
+
+[patch.crates-io]
+datafusion-federation = { git = "https://github.com/ahirner/datafusion-federation.git", branch = "spiceai-47-port" }
