@@ -39,7 +39,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use write::DuckDBTableWriterBuilder;
 
-pub use self::settings::DuckDBSettingsRegistry;
+pub use self::settings::{DuckDBSetting, DuckDBSettingsRegistry};
 use self::sql_table::DuckDBTable;
 
 #[cfg(feature = "duckdb-federation")]
