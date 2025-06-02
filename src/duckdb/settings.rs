@@ -151,6 +151,11 @@ impl DuckDBSettingsRegistry {
         }
     }
 
+    pub fn with_setting(mut self, setting: Box<dyn DuckDBSetting>) -> Self {
+        self.register(setting);
+        self
+    }
+
     /// Register a new setting
     pub fn register(&mut self, setting: Box<dyn DuckDBSetting>) {
         self.settings.push(setting);
