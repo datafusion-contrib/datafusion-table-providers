@@ -188,15 +188,13 @@ impl DuckDBSettingsRegistry {
                     .validate(&value)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                tracing::debug!("Setting DuckDB {} to {}", setting.setting_name(), value);
-                conn.execute(
-                    &format!(
-                        "SET {} = {}",
-                        setting.setting_name(),
-                        setting.format_sql_value(&value)
-                    ),
-                    &[],
-                )?;
+                let set_statement = format!(
+                    "SET {} = {}",
+                    setting.setting_name(),
+                    setting.format_sql_value(&value)
+                );
+                tracing::debug!("DuckDB: {}", set_statement);
+                conn.execute(&set_statement, &[])?;
             }
         }
 
