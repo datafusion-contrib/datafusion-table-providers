@@ -39,12 +39,14 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use write::DuckDBTableWriterBuilder;
 
+pub use self::settings::DuckDBSettingsRegistry;
 use self::sql_table::DuckDBTable;
 
 #[cfg(feature = "duckdb-federation")]
 mod federation;
 
 mod creator;
+mod settings;
 mod sql_table;
 pub mod write;
 pub use creator::{RelationName, TableDefinition};
@@ -167,11 +169,16 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+const DUCKDB_DB_PATH_PARAM: &str = "open";
+const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
+const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
+
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
+    settings_registry: DuckDBSettingsRegistry,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -185,13 +192,6 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
     }
 }
 
-const DUCKDB_DB_PATH_PARAM: &str = "open";
-const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
-const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
-const DUCKDB_SETTING_MEMORY_LIMIT: &str = "memory_limit";
-const DUCKDB_SETTING_TEMP_DIRECTORY: &str = "temp_directory";
-const DUCKDB_SETTING_PRESERVE_INSERTION_ORDER: &str = "preserve_insertion_order";
-
 impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn new(access_mode: AccessMode) -> Self {
@@ -200,6 +200,7 @@ impl DuckDBTableProviderFactory {
             instances: Arc::new(Mutex::new(HashMap::new())),
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
+            settings_registry: DuckDBSettingsRegistry::new(),
         }
     }
 
@@ -216,6 +217,22 @@ impl DuckDBTableProviderFactory {
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
         self
+    }
+
+    #[must_use]
+    pub fn with_settings_registry(mut self, settings_registry: DuckDBSettingsRegistry) -> Self {
+        self.settings_registry = settings_registry;
+        self
+    }
+
+    #[must_use]
+    pub fn settings_registry(&self) -> &DuckDBSettingsRegistry {
+        &self.settings_registry
+    }
+
+    #[must_use]
+    pub fn settings_registry_mut(&mut self) -> &mut DuckDBSettingsRegistry {
+        &mut self.settings_registry
     }
 
     #[must_use]
@@ -407,18 +424,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
-        if let Some(memory_limit) = options.get(DUCKDB_SETTING_MEMORY_LIMIT) {
-            apply_memory_limit(&dyn_pool, memory_limit).await?;
-        }
-
-        if let Some(temp_directory) = options.get(DUCKDB_SETTING_TEMP_DIRECTORY) {
-            apply_temp_directory(&dyn_pool, temp_directory).await?;
-        }
-
-        if let Some(preserve_insertion_order) = options.get(DUCKDB_SETTING_PRESERVE_INSERTION_ORDER)
-        {
-            apply_preserve_insertion_order(&dyn_pool, preserve_insertion_order).await?;
-        }
+        // Apply DuckDB settings using the registry
+        self.settings_registry
+            .apply_settings(&dyn_pool, &options)
+            .await?;
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
@@ -613,71 +622,6 @@ fn create_table_function_view_name(table_reference: &TableReference) -> TableRef
     .flatten()
     .join(".");
     TableReference::from(&tbl_ref_view)
-}
-
-async fn apply_memory_limit(
-    pool: &Arc<DynDuckDbConnectionPool>,
-    memory_limit: &str,
-) -> DataFusionResult<()> {
-    tracing::debug!("Setting DuckDB memory limit to {memory_limit}");
-
-    if let Err(err) = byte_unit::Byte::parse_str(memory_limit, true) {
-        return Err(to_datafusion_error(Error::UnableToParseMemoryLimit {
-            value: memory_limit.to_string(),
-            source: err,
-        }));
-    }
-
-    let db_conn = pool.connect().await?;
-    let Some(conn) = db_conn.as_sync() else {
-        // should never happen
-        return Err(to_datafusion_error(Error::DbConnectionError {
-            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
-        }));
-    };
-    conn.execute(
-        &format!("SET {DUCKDB_SETTING_MEMORY_LIMIT} = '{memory_limit}'"),
-        &[],
-    )?;
-    Ok(())
-}
-
-async fn apply_temp_directory(
-    pool: &Arc<DynDuckDbConnectionPool>,
-    temp_directory: &str,
-) -> DataFusionResult<()> {
-    tracing::debug!("Setting DuckDB temp directory to {temp_directory}");
-
-    let db_conn = pool.connect().await?;
-    let Some(conn) = db_conn.as_sync() else {
-        return Err(to_datafusion_error(Error::DbConnectionError {
-            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
-        }));
-    };
-    conn.execute(
-        &format!("SET {DUCKDB_SETTING_TEMP_DIRECTORY} = '{temp_directory}'"),
-        &[],
-    )?;
-    Ok(())
-}
-
-async fn apply_preserve_insertion_order(
-    pool: &Arc<DynDuckDbConnectionPool>,
-    preserve_insertion_order: &str,
-) -> DataFusionResult<()> {
-    tracing::debug!("Setting DuckDB preserve insertion order to {preserve_insertion_order}");
-
-    let db_conn = pool.connect().await?;
-    let Some(conn) = db_conn.as_sync() else {
-        return Err(to_datafusion_error(Error::DbConnectionError {
-            source: "Failed to get sync DuckDbConnection using DbConnection".into(),
-        }));
-    };
-    conn.execute(
-        &format!("SET {DUCKDB_SETTING_PRESERVE_INSERTION_ORDER} = {preserve_insertion_order}"),
-        &[],
-    )?;
-    Ok(())
 }
 
 pub(crate) fn make_initial_table(
