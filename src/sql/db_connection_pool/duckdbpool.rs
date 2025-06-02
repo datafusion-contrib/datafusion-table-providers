@@ -290,6 +290,7 @@ impl DuckDbConnectionPool {
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
+                .with_connection_setup_queries(self.connection_setup_queries.clone())
                 .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }
@@ -338,6 +339,7 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Ok(Box::new(
             DuckDbConnection::new(conn)
                 .with_attachments(attachments)
+                .with_connection_setup_queries(self.connection_setup_queries.clone())
                 .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }

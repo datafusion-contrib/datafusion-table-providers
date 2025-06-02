@@ -216,6 +216,7 @@ pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
     attachments: Option<Arc<DuckDBAttachments>>,
     unsupported_type_action: UnsupportedTypeAction,
+    connection_setup_queries: Vec<Arc<str>>,
 }
 
 impl SchemaValidator for DuckDbConnection {
@@ -278,6 +279,12 @@ impl DuckDbConnection {
         self
     }
 
+    #[must_use]
+    pub fn with_connection_setup_queries(mut self, queries: Vec<Arc<str>>) -> Self {
+        self.connection_setup_queries = queries;
+        self
+    }
+
     /// Passthrough if Option is Some for `DuckDBAttachments::attach`
     ///
     /// # Errors
@@ -298,6 +305,13 @@ impl DuckDbConnection {
     pub fn detach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
         if let Some(attachments) = attachments {
             attachments.detach(conn)?;
+        }
+        Ok(())
+    }
+
+    fn apply_connection_setup_queries(&self, conn: &Connection) -> Result<()> {
+        for query in self.connection_setup_queries.iter() {
+            conn.execute(query, []).context(DuckDBConnectionSnafu)?;
         }
         Ok(())
     }
@@ -331,6 +345,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             conn,
             attachments: None,
             unsupported_type_action: UnsupportedTypeAction::default(),
+            connection_setup_queries: Vec::new(),
         }
     }
 
@@ -364,6 +379,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let conn = self.conn.try_clone()?;
         Self::attach(&conn, &self.attachments)?;
+        self.apply_connection_setup_queries(&conn)?;
 
         let fetch_schema_sql =
             format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
