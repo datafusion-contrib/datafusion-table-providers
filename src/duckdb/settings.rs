@@ -29,7 +29,7 @@
 //! Library users can create their own settings by implementing the `DuckDBSetting` trait:
 //!
 //! ```rust,no_run
-//! use datafusion_table_providers::duckdb::DuckDBSetting;
+//! use datafusion_table_providers::duckdb::{DuckDBSetting, DuckDBSettingScope};
 //! use datafusion_table_providers::duckdb::Error;
 //! use std::collections::HashMap;
 //!
@@ -47,6 +47,10 @@
 //!
 //!     fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
 //!         options.get("query_timeout").cloned()
+//!     }
+//!
+//!     fn scope(&self) -> DuckDBSettingScope {
+//!         DuckDBSettingScope::Global
 //!     }
 //!
 //!     fn validate(&self, value: &str) -> Result<(), Error> {
@@ -69,7 +73,7 @@
 //! You can create settings that always apply regardless of the options:
 //!
 //! ```rust,no_run
-//! use datafusion_table_providers::duckdb::DuckDBSetting;
+//! use datafusion_table_providers::duckdb::{DuckDBSetting, DuckDBSettingScope};
 //! use std::collections::HashMap;
 //!
 //! #[derive(Debug)]
@@ -80,6 +84,10 @@
 //!     
 //!     fn setting_name(&self) -> &'static str {
 //!         "enable_feature"
+//!     }
+//!
+//!     fn scope(&self) -> DuckDBSettingScope {
+//!         DuckDBSettingScope::Global
 //!     }
 //!
 //!     fn get_value(&self, _options: &HashMap<String, String>) -> Option<String> {
@@ -101,7 +109,9 @@ use std::sync::Arc;
 /// Indicates the scope of a DuckDB setting
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DuckDBSettingScope {
+    /// Global settings are applied once to the entire DuckDB instance
     Global,
+    /// Local settings are applied to each connection
     Local,
 }
 
