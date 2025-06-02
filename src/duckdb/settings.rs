@@ -7,7 +7,7 @@
 //! ## Basic Usage
 //!
 //! ```rust,no_run
-//! use datafusion_table_providers::duckdb::settings::{DuckDBSettingsRegistry, MemoryLimitSetting};
+//! use datafusion_table_providers::duckdb::{DuckDBSettingsRegistry, MemoryLimitSetting};
 //! use std::collections::HashMap;
 //!
 //! // Create a registry with default settings
@@ -29,7 +29,7 @@
 //! Library users can create their own settings by implementing the `DuckDBSetting` trait:
 //!
 //! ```rust,no_run
-//! use datafusion_table_providers::duckdb::settings::DuckDBSetting;
+//! use datafusion_table_providers::duckdb::DuckDBSetting;
 //! use datafusion_table_providers::duckdb::Error;
 //! use std::collections::HashMap;
 //!
@@ -69,7 +69,7 @@
 //! You can create settings that always apply regardless of the options:
 //!
 //! ```rust,no_run
-//! use datafusion_table_providers::duckdb::settings::DuckDBSetting;
+//! use datafusion_table_providers::duckdb::DuckDBSetting;
 //! use std::collections::HashMap;
 //!
 //! #[derive(Debug)]
