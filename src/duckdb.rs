@@ -34,15 +34,14 @@ use datafusion::{
 };
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
-use settings::DuckDBSettingScope;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use write::DuckDBTableWriterBuilder;
 
 pub use self::settings::{
-    DuckDBSetting, DuckDBSettingsRegistry, MemoryLimitSetting, PreserveInsertionOrderSetting,
-    TempDirectorySetting,
+    DuckDBSetting, DuckDBSettingScope, DuckDBSettingsRegistry, MemoryLimitSetting,
+    PreserveInsertionOrderSetting, TempDirectorySetting,
 };
 use self::sql_table::DuckDBTable;
 
