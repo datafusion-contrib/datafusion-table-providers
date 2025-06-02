@@ -37,6 +37,7 @@ pub struct DuckDbConnectionPoolBuilder {
     access_mode: AccessMode,
     min_idle: Option<u32>,
     mode: Mode,
+    connection_setup_queries: Vec<Arc<str>>,
 }
 
 impl DuckDbConnectionPoolBuilder {
@@ -47,6 +48,7 @@ impl DuckDbConnectionPoolBuilder {
             access_mode: AccessMode::ReadWrite,
             min_idle: None,
             mode: Mode::Memory,
+            connection_setup_queries: Vec::new(),
         }
     }
 
@@ -57,6 +59,7 @@ impl DuckDbConnectionPoolBuilder {
             access_mode: AccessMode::ReadWrite,
             min_idle: None,
             mode: Mode::File,
+            connection_setup_queries: Vec::new(),
         }
     }
 
@@ -83,7 +86,12 @@ impl DuckDbConnectionPoolBuilder {
         self
     }
 
-    fn build_memory_pool(&self) -> Result<DuckDbConnectionPool> {
+    pub fn with_connection_setup_query(mut self, query: impl Into<Arc<str>>) -> Self {
+        self.connection_setup_queries.push(query.into());
+        self
+    }
+
+    fn build_memory_pool(self) -> Result<DuckDbConnectionPool> {
         let config = get_config(&AccessMode::ReadWrite)?;
         let manager =
             DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
@@ -112,10 +120,11 @@ impl DuckDbConnectionPoolBuilder {
             attached_databases: Vec::new(),
             mode: Mode::Memory,
             unsupported_type_action: UnsupportedTypeAction::Error,
+            connection_setup_queries: self.connection_setup_queries,
         })
     }
 
-    fn build_file_pool(&self) -> Result<DuckDbConnectionPool> {
+    fn build_file_pool(self) -> Result<DuckDbConnectionPool> {
         let config = get_config(&self.access_mode)?;
         let manager = DuckdbConnectionManager::file_with_flags(&self.path, config)
             .context(DuckDBConnectionSnafu)?;
@@ -141,10 +150,11 @@ impl DuckDbConnectionPoolBuilder {
             path: self.path.as_str().into(),
             pool,
             // Allow join-push down for any other instances that connect to the same underlying file.
-            join_push_down: JoinPushDown::AllowedFor(self.path.clone()),
+            join_push_down: JoinPushDown::AllowedFor(self.path),
             attached_databases: Vec::new(),
             mode: Mode::File,
             unsupported_type_action: UnsupportedTypeAction::Error,
+            connection_setup_queries: self.connection_setup_queries,
         })
     }
 
@@ -164,6 +174,7 @@ pub struct DuckDbConnectionPool {
     attached_databases: Vec<Arc<str>>,
     mode: Mode,
     unsupported_type_action: UnsupportedTypeAction,
+    connection_setup_queries: Vec<Arc<str>>,
 }
 
 impl std::fmt::Debug for DuckDbConnectionPool {
@@ -249,6 +260,12 @@ impl DuckDbConnectionPool {
         self
     }
 
+    #[must_use]
+    pub fn with_connection_setup_queries(mut self, queries: Vec<Arc<str>>) -> Self {
+        self.connection_setup_queries = queries;
+        self
+    }
+
     /// Create a new `DuckDbConnectionPool` from a database URL.
     ///
     /// # Errors
@@ -264,6 +281,11 @@ impl DuckDbConnectionPool {
             pool.get().context(ConnectionPoolSnafu)?;
 
         let attachments = self.get_attachments()?;
+
+        for query in self.connection_setup_queries.iter() {
+            tracing::debug!("DuckDB connection setup: {}", query);
+            conn.execute(query, []).context(DuckDBConnectionSnafu)?;
+        }
 
         Ok(Box::new(
             DuckDbConnection::new(conn)
@@ -307,6 +329,11 @@ impl DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             pool.get().context(ConnectionPoolSnafu)?;
 
         let attachments = self.get_attachments()?;
+
+        for query in self.connection_setup_queries.iter() {
+            tracing::debug!("DuckDB connection setup: {}", query);
+            conn.execute(query, []).context(DuckDBConnectionSnafu)?;
+        }
 
         Ok(Box::new(
             DuckDbConnection::new(conn)

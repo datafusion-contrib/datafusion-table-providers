@@ -89,12 +89,21 @@
 //! }
 //! ```
 
-use crate::duckdb::Error;
-use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDBSyncParameter;
+use crate::{duckdb::Error, sql::db_connection_pool::dbconnection::SyncDbConnection};
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use duckdb::DuckdbConnectionManager;
+use r2d2::PooledConnection;
 use snafu::prelude::*;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Indicates the scope of a DuckDB setting
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuckDBSettingScope {
+    Global,
+    Local,
+}
 
 /// Trait for DuckDB settings that can be applied to a connection
 pub trait DuckDBSetting: Send + Sync + std::fmt::Debug {
@@ -102,6 +111,9 @@ pub trait DuckDBSetting: Send + Sync + std::fmt::Debug {
 
     /// The name of the DuckDB setting, i.e. `SET <setting_name> = <value>`
     fn setting_name(&self) -> &'static str;
+
+    /// The scope of the DuckDB setting, see [DuckDB documentation](https://duckdb.org/docs/stable/sql/statements/set.html#scopes)
+    fn scope(&self) -> DuckDBSettingScope;
 
     /// Get the value for this setting from the options, if available
     fn get_value(&self, options: &HashMap<String, String>) -> Option<String>;
@@ -162,43 +174,61 @@ impl DuckDBSettingsRegistry {
     }
 
     /// Apply all applicable settings to the connection pool
-    pub async fn apply_settings(
+    pub fn apply_settings(
         &self,
-        pool: &Arc<
-            dyn DbConnectionPool<
-                    r2d2::PooledConnection<DuckdbConnectionManager>,
-                    crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDBParameter,
-                > + Send
-                + Sync,
+        conn: &dyn SyncDbConnection<
+            PooledConnection<DuckdbConnectionManager>,
+            Box<dyn DuckDBSyncParameter>,
         >,
         options: &HashMap<String, String>,
+        scope: DuckDBSettingScope,
     ) -> DataFusionResult<()> {
-        let db_conn = pool.connect().await?;
-        let Some(conn) = db_conn.as_sync() else {
-            return Err(DataFusionError::External(Box::new(
-                Error::DbConnectionError {
-                    source: "Failed to get sync DuckDbConnection using DbConnection".into(),
-                },
-            )));
-        };
-
         for setting in &self.settings {
+            if setting.scope() != scope {
+                tracing::debug!(
+                    "Skipping setting {} because it's not a {scope:?}",
+                    setting.setting_name(),
+                );
+                continue;
+            }
+
             if let Some(value) = setting.get_value(options) {
                 setting
                     .validate(&value)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                let set_statement = format!(
-                    "SET {} = {}",
-                    setting.setting_name(),
-                    setting.format_sql_value(&value)
-                );
+                let set_statement = self.set_statement(setting.as_ref(), &value);
                 tracing::debug!("DuckDB: {}", set_statement);
                 conn.execute(&set_statement, &[])?;
             }
         }
 
         Ok(())
+    }
+
+    /// Returns a list of DuckDB SET statements for the given settings and options
+    pub fn get_setting_statements(
+        &self,
+        options: &HashMap<String, String>,
+        scope: DuckDBSettingScope,
+    ) -> Vec<Arc<str>> {
+        self.settings
+            .iter()
+            .filter(|s| s.scope() == scope)
+            .filter_map(|s| {
+                s.get_value(options)
+                    .map(|value| self.set_statement(s.as_ref(), &value))
+            })
+            .map(|s| s.into())
+            .collect()
+    }
+
+    fn set_statement(&self, setting: &dyn DuckDBSetting, value: &str) -> String {
+        format!(
+            "SET {} = {}",
+            setting.setting_name(),
+            setting.format_sql_value(value)
+        )
     }
 }
 
@@ -213,6 +243,10 @@ impl DuckDBSetting for MemoryLimitSetting {
 
     fn setting_name(&self) -> &'static str {
         "memory_limit"
+    }
+
+    fn scope(&self) -> DuckDBSettingScope {
+        DuckDBSettingScope::Global
     }
 
     fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
@@ -246,6 +280,10 @@ impl DuckDBSetting for TempDirectorySetting {
         "temp_directory"
     }
 
+    fn scope(&self) -> DuckDBSettingScope {
+        DuckDBSettingScope::Global
+    }
+
     fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
         options.get("temp_directory").cloned()
     }
@@ -266,6 +304,10 @@ impl DuckDBSetting for PreserveInsertionOrderSetting {
 
     fn setting_name(&self) -> &'static str {
         "preserve_insertion_order"
+    }
+
+    fn scope(&self) -> DuckDBSettingScope {
+        DuckDBSettingScope::Global
     }
 
     fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
@@ -305,6 +347,10 @@ mod tests {
             Some(self.value.clone())
         }
 
+        fn scope(&self) -> DuckDBSettingScope {
+            DuckDBSettingScope::Global
+        }
+
         fn format_sql_value(&self, value: &str) -> String {
             format!("'{}'", value)
         }
@@ -321,6 +367,10 @@ mod tests {
 
         fn setting_name(&self) -> &'static str {
             "test_setting"
+        }
+
+        fn scope(&self) -> DuckDBSettingScope {
+            DuckDBSettingScope::Global
         }
 
         fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
@@ -608,6 +658,9 @@ mod tests {
             fn setting_name(&self) -> &'static str {
                 "setting1"
             }
+            fn scope(&self) -> DuckDBSettingScope {
+                DuckDBSettingScope::Global
+            }
             fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
                 options.get("shared_key").cloned()
             }
@@ -619,6 +672,9 @@ mod tests {
             }
             fn setting_name(&self) -> &'static str {
                 "setting2"
+            }
+            fn scope(&self) -> DuckDBSettingScope {
+                DuckDBSettingScope::Global
             }
             fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
                 options.get("shared_key").cloned()

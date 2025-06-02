@@ -34,6 +34,7 @@ use datafusion::{
 };
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
+use settings::DuckDBSettingScope;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -410,6 +411,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::Memory => pool.clone(),
         };
 
+        // Get local DuckDB SET statements to use as setup queries on the pool
+        let local_settings = self
+            .settings_registry
+            .get_setting_statements(&options, DuckDBSettingScope::Local);
+
+        let read_pool = read_pool.with_connection_setup_queries(local_settings);
+
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let table_definition =
@@ -427,10 +435,18 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
-        // Apply DuckDB settings using the registry
+        let db_conn = dyn_pool.connect().await?;
+        let Some(conn) = db_conn.as_sync() else {
+            return Err(DataFusionError::External(Box::new(
+                Error::DbConnectionError {
+                    source: "Failed to get sync DuckDbConnection using DbConnection".into(),
+                },
+            )));
+        };
+
+        // Apply DuckDB global settings
         self.settings_registry
-            .apply_settings(&dyn_pool, &options)
-            .await?;
+            .apply_settings(conn, &options, DuckDBSettingScope::Global)?;
 
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
