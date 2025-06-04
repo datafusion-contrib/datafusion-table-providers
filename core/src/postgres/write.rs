@@ -31,6 +31,8 @@ pub struct PostgresTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
+    batch_flush_interval: std::time::Duration,
+    batch_size: u64,
 }
 
 impl PostgresTableWriter {
@@ -122,6 +124,7 @@ impl DataSink for PostgresDataSink {
         &self.schema
     }
 
+    // @Goldsky: change the commit behavior to commit in batches
     async fn write_all(
         &self,
         mut data: SendableRecordBatchStream,
@@ -132,14 +135,13 @@ impl DataSink for PostgresDataSink {
         let mut db_conn = self.postgres.connect().await.map_err(to_datafusion_error)?;
         let postgres_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
 
-        let tx = postgres_conn
-            .conn
-            .transaction()
-            .await
-            .context(super::UnableToBeginTransactionSnafu)
-            .map_err(to_datafusion_error)?;
-
         if matches!(self.overwrite, InsertOp::Overwrite) {
+            let tx = postgres_conn
+                .conn
+                .transaction()
+                .await
+                .context(super::UnableToBeginTransactionSnafu)
+                .map_err(to_datafusion_error)?;
             self.postgres
                 .delete_all_table_data(&tx)
                 .await
@@ -165,6 +167,13 @@ impl DataSink for PostgresDataSink {
             .collect::<Vec<_>>();
 
         let postgres_schema = Arc::new(Schema::new(postgres_fields));
+
+        let batch_flush_size = 1000000; // TODO: make configurable
+        let flush_interval = std::time::Duration::from_secs(1); // TODO: make configurable
+
+        let mut batches_buffer = Vec::new();
+        let mut buffer_row_count = 0;
+        let mut last_flush_time = std::time::Instant::now();
 
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
@@ -202,26 +211,79 @@ impl DataSink for PostgresDataSink {
                 continue;
             };
 
-            num_rows += batch_num_rows as u64;
+            batches_buffer.push(batch);
+            buffer_row_count += batch_num_rows;
 
-            constraints::validate_batch_with_constraints(
-                &[batch.clone()],
-                self.postgres.constraints(),
-            )
-            .await
-            .context(super::ConstraintViolationSnafu)
-            .map_err(to_datafusion_error)?;
+            // Check if we need to flush based on size or time
+            let should_flush =
+                buffer_row_count >= batch_flush_size || last_flush_time.elapsed() >= flush_interval;
 
-            self.postgres
-                .insert_batch(&tx, batch, self.on_conflict.clone())
-                .await
-                .map_err(to_datafusion_error)?;
+            if should_flush {
+                let tx = postgres_conn
+                    .conn
+                    .transaction()
+                    .await
+                    .context(super::UnableToBeginTransactionSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                for batch in &batches_buffer {
+                    constraints::validate_batch_with_constraints(
+                        &[batch.clone()],
+                        self.postgres.constraints(),
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                    self.postgres
+                        .insert_batch(&tx, batch.clone(), self.on_conflict.clone())
+                        .await
+                        .map_err(to_datafusion_error)?;
+                }
+
+                tx.commit()
+                    .await
+                    .context(super::UnableToCommitPostgresTransactionSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                num_rows += buffer_row_count as u64;
+                batches_buffer.clear();
+                buffer_row_count = 0;
+                last_flush_time = std::time::Instant::now();
+            }
         }
 
-        tx.commit()
-            .await
-            .context(super::UnableToCommitPostgresTransactionSnafu)
-            .map_err(to_datafusion_error)?;
+        // Flush any remaining batches
+        if !batches_buffer.is_empty() {
+            let tx = postgres_conn
+                .conn
+                .transaction()
+                .await
+                .context(super::UnableToBeginTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            for batch in &batches_buffer {
+                constraints::validate_batch_with_constraints(
+                    &[batch.clone()],
+                    self.postgres.constraints(),
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
+
+                self.postgres
+                    .insert_batch(&tx, batch.clone(), self.on_conflict.clone())
+                    .await
+                    .map_err(to_datafusion_error)?;
+            }
+
+            tx.commit()
+                .await
+                .context(super::UnableToCommitPostgresTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            num_rows += buffer_row_count as u64;
+        }
 
         Ok(num_rows)
     }
