@@ -731,13 +731,13 @@ pub(crate) mod tests {
             dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
         },
     };
-    use datafusion::arrow::array::RecordBatch;
+    use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
         common::SchemaExt,
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-        physical_plan::{insert::DataSink, memory::MemoryStream},
+        physical_plan::memory::MemoryStream,
     };
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;

@@ -1,6 +1,8 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
-use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion_federation::sql::{
+    RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -13,21 +15,36 @@ use datafusion::{
     arrow::datatypes::SchemaRef,
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream},
-    sql::{unparser::dialect::Dialect, TableReference},
+    sql::{
+        unparser::dialect::{DefaultDialect, Dialect},
+        TableReference,
+    },
 };
 
 impl<T, P> SqlTable<T, P> {
+    // Return the current memory location of the object as a unique identifier
+    fn unique_id(&self) -> usize {
+        std::ptr::from_ref(self) as usize
+    }
+
+    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
+    }
+
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.table_reference.to_quoted_string();
+        let table_reference = self.table_reference.clone();
         let schema = Arc::clone(&self.schema);
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            RemoteTableRef::from(table_reference),
             schema,
-        )?))
+        )))
     }
 
     pub fn create_federated_table_provider(

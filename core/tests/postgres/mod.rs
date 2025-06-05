@@ -289,11 +289,7 @@ async fn test_postgres_jsonb_type(port: usize) {
     ('{"nested": {"key": "value"}}');
     "#;
 
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "data",
-        DataType::LargeUtf8,
-        true,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
 
     // Parse and re-serialize the JSON to ensure consistent ordering
     let expected_values = vec![
@@ -314,9 +310,7 @@ async fn test_postgres_jsonb_type(port: usize) {
 
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(arrow::array::LargeStringArray::from(
-            expected_values,
-        ))],
+        vec![Arc::new(arrow::array::StringArray::from(expected_values))],
     )
     .expect("Failed to create arrow record batch");
 

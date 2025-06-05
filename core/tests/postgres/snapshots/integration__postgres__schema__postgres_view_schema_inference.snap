@@ -1,5 +1,5 @@
 ---
-source: tests/postgres/schema.rs
+source: core/tests/postgres/schema.rs
 expression: pretty_schema
 ---
 Schema {
@@ -221,6 +221,33 @@ Schema {
                     dict_is_ordered: false,
                     metadata: {},
                 },
+            ),
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "int_range_col",
+            data_type: Struct(
+                [
+                    Field {
+                        name: "lower",
+                        data_type: Int32,
+                        nullable: true,
+                        dict_id: 0,
+                        dict_is_ordered: false,
+                        metadata: {},
+                    },
+                    Field {
+                        name: "upper",
+                        data_type: Int32,
+                        nullable: true,
+                        dict_id: 0,
+                        dict_is_ordered: false,
+                        metadata: {},
+                    },
+                ],
             ),
             nullable: true,
             dict_id: 0,

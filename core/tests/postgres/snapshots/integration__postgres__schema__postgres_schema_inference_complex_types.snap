@@ -187,7 +187,7 @@ Schema {
         },
         Field {
             name: "json_col",
-            data_type: LargeUtf8,
+            data_type: Utf8,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
