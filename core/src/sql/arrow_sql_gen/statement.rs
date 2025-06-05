@@ -183,8 +183,8 @@ pub struct InsertBuilder {
 }
 
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
-    data_type: &DataType,
-    query_builder: &T,
+    #[allow(unused_variables)] data_type: &DataType,
+    #[allow(unused_variables)] query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
     {
