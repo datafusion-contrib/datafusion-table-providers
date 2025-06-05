@@ -2,7 +2,9 @@ use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError}
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::{SQLExecutor, SQLFederationProvider, SQLTableSource};
+use datafusion_federation::sql::{
+    RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+};
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
 use snafu::ResultExt;
@@ -23,14 +25,14 @@ impl<T, P> DuckDBTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.to_quoted_string();
+        let table_reference = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            RemoteTableRef::from(table_reference),
             schema,
-        )?))
+        )))
     }
 
     pub fn create_federated_table_provider(

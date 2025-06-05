@@ -1,7 +1,7 @@
 use datafusion::error::DataFusionError;
 use datafusion::sql::sqlparser::ast::{
     self, BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentList, Ident,
-    VisitorMut,
+    ObjectNamePart, VisitorMut,
 };
 use std::fmt::Display;
 use std::ops::ControlFlow;
@@ -145,7 +145,10 @@ impl SQLiteIntervalVisitor {
 
     fn parse_interval(interval: &Expr) -> Result<IntervalParts, DataFusionError> {
         if let Expr::Interval(interval_expr) = interval {
-            if let Expr::Value(ast::Value::SingleQuotedString(value)) = interval_expr.value.as_ref()
+            if let Expr::Value(ast::ValueWithSpan {
+                value: ast::Value::SingleQuotedString(value),
+                span: _,
+            }) = interval_expr.value.as_ref()
             {
                 return SQLiteIntervalVisitor::parse_interval_string(value);
             }
@@ -229,7 +232,9 @@ impl SQLiteIntervalVisitor {
         .collect();
 
         let datetime_function = Expr::Function(ast::Function {
-            name: ast::ObjectName(vec![Ident::new(interval_date_type.to_string())]),
+            name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new(
+                interval_date_type.to_string(),
+            ))]),
             args: ast::FunctionArguments::List(FunctionArgumentList {
                 duplicate_treatment: None,
                 args: function_args,
@@ -255,7 +260,7 @@ impl SQLiteIntervalVisitor {
         if value == 0 {
             None
         } else {
-            Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+            Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                 ast::Value::SingleQuotedString(format!("{value:+} {unit}")),
             ))))
         }
@@ -275,7 +280,7 @@ impl SQLiteIntervalVisitor {
                 String::new()
             };
 
-            Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+            Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                 ast::Value::SingleQuotedString(format!("{value:+}{fraction_str} {unit}")),
             ))))
         }
@@ -372,7 +377,7 @@ mod test {
 
     #[test]
     fn test_create_date_function() {
-        let target = Expr::Value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
+        let target = Expr::value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
         let interval = IntervalParts::new()
             .with_years(1)
             .with_months(2)
@@ -386,20 +391,20 @@ mod test {
 
         let expected = Expr::Cast {
             expr: Box::new(Expr::Function(ast::Function {
-                name: ast::ObjectName(vec![Ident::new("date")]),
+                name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new("date"))]),
                 args: ast::FunctionArguments::List(FunctionArgumentList {
                     duplicate_treatment: None,
                     args: vec![
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("1995-01-01".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+1 years".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+2 months".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+3 days".to_string()),
                         ))),
                     ],
@@ -422,7 +427,7 @@ mod test {
 
     #[test]
     fn test_create_datetime_function() {
-        let target = Expr::Value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
+        let target = Expr::value(ast::Value::SingleQuotedString("1995-01-01".to_string()));
         let interval = IntervalParts::new()
             .with_years(0)
             .with_months(0)
@@ -436,20 +441,20 @@ mod test {
 
         let expected = Expr::Cast {
             expr: Box::new(Expr::Function(ast::Function {
-                name: ast::ObjectName(vec![Ident::new("datetime")]),
+                name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new("datetime"))]),
                 args: ast::FunctionArguments::List(FunctionArgumentList {
                     duplicate_treatment: None,
                     args: vec![
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("1995-01-01".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+1 hours".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+2 minutes".to_string()),
                         ))),
-                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::value(
                             ast::Value::SingleQuotedString("+3 seconds".to_string()),
                         ))),
                     ],

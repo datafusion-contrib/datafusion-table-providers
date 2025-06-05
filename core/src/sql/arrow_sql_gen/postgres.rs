@@ -356,8 +356,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
                     };
-                    let Some(builder) = builder.as_any_mut().downcast_mut::<StringBuilder>()
-                    else {
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<StringBuilder>() else {
                         return FailedToDowncastBuilderSnafu {
                             postgres_type: format!("{postgres_type}"),
                         }
