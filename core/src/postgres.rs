@@ -204,7 +204,6 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-
         let name = cmd.name.clone();
         let mut options = cmd.options.clone();
         let schema: Schema = cmd.schema.as_ref().into();
@@ -442,9 +441,12 @@ impl Postgres {
         transaction: &Transaction<'_>,
         primary_keys: Vec<String>,
     ) -> Result<()> {
+        tracing::info!("Creating table: {:?}", self.table);
+        
         // Create schema if it doesn't exist
         if let Some(schema_name) = self.table.schema() {
             let create_schema_stmt = format!("CREATE SCHEMA IF NOT EXISTS {}", schema_name);
+            tracing::info!("Creating schema: {}", create_schema_stmt);
             transaction
                 .execute(&create_schema_stmt, &[])
                 .await
@@ -462,6 +464,7 @@ impl Postgres {
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {
+            tracing::info!("Executing CREATE TABLE statement: {}", create_stmt);
             transaction
                 .execute(&create_stmt, &[])
                 .await
