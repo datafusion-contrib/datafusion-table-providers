@@ -453,14 +453,9 @@ impl Postgres {
                 .context(UnableToCreatePostgresTableSnafu)?;
         }
 
-        let table_name = if let Some(schema_name) = self.table.schema() {
-            format!("{}.{}", schema_name, self.table.table())
-        } else {
-            self.table.table().to_string()
-        };
-
-        let create_table_statement =
-            CreateTableBuilder::new(schema, &table_name).primary_keys(primary_keys);
+        let create_table_statement = CreateTableBuilder::new(schema, self.table.table())
+            .schema_name(self.table.schema().map(|s| s.to_string()))
+            .primary_keys(primary_keys);
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {

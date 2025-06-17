@@ -145,7 +145,7 @@ impl DataSink for PostgresDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let mut num_rows = 0;
+        let mut num_rows = 0u64;
 
         let mut db_conn = self.postgres.connect().await.map_err(to_datafusion_error)?;
         let postgres_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
