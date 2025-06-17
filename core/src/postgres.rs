@@ -123,11 +123,6 @@ pub enum Error {
     #[snafu(display("Error parsing on_conflict: {source}"))]
     UnableToParseOnConflict { source: on_conflict::Error },
 
-    #[snafu(display(
-        "Failed to create '{table_name}': creating a table with a schema is not supported"
-    ))]
-    TableWithSchemaCreationNotSupported { table_name: String },
-
     #[snafu(display("Schema validation error: the provided data schema does not match the expected table schema: '{table_name}'"))]
     SchemaValidationError { table_name: String },
 }
@@ -209,13 +204,6 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
-        if cmd.name.schema().is_some() {
-            TableWithSchemaCreationNotSupportedSnafu {
-                table_name: cmd.name.to_string(),
-            }
-            .fail()
-            .map_err(to_datafusion_error)?;
-        }
 
         let name = cmd.name.clone();
         let mut options = cmd.options.clone();
@@ -454,8 +442,23 @@ impl Postgres {
         transaction: &Transaction<'_>,
         primary_keys: Vec<String>,
     ) -> Result<()> {
+        // Create schema if it doesn't exist
+        if let Some(schema_name) = self.table.schema() {
+            let create_schema_stmt = format!("CREATE SCHEMA IF NOT EXISTS {}", schema_name);
+            transaction
+                .execute(&create_schema_stmt, &[])
+                .await
+                .context(UnableToCreatePostgresTableSnafu)?;
+        }
+
+        let table_name = if let Some(schema_name) = self.table.schema() {
+            format!("{}.{}", schema_name, self.table.table())
+        } else {
+            self.table.table().to_string()
+        };
+
         let create_table_statement =
-            CreateTableBuilder::new(schema, self.table.table()).primary_keys(primary_keys);
+            CreateTableBuilder::new(schema, &table_name).primary_keys(primary_keys);
         let create_stmts = create_table_statement.build_postgres();
 
         for create_stmt in create_stmts {
@@ -474,7 +477,13 @@ impl Postgres {
         columns: Vec<&str>,
         unique: bool,
     ) -> Result<()> {
-        let mut index_builder = IndexBuilder::new(self.table.table(), columns);
+        let table_name = if let Some(schema_name) = self.table.schema() {
+            format!("{}.{}", schema_name, self.table.table())
+        } else {
+            self.table.table().to_string()
+        };
+
+        let mut index_builder = IndexBuilder::new(&table_name, columns);
         if unique {
             index_builder = index_builder.unique();
         }
