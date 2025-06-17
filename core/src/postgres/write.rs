@@ -1,4 +1,4 @@
-use std::{any::Any, fmt, sync::Arc};
+use std::{any::Any, fmt, sync::Arc, time::Duration};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
@@ -27,12 +27,16 @@ use crate::postgres::Postgres;
 use super::to_datafusion_error;
 
 #[derive(Debug, Clone)]
+pub struct PostgresWriteConfig {
+    pub batch_flush_interval: Duration,
+    pub batch_size: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct PostgresTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
-    batch_flush_interval: std::time::Duration,
-    batch_size: u64,
 }
 
 impl PostgresTableWriter {
@@ -85,10 +89,17 @@ impl TableProvider for PostgresTableWriter {
 
     async fn insert_into(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let (batch_flush_interval, batch_size) =
+            if let Some(ext) = state.config().get_extension::<PostgresWriteConfig>() {
+                (ext.batch_flush_interval, ext.batch_size)
+            } else {
+                (Duration::from_secs(1), 1_000_000)
+            };
+
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(PostgresDataSink::new(
@@ -96,6 +107,8 @@ impl TableProvider for PostgresTableWriter {
                 op,
                 self.on_conflict.clone(),
                 self.schema(),
+                batch_flush_interval,
+                batch_size,
             )),
             None,
         )) as _)
@@ -108,6 +121,8 @@ struct PostgresDataSink {
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
+    batch_flush_interval: Duration,
+    batch_size: usize,
 }
 
 #[async_trait]
@@ -168,8 +183,8 @@ impl DataSink for PostgresDataSink {
 
         let postgres_schema = Arc::new(Schema::new(postgres_fields));
 
-        let batch_flush_size = 1000000; // TODO: make configurable
-        let flush_interval = std::time::Duration::from_secs(1); // TODO: make configurable
+        let batch_flush_size = self.batch_size;
+        let flush_interval = self.batch_flush_interval;
 
         let mut batches_buffer = Vec::new();
         let mut buffer_row_count = 0;
@@ -295,12 +310,16 @@ impl PostgresDataSink {
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
+        batch_flush_interval: Duration,
+        batch_size: usize,
     ) -> Self {
         Self {
             postgres,
             overwrite,
             on_conflict,
             schema,
+            batch_flush_interval,
+            batch_size,
         }
     }
 }
