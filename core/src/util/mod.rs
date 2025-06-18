@@ -12,6 +12,7 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
+pub mod table_arg_replace;
 
 #[cfg(any(feature = "sqlite", feature = "duckdb", feature = "postgres"))]
 pub mod schema;

@@ -5,6 +5,8 @@ pub mod common;
 pub mod sql;
 pub mod util;
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
 #[cfg(feature = "flight")]

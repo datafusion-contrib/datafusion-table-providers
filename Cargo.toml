@@ -16,10 +16,7 @@
 # under the License.
 
 [workspace]
-members = [
-    "core",
-    "python",
-]
+members = ["core", "python"]
 resolver = "2"
 
 [workspace.package]
@@ -37,6 +34,7 @@ arrow-flight = { version = "55.0.0", features = [
   "flight-sql-experimental",
   "tls",
 ] }
+arrow-ipc = { version = "55.0.0" }
 arrow-schema = { version = "55.0.0", features = ["serde"] }
 arrow-json = "55.0.0"
 arrow-odbc = { version = "16.0.2" }
