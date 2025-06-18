@@ -25,6 +25,7 @@ use datafusion::sql::unparser;
 use datafusion::{common::Constraints, sql::TableReference};
 use std::sync::Arc;
 
+use crate::sql::db_connection_pool::clickhousepool::ClickhouseConnectionPool;
 use crate::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 #[cfg(feature = "clickhouse-federation")]
@@ -32,12 +33,12 @@ pub mod federation;
 pub mod sql_table;
 
 pub struct ClickHouseTableFactory {
-    client: clickhouse::Client,
+    pool: Arc<ClickhouseConnectionPool>,
 }
 
 impl ClickHouseTableFactory {
-    pub fn new(pool: clickhouse::Client) -> Self {
-        Self { client: pool }
+    pub fn new(pool: impl Into<Arc<ClickhouseConnectionPool>>) -> Self {
+        Self { pool: pool.into() }
     }
 
     pub async fn table_provider(
@@ -45,12 +46,12 @@ impl ClickHouseTableFactory {
         table_reference: TableReference,
         args: Option<Vec<(String, Arg)>>,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        let client: &dyn AsyncDbConnection<Client, ()> = &self.client;
+        let client: &dyn AsyncDbConnection<Client, ()> = &self.pool.client();
         let schema = client.get_schema(&table_reference).await?;
         let table_provider = Arc::new(ClickHouseTable::new(
             table_reference,
             args,
-            self.client.clone(),
+            self.pool.clone(),
             schema,
             Constraints::empty(),
         ));
@@ -129,7 +130,7 @@ fn into_table_args(args: Vec<(String, Arg)>) -> Vec<FunctionArg> {
 pub struct ClickHouseTable {
     table_reference: TableReference,
     args: Option<Vec<(String, Arg)>>,
-    pool: Arc<Client>,
+    pool: Arc<ClickhouseConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
     dialect: Arc<dyn unparser::dialect::Dialect>,
@@ -149,14 +150,14 @@ impl ClickHouseTable {
     pub fn new(
         table_reference: TableReference,
         args: Option<Vec<(String, Arg)>>,
-        client: Client,
+        pool: Arc<ClickhouseConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
     ) -> Self {
         Self {
             table_reference,
             args,
-            pool: Arc::new(client),
+            pool,
             schema,
             constraints,
             dialect: Arc::new(unparser::dialect::DefaultDialect {}),
