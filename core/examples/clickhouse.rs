@@ -1,21 +1,30 @@
+use std::collections::HashMap;
+
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
-use datafusion_table_providers::clickhouse::{Arg, ClickHouseTableFactory};
+use datafusion_table_providers::{
+    clickhouse::{Arg, ClickHouseTableFactory},
+    sql::db_connection_pool::clickhousepool::ClickhouseConnectionPool,
+    util::secrets::to_secret_map,
+};
 
 /// Example illustrates on how to use clickhouse client as a table factory
 /// and create read only table providers which can be registered with datafusion session.
 #[tokio::main]
 async fn main() {
-    let client = clickhouse::Client::default()
-        .with_url("http://localhost:8123")
-        .with_user("admin")
-        .with_password("secret");
+    let param = to_secret_map(HashMap::from([
+        ("url".to_string(), "http://localhost:8123".to_string()),
+        ("user".to_string(), "admin".to_string()),
+        ("password".to_string(), "secret".to_string()),
+    ]));
+
+    let pool = ClickhouseConnectionPool::new(param).await.unwrap();
 
     // Create a Datafusion session.
     let ctx = SessionContext::new();
 
     // Create a Clickhouse table factory
-    let table_factory = ClickHouseTableFactory::new(client);
+    let table_factory = ClickHouseTableFactory::new(pool);
 
     // Using table factory, we can create table provider that queries a clickhouse table
     let base_table = table_factory
