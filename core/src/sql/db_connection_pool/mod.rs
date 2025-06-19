@@ -3,6 +3,9 @@ use dbconnection::DbConnection;
 use std::sync::Arc;
 
 pub mod dbconnection;
+
+#[cfg(feature = "clickhouse")]
+pub mod clickhousepool;
 #[cfg(feature = "duckdb")]
 pub mod duckdbpool;
 #[cfg(feature = "mysql")]

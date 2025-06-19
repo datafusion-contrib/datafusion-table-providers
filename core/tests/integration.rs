@@ -1,6 +1,8 @@
 use rand::Rng;
 
 mod arrow_record_batch_gen;
+#[cfg(feature = "clickhouse")]
+mod clickhouse;
 mod docker;
 #[cfg(all(feature = "duckdb", feature = "federation"))]
 mod duckdb;

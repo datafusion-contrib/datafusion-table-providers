@@ -38,6 +38,9 @@ jobs:
       - name: Build without default features
         run: cargo check --no-default-features
 
+      - name: Build with only clickhouse
+        run: cargo check --no-default-features --features clickhouse
+
       - name: Build with only duckdb
         run: cargo check --no-default-features --features duckdb
 

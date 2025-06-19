@@ -794,7 +794,7 @@ pub(crate) fn get_arrow_map_record_batch() -> (RecordBatch, SchemaRef) {
     (rb, schema)
 }
 
-fn parse_json_to_batch(json_data: &str, schema: SchemaRef) -> RecordBatch {
+pub(crate) fn parse_json_to_batch(json_data: &str, schema: SchemaRef) -> RecordBatch {
     let reader = arrow_json::ReaderBuilder::new(schema)
         .build(std::io::Cursor::new(json_data))
         .expect("Failed to create JSON reader");

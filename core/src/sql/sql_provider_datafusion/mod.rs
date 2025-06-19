@@ -201,19 +201,7 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let filter_push_down: Vec<TableProviderFilterPushDown> = filters
-            .iter()
-            .map(|f| match Unparser::new(self.dialect()).expr_to_sql(f) {
-                // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
-                Ok(_) => match expr::expr_contains_subquery(f) {
-                    Ok(true) => TableProviderFilterPushDown::Unsupported,
-                    Ok(false) => TableProviderFilterPushDown::Exact,
-                    Err(_) => TableProviderFilterPushDown::Unsupported,
-                },
-                Err(_) => TableProviderFilterPushDown::Unsupported,
-            })
-            .collect();
-
+        let filter_push_down = default_filter_pushdown(filters, self.dialect());
         Ok(filter_push_down)
     }
 
@@ -227,6 +215,24 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         let sql = self.scan_to_sql(projection, filters, limit)?;
         return self.create_physical_plan(projection, sql);
     }
+}
+
+pub fn default_filter_pushdown(
+    filters: &[&Expr],
+    dialect: &dyn Dialect,
+) -> Vec<TableProviderFilterPushDown> {
+    filters
+        .iter()
+        .map(|f| match Unparser::new(dialect).expr_to_sql(f) {
+            // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
+            Ok(_) => match expr::expr_contains_subquery(f) {
+                Ok(true) => TableProviderFilterPushDown::Unsupported,
+                Ok(false) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            },
+            Err(_) => TableProviderFilterPushDown::Unsupported,
+        })
+        .collect()
 }
 
 impl<T, P> Display for SqlTable<T, P> {
