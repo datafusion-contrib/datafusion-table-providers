@@ -1,5 +1,5 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
-use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -54,7 +54,10 @@ impl SQLExecutor for ClickHouseTable {
     }
 
     fn compute_context(&self) -> Option<String> {
-        Some(format!("{}", std::ptr::from_ref(self) as usize))
+        match self.pool.join_push_down() {
+            JoinPushDown::Disallow => Some(format!("{}", std::ptr::from_ref(self) as usize)),
+            JoinPushDown::AllowedFor(s) => Some(s),
+        }
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
