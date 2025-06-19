@@ -67,21 +67,6 @@ impl ClickHouseTableFactory {
     }
 }
 
-#[derive(Debug)]
-pub struct ClickHouseTableProviderFactory {}
-
-impl ClickHouseTableProviderFactory {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for ClickHouseTableProviderFactory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Arg {
     Unsigned(u64),
