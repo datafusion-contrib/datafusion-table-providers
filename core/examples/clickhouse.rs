@@ -4,7 +4,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     clickhouse::{Arg, ClickHouseTableFactory},
-    sql::db_connection_pool::clickhousepool::ClickhouseConnectionPool,
+    sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
     util::secrets::to_secret_map,
 };
 
@@ -18,12 +18,12 @@ async fn main() {
         ("password".to_string(), "secret".to_string()),
     ]));
 
-    let pool = ClickhouseConnectionPool::new(param).await.unwrap();
+    let pool = ClickHouseConnectionPool::new(param).await.unwrap();
 
     // Create a Datafusion session.
     let ctx = SessionContext::new();
 
-    // Create a Clickhouse table factory
+    // Create a ClickHouse table factory
     let table_factory = ClickHouseTableFactory::new(pool);
 
     // Using table factory, we can create table provider that queries a clickhouse table
@@ -34,7 +34,7 @@ async fn main() {
 
     // Demonstrate direct table provider registration
     // This method registers the table in the default catalog
-    // Here we register the Clickhouse "Reports" table as "reports_v1"
+    // Here we register the ClickHouse "Reports" table as "reports_v1"
     ctx.register_table("reports_v1", base_table).unwrap();
 
     // Using table factory, we can create table provider that queries a parameterized view in clickhouse with some arguments.

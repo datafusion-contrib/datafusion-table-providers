@@ -19,20 +19,20 @@ pub enum Error {
 }
 
 #[derive(Clone)]
-pub struct ClickhouseConnectionPool {
+pub struct ClickHouseConnectionPool {
     pub client: Client,
     pub join_push_down: JoinPushDown,
 }
 
-impl std::fmt::Debug for ClickhouseConnectionPool {
+impl std::fmt::Debug for ClickHouseConnectionPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClickhouseConnectionPool")
+        f.debug_struct("ClickHouseConnectionPool")
             .field("join_push_down", &self.join_push_down)
             .finish()
     }
 }
 
-impl ClickhouseConnectionPool {
+impl ClickHouseConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self, Error> {
         let mut client = Client::default();
         let mut url = None;
@@ -113,7 +113,7 @@ impl ClickhouseConnectionPool {
 }
 
 #[async_trait::async_trait]
-impl DbConnectionPool<Client, ()> for ClickhouseConnectionPool {
+impl DbConnectionPool<Client, ()> for ClickHouseConnectionPool {
     async fn connect(&self) -> super::Result<Box<dyn DbConnection<Client, ()>>> {
         Ok(Box::new(self.client()))
     }

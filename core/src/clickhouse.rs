@@ -25,7 +25,7 @@ use datafusion::sql::unparser;
 use datafusion::{common::Constraints, sql::TableReference};
 use std::sync::Arc;
 
-use crate::sql::db_connection_pool::clickhousepool::ClickhouseConnectionPool;
+use crate::sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool;
 use crate::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 #[cfg(feature = "clickhouse-federation")]
@@ -33,11 +33,11 @@ pub mod federation;
 pub mod sql_table;
 
 pub struct ClickHouseTableFactory {
-    pool: Arc<ClickhouseConnectionPool>,
+    pool: Arc<ClickHouseConnectionPool>,
 }
 
 impl ClickHouseTableFactory {
-    pub fn new(pool: impl Into<Arc<ClickhouseConnectionPool>>) -> Self {
+    pub fn new(pool: impl Into<Arc<ClickHouseConnectionPool>>) -> Self {
         Self { pool: pool.into() }
     }
 
@@ -115,7 +115,7 @@ fn into_table_args(args: Vec<(String, Arg)>) -> Vec<FunctionArg> {
 pub struct ClickHouseTable {
     table_reference: TableReference,
     args: Option<Vec<(String, Arg)>>,
-    pool: Arc<ClickhouseConnectionPool>,
+    pool: Arc<ClickHouseConnectionPool>,
     schema: SchemaRef,
     constraints: Constraints,
     dialect: Arc<dyn unparser::dialect::Dialect>,
@@ -135,7 +135,7 @@ impl ClickHouseTable {
     pub fn new(
         table_reference: TableReference,
         args: Option<Vec<(String, Arg)>>,
-        pool: Arc<ClickhouseConnectionPool>,
+        pool: Arc<ClickHouseConnectionPool>,
         schema: SchemaRef,
         constraints: Constraints,
     ) -> Self {
