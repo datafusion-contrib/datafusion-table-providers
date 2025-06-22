@@ -40,12 +40,12 @@ arrow-flight = { version = "55.0.0", features = [
 arrow-schema = { version = "55.0.0", features = ["serde"] }
 arrow-json = "55.0.0"
 arrow-odbc = { version = "16.0.2" }
-datafusion = { version = "47", default-features = false }
-datafusion-expr = { version = "47" }
-datafusion-federation = { version = "=0.4.2" }
-datafusion-ffi = { version = "47" }
-datafusion-proto = { version = "47" }
-datafusion-physical-expr = { version = "47" }
-datafusion-physical-plan = { version = "47" }
+datafusion = { version = "48", default-features = false }
+datafusion-expr = { version = "48" }
+datafusion-federation = { version = "=0.4.3" }
+datafusion-ffi = { version = "48" }
+datafusion-proto = { version = "48" }
+datafusion-physical-expr = { version = "48" }
+datafusion-physical-plan = { version = "48" }
 datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.3.0", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
