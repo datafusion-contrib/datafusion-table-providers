@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// use async_trait::async_trait;
 use clickhouse::Client;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
