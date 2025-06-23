@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --features duckdb-federation,flight,mysql-federation,postgres-federation,sqlite-federation -p datafusion-table-providers --lib
+	cargo test --features clickhouse-federation,duckdb-federation,flight,mysql-federation,postgres-federation,sqlite-federation -p datafusion-table-providers --lib
 
 .PHONY: lint
 lint:
@@ -11,4 +11,4 @@ lint:
 
 .PHONY: test-integration
 test-integration:
-	RUST_LOG=debug cargo test --test integration --no-default-features --features postgres,sqlite,mysql,flight -- --nocapture
+	RUST_LOG=debug cargo test --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse -- --nocapture
