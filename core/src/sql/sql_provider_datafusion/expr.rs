@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_literal_no_subquery() {
-        let expr = Expr::Literal(ScalarValue::Int32(Some(1)));
+        let expr = Expr::Literal(ScalarValue::Int32(Some(1)), None);
         assert!(!expr_contains_subquery(&expr).expect("literal should not contain subquery"));
     }
 
@@ -42,7 +42,7 @@ mod tests {
     fn test_binary_expr_with_subquery() {
         let plan = LogicalPlanBuilder::empty(false).build().unwrap();
         let left = scalar_subquery(plan.into());
-        let right = Expr::Literal(ScalarValue::Int32(Some(2)));
+        let right = Expr::Literal(ScalarValue::Int32(Some(2)), None);
         let expr = Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Eq,
@@ -55,7 +55,7 @@ mod tests {
     fn test_inlist_with_subquery() {
         let plan = LogicalPlanBuilder::empty(false).build().unwrap();
         let list = vec![
-            Expr::Literal(ScalarValue::Int32(Some(1))),
+            Expr::Literal(ScalarValue::Int32(Some(1)), None),
             scalar_subquery(plan.into()),
         ];
         let expr = Expr::InList(InList {
