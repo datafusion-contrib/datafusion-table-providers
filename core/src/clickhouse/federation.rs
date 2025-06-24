@@ -4,7 +4,6 @@ use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::ast_analyzer::TableArgReplace;
 use datafusion_federation::sql::{
     AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -65,13 +64,7 @@ impl SQLExecutor for ClickHouseTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        if let Some(args) = &self.args {
-            let args = super::into_table_args(args.clone());
-            let table_args = TableArgReplace::new(vec![(self.table_reference.clone(), args)]);
-            Some(table_args.into_analyzer())
-        } else {
-            None
-        }
+        None
     }
 
     fn execute(
