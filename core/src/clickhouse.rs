@@ -44,7 +44,8 @@ impl ClickHouseTableFactory {
         &self,
         table_reference: TableReference,
         args: Option<Vec<(String, Arg)>>,
-    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
+    {
         let client: &dyn AsyncDbConnection<Client, ()> = &self.pool.client();
         let schema = client.get_schema(&table_reference).await?;
         let table_provider = Arc::new(ClickHouseTable::new(
