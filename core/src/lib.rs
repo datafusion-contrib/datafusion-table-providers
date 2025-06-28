@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 
