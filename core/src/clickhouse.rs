@@ -28,8 +28,8 @@ use crate::sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool;
 use crate::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 #[cfg(feature = "clickhouse-federation")]
-pub mod federation;
-pub mod sql_table;
+mod federation;
+mod sql_table;
 
 pub struct ClickHouseTableFactory {
     pool: Arc<ClickHouseConnectionPool>,
