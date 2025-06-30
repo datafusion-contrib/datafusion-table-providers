@@ -1,4 +1,7 @@
-use std::{ffi::CString, sync::Arc};
+use std::{
+    ffi::CString,
+    sync::{Arc, OnceLock},
+};
 
 use datafusion::catalog::TableProvider;
 use datafusion_ffi::table_provider::FFI_TableProvider;
@@ -10,6 +13,12 @@ struct RawTableProvider {
     pub(crate) supports_pushdown_filters: bool,
 }
 
+#[inline]
+pub(crate) fn get_tokio_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"))
+}
+
 #[pymethods]
 impl RawTableProvider {
     fn __datafusion_table_provider__<'py>(
@@ -18,16 +27,24 @@ impl RawTableProvider {
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
+        let runtime = if cfg!(feature = "clickhouse") {
+            Some(get_tokio_runtime().handle().clone())
+        } else {
+            None
+        };
+
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
-            None,
+            runtime,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }
 }
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
 #[cfg(feature = "flight")]
@@ -87,6 +104,13 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let flight = PyModule::new(py, "flight")?;
         flight::init_module(&flight)?;
         m.add_submodule(&flight)?;
+    }
+
+    #[cfg(feature = "clickhouse")]
+    {
+        let clickhouse = PyModule::new(py, "clickhouse")?;
+        clickhouse::init_module(&clickhouse)?;
+        m.add_submodule(&clickhouse)?;
     }
 
     Ok(())

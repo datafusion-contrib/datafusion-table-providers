@@ -23,6 +23,7 @@ let ctx = SessionContext::with_state(state);
 - PostgreSQL
 - MySQL
 - SQLite
+- ClickHouse
 - DuckDB
 - Flight SQL
 - ODBC
@@ -84,6 +85,59 @@ EOF
 # Run from repo folder
 cargo run -p datafusion-table-providers --example postgres --features postgres
 
+```
+
+### ClickHouse
+
+In order to run the Clickhouse example, you need to have a Clickhouse server running. You can use the following command to start a Clickhouse server in a Docker container the example can use:
+
+```bash
+docker run --name clickhouse \
+    -e CLICKHOUSE_DB=default \
+    -e CLICKHOUSE_USER=admin \
+    -e CLICKHOUSE_PASSWORD=secret \
+    -p 8123:8123 \
+    -p 9000:9000 \
+    -d clickhouse/clickhouse-server:24.8-alpine
+
+# 2. Wait for readiness
+echo "Waiting for ClickHouse to start..."
+until curl -s http://localhost:8123/ping | grep -q 'Ok'; do
+    sleep 2
+done
+echo
+
+# 3. Create tables and a parameterized view
+docker exec -i clickhouse clickhouse-client \
+    --user=admin --password=secret --multiquery <<EOF
+CREATE TABLE IF NOT EXISTS Reports (
+  id UInt32,
+  name String
+) ENGINE = Memory;
+
+INSERT INTO Reports VALUES (1, 'Monthly Report'), (2, 'Quarterly Report');
+
+CREATE TABLE IF NOT EXISTS Users (
+  workspace_uid String,
+  id UInt32,
+  username String
+) ENGINE = Memory;
+
+INSERT INTO Users VALUES
+  ('abc', 1, 'alice'),
+  ('abc', 2, 'bob'),
+  ('xyz', 3, 'charlie');
+
+CREATE OR REPLACE VIEW Users AS
+SELECT workspace_uid, id, username
+FROM Users
+WHERE workspace_uid = {workspace_uid:String};
+EOF
+```
+
+```bash
+# Run from repo folder
+cargo run -p datafusion-table-providers --example clickhouse --features clickhouse
 ```
 
 ### MySQL

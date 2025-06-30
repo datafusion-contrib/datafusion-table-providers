@@ -25,6 +25,7 @@ duckdb = { workspace = true, optional = true}
 
 [features]
 default = ["duckdb", "sqlite", "mysql", "postgres", "odbc", "flight"]
+clickhouse = ["datafusion-table-providers/clickhouse-federation"]
 duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]
 sqlite = ["datafusion-table-providers/sqlite-federation"]
 mysql = ["datafusion-table-providers/mysql-federation"]
