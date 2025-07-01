@@ -29,7 +29,7 @@ description = "Extend the capabilities of DataFusion to support additional data 
 
 [workspace.dependencies]
 arrow = "55.0.0"
-arrow-array = { version = "55.0.0" }
+arrow-array = { version = "55.2.0" }
 arrow-flight = { version = "55.0.0", features = [
   "flight-sql-experimental",
   "tls",
