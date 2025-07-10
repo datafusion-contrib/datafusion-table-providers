@@ -5,39 +5,6 @@ use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     mongodb::{connection_pool::MongoDBConnectionPool, MongoDBTableFactory}, util::secrets::to_secret_map,
 };
-use mongodb::{options::ClientOptions, Client};
-
-async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Error> {
-    let connection_string = format!("mongodb://root:password@localhost:{port}/mongo_db?authSource=admin");
-    
-    let client_options = ClientOptions::parse(connection_string)
-        .await
-        .expect("Failed to parse MongoDB connection string");
-    
-    let client = Client::with_options(client_options)
-        .expect("Failed to create MongoDB client");
-    
-    // Test the connection
-    let mut retries = 10;
-    let mut last_err = None;
-    while retries > 0 {
-        match client
-            .database("testdb")
-            .run_command(mongodb::bson::doc! { "ping": 1 })
-            .await
-        {
-            Ok(_) => {println!("Client created"); return Ok(client)},
-            Err(e) => {
-                last_err = Some(e);
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                retries -= 1;
-                println!("Ping failed");
-            }
-        }
-    }
-
-    Ok(client)
-}
 
 /// This example demonstrates how to:
 /// 1. Create a MySQL connection pool
@@ -69,12 +36,7 @@ async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Error> {
 /// ```
 #[tokio::main]
 async fn main(){
-
-    let c = get_mongodb_client(27017).await.unwrap();
-    let n = c.database("mongo_db").list_collection_names().await.unwrap();
-    println!("{:?}", n);
-
-    
+   
     // Create MongoDB connection parameters
     // Including connection string and SSL mode settings
     let mongodb_params = to_secret_map(HashMap::from([
@@ -117,5 +79,3 @@ async fn main(){
         .expect("select failed");
     df.show().await.expect("show failed");
 }
-
-

@@ -263,6 +263,7 @@ impl ArrayBuilderTrait for StringArrayBuilder {
                     .map_err(|e| Error::ConversionError { source: Box::new(e) })?;
                 self.0.append_value(&json_str);
             }
+            Some(Bson::Null) => self.0.append_null(),
             Some(other) => {
                 self.0.append_value(&format!("{}", other));
             }
@@ -888,6 +889,35 @@ mod tests {
         let emoji_array = result.column_by_name("emoji").unwrap()
             .as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(emoji_array.value(0), "🚀🎉💯");
+    }
+
+    #[test]
+    fn test_bson_null_string_is_real_null() {
+        use mongodb::bson::{doc, Bson};
+        use arrow::datatypes::{Field, Schema, DataType};
+        use arrow::array::StringArray;
+
+        let docs = vec![
+            doc! {
+                "name": Bson::Null,
+            }
+        ];
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+
+        let name_array = result
+            .column_by_name("name")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        assert_eq!(name_array.len(), 1);
+        assert!(name_array.is_null(0), "Expected Arrow null, got {:?}", name_array.value(0));
     }
 
     #[test]

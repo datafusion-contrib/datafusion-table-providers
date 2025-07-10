@@ -13,6 +13,8 @@ Many of the table providers in this repo are for querying data from other databa
 - SQLite
 - DuckDB
 - Flight SQL
+- ODBC
+- MongoDB
 
 ## Examples
 
@@ -104,3 +106,61 @@ roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_20
 
 cargo run --example flight-sql --features flight
 ```
+
+### ODBC
+```bash
+apt-get install unixodbc-dev libsqliteodbc
+# or
+# brew install unixodbc & brew install sqliteodbc
+
+cargo run --example odbc_sqlite --features odbc
+```
+
+### MongoDB
+
+In order to run the MongoDB example, you need to have a MongoDB server running. You can use the following command to start a MongoDB server in a Docker container the example can use:
+
+```bash
+docker run --name mongodb \
+  -e MONGO_INITDB_ROOT_USERNAME=root \
+  -e MONGO_INITDB_ROOT_PASSWORD=password \
+  -e MONGO_INITDB_DATABASE=mongo_db \
+  -p 27017:27017 \
+  -d mongo:7.0
+# Wait for the MongoDB server to start
+sleep 30
+
+# Create a table in the MongoDB server and insert some data
+docker exec -i mongodb mongosh -u root -p password --authenticationDatabase admin <<EOF
+use mongo_db;
+db.companies.insertOne({
+  id: 1,
+  name: "Acme Corporation"
+});
+EOF
+
+# Run from repo folder
+cargo run -p datafusion-table-providers --example mongodb --features mongodb
+```
+
+#### ARM Mac
+
+Please see https://github.com/pacman82/odbc-api#os-x-arm--mac-m1 for reference.
+
+Steps:
+1. Install unixodbc and sqliteodbc by `brew install unixodbc sqliteodbc`.
+2. Find local sqliteodbc driver path by running `brew info sqliteodbc`. The path might look like `/opt/homebrew/Cellar/sqliteodbc/0.99991`.
+3. Set up odbc config file at `~/.odbcinst.ini` with your local sqliteodbc path.
+Example config file:
+```
+[SQLite3]
+Description = SQLite3 ODBC Driver
+Driver      = /opt/homebrew/Cellar/sqliteodbc/0.99991/lib/libsqlite3odbc.dylib
+```
+4. Test configuration by running `odbcinst -q -d -n SQLite3`. If the path is printed out correctly, then you are all set.
+
+## Examples (in Python)
+1. Start a Python venv
+2. Enter into venv
+3. Inside python/ folder, run `maturin develop`.
+4. Inside python/examples/ folder, run the corresponding test using `python3 [file_name]`.
