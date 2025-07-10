@@ -129,8 +129,6 @@ impl MongoDBConnection {
 }
 
 
-
-
 pub fn schema_to_mongo_projection(projected_schema: &SchemaRef) -> Document {
     let mut projection = Document::new();
     
