@@ -311,7 +311,6 @@ impl ArrayBuilderTrait for TimestampArrayBuilder {
                 self.0.append_value(dt.timestamp_millis())
             }
             Some(Bson::Timestamp(ts)) => {
-                // MongoDB timestamp to milliseconds
                 self.0.append_value((ts.time as i64) * 1000)
             }
             Some(_) => self.0.append_null(),

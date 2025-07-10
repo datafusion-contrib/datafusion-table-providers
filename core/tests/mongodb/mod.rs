@@ -8,14 +8,14 @@ use rstest::rstest;
 
 use arrow::{
     array::*,
-    datatypes::{DataType, Field, Schema, TimeUnit},
+    datatypes::{DataType, Field, Int32Type, Schema, TimeUnit},
 };
 
 use crate::docker::RunningContainer;
 
 mod common;
 
-async fn test_mongodb_timestamp_types(port: usize) {
+async fn test_mongodb_datetime_types(port: usize) {
     let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z").unwrap().with_timezone(&Utc);
     let ts1 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.1Z").unwrap().with_timezone(&Utc);
     let ts2 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.12Z").unwrap().with_timezone(&Utc);
@@ -247,72 +247,128 @@ async fn test_mongodb_object_id_types(port: usize) {
     .await;
 }
 
-// async fn test_mongodb_array_types(port: usize) {
-//     let test_docs = vec![
-//         doc! {
-//             "tags": ["rust", "mongodb", "arrow"],
-//             "scores": [85, 92, 78],
-//             "flags": [true, false, true],
-//         }
-//     ];
+async fn test_mongodb_array_types(port: usize) {
+    let test_docs = vec![
+        doc! {
+            "string_tags": ["rust", "mongodb", "arrow"],
+            "mixed_array": ["text", 42, true, 3.14],
+            "empty_array": [],
+            "numbers_as_strings": [1, 2, 3],
+        },
+        doc! {
+            "string_tags": ["python", "sql"],
+            "mixed_array": ["another", false, 99],
+            "empty_array": [],
+            "numbers_as_strings": [4, 5],
+        },
+    ];
 
-//     let schema = Arc::new(Schema::new(vec![
-//         Field::new(
-//             "tags",
-//             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-//             true,
-//         ),
-//         Field::new(
-//             "scores",
-//             DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-//             true,
-//         ),
-//         Field::new(
-//             "flags",
-//             DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
-//             true,
-//         ),
-//     ]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "string_tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new(
+            "mixed_array",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new(
+            "empty_array",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+        Field::new(
+            "numbers_as_strings",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+    ]));
 
-//     // Create list arrays
-//     let tags_values = StringArray::from(vec!["rust", "mongodb", "arrow"]);
-//     let tags_list = ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(0), Some(1), Some(2)])]);
+    // Create the expected ListArrays manually
+    let string_tags_builder = ListBuilder::new(StringBuilder::new());
+    let mut string_tags_list = string_tags_builder;
     
-//     let scores_values = Int32Array::from(vec![85, 92, 78]);
-//     let scores_list = ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(0), Some(1), Some(2)])]);
+    // First document string_tags: ["rust", "mongodb", "arrow"]
+    string_tags_list.values().append_value("rust");
+    string_tags_list.values().append_value("mongodb");
+    string_tags_list.values().append_value("arrow");
+    string_tags_list.append(true);
     
-//     let flags_values = BooleanArray::from(vec![true, false, true]);
-//     let flags_list = ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(0), Some(1), Some(2)])]);
-
-//     // Note: This is a simplified version. In reality, you'd need to properly construct ListArrays
-//     // For the test, we'll use a simpler approach or mark as ignored if too complex
+    // Second document string_tags: ["python", "sql"]
+    string_tags_list.values().append_value("python");
+    string_tags_list.values().append_value("sql");
+    string_tags_list.append(true);
     
-//     // Simplified version - treat arrays as JSON strings for now
-//     let simplified_schema = Arc::new(Schema::new(vec![
-//         Field::new("tags", DataType::Utf8, true),
-//         Field::new("scores", DataType::Utf8, true),
-//         Field::new("flags", DataType::Utf8, true),
-//     ]));
+    let string_tags_array = Arc::new(string_tags_list.finish());
 
-//     let simplified_record = RecordBatch::try_new(
-//         Arc::clone(&simplified_schema),
-//         vec![
-//             Arc::new(StringArray::from(vec!["[\"rust\",\"mongodb\",\"arrow\"]"])),
-//             Arc::new(StringArray::from(vec!["[85,92,78]"])),
-//             Arc::new(StringArray::from(vec!["[true,false,true]"])),
-//         ],
-//     )
-//     .expect("Failed to create arrow record batch");
+    // Mixed array (all converted to strings)
+    let mixed_array_builder = ListBuilder::new(StringBuilder::new());
+    let mut mixed_array_list = mixed_array_builder;
+    
+    // First document mixed_array: ["text", "42", "true", "3.14"]
+    mixed_array_list.values().append_value("text");
+    mixed_array_list.values().append_value("42");
+    mixed_array_list.values().append_value("true");
+    mixed_array_list.values().append_value("3.14");
+    mixed_array_list.append(true);
+    
+    // Second document mixed_array: ["another", "false", "99"]
+    mixed_array_list.values().append_value("another");
+    mixed_array_list.values().append_value("false");
+    mixed_array_list.values().append_value("99");
+    mixed_array_list.append(true);
+    
+    let mixed_array_array = Arc::new(mixed_array_list.finish());
 
-//     arrow_mongodb_one_way(
-//         port,
-//         "array_collection",
-//         test_docs,
-//         simplified_record,
-//     )
-//     .await;
-// }
+    // Empty arrays
+    let empty_array_builder = ListBuilder::new(StringBuilder::new());
+    let mut empty_array_list = empty_array_builder;
+    
+    // First document: empty array
+    empty_array_list.append(true);
+    // Second document: empty array  
+    empty_array_list.append(true);
+    
+    let empty_array_array = Arc::new(empty_array_list.finish());
 
+    // Numbers as strings array
+    let numbers_builder = ListBuilder::new(StringBuilder::new());
+    let mut numbers_list = numbers_builder;
+    
+    // First document: [1, 2, 3] -> ["1", "2", "3"]
+    numbers_list.values().append_value("1");
+    numbers_list.values().append_value("2");
+    numbers_list.values().append_value("3");
+    numbers_list.append(true);
+    
+    // Second document: [4, 5] -> ["4", "5"]
+    numbers_list.values().append_value("4");
+    numbers_list.values().append_value("5");
+    numbers_list.append(true);
+    
+    let numbers_array = Arc::new(numbers_list.finish());
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            string_tags_array,
+            mixed_array_array,
+            empty_array_array,
+            numbers_array,
+        ],
+    )
+    .expect("Failed to create arrow record batch");
+
+    arrow_mongodb_one_way(
+        port,
+        "array_collection",
+        test_docs,
+        expected_record,
+    )
+    .await;
+}
 
 async fn test_mongodb_null_and_missing_fields(port: usize) {
     let test_docs = vec![
@@ -469,13 +525,13 @@ async fn test_mongodb_arrow_oneway() {
     let port = crate::get_random_port();
     let mongodb_container = start_mongodb_container(port).await;
 
-    test_mongodb_timestamp_types(port).await;
+    test_mongodb_datetime_types(port).await;
     test_mongodb_numeric_types(port).await;
     test_mongodb_string_types(port).await;
     test_mongodb_boolean_types(port).await;
     test_mongodb_binary_types(port).await;
     test_mongodb_object_id_types(port).await;
-    // test_mongodb_array_types(port).await;
+    test_mongodb_array_types(port).await;
     // test_mongodb_nested_object_types(port).await;
     test_mongodb_null_and_missing_fields(port).await;
 
