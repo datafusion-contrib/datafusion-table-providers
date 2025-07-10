@@ -370,6 +370,162 @@ async fn test_mongodb_array_types(port: usize) {
     .await;
 }
 
+async fn test_mongodb_nested_object_types(port: usize) {
+    let test_docs = vec![
+        doc! {
+            "user": {
+                "name": "Alice",
+                "age": 30,
+                "contact": {
+                    "email": "alice@example.com",
+                    "phone": "555-1234"
+                }
+            },
+            "metadata": {
+                "created_at": "2024-01-01",
+                "tags": ["important", "user"],
+                "settings": {
+                    "theme": "dark",
+                    "notifications": true
+                }
+            },
+            "empty_object": {},
+            "simple_string": "not an object"
+        },
+        doc! {
+            "user": {
+                "name": "Bob", 
+                "age": 25,
+                "contact": {
+                    "email": "bob@example.com"
+                }
+            },
+            "metadata": {
+                "created_at": "2024-01-02", 
+                "tags": ["user"],
+                "settings": {
+                    "theme": "light",
+                    "notifications": false
+                }
+            },
+            "empty_object": {},
+            "simple_string": "also not an object"
+        },
+    ];
+
+    // We'll test the content, not the exact JSON string format
+    let ctx = SessionContext::new();
+    let client = common::get_mongodb_client(port)
+        .await
+        .expect("MongoDB client should be created");
+
+    // Insert test data into MongoDB collection
+    let db = client.database("testdb");
+    let collection = db.collection::<Document>("nested_object_collection");
+    
+    // Drop collection if it exists
+    let _ = collection.drop().await;
+
+    // Insert test documents
+    collection
+        .insert_many(test_docs)
+        .await
+        .expect("MongoDB documents should be inserted");
+
+    let expected_user1 = serde_json::json!({
+        "name": "Alice",
+        "age": 30,
+        "contact": {
+            "email": "alice@example.com",
+            "phone": "555-1234"
+        }
+    });
+
+    let expected_user2 = serde_json::json!({
+        "name": "Bob",
+        "age": 25,
+        "contact": {
+            "email": "bob@example.com"
+        }
+    });
+
+    let expected_metadata1 = serde_json::json!({
+        "created_at": "2024-01-01",
+        "tags": ["important", "user"],
+        "settings": {
+            "theme": "dark",
+            "notifications": true
+        }
+    });
+
+    let expected_metadata2 = serde_json::json!({
+        "created_at": "2024-01-02",
+        "tags": ["user"],
+        "settings": {
+            "theme": "light",
+            "notifications": false
+        }
+    });
+
+    let expected_empty = serde_json::json!({});
+
+    // Register DataFusion table
+    let mongo_conn_pool = common::get_mongodb_connection_pool(port)
+        .await
+        .expect("MongoDB connection pool should be created");
+
+    let table = MongoDBTable::new(&Arc::new(mongo_conn_pool), "nested_object_collection")
+        .await
+        .expect("Table should be created");
+
+    ctx.register_table("nested_object_collection", Arc::new(table))
+        .expect("Table should be registered");
+
+    // Query the data
+    let sql = r#"SELECT "user", "metadata", "empty_object", "simple_string" FROM nested_object_collection"#;
+    let df = ctx
+        .sql(&sql)
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batches = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batches.len(), 1);
+    
+    let batch = &record_batches[0];
+    assert_eq!(batch.num_rows(), 2);
+    assert_eq!(batch.num_columns(), 4);
+
+    // Verify the JSON content by parsing and comparing structure
+    let user_array = batch.column_by_name("user").unwrap()
+        .as_any().downcast_ref::<StringArray>().unwrap();
+    let metadata_array = batch.column_by_name("metadata").unwrap()
+        .as_any().downcast_ref::<StringArray>().unwrap();
+    let empty_array = batch.column_by_name("empty_object").unwrap()
+        .as_any().downcast_ref::<StringArray>().unwrap();
+    let string_array = batch.column_by_name("simple_string").unwrap()
+        .as_any().downcast_ref::<StringArray>().unwrap();
+
+    // Parse actual JSON strings and compare with expected JSON objects
+    let actual_user1: serde_json::Value = serde_json::from_str(user_array.value(0)).unwrap();
+    let actual_user2: serde_json::Value = serde_json::from_str(user_array.value(1)).unwrap();
+    let actual_metadata1: serde_json::Value = serde_json::from_str(metadata_array.value(0)).unwrap();
+    let actual_metadata2: serde_json::Value = serde_json::from_str(metadata_array.value(1)).unwrap();
+    let actual_empty1: serde_json::Value = serde_json::from_str(empty_array.value(0)).unwrap();
+    let actual_empty2: serde_json::Value = serde_json::from_str(empty_array.value(1)).unwrap();
+
+    // Direct JSON comparison - order doesn't matter!
+    assert_eq!(actual_user1, expected_user1);
+    assert_eq!(actual_user2, expected_user2);
+    assert_eq!(actual_metadata1, expected_metadata1);
+    assert_eq!(actual_metadata2, expected_metadata2);
+    assert_eq!(actual_empty1, expected_empty);
+    assert_eq!(actual_empty2, expected_empty);
+
+    // String values remain simple
+    assert_eq!(string_array.value(0), "not an object");
+    assert_eq!(string_array.value(1), "also not an object");
+}
+
 async fn test_mongodb_null_and_missing_fields(port: usize) {
     let test_docs = vec![
         doc! {
@@ -532,7 +688,7 @@ async fn test_mongodb_arrow_oneway() {
     test_mongodb_binary_types(port).await;
     test_mongodb_object_id_types(port).await;
     test_mongodb_array_types(port).await;
-    // test_mongodb_nested_object_types(port).await;
+    test_mongodb_nested_object_types(port).await;
     test_mongodb_null_and_missing_fields(port).await;
 
     mongodb_container.remove().await.expect("container to stop");
