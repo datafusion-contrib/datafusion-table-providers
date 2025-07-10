@@ -46,17 +46,9 @@ fn infer_bson_type(value: &Bson) -> DataType {
         Bson::Double(_) => DataType::Float64,
         Bson::String(_) => DataType::Utf8,
         Bson::Array(arr) => {
-            if arr.is_empty() {
-                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
-            } else {
-                // Use first non-null element
-                let element_type = arr.iter()
-                    .find(|item| !matches!(item, Bson::Null))
-                    .map(infer_bson_type)
-                    .unwrap_or(DataType::Utf8);
-                
-                DataType::List(Arc::new(Field::new("item", element_type, true)))
-            }
+            // MongoDB arrays can be heterogeneous [1, "foo", true]
+            // Arrow arrays must be homogeneous - use strings to preserve all data
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         }
         Bson::Document(_) => {
             // Represent nested documents as JSON strings
@@ -185,10 +177,8 @@ mod tests {
             .map(|f| (f.name().clone(), f.data_type()))
             .collect();
         
-        // Empty array defaults to string list
         assert!(matches!(field_map.get("empty_array"), Some(DataType::List(_))));
         
-        // Check array element types
         if let Some(DataType::List(field)) = field_map.get("string_array") {
             assert_eq!(field.data_type(), &DataType::Utf8);
         } else {
@@ -196,19 +186,17 @@ mod tests {
         }
         
         if let Some(DataType::List(field)) = field_map.get("number_array") {
-            assert_eq!(field.data_type(), &DataType::Int32);
+            assert_eq!(field.data_type(), &DataType::Utf8);
         } else {
             panic!("Expected List type for number_array");
         }
         
-        // Mixed array should infer from first non-null (string in this case)
         if let Some(DataType::List(field)) = field_map.get("mixed_array") {
             assert_eq!(field.data_type(), &DataType::Utf8);
         } else {
             panic!("Expected List type for mixed_array");
         }
         
-        // Null array should find the string type
         if let Some(DataType::List(field)) = field_map.get("null_array") {
             assert_eq!(field.data_type(), &DataType::Utf8);
         } else {
