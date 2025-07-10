@@ -13,6 +13,8 @@ pub mod clickhouse;
 pub mod duckdb;
 #[cfg(feature = "flight")]
 pub mod flight;
+#[cfg(feature = "mongodb")]
+pub mod mongodb;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "odbc")]

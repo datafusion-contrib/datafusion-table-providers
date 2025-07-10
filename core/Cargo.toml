@@ -58,6 +58,7 @@ mysql_async = { version = "0.36", features = [
   "time",
   "bigdecimal",
 ], optional = true }
+mongodb = { version = "3.2.2", features = ["openssl-tls"], optional = true }
 native-tls = { version = "0.2", optional = true }
 num-bigint = "0.4"
 odbc-api = { version = "13.0", optional = true }
@@ -135,6 +136,7 @@ flight = [
   "dep:prost",
   "dep:tonic",
 ]
+mongodb = ["dep:mongodb", "dep:async-stream"]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 mysql-federation = ["mysql", "federation"]
 odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]
