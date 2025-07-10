@@ -8,7 +8,7 @@ use rstest::rstest;
 
 use arrow::{
     array::*,
-    datatypes::{DataType, Field, Int32Type, Schema, TimeUnit},
+    datatypes::{DataType, Field, Schema, TimeUnit},
 };
 
 use crate::docker::RunningContainer;

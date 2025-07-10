@@ -45,7 +45,7 @@ fn infer_bson_type(value: &Bson) -> DataType {
     match value {
         Bson::Double(_) => DataType::Float64,
         Bson::String(_) => DataType::Utf8,
-        Bson::Array(arr) => {
+        Bson::Array(_) => {
             // MongoDB arrays can be heterogeneous [1, "foo", true]
             // Arrow arrays must be homogeneous - use strings to preserve all data
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
