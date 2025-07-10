@@ -14,25 +14,24 @@ use crate::mongodb::{connection::MongoDBConnection, ConnectionFailedSnafu, Error
 pub struct MongoDBConnectionPool {
     client: Arc<Client>,
     db_name: String,
-    // join_push_down: JoinPushDown,
 }
 
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: &str = "27017";
+const DEFAULT_DATABASE : &str = "default";
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
         let params = crate::util::remove_prefix_from_hashmap_keys(params, "mongo_");
 
-        let db_name = params
-            .get("db")
-            .map(SecretBox::expose_secret)
-            .unwrap_or_else(|| "default");
-
         // Build URI
         let uri = if let Some(uri) = params.get("connection_string") {
             uri.expose_secret().to_string()
         } else {
+            let db_name = params
+                .get("db")
+                .map(SecretBox::expose_secret)
+                .unwrap_or(DEFAULT_DATABASE);
             let host = params
                 .get("host")
                 .map(SecretBox::expose_secret)
@@ -76,12 +75,11 @@ impl MongoDBConnectionPool {
         // Set ServerApi for compatibility with Atlas
         client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
 
-        // Build join push down context
-        // let join_context = build_join_context(&client_options, &db_name);
+        let db_name = &client_options.default_database.as_ref().unwrap();
 
         let client = Client::with_options(client_options.clone()).context(ConnectionFailedSnafu)?;
         client
-            .database(&db_name)
+            .database(db_name)
             .run_command(doc! { "ping": 1 })
             .await
             .context(ConnectionFailedSnafu)?;
@@ -89,7 +87,6 @@ impl MongoDBConnectionPool {
         Ok(Self {
             client: Arc::new(client),
             db_name: db_name.to_string(),
-            // join_push_down: JoinPushDown::AllowedFor(join_context),
         })
     }
 
@@ -107,24 +104,4 @@ impl MongoDBConnectionPool {
             self.db_name.clone(),
         )))
     }
-
-    // fn join_push_down(&self) -> JoinPushDown {
-    //     self.join_push_down.clone()
-    // }
 }
-
-// fn build_join_context(opts: &ClientOptions, db_name: &str) -> String {
-//     let mut host = String::new();
-//     for opt_host in opts.hosts.iter() {
-//         host.push_str(&format!("host={opt_host:?},"));
-//     }
-
-//     let user = opts.credential.as_ref().and_then(|c| c.username.clone());
-
-//     let mut ctx = format!("host={},db={}", host, db_name);
-//     if let Some(user) = user {
-//         ctx.push_str(&format!(",user={}", user));
-//     }
-//     ctx
-// }
-

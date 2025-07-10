@@ -134,18 +134,20 @@ impl MongoDBExec {
             })
             .transpose()?;
 
-        let combined_exprs = combine_exprs_with_and(filters)
-            .ok_or(DataFusionError::Execution("Failed to combine expressions".to_string()))?;
+        let combined_exprs = combine_exprs_with_and(filters);
 
-        let mongo_filters_doc = expr_to_mongo_filter(&combined_exprs)
-            .ok_or(DataFusionError::Execution("Failed to convert expressions".to_string()))?;
+        let mongo_filters_doc = match combined_exprs {
+            Some(e) => expr_to_mongo_filter(&e)
+                .ok_or(DataFusionError::Execution("Failed to convert expressions".to_string()))?,
+            None => Document::new(),
+        };
 
         Ok(Self {
             table_reference: Arc::clone(&table_reference),
             pool: pool,
             projected_schema: Arc::clone(&projected_schema),
             filters_doc: mongo_filters_doc,
-            limit,
+            limit: limit,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
