@@ -15,55 +15,47 @@ use crate::docker::RunningContainer;
 
 mod common;
 
-// async fn test_mongodb_timestamp_types(port: usize) {
-//     let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.000Z").unwrap().with_timezone(&Utc);
-//     let ts1 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123Z").unwrap().with_timezone(&Utc);
-//     let ts2 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123456Z").unwrap().with_timezone(&Utc);
+async fn test_mongodb_timestamp_types(port: usize) {
+    let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z").unwrap().with_timezone(&Utc);
+    let ts1 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.1Z").unwrap().with_timezone(&Utc);
+    let ts2 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.12Z").unwrap().with_timezone(&Utc);
+    let ts3 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123Z").unwrap().with_timezone(&Utc);
 
-//     let test_docs = vec![
-//         doc! {
-//             "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
-//             "timestamp_millis": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts1))),
-//             "timestamp_micros": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts2))),
-//         }
-//     ];
+    let test_docs = vec![
+        doc! {
+            "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
+            "timestamp_one_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts1))),
+            "timestamp_two_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts2))),
+            "timestamp_three_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts3))),
+        }
+    ];
 
-//     let schema = Arc::new(Schema::new(vec![
-//         Field::new(
-//             "timestamp_field",
-//             DataType::Timestamp(TimeUnit::Microsecond, None),
-//             true,
-//         ),
-//         Field::new(
-//             "timestamp_millis",
-//             DataType::Timestamp(TimeUnit::Microsecond, None),
-//             true,
-//         ),
-//         Field::new(
-//             "timestamp_micros",
-//             DataType::Timestamp(TimeUnit::Microsecond, None),
-//             true,
-//         ),
-//     ]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("timestamp_field", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+        Field::new("timestamp_one_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+        Field::new("timestamp_two_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+        Field::new("timestamp_three_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+    ]));
 
-//     let expected_record = RecordBatch::try_new(
-//         Arc::clone(&schema),
-//         vec![
-//             Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_000_000])),
-//             Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_000])),
-//             Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_123_456])),
-//         ],
-//     )
-//     .expect("Failed to create arrow record batch");
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_000])),
+            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_100])),
+            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_120])),
+            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_123])),
+        ],
+    )
+    .expect("Failed to create arrow record batch");
 
-//     arrow_mongodb_one_way(
-//         port,
-//         "timestamp_collection",
-//         test_docs,
-//         expected_record,
-//     )
-//     .await;
-// }
+    arrow_mongodb_one_way(
+        port,
+        "timestamp_collection",
+        test_docs,
+        expected_record,
+    )
+    .await;
+}
 
 async fn test_mongodb_numeric_types(port: usize) {
     let test_docs = vec![
@@ -477,7 +469,7 @@ async fn test_mongodb_arrow_oneway() {
     let port = crate::get_random_port();
     let mongodb_container = start_mongodb_container(port).await;
 
-    // test_mongodb_timestamp_types(port).await;
+    test_mongodb_timestamp_types(port).await;
     test_mongodb_numeric_types(port).await;
     test_mongodb_string_types(port).await;
     test_mongodb_boolean_types(port).await;
