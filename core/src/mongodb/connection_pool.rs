@@ -22,7 +22,7 @@ const DEFAULT_DATABASE : &str = "default";
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
-        let params = crate::util::remove_prefix_from_hashmap_keys(params, "mongo_");
+        let params = crate::util::remove_prefix_from_hashmap_keys(params, "mongodb_");
 
         // Build URI
         let uri = if let Some(uri) = params.get("connection_string") {

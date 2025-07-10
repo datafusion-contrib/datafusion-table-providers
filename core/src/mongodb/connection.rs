@@ -62,7 +62,6 @@ impl MongoDBConnection {
             .context(UnableToGetSchemaSnafu)?;
 
         let docs: Vec<Document> = sample.try_collect().await.boxed().context(UnableToGetSchemaSnafu)?;
-        // let doc: Option<Document> = sample.try_next().await.boxed().context(UnableToGetSchemaSnafu)?;
 
         infer_arrow_schema_from_documents(&docs)
             .boxed()
