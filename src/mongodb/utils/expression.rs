@@ -77,7 +77,7 @@ fn extract_column_name(expr: &Expr) -> Option<String> {
 
 fn extract_literal_value(expr: &Expr) -> Option<Bson> {
     match expr {
-        Expr::Literal(scalar, _) => match scalar {
+        Expr::Literal(scalar) => match scalar {
             ScalarValue::Utf8(Some(s)) => Some(Bson::String(s.clone())),
             ScalarValue::Utf8(None) => Some(Bson::Null),
             ScalarValue::Int32(Some(i)) => Some(Bson::Int32(*i)),
