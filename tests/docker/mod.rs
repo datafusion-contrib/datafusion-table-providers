@@ -134,7 +134,7 @@ impl<'a> ContainerRunner<'a> {
                 format!("{container_port}/tcp"),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(format!("{host_port}/tcp")),
+                    host_port: Some(format!("{host_port}")),
                 }]),
             );
         }
