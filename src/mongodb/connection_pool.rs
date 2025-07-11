@@ -24,7 +24,6 @@ impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
         let params = crate::util::remove_prefix_from_hashmap_keys(params, "mongodb_");
 
-        // Build URI
         let uri = if let Some(uri) = params.get("connection_string") {
             uri.expose_secret().to_string()
         } else {

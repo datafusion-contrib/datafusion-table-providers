@@ -3,7 +3,6 @@ use mongodb::bson::{doc, Bson, Document};
 
 pub fn combine_exprs_with_and(exprs: &[Expr]) -> Option<Expr> {
     let mut iter = exprs.iter();
-
     let first = iter.next()?.clone();
     Some(iter.fold(first, |acc, e| acc.and(e.clone())))
 }
@@ -212,7 +211,6 @@ mod tests {
 
     #[test]
     fn test_complex_and_or_filter() {
-        // (age > 25 AND status = "active") OR (priority = "high")
         let age_and_status = col("age").gt(lit(25)).and(col("status").eq(lit("active")));
         let expr = age_and_status.or(col("priority").eq(lit("high")));
         
@@ -233,7 +231,6 @@ mod tests {
 
     #[test]
     fn test_nested_and_filters() {
-        // (age > 18 AND age < 65) AND (country = "US")
         let age_range = col("age").gt(lit(18)).and(col("age").lt(lit(65)));
         let expr = age_range.and(col("country").eq(lit("US")));
         
@@ -270,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_string_comparison_filters() {
-        let expr = col("name").gt(lit("M")); // Alphabetical comparison
+        let expr = col("name").gt(lit("M")); 
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! { "name": { "$gt": "M" } };
         assert_eq!(filter, expected);
@@ -294,7 +291,6 @@ mod tests {
         let exprs = vec![col("status").eq(lit("active"))];
         let combined = combine_exprs_with_and(&exprs).unwrap();
         
-        // Single expression should be returned as-is
         if let Expr::BinaryExpr(bin) = &combined {
             assert_eq!(bin.op, Operator::Eq);
         } else {
@@ -318,10 +314,8 @@ mod tests {
         ];
         let combined = combine_exprs_with_and(&exprs).unwrap();
         
-        // Should create nested AND structure
         if let Expr::BinaryExpr(bin) = &combined {
             assert_eq!(bin.op, Operator::And);
-            // Left side should be another AND expression
             if let Expr::BinaryExpr(left_bin) = &*bin.left {
                 assert_eq!(left_bin.op, Operator::And);
             } else {
@@ -334,8 +328,6 @@ mod tests {
 
     #[test]
     fn test_null_literal_filter() {
-        // This test might fail if your scalar_to_bson doesn't handle nulls
-        // But it's good to have for completeness
         let expr = col("optional_field").eq(lit(ScalarValue::Utf8(None)));
         let filter = expr_to_mongo_filter(&expr);
         
@@ -343,19 +335,16 @@ mod tests {
             let expected = doc! { "optional_field": mongodb::bson::Bson::Null };
             assert_eq!(doc, expected);
         }
-        // If this fails, it means null handling needs work
     }
 
     #[test]
     fn test_wrong_operand_order_returns_none() {
-        // Test what happens if someone tries literal.eq(column) instead of column.eq(literal)
-        // This should fail gracefully
         use datafusion::logical_expr::Expr;
         
         let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(lit("Alice")), // literal on left
+            left: Box::new(lit("Alice")), 
             op: Operator::Eq,
-            right: Box::new(col("name")), // column on right
+            right: Box::new(col("name")),
         });
         
         let filter = expr_to_mongo_filter(&expr);
@@ -364,7 +353,6 @@ mod tests {
 
     #[test]
     fn test_multiple_or_conditions() {
-        // status = "active" OR status = "pending" OR status = "review"
         let expr = col("status").eq(lit("active"))
             .or(col("status").eq(lit("pending")))
             .or(col("status").eq(lit("review")));
