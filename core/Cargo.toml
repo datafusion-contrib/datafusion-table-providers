@@ -136,7 +136,11 @@ flight = [
   "dep:prost",
   "dep:tonic",
 ]
-mongodb = ["dep:mongodb", "dep:async-stream"]
+mongodb = [
+  "dep:mongodb", 
+  "dep:async-stream",
+  "dep:arrow-schema",
+]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 mysql-federation = ["mysql", "federation"]
 odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]

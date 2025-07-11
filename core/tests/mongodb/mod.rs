@@ -63,7 +63,7 @@ async fn test_mongodb_numeric_types(port: usize) {
             "int32_field": 2147483647i32,
             "int64_field": 9223372036854775807i64,
             "double_field": 3.14159265359,
-            // "decimal_field": Bson::Decimal128(mongodb::bson::Decimal128::from_bytes([0u8; 16])),
+            "decimal_field": Bson::Decimal128(mongodb::bson::Decimal128::from_bytes([0u8; 16])),
         }
     ];
 
@@ -71,7 +71,7 @@ async fn test_mongodb_numeric_types(port: usize) {
         Field::new("int32_field", DataType::Int32, true),
         Field::new("int64_field", DataType::Int64, true),
         Field::new("double_field", DataType::Float64, true),
-        // Field::new("decimal_field", DataType::Decimal128(38, 0), true),
+        Field::new("decimal_field", DataType::Decimal128(38, 10), true),
     ]));
 
     let expected_record = RecordBatch::try_new(
@@ -80,11 +80,11 @@ async fn test_mongodb_numeric_types(port: usize) {
             Arc::new(Int32Array::from(vec![2147483647i32])),
             Arc::new(Int64Array::from(vec![9223372036854775807i64])),
             Arc::new(Float64Array::from(vec![3.14159265359])),
-            // Arc::new(
-            //     Decimal128Array::from(vec![Some(0i128)])
-            //         .with_precision_and_scale(38, 0)
-            //         .unwrap(),
-            // ),
+            Arc::new(
+                Decimal128Array::from(vec![Some(0i128)])
+                    .with_precision_and_scale(38, 10)
+                    .unwrap(),
+            ),
         ],
     )
     .expect("Failed to create arrow record batch");

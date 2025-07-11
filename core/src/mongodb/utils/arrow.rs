@@ -7,8 +7,8 @@ use arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use mongodb::bson::{Bson, Document};
-
-use crate::mongodb::{Result, Error};
+use snafu::prelude::*;
+use crate::mongodb::{Error, InvalidDecimalSnafu, Result};
 
 pub fn mongo_docs_to_arrow(
     docs: &[Document],
@@ -90,7 +90,7 @@ fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Er
                 Box::new(TimestampArrayBuilder::new(capacity))
             }
             DataType::Decimal128(precision, scale) => {
-                Box::new(Decimal128ArrayBuilder::new(capacity, *precision, *scale))
+                Box::new(Decimal128ArrayBuilder::new(capacity, *precision, *scale)?)
             }
             DataType::List(_) => Box::new(ListArrayBuilder::new(capacity)),
             DataType::Null => Box::new(NullArrayBuilder::new()),
@@ -325,8 +325,11 @@ impl ArrayBuilderTrait for TimestampArrayBuilder {
 }
 
 impl Decimal128ArrayBuilder {
-    fn new(capacity: usize, _precision: u8, _scale: i8) -> Self {
-        Self(Decimal128Builder::with_capacity(capacity))
+    fn new(capacity: usize, precision: u8, scale: i8) -> Result<Self, Error> {
+        let foo = Decimal128Builder::with_capacity(capacity)
+            .with_precision_and_scale(precision, scale)
+            .context(InvalidDecimalSnafu)?;
+        Ok(Self(foo))
     }
 }
 
@@ -334,7 +337,6 @@ impl ArrayBuilderTrait for Decimal128ArrayBuilder {
     fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
         match value {
             Some(Bson::Decimal128(decimal)) => {
-                // Simplified conversion - you might need more sophisticated handling
                 let bytes = decimal.bytes();
                 let value = i128::from_le_bytes(bytes);
                 self.0.append_value(value);
