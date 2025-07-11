@@ -20,18 +20,11 @@ use std::{any::Any, fmt, sync::Arc};
 use serde_json;
 use futures::TryStreamExt;
 
+#[derive(Debug)]
 pub struct MongoDBTable {
     pool: Arc<MongoDBConnectionPool>,
     schema: SchemaRef,
     table_reference: Arc<TableReference>,
-}
-
-impl std::fmt::Debug for MongoDBTable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MongoDBTable")
-            // .field("base_table", &self.base_table)
-            .finish()
-    }
 }
 
 impl MongoDBTable {
@@ -88,12 +81,6 @@ impl TableProvider for MongoDBTable {
         )?))
     }
 }
-
-// impl fmt::Display for MongoDBTable {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "MongoDBTable {}", self.base_table.name())
-//     }
-// }
 
 #[derive(Debug)]
 struct MongoDBExec {
@@ -158,7 +145,6 @@ impl MongoDBExec {
     }
 }
 
-
 impl DisplayAs for MongoDBExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let columns = self
@@ -179,7 +165,6 @@ impl DisplayAs for MongoDBExec {
         )
     }
 }
-
 
 impl ExecutionPlan for MongoDBExec {
     fn name(&self) -> &'static str {

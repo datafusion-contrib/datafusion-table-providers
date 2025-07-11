@@ -50,6 +50,10 @@ pub(super) fn get_mongodb_params(port: usize) -> HashMap<String, SecretString> {
         "mongodb_pool_max".to_string(),
         SecretString::from("10".to_string()),
     );
+    params.insert(
+        "mongodb_sslmode".to_string(),
+        SecretString::from("disabled".to_string()),
+    );
     params
 }
 
@@ -77,17 +81,16 @@ pub async fn start_mongodb_docker_container(port: usize) -> Result<RunningContai
                 "--eval".to_string(),
                 "db.runCommand({ ping: 1 }).ok".to_string(),
             ]),
-            interval: Some(500_000_000), // 500ms
-            timeout: Some(300_000_000),  // 300ms
+            interval: Some(500_000_000),
+            timeout: Some(300_000_000),
             retries: Some(10),
-            start_period: Some(1_000_000_000), // 1s
+            start_period: Some(1_000_000_000),
             start_interval: None,
         })
         .build()?
         .run()
         .await?;
 
-    // Wait a bit longer for MongoDB to be fully ready
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     Ok(running_container)
 }
@@ -114,7 +117,6 @@ pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Er
     let client = Client::with_options(client_options)
         .expect("Failed to create MongoDB client");
     
-    // Test the connection
     let mut retries = 10;
     let mut last_err = None;
     while retries > 0 {
