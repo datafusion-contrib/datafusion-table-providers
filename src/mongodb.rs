@@ -5,6 +5,7 @@ pub mod utils;
 
 use crate::mongodb::table::MongoDBTable;
 use crate::mongodb::connection_pool::MongoDBConnectionPool;
+use arrow_schema::ArrowError;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::TableReference;
 use snafu::prelude::*;
@@ -38,6 +39,9 @@ pub enum Error {
 
     #[snafu(display("Failed to convert MongoDB documents to Arrow: {source}"))]
     ConversionError { source: Box<dyn std::error::Error + std::marker::Send + Sync> },
+
+    #[snafu(display("Invalid decimal parameters: {source}"))]
+    InvalidDecimalError { source: ArrowError },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
