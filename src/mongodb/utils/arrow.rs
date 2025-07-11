@@ -256,7 +256,7 @@ impl ArrayBuilderTrait for StringArrayBuilder {
     fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
         match value {
             Some(Bson::String(s)) => self.0.append_value(s),
-            Some(Bson::ObjectId(oid)) => self.0.append_value(&oid.to_hex()),
+            Some(Bson::ObjectId(oid)) => self.0.append_value(oid.to_hex()),
             Some(Bson::Document(doc)) => {
                 // Convert document to JSON string. Maybe later add support for nested documents
                 let json_str = serde_json::to_string(doc)
@@ -265,7 +265,7 @@ impl ArrayBuilderTrait for StringArrayBuilder {
             }
             Some(Bson::Null) => self.0.append_null(),
             Some(other) => {
-                self.0.append_value(&format!("{}", other));
+                self.0.append_value(format!("{}", other));
             }
             None => self.0.append_null(),
         }
@@ -326,10 +326,10 @@ impl ArrayBuilderTrait for TimestampArrayBuilder {
 
 impl Decimal128ArrayBuilder {
     fn new(capacity: usize, precision: u8, scale: i8) -> Result<Self, Error> {
-        let foo = Decimal128Builder::with_capacity(capacity)
+        let builder = Decimal128Builder::with_capacity(capacity)
             .with_precision_and_scale(precision, scale)
             .context(InvalidDecimalSnafu)?;
-        Ok(Self(foo))
+        Ok(Self(builder))
     }
 }
 
@@ -366,7 +366,7 @@ impl ArrayBuilderTrait for ListArrayBuilder {
                 for item in arr {
                     match item {
                         Bson::String(s) => self.0.values().append_value(s),
-                        other => self.0.values().append_value(&format!("{}", other)),
+                        other => self.0.values().append_value(format!("{}", other)),
                     }
                 }
                 self.0.append(true);

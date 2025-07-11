@@ -131,10 +131,10 @@ impl MongoDBExec {
 
         Ok(Self {
             table_reference: Arc::clone(&table_reference),
-            pool: pool,
+            pool,
             projected_schema: Arc::clone(&projected_schema),
             filters_doc: mongo_filters_doc,
-            limit: limit,
+            limit,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
