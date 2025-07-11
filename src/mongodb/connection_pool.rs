@@ -1,13 +1,11 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
-
 use mongodb::{
     bson::doc,
-    options::{ClientOptions, ServerApi, ServerApiVersion, Tls, TlsOptions},
-    Client, Database,
+    options::{ClientOptions, Tls, TlsOptions},
+    Client,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::ResultExt;
-
 use crate::mongodb::{connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result};
 
 #[derive(Clone, Debug)]
@@ -19,6 +17,8 @@ pub struct MongoDBConnectionPool {
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: &str = "27017";
 const DEFAULT_DATABASE : &str = "default";
+const DEFAULT_MIN_POOL_SIZE: u32 = 10;
+const DEFAULT_MAX_POOL_SIZE: u32 = 100;
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
@@ -55,25 +55,51 @@ impl MongoDBConnectionPool {
             .await
             .context(InvalidUriSnafu)?;
 
-        // Optional TLS
-        if let Some(cert_path) = params.get("sslrootcert") {
-            let path = PathBuf::from(cert_path.expose_secret());
-            if !path.exists() {
-                return Err(Error::InvalidRootCertPath {
-                    path: cert_path.expose_secret().to_string(),
-                });
-            }
+        // Configure pool size
+        let pool_min = params
+            .get("pool_min")
+            .map(SecretBox::expose_secret)
+            .unwrap_or_default()
+            .parse::<u32>()
+            .unwrap_or(DEFAULT_MIN_POOL_SIZE);
+        client_options.min_pool_size = Some(pool_min);
 
-            let tls = Tls::Enabled(
-                TlsOptions::builder()
-                    .ca_file_path(Some(path))
-                    .build(),
-            );
-            client_options.tls = Some(tls);
+        let pool_max = params
+            .get("pool_max")
+            .map(SecretBox::expose_secret)
+            .unwrap_or_default()
+            .parse::<u32>()
+            .unwrap_or(DEFAULT_MAX_POOL_SIZE);
+        client_options.min_pool_size = Some(pool_max);
+
+        // Configure SSL + TLS
+        let mut ssl_mode = "required";
+        let mut ssl_rootcert_path: Option<PathBuf> = None;
+
+        if let Some(mongo_sslmode) = params.get("sslmode").map(SecretBox::expose_secret) {
+            match mongo_sslmode.to_lowercase().as_str() {
+                "disabled" | "required" | "preferred" => {
+                    ssl_mode = mongo_sslmode;
+                }
+                _ => {
+                    return Err(Error::InvalidParameter {
+                        parameter_name: "sslmode".to_string(),
+                    });
+                }
+            }
         }
 
-        // Set ServerApi for compatibility with Atlas
-        client_options.server_api = Some(ServerApi::builder().version(ServerApiVersion::V1).build());
+        if let Some(mongo_sslrootcert) = params.get("sslrootcert").map(SecretBox::expose_secret) {
+            let path = PathBuf::from(mongo_sslrootcert);
+            if !path.exists() {
+                return Err(Error::InvalidRootCertPath {
+                    path: mongo_sslrootcert.to_string(),
+                });
+            }
+            ssl_rootcert_path = Some(path);
+        }
+
+        client_options.tls = get_tls_opts(ssl_mode, ssl_rootcert_path);
 
         let db_name = &client_options.default_database.as_ref().unwrap();
 
@@ -90,18 +116,41 @@ impl MongoDBConnectionPool {
         })
     }
 
-    pub fn client(&self) -> Arc<Client> {
-        Arc::clone(&self.client)
-    }
-
-    pub fn database(&self) -> Database {
-        self.client.database(&self.db_name)
-    }
-
     pub async fn connect(&self) -> Result<Box<MongoDBConnection>> {
         Ok(Box::new(MongoDBConnection::new(
             Arc::clone(&self.client),
             self.db_name.clone(),
         )))
     }
+}
+
+fn get_tls_opts(ssl_mode: &str, rootcert_path: Option<PathBuf>) -> Option<Tls> {
+    if ssl_mode == "disabled" {
+        return Some(Tls::Disabled);
+    }
+
+    let tls_options = match (rootcert_path, ssl_mode) {
+        // Root cert + preferred 
+        (Some(path), "preferred") => TlsOptions::builder()
+            .ca_file_path(Some(path))
+            .allow_invalid_certificates(Some(true))
+            .allow_invalid_hostnames(Some(true))
+            .build(),
+        
+        // Root cert + required 
+        (Some(path), _) => TlsOptions::builder()
+            .ca_file_path(Some(path))
+            .build(),
+        
+        // No root cert + preferred 
+        (None, "preferred") => TlsOptions::builder()
+            .allow_invalid_certificates(Some(true))
+            .allow_invalid_hostnames(Some(true))
+            .build(),
+        
+        // No root cert + required 
+        (None, _) => TlsOptions::builder().build(),
+    };
+
+    Some(Tls::Enabled(tls_options))
 }

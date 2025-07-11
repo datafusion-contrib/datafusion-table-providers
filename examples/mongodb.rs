@@ -7,10 +7,9 @@ use datafusion_table_providers::{
 };
 
 /// This example demonstrates how to:
-/// 1. Create a MySQL connection pool
-/// 2. Create and use MySQLTableFactory to generate TableProvider
-/// 3. Register TableProvider with DataFusion
-/// 4. Use SQL queries to access MySQL table data
+/// 1. Create a MongoDB connection pool
+/// 2. Create and use MongoDBTableFactory to generate TableProvider
+/// 3. Use SQL queries to access MongoDB table data
 ///
 /// Prerequisites:
 /// Start a MongoDB server using Docker:
@@ -44,9 +43,10 @@ async fn main(){
             "connection_string".to_string(),
             "mongodb://root:password@localhost:27017/mongo_db?authSource=admin".to_string(),
         ),
+        ("sslmode".to_string(), "disabled".to_string()),
     ]));
 
-    // Create MySQL connection pool
+    // Create MongoDB connection pool
     let mongodb_pool = Arc::new(
         MongoDBConnectionPool::new(mongodb_params)
             .await

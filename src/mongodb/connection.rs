@@ -30,23 +30,6 @@ impl MongoDBConnection {
         self.client.database(&self.db_name).collection(collection)
     }
 
-    // async fn tables(&self, schema: &str) -> Result<Vec<String>, Error> {
-    //     let db = self.client.database(schema);
-
-    //     db.list_collection_names()
-    //         .await
-    //         .boxed()
-    //         .context(UnableToGetTablesSnafu)
-    // }
-
-    // async fn schemas(&self) -> Result<Vec<String>, Error> {
-    //     self.client
-    //         .list_database_names()
-    //         .await
-    //         .boxed()
-    //         .context(UnableToGetSchemasSnafu)
-    // }
-
     pub async fn get_schema(
         &self,
         table_reference: &TableReference,
@@ -90,7 +73,6 @@ impl MongoDBConnection {
         let chunked_stream = cursor.try_chunks(4_000);
         let projected_schema_clone = Arc::clone(projected_schema);
 
-        // Convert Mongo chunks to Arrow batches
         let mut batch_stream = Box::pin(stream! {
             for await chunk in chunked_stream {
                 match chunk {
@@ -103,7 +85,6 @@ impl MongoDBConnection {
             }
         });
 
-        // Get first batch for schema detection
         let Some(first_batch_result) = batch_stream.next().await else {
             return Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::new(Schema::empty()),
@@ -114,7 +95,6 @@ impl MongoDBConnection {
         let first_batch = first_batch_result?;
         let schema = first_batch.schema();
 
-        // Prepend first batch back into stream
         let full_stream = Box::pin(stream! {
             yield Ok(first_batch);
             while let Some(batch_result) = batch_stream.next().await {
