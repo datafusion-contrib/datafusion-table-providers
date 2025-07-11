@@ -15,6 +15,9 @@ pub enum Error {
     #[snafu(display("Invalid MongoDB URI: {source}"))]
     InvalidUri { source: mongodb::error::Error },
 
+    #[snafu(display("Invalid value for parameter {parameter_name}\nEnsure the value is valid for parameter {parameter_name}"))]
+    InvalidParameter { parameter_name: String },
+
     #[snafu(display("TLS root certificate path is invalid: {path}"))]
     InvalidRootCertPath { path: String },
 
