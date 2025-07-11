@@ -56,6 +56,9 @@ jobs:
       - name: Build with only flight
         run: cargo check --no-default-features --features flight
 
+      - name: Build with only mongodb
+        run: cargo check --no-default-features --features mongodb
+
   integration-test:
     name: Tests
     runs-on: ubuntu-latest
@@ -63,6 +66,7 @@ jobs:
     env:
       PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
       MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
+      MONGODB_DOCKER_IMAGE: public.ecr.aws/docker/library/mongo:7
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +77,7 @@ jobs:
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+          docker pull ${{ env.MONGODB_DOCKER_IMAGE }}
 
       - name: Free Disk Space
         run: |
