@@ -11,7 +11,7 @@ use mongodb::bson::{Bson, Document};
 use rust_decimal::Decimal;
 use snafu::prelude::*;
 use num_traits::ToPrimitive;
-use crate::mongodb::{Error, InvalidDecimalSnafu, ConversionSnafu, Result};
+use crate::mongodb::{Error, InvalidDecimalSnafu, Result};
 
 
 pub fn mongo_docs_to_arrow(
@@ -158,7 +158,6 @@ struct BinaryArrayBuilder(BinaryBuilder);
 struct TimestampArrayBuilder(TimestampMillisecondBuilder);
 pub struct Decimal128ArrayBuilder {
     builder: Decimal128Builder,
-    precision: u8,
     scale: i8,
 }
 struct ListArrayBuilder(ListBuilder<StringBuilder>);
@@ -337,7 +336,7 @@ impl Decimal128ArrayBuilder {
         let builder = Decimal128Builder::with_capacity(capacity)
             .with_precision_and_scale(precision, scale)
             .context(InvalidDecimalSnafu)?;
-        Ok(Self { builder, precision, scale } )
+        Ok(Self { builder, scale } )
     }
 }
 
@@ -463,7 +462,6 @@ mod tests {
     use arrow::array::*;
     use arrow::datatypes::{Schema, Field, DataType, TimeUnit};
     use mongodb::bson::{doc, Bson, Document, oid::ObjectId, DateTime, Timestamp, Binary, spec::BinarySubtype};
-    use std::str::FromStr;
 
     #[test]
     fn test_empty_documents() {

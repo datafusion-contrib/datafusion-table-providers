@@ -22,6 +22,10 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+
       - run: cargo clippy --all-features -- -D warnings
 
   build:
@@ -32,6 +36,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build
 
       # Putting this into a GitHub Actions matrix will run a separate job per matrix item, whereas in theory
       # this can re-use the existing build cache to go faster.
@@ -66,6 +74,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
 
       - name: Pull the Postgres/MySQL images
         run: |
