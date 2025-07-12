@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	RUST_LOG=debug cargo test --features mongodb
+	RUST_LOG=debug cargo test --features postgres,sqlite,mysql,mongodb
 
 .PHONY: lint
 lint:
