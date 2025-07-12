@@ -22,6 +22,10 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+
       - run: cargo clippy --all-features -- -D warnings
 
   build:
@@ -32,6 +36,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build
 
       # Putting this into a GitHub Actions matrix will run a separate job per matrix item, whereas in theory
       # this can re-use the existing build cache to go faster.
@@ -50,6 +58,9 @@ jobs:
       - name: Build with only mysql
         run: cargo check --no-default-features --features mysql
 
+      - name: Build with only mongodb
+        run: cargo check --no-default-features --features mongodb
+
   integration-test:
     name: Tests
     runs-on: ubuntu-latest
@@ -57,16 +68,22 @@ jobs:
     env:
       PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
       MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
+      MONGODB_DOCKER_IMAGE: public.ecr.aws/docker/library/mongo:7
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+          docker pull ${{ env.MONGODB_DOCKER_IMAGE }}
 
       - name: Free Disk Space
         run: |

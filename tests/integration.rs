@@ -6,6 +6,8 @@ mod docker;
 mod duckdb;
 #[cfg(feature = "flight")]
 mod flight;
+#[cfg(feature = "mongodb")]
+mod mongodb;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]
