@@ -82,9 +82,9 @@ pub async fn start_mongodb_docker_container(port: usize) -> Result<RunningContai
                 "db.runCommand({ ping: 1 }).ok".to_string(),
             ]),
             interval: Some(500_000_000),
-            timeout: Some(300_000_000),
+            timeout: Some(500_000_000),
             retries: Some(10),
-            start_period: Some(1_000_000_000),
+            start_period: Some(3_000_000_000),
             start_interval: None,
         })
         .build()?
