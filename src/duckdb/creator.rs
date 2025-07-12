@@ -296,6 +296,7 @@ impl TableManager {
     }
 
     /// Inserts data from this table into the target table.
+    #[allow(dead_code)]
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn insert_into(
         &self,
