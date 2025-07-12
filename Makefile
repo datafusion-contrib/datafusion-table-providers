@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --features postgres,sqlite,mysql
+	cargo test --features postgres,sqlite,mysql,duckdb
 
 .PHONY: lint
 lint:
