@@ -64,6 +64,15 @@ jobs:
   integration-test:
     name: Tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - postgres
+          - sqlite
+          - mysql
+          - duckdb
+          - flight
+          - mongodb
 
     env:
       PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
@@ -120,4 +129,4 @@ jobs:
           sudo apt-get install -y libsqlite3-dev
 
       - name: Run tests
-        run: make test
+        run: cargo test --features ${{ matrix.features }}
