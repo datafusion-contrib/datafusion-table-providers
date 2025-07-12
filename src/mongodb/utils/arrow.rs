@@ -1090,28 +1090,6 @@ mod decimal_tests {
         assert_eq!(scientific_array.value(0), 0);
     }
 
-    // #[test]
-    // fn test_decimal_high_precision() {
-    //     let docs = vec![
-    //         doc! {
-    //             "precise": BsonDecimal128::from_str("123.123456789012345").unwrap(),
-    //         }
-    //     ];
-        
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("precise", DataType::Decimal128(38, 15), true),
-    //     ]));
-        
-    //     let result = mongo_docs_to_arrow(&docs, schema).unwrap();
-        
-    //     let precise_array = result.column_by_name("precise").unwrap()
-    //         .as_any().downcast_ref::<Decimal128Array>().unwrap();
-        
-    //     // 123.123456789012345 with scale 15
-    //     let expected = (123.123456789012345 * 10_f64.powi(15)) as i128;
-    //     assert_eq!(precise_array.value(0), expected);
-    // }
-
     #[test]
     fn test_decimal_rounding() {
         let docs = vec![
@@ -1171,33 +1149,6 @@ mod decimal_tests {
         // -0.00 with scale 2 = 0
         assert_eq!(neg_zero_array.value(0), 0);
     }
-
-    // #[test]
-    // fn test_decimal_very_small_numbers() {
-    //     let docs = vec![
-    //         doc! {
-    //             "tiny": BsonDecimal128::from_str("0.00000001").unwrap(),
-    //             "micro": BsonDecimal128::from_str("0.000000000001").unwrap(),
-    //         }
-    //     ];
-        
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("tiny", DataType::Decimal128(18, 8), true),
-    //         Field::new("micro", DataType::Decimal128(18, 12), true),
-    //     ]));
-        
-    //     let result = mongo_docs_to_arrow(&docs, schema).unwrap();
-        
-    //     let tiny_array = result.column_by_name("tiny").unwrap()
-    //         .as_any().downcast_ref::<Decimal128Array>().unwrap();
-    //     let micro_array = result.column_by_name("micro").unwrap()
-    //         .as_any().downcast_ref::<Decimal128Array>().unwrap();
-        
-    //     // 0.00000001 with scale 8 = 1
-    //     assert_eq!(tiny_array.value(0), 1);
-    //     // 0.000000000001 with scale 12 = 1
-    //     assert_eq!(micro_array.value(0), 1);
-    // }
 
     #[test]
     fn test_decimal_large_numbers() {
@@ -1303,35 +1254,6 @@ mod decimal_tests {
         // This should succeed for max scale within rust_decimal limits
         assert!(result.is_ok());
     }
-
-    // #[test]
-    // fn test_decimal_overflow_scenarios() {
-    //     let docs = vec![
-    //         doc! {
-    //             "huge_number": BsonDecimal128::from_str("999999999999999999999999999999.999999999").unwrap(),
-    //         }
-    //     ];
-        
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("huge_number", DataType::Decimal128(38, 9), true),
-    //     ]));
-        
-    //     // This test checks behavior with very large numbers
-    //     let result = mongo_docs_to_arrow(&docs, schema);
-        
-    //     // Should either succeed or fail gracefully
-    //     match result {
-    //         Ok(batch) => {
-    //             let array = batch.column_by_name("huge_number").unwrap()
-    //                 .as_any().downcast_ref::<Decimal128Array>().unwrap();
-    //             // If it succeeds, the value should be valid
-    //             assert!(!array.is_null(0));
-    //         }
-    //         Err(_) => {
-    //             // Overflow errors are acceptable for very large numbers
-    //         }
-    //     }
-    // }
 
     #[test]
     fn test_decimal_precision_loss() {
