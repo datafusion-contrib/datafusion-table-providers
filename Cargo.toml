@@ -132,6 +132,16 @@ path = "examples/duckdb.rs"
 required-features = ["duckdb"]
 
 [[example]]
+name = "duckdb_external_table"
+path = "examples/duckdb_external_table.rs"
+required-features = ["duckdb"]
+
+[[example]]
+name = "duckdb_function"
+path = "examples/duckdb_function.rs"
+required-features = ["duckdb"]
+
+[[example]]
 name = "flight-sql"
 path = "examples/flight-sql.rs"
 required-features = ["flight"]
