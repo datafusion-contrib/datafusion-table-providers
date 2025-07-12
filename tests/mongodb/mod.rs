@@ -3,7 +3,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion::{error::DataFusionError, execution::context::SessionContext};
 use datafusion_table_providers::mongodb::table::MongoDBTable;
-use mongodb::bson::{doc, Document, Bson, DateTime as BsonDateTime};
+use mongodb::bson::{doc, Document, Bson, DateTime as BsonDateTime, Decimal128};
+use std::str::FromStr;
 use rstest::rstest;
 
 use arrow::{
@@ -58,12 +59,15 @@ async fn test_mongodb_datetime_types(port: usize) {
 }
 
 async fn test_mongodb_numeric_types(port: usize) {
+
+    let decimal = Decimal128::from_str("123.456").unwrap();
+
     let test_docs = vec![
         doc! {
             "int32_field": 2147483647i32,
             "int64_field": 9223372036854775807i64,
             "double_field": 3.14159265359,
-            "decimal_field": Bson::Decimal128(mongodb::bson::Decimal128::from_bytes([0u8; 16])),
+            "decimal_field": Bson::Decimal128(decimal),
         }
     ];
 
@@ -81,13 +85,21 @@ async fn test_mongodb_numeric_types(port: usize) {
             Arc::new(Int64Array::from(vec![9223372036854775807i64])),
             Arc::new(Float64Array::from(vec![3.14159265359])),
             Arc::new(
-                Decimal128Array::from(vec![Some(0i128)])
+                Decimal128Array::from(vec![Some(1234560000000i128)])
                     .with_precision_and_scale(38, 10)
                     .unwrap(),
             ),
         ],
     )
     .expect("Failed to create arrow record batch");
+
+    let array = expected_record
+        .column(3)
+        .as_any()
+        .downcast_ref::<Decimal128Array>()
+        .unwrap();
+
+    println!("Decimal as i128: {:?}", array.value(0));
 
     arrow_mongodb_one_way(
         port,

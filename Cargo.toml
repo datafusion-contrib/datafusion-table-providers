@@ -36,9 +36,11 @@ fallible-iterator = "0.3.0"
 futures = "0.3.30"
 mysql_async = { version = "0.35.1", features = ["native-tls-tls", "chrono", "hdrhistogram", "bigdecimal", "time"], optional = true }
 mongodb = { version = "3.2.2", features = ["openssl-tls"], optional = true }
+num-traits = { version = "0.2", optional = true }
 prost = { version = "0.13.2", optional = true }
 rand = "0.8.5"
 r2d2 = { version = "0.8.10", optional = true }
+rust_decimal = { version = "1.32", optional = true }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
 secrecy = "0.10.3"
@@ -105,6 +107,8 @@ mongodb = [
   "dep:mongodb", 
   "dep:async-stream",
   "dep:arrow-schema",
+  "dep:rust_decimal",
+  "dep:num-traits",
 ]
 
 [patch.crates-io]
@@ -116,3 +120,43 @@ datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "b5
 datafusion-physical-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" } # spiceai-47
 datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" } # spiceai-47
 datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" }         # spiceai-47
+
+[[example]]
+name = "odbc_sqlite"
+path = "examples/odbc_sqlite.rs"
+required-features = ["sqlite", "odbc"]
+
+[[example]]
+name = "duckdb"
+path = "examples/duckdb.rs"
+required-features = ["duckdb"]
+
+[[example]]
+name = "flight-sql"
+path = "examples/flight-sql.rs"
+required-features = ["flight"]
+
+[[example]]
+name = "sqlite"
+path = "examples/sqlite.rs"
+required-features = ["sqlite"]
+
+[[example]]
+name = "clickhouse"
+path = "examples/clickhouse.rs"
+required-features = ["clickhouse"]
+
+[[example]]
+name = "mysql"
+path = "examples/mysql.rs"
+required-features = ["mysql"]
+
+[[example]]
+name = "postgres"
+path = "examples/postgres.rs"
+required-features = ["postgres"]
+
+[[example]]
+name = "mongodb"
+path = "examples/mongodb.rs"
+required-features = ["mongodb"]
