@@ -109,6 +109,75 @@ VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
+    )
+    .await;
+}
+
+/// Tests the MySQL TIMESTAMP with time zone override.
+/// The test verifies that the TIMESTAMP type correctly adjusts to the specified time zone when retrieved from the database.
+/// `TIMESTAMP` columns should be automatically converted to the specified time zone,
+/// while `DATETIME` columns should remain unchanged.
+async fn test_mysql_timestamp_tz_override(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE timestamp_tz_table (
+            ts TIMESTAMP,
+            dt DATETIME
+        );
+    ";
+    // values will be inserted in UTC
+    let insert_table_stmt = "
+        INSERT INTO timestamp_tz_table (ts, dt)
+        VALUES
+            ('2024-09-12 10:00:00', '2024-09-12 10:00:00');
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        Field::new("dt", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+    ]));
+
+    // Both columns should remain unchanged as target time zone is UTC (same as insert time zone)
+    let expected_utc = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_000_000])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_000_000])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "timestamp_tz_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_utc,
+        Some("UTC"),
+    )
+    .await;
+
+    // "+02:00"
+    let expected_custom_tz = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            // ts: TIMESTAMP column, should be shifted +2 hours (timezone override)
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                1_726_135_200_000_000 + 2 * 60 * 60 * 1_000_000,
+            ])),
+            // dt: DATETIME column, should remain unchanged
+            Arc::new(TimestampMicrosecondArray::from(vec![1_726_135_200_000_000])),
+        ],
+    )
+    .expect("Failed to created arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "timestamp_tz_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_custom_tz,
+        Some("+02:00"), // Override time zone to +02:00
     )
     .await;
 }
@@ -197,6 +266,7 @@ VALUES (
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -269,6 +339,7 @@ VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -315,6 +386,7 @@ VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -377,6 +449,7 @@ VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -429,6 +502,7 @@ VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -484,6 +558,7 @@ INSERT INTO high_precision_decimal (decimal_values) VALUES
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -559,6 +634,7 @@ async fn test_mysql_zero_date_type(port: usize) {
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -593,6 +669,7 @@ async fn test_mysql_decimal_types_to_decimal128(port: usize) {
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
@@ -603,13 +680,15 @@ async fn arrow_mysql_one_way(
     create_table_stmt: &str,
     insert_table_stmt: &str,
     expected_record: RecordBatch,
+    test_query_tz: Option<&str>,
 ) -> Vec<RecordBatch> {
     tracing::debug!("Running tests on {table_name}");
 
     let ctx = SessionContext::new();
-    let pool = common::get_mysql_connection_pool(port)
+    // For dataset initialization we always use UTC (default) timezone
+    let pool = common::get_mysql_connection_pool(port, None)
         .await
-        .expect("MySQL connection pool should be created");
+        .expect("MySQL connection pool for test table creation should be created");
 
     let db_conn = pool
         .connect_direct()
@@ -625,6 +704,12 @@ async fn arrow_mysql_one_way(
         .await
         .expect("SQL mode should be adjusted");
 
+    // Drop table if already exists
+    let _ = db_conn
+        .execute(format!("DROP TABLE IF EXISTS {table_name}").as_str(), &[])
+        .await
+        .expect("MySQL table should be dropped if exists");
+
     // Create table and insert data into mysql test_table
     let _ = db_conn
         .execute(create_table_stmt, &[])
@@ -635,6 +720,11 @@ async fn arrow_mysql_one_way(
         .execute(insert_table_stmt, &[])
         .await
         .expect("MySQL table data should be inserted");
+
+    // For the test query, use a new connection pool with optional time zone override
+    let pool = common::get_mysql_connection_pool(port, test_query_tz)
+        .await
+        .expect("MySQL connection pool for test query should be created");
 
     // Register datafusion table, test mysql row -> arrow conversion
     let sqltable_pool: Arc<
@@ -685,6 +775,7 @@ async fn test_mysql_arrow_oneway() {
     let mysql_container = start_mysql_container(port).await;
 
     test_mysql_timestamp_types(port).await;
+    test_mysql_timestamp_tz_override(port).await;
     test_mysql_datetime_types(port).await;
     test_mysql_time_types(port).await;
     test_mysql_enum_types(port).await;

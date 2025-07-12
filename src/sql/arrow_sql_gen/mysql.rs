@@ -15,7 +15,6 @@ use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
-use time::PrimitiveDateTime;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -527,7 +526,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         .fail();
                     };
                     let v = match handle_null_error(
-                        row.get_opt::<PrimitiveDateTime, usize>(i).transpose(),
+                        row.get_opt::<chrono::NaiveDateTime, usize>(i).transpose(),
                     ) {
                         Ok(v) => v,
                         Err(err) => {
@@ -546,10 +545,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
                     match v {
                         Some(v) => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let timestamp_micros =
-                                (v.assume_utc().unix_timestamp_nanos() / 1_000) as i64;
-                            builder.append_value(timestamp_micros);
+                            builder.append_value(v.and_utc().timestamp_micros());
                         }
                         None => builder.append_null(),
                     }
