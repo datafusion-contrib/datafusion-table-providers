@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --lib 
+	cargo test --features postgres,sqlite,mysql
 
 .PHONY: lint
 lint:
