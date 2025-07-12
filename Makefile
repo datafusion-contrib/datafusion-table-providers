@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --features mongodb --lib
+	cargo test --features mongodb,duckdb
 
 .PHONY: lint
 lint:
