@@ -347,15 +347,12 @@ impl ArrayBuilderTrait for Decimal128ArrayBuilder {
                 let parsed_decimal = rust_decimal::Decimal::from_str(&decimal.to_string())
                     .map_err(|e| Error::ConversionError { source: Box::new(e) })?;
 
-                // let target_scale = self.0.scale(); // i8
-
-                let scaling_factor: Decimal;
-                if self.scale >= 0 {
-                    scaling_factor = ten_pow_decimal(self.scale as u32)
+                let scaling_factor: Decimal = if self.scale >= 0 {
+                    ten_pow_decimal(self.scale as u32)
                         .map_err(|_| Error::ConversionError {
                             source: Box::new(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,"overflow in scaling factor"))
-                        })?;
+                        })?
                 } else {
                     let abs_scale = (-(self.scale as i32)) as u32;
                     if abs_scale > 28 {
@@ -364,8 +361,8 @@ impl ArrayBuilderTrait for Decimal128ArrayBuilder {
                                 std::io::ErrorKind::InvalidData,"Negative scale too large for rust_decimal"))
                         });
                     }
-                    scaling_factor = rust_decimal::Decimal::new(1, abs_scale);
-                }
+                    rust_decimal::Decimal::new(1, abs_scale)
+                };
 
                 let scaled_decimal = parsed_decimal
                     .checked_mul(scaling_factor)
