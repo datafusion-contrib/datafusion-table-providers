@@ -62,7 +62,7 @@ jobs:
         run: cargo check --no-default-features --features mongodb
 
   integration-test:
-    name: Tests
+    name: Tests postgres,postgres-federation,sqlite,sqlite-federation,mysql
     runs-on: ubuntu-latest
 
     env:
@@ -120,10 +120,10 @@ jobs:
           sudo apt-get install -y libsqlite3-dev
 
       - name: Run tests
-        run: make test --features postgres,postgres-federation,sqlite,sqlite-federation,mysql
+        run: cargo test --features postgres,postgres-federation,sqlite,sqlite-federation,mysql
 
   integration-test-2:
-    name: Tests
+    name: Tests duckdb,duckdb-federation,flight,mongodb
     runs-on: ubuntu-latest
 
     env:
@@ -181,4 +181,4 @@ jobs:
           sudo apt-get install -y libsqlite3-dev
 
       - name: Run tests
-        run: make test --features duckdb,duckdb-federation,flight,mongodb
+        run: cargo test --features duckdb,duckdb-federation,flight,mongodb
