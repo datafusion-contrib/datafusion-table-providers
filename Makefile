@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --features mongodb
+	RUST_LOG=debug cargo test --features mongodb
 
 .PHONY: lint
 lint:
