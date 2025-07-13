@@ -62,7 +62,7 @@ jobs:
         run: cargo check --no-default-features --features mongodb
 
   integration-test:
-    name: Tests postgres,postgres-federation,sqlite,sqlite-federation,mysql
+    name: Tests
     runs-on: ubuntu-latest
 
     env:
