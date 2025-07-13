@@ -41,9 +41,8 @@ async fn main(){
     let mongodb_params = to_secret_map(HashMap::from([
         (
             "connection_string".to_string(),
-            "mongodb://root:password@localhost:27017/mongo_db?authSource=admin".to_string(),
+            "mongodb://root:password@localhost:27017/mongo_db?authSource=admin&tls=true".to_string(),
         ),
-        ("sslmode".to_string(), "disabled".to_string()),
     ]));
 
     // Create MongoDB connection pool

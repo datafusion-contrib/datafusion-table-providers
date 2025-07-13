@@ -42,6 +42,9 @@ pub enum Error {
 
     #[snafu(display("Invalid decimal parameters: {source}"))]
     InvalidDecimalError { source: ArrowError },
+
+    #[snafu(display("Authentication failed. Verify username and password."))]
+    InvalidUsernameOrPassword,
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
