@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --all-features 
+	cargo test --all-features
 
 .PHONY: lint
 lint:
