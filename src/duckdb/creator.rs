@@ -686,13 +686,15 @@ impl TableManager {
 
     fn get_table_columns(&self, tx: &Transaction<'_>) -> super::Result<Vec<String>> {
         let sql = "SELECT name FROM pragma_table_info(?)".to_string();
-        tracing::debug!("{sql}");
+
+        let owned_table_name = self.table_name().to_string();
+        let table_name = quote_identifier(&owned_table_name);
+
+        tracing::debug!("{sql}; ?={table_name}");
 
         let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
         let columns_iter = stmt
-            .query_map([&self.table_name().to_string()], |row| {
-                row.get::<usize, String>(0)
-            })
+            .query_map([table_name], |row| row.get::<usize, String>(0))
             .context(super::UnableToQueryDataSnafu)?;
 
         let mut columns = Vec::new();
@@ -881,7 +883,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_creator() {
+    async fn test_table_creator_indexes() {
         let _guard = init_tracing(None);
         let batches = get_logs_batches().await;
 
@@ -2095,5 +2097,78 @@ pub(crate) mod tests {
         let ordered_columns = table_manager.order_columns_by_index(columns);
 
         assert_eq!(ordered_columns.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_index_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![(
+                    ColumnReference::try_from("id").expect("valid column ref"),
+                    IndexType::Enabled,
+                )]),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES (1, 'Alice', 30, 'active'), (2, 'Bob', 25, 'inactive'), (3, 'Charlie', 35, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let explain_query = format!(
+            "EXPLAIN SELECT * FROM {} WHERE id = 1",
+            table_definition.name()
+        );
+
+        let mut stmt = tx.prepare(&explain_query).expect("to prepare statement");
+        let mut rows = stmt.query([]).expect("to execute query");
+
+        let mut explain_output = Vec::new();
+        while let Some(row) = rows.next().expect("to get next row") {
+            let line: String = row.get(1).expect("to get explain line");
+            explain_output.push(line);
+        }
+
+        let explain_result = explain_output.join("\n");
+        insta::assert_snapshot!(explain_result);
+
+        tx.rollback().expect("should rollback transaction");
     }
 }
