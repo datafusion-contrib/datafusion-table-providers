@@ -468,15 +468,20 @@ impl TableManager {
             return Ok(());
         }
 
-        tx.execute(
-            &format!(
-                "CREATE OR REPLACE VIEW {base_table} AS SELECT * FROM {internal_table}",
-                base_table = quote_identifier(&self.definition_name().to_string()),
-                internal_table = quote_identifier(&self.table_name().to_string())
-            ),
-            [],
-        )
-        .context(super::UnableToCreateDuckDBTableSnafu)?;
+        let table_columns = self.get_table_columns(tx)?;
+        let ordered_columns = self.order_columns_by_index(table_columns);
+
+        let view_creation_sql = format!(
+            "CREATE OR REPLACE VIEW {base_table} AS SELECT {columns} FROM {internal_table}",
+            base_table = quote_identifier(&self.definition_name().to_string()),
+            columns = ordered_columns.join(", "),
+            internal_table = quote_identifier(&self.table_name().to_string())
+        );
+
+        tracing::debug!("{view_creation_sql}");
+
+        tx.execute(&view_creation_sql, [])
+            .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         Ok(())
     }
@@ -677,6 +682,61 @@ impl TableManager {
             .context(super::UnableToQueryDataSnafu)?;
 
         Ok(count)
+    }
+
+    fn get_table_columns(&self, tx: &Transaction<'_>) -> super::Result<Vec<String>> {
+        let sql = "SELECT name FROM pragma_table_info(?)".to_string();
+        tracing::debug!("{sql}");
+
+        let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
+        let columns_iter = stmt
+            .query_map([&self.table_name().to_string()], |row| {
+                row.get::<usize, String>(0)
+            })
+            .context(super::UnableToQueryDataSnafu)?;
+
+        let mut columns = Vec::new();
+        for column in columns_iter {
+            columns.push(column.context(super::UnableToQueryDataSnafu)?);
+        }
+
+        Ok(columns)
+    }
+
+    /// Orders the given columns such that indexed single columns are first.
+    /// If there is an index defined on a single column, that column should come first in the list.
+    /// Multi-column indexes are not considered for ordering.
+    pub(crate) fn order_columns_by_index(&self, columns: Vec<String>) -> Vec<String> {
+        let mut indexed_columns = Vec::new();
+        let mut non_indexed_columns = Vec::new();
+
+        // Get single-column indexes
+        let single_column_indexes: HashSet<String> = self
+            .table_definition
+            .indexes
+            .iter()
+            .filter_map(|(column_ref, _)| {
+                let cols: Vec<&str> = column_ref.iter().collect();
+                if cols.len() == 1 {
+                    Some(cols[0].to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Separate columns into indexed and non-indexed
+        for column in columns {
+            if single_column_indexes.contains(&column) {
+                indexed_columns.push(column);
+            } else {
+                non_indexed_columns.push(column);
+            }
+        }
+
+        // Return indexed columns first, then non-indexed columns
+        indexed_columns.extend(non_indexed_columns);
+        indexed_columns
     }
 }
 
@@ -1640,5 +1700,400 @@ pub(crate) mod tests {
             first_tables.first().expect("should have a table").0,
             second_tables.first().expect("should have a table").0
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_table_columns() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let columns = table_creator
+            .get_table_columns(&tx)
+            .expect("to get table columns");
+
+        assert_eq!(columns.len(), 2);
+        assert_eq!(columns[0], "id");
+        assert_eq!(columns[1], "name");
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_get_table_columns_with_internal_table() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let columns = table_creator
+            .get_table_columns(&tx)
+            .expect("to get table columns");
+
+        assert_eq!(columns.len(), 2);
+        assert_eq!(columns[0], "id");
+        assert_eq!(columns[1], "name");
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_get_table_columns_with_complex_schema() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new(
+                "created_at",
+                arrow::datatypes::DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Millisecond,
+                    None,
+                ),
+                false,
+            ),
+            arrow::datatypes::Field::new("metadata", arrow::datatypes::DataType::Utf8, true),
+        ]));
+
+        let table_definition = Arc::new(TableDefinition::new(
+            RelationName::new("complex_table"),
+            schema,
+        ));
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let columns = table_creator
+            .get_table_columns(&tx)
+            .expect("to get table columns");
+
+        assert_eq!(columns.len(), 5);
+        assert_eq!(columns[0], "id");
+        assert_eq!(columns[1], "name");
+        assert_eq!(columns[2], "age");
+        assert_eq!(columns[3], "created_at");
+        assert_eq!(columns[4], "metadata");
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_get_table_columns_nonexistent_table() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
+
+        let result = table_creator.get_table_columns(&tx);
+
+        assert!(result.is_err());
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_get_table_columns_with_special_characters_in_table_name() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(TableDefinition::new(
+            RelationName::new("table_with_spaces and dots"),
+            schema,
+        ));
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_creator = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table creator");
+
+        table_creator
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        let columns = table_creator
+            .get_table_columns(&tx)
+            .expect("to get table columns");
+
+        assert_eq!(columns.len(), 2);
+        assert_eq!(columns[0], "id");
+        assert_eq!(columns[1], "name");
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_no_indexes() {
+        let table_definition = get_basic_table_definition();
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let ordered_columns = table_manager.order_columns_by_index(columns.clone());
+
+        // Should return columns in original order when no indexes
+        assert_eq!(ordered_columns, columns);
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_single_column_index() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("email", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), schema).with_indexes(vec![(
+                ColumnReference::try_from("age").expect("valid column ref"),
+                IndexType::Enabled,
+            )]),
+        );
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        let columns = vec![
+            "id".to_string(),
+            "name".to_string(),
+            "age".to_string(),
+            "email".to_string(),
+        ];
+        let ordered_columns = table_manager.order_columns_by_index(columns);
+
+        // 'age' should be first since it has an index
+        assert_eq!(ordered_columns[0], "age");
+        assert_eq!(ordered_columns.len(), 4);
+        assert!(ordered_columns.contains(&"id".to_string()));
+        assert!(ordered_columns.contains(&"name".to_string()));
+        assert!(ordered_columns.contains(&"email".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_multiple_single_column_indexes() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("email", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), schema).with_indexes(vec![
+                (
+                    ColumnReference::try_from("age").expect("valid column ref"),
+                    IndexType::Enabled,
+                ),
+                (
+                    ColumnReference::try_from("email").expect("valid column ref"),
+                    IndexType::Unique,
+                ),
+            ]),
+        );
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        let columns = vec![
+            "id".to_string(),
+            "name".to_string(),
+            "age".to_string(),
+            "email".to_string(),
+            "status".to_string(),
+        ];
+        let ordered_columns = table_manager.order_columns_by_index(columns);
+
+        // Both 'age' and 'email' should be first (indexed columns)
+        assert_eq!(ordered_columns.len(), 5);
+        assert!(ordered_columns[0] == "age" || ordered_columns[0] == "email");
+        assert!(ordered_columns[1] == "age" || ordered_columns[1] == "email");
+        assert_ne!(ordered_columns[0], ordered_columns[1]); // Should be different indexed columns
+
+        // Non-indexed columns should come after
+        let non_indexed_start = 2;
+        let remaining_columns: Vec<String> = ordered_columns[non_indexed_start..].to_vec();
+        assert!(remaining_columns.contains(&"id".to_string()));
+        assert!(remaining_columns.contains(&"name".to_string()));
+        assert!(remaining_columns.contains(&"status".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_with_multi_column_index() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("email", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), schema).with_indexes(vec![
+                (
+                    ColumnReference::try_from("(name, age)").expect("valid column ref"),
+                    IndexType::Enabled,
+                ),
+                (
+                    ColumnReference::try_from("email").expect("valid column ref"),
+                    IndexType::Unique,
+                ),
+            ]),
+        );
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        let columns = vec![
+            "id".to_string(),
+            "name".to_string(),
+            "age".to_string(),
+            "email".to_string(),
+        ];
+        let ordered_columns = table_manager.order_columns_by_index(columns);
+
+        // Only 'email' should be first (single-column index), multi-column index (name, age) should be ignored
+        assert_eq!(ordered_columns[0], "email");
+        assert_eq!(ordered_columns.len(), 4);
+
+        // Other columns should be in remaining positions
+        let remaining_columns: Vec<String> = ordered_columns[1..].to_vec();
+        assert!(remaining_columns.contains(&"id".to_string()));
+        assert!(remaining_columns.contains(&"name".to_string()));
+        assert!(remaining_columns.contains(&"age".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_with_missing_indexed_column() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), schema).with_indexes(vec![
+                (
+                    ColumnReference::try_from("age").expect("valid column ref"),
+                    IndexType::Enabled,
+                ),
+                (
+                    ColumnReference::try_from("status").expect("valid column ref"), // Column not in schema
+                    IndexType::Enabled,
+                ),
+            ]),
+        );
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        // Only provide columns that exist in schema
+        let columns = vec!["id".to_string(), "name".to_string(), "age".to_string()];
+        let ordered_columns = table_manager.order_columns_by_index(columns);
+
+        // 'age' should be first since it has an index and exists in the column list
+        assert_eq!(ordered_columns[0], "age");
+        assert_eq!(ordered_columns.len(), 3);
+        assert!(ordered_columns.contains(&"id".to_string()));
+        assert!(ordered_columns.contains(&"name".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_order_columns_by_index_empty_columns() {
+        let table_definition = get_basic_table_definition();
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(false)
+            .expect("to create table manager");
+
+        let columns = vec![];
+        let ordered_columns = table_manager.order_columns_by_index(columns);
+
+        assert_eq!(ordered_columns.len(), 0);
     }
 }
