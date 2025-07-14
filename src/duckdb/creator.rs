@@ -709,7 +709,7 @@ impl TableManager {
     /// If there is an index defined on a single column, that column should come first in the list.
     /// Multi-column indexes are not considered for ordering.
     pub(crate) fn order_columns_by_index(&self, columns: Vec<String>) -> Vec<String> {
-        let mut indexed_columns = Vec::new();
+        let mut ordered_columns = Vec::new();
         let mut non_indexed_columns = Vec::new();
 
         // Get single-column indexes
@@ -730,15 +730,15 @@ impl TableManager {
         // Separate columns into indexed and non-indexed
         for column in columns {
             if single_column_indexes.contains(&column) {
-                indexed_columns.push(column);
+                ordered_columns.push(column);
             } else {
                 non_indexed_columns.push(column);
             }
         }
 
         // Return indexed columns first, then non-indexed columns
-        indexed_columns.extend(non_indexed_columns);
-        indexed_columns
+        ordered_columns.extend(non_indexed_columns);
+        ordered_columns
     }
 }
 
@@ -2105,8 +2105,8 @@ pub(crate) mod tests {
         let pool = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
-            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
             arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
             arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
         ]));
@@ -2143,7 +2143,7 @@ pub(crate) mod tests {
 
         tx.execute(
             &format!(
-                r#"INSERT INTO "{table_name}" VALUES (1, 'Alice', 30, 'active'), (2, 'Bob', 25, 'inactive'), (3, 'Charlie', 35, 'active')"#,
+                r#"INSERT INTO "{table_name}" VALUES ('Alice', 1, 30, 'active'), ('Bob', 2, 25, 'inactive'), ('Charlie', 3, 35, 'active')"#,
                 table_name = table_manager.table_name()
             ),
             [],
@@ -2152,22 +2152,175 @@ pub(crate) mod tests {
 
         table_manager.create_view(&tx).expect("to create view");
 
-        let explain_query = format!(
-            "EXPLAIN SELECT * FROM {} WHERE id = 1",
-            table_definition.name()
-        );
+        let queries = [
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+        ];
 
-        let mut stmt = tx.prepare(&explain_query).expect("to prepare statement");
-        let mut rows = stmt.query([]).expect("to execute query");
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
 
-        let mut explain_output = Vec::new();
-        while let Some(row) = rows.next().expect("to get next row") {
-            let line: String = row.get(1).expect("to get explain line");
-            explain_output.push(line);
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_{idx}"), explain_result);
+            });
         }
 
-        let explain_result = explain_output.join("\n");
-        insta::assert_snapshot!(explain_result);
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_multiple_indexes_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![
+                    (
+                        ColumnReference::try_from("id").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                    (
+                        ColumnReference::try_from("age").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                    (
+                        ColumnReference::try_from("status").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                ]),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES 
+                ('Alice', 1, 30, 'active'), 
+                ('Bob', 2, 25, 'inactive'), 
+                ('Charlie', 3, 35, 'active'),
+                ('David', 4, 30, 'pending'),
+                ('Eve', 5, 40, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let queries = [
+            // Test index on id column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name, status FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            // Test index on age column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, name FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            // Test index on status column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, age FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+        ];
+
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
+
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_multiple_indexes_{idx}"), explain_result);
+            });
+        }
 
         tx.rollback().expect("should rollback transaction");
     }
