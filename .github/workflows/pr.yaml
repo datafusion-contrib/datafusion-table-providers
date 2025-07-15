@@ -110,6 +110,15 @@ jobs:
           echo "some packages purged"
           df -h
 
+      - name: Increase swapfile
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 15G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo swapon --show
+
       - name: Install ODBC & Sqlite
         run: |
           sudo apt-get install -y unixodbc-dev
@@ -134,6 +143,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: test
+
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
@@ -167,6 +177,15 @@ jobs:
           sudo apt-get autoclean -y >/dev/null 2>&1
           echo "some packages purged"
           df -h
+
+      - name: Increase swapfile
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 15G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo swapon --show
 
       - name: Install ODBC & Sqlite
         run: |
