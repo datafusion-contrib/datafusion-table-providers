@@ -67,7 +67,7 @@ fn infer_bson_type(value: &Bson) -> DataType {
         Bson::ObjectId(_) => DataType::Utf8, 
         Bson::DateTime(_) => DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
         Bson::Symbol(_) => DataType::Utf8,
-        Bson::Decimal128(_) => DataType::Decimal128(38, 10),
+        Bson::Decimal128(_) => DataType::Decimal128(18, 6),
         Bson::Undefined => DataType::Null,
         Bson::MaxKey => DataType::Utf8,
         Bson::MinKey => DataType::Utf8,
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(field_map.get("created_at"), Some(&&DataType::Timestamp(TimeUnit::Millisecond, None)));
         assert_eq!(field_map.get("timestamp"), Some(&&DataType::Timestamp(TimeUnit::Millisecond, None)));
         assert_eq!(field_map.get("binary_data"), Some(&&DataType::Binary));
-        assert_eq!(field_map.get("decimal"), Some(&&DataType::Decimal128(38, 10)));
+        assert_eq!(field_map.get("decimal"), Some(&&DataType::Decimal128(18, 6)));
     }
 
     #[test]
