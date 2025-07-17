@@ -471,6 +471,12 @@ impl TableManager {
         let table_columns = self.get_table_columns(tx)?;
         let ordered_columns = self.order_columns_by_index(table_columns);
 
+        // quote column identifiers regardless
+        let ordered_columns = ordered_columns
+            .into_iter()
+            .map(|s| quote_identifier_regardless(&s))
+            .collect::<Vec<_>>();
+
         let view_creation_sql = format!(
             "CREATE OR REPLACE VIEW {base_table} AS SELECT {columns} FROM {internal_table}",
             base_table = quote_identifier(&self.definition_name().to_string()),
@@ -801,6 +807,12 @@ impl ViewCreator {
     }
 }
 
+// Datafusion quote_identifier will determine whether a string needs
+// quoting based on the contents. This function quotes regardless.
+fn quote_identifier_regardless(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::{
@@ -880,6 +892,42 @@ pub(crate) mod tests {
             RelationName::new("test_table"),
             schema,
         ))
+    }
+
+    #[tokio::test]
+    async fn test_escaping_keyword_identifiers() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        // columns are SQL keywords that need to be escaped
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("select", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("group", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("where", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(TableDefinition::new(
+            RelationName::new("test_table"),
+            schema,
+        ));
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table creator");
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+        table_manager.create_view(&tx).expect("to create view");
     }
 
     #[tokio::test]
