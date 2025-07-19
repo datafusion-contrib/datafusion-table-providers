@@ -37,6 +37,7 @@ pub struct CreateTableBuilder {
     schema: SchemaRef,
     table_name: String,
     primary_keys: Vec<String>,
+    temporary: bool,
 }
 
 impl CreateTableBuilder {
@@ -46,6 +47,7 @@ impl CreateTableBuilder {
             schema,
             table_name: table_name.to_string(),
             primary_keys: Vec::new(),
+            temporary: false,
         }
     }
 
@@ -55,6 +57,13 @@ impl CreateTableBuilder {
         T: Into<String>,
     {
         self.primary_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    #[must_use]
+    /// Set whether the table is temporary or not.
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
         self
     }
 
@@ -143,6 +152,10 @@ impl CreateTableBuilder {
                 index.col(Alias::new(key).into_iden().into_index_column());
             }
             create_stmt.primary_key(&mut index);
+        }
+
+        if self.temporary {
+            create_stmt.temporary();
         }
 
         create_stmt.to_string(query_builder)
@@ -1548,6 +1561,20 @@ mod tests {
             .build_sqlite();
 
         assert_eq!(sql, "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"id2\" integer NOT NULL, \"name\" text NOT NULL, \"age\" integer, PRIMARY KEY (\"id\", \"id2\") )");
+    }
+
+    #[test]
+    fn test_temporary_table_creation() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users")
+            .primary_keys(vec!["id"])
+            .temporary(true)
+            .build_sqlite();
+
+        assert_eq!(sql, "CREATE TEMPORARY TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL, PRIMARY KEY (\"id\") )");
     }
 
     #[test]
