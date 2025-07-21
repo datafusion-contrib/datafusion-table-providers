@@ -468,20 +468,15 @@ impl TableManager {
             return Ok(());
         }
 
-        let table_columns = self.get_table_columns(tx)?;
-        let ordered_columns = self.order_columns_by_index(table_columns);
-
-        let view_creation_sql = format!(
-            "CREATE OR REPLACE VIEW {base_table} AS SELECT {columns} FROM {internal_table}",
-            base_table = quote_identifier(&self.definition_name().to_string()),
-            columns = ordered_columns.join(", "),
-            internal_table = quote_identifier(&self.table_name().to_string())
-        );
-
-        tracing::debug!("{view_creation_sql}");
-
-        tx.execute(&view_creation_sql, [])
-            .context(super::UnableToCreateDuckDBTableSnafu)?;
+        tx.execute(
+            &format!(
+                "CREATE OR REPLACE VIEW {base_table} AS SELECT * FROM {internal_table}",
+                base_table = quote_identifier(&self.definition_name().to_string()),
+                internal_table = quote_identifier(&self.table_name().to_string())
+            ),
+            [],
+        )
+        .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         Ok(())
     }
@@ -683,63 +678,6 @@ impl TableManager {
 
         Ok(count)
     }
-
-    fn get_table_columns(&self, tx: &Transaction<'_>) -> super::Result<Vec<String>> {
-        let sql = "SELECT name FROM pragma_table_info(?)".to_string();
-
-        let owned_table_name = self.table_name().to_string();
-        let table_name = quote_identifier(&owned_table_name);
-
-        tracing::debug!("{sql}; ?={table_name}");
-
-        let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
-        let columns_iter = stmt
-            .query_map([table_name], |row| row.get::<usize, String>(0))
-            .context(super::UnableToQueryDataSnafu)?;
-
-        let mut columns = Vec::new();
-        for column in columns_iter {
-            columns.push(column.context(super::UnableToQueryDataSnafu)?);
-        }
-
-        Ok(columns)
-    }
-
-    /// Orders the given columns such that indexed single columns are first.
-    /// If there is an index defined on a single column, that column should come first in the list.
-    /// Multi-column indexes are not considered for ordering.
-    pub(crate) fn order_columns_by_index(&self, columns: Vec<String>) -> Vec<String> {
-        let mut ordered_columns = Vec::new();
-        let mut non_indexed_columns = Vec::new();
-
-        // Get single-column indexes
-        let single_column_indexes: HashSet<String> = self
-            .table_definition
-            .indexes
-            .iter()
-            .filter_map(|(column_ref, _)| {
-                let cols: Vec<&str> = column_ref.iter().collect();
-                if cols.len() == 1 {
-                    Some(cols[0].to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Separate columns into indexed and non-indexed
-        for column in columns {
-            if single_column_indexes.contains(&column) {
-                ordered_columns.push(column);
-            } else {
-                non_indexed_columns.push(column);
-            }
-        }
-
-        // Return indexed columns first, then non-indexed columns
-        ordered_columns.extend(non_indexed_columns);
-        ordered_columns
-    }
 }
 
 fn create_empty_record_batch_reader(schema: SchemaRef) -> impl RecordBatchReader {
@@ -883,7 +821,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_creator_indexes() {
+    async fn test_table_creator() {
         let _guard = init_tracing(None);
         let batches = get_logs_batches().await;
 
@@ -1761,9 +1699,7 @@ pub(crate) mod tests {
             .with_internal(true)
             .expect("to create table creator");
 
-        table_creator
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        table_creator.expect("to create table");
 
         let columns = table_creator
             .get_table_columns(&tx)
