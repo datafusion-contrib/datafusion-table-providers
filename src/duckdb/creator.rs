@@ -1867,4 +1867,114 @@ pub(crate) mod tests {
 
         tx.rollback().expect("should rollback transaction");
     }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_primary_key_and_index_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![(
+                    ColumnReference::try_from("id").expect("valid column ref"),
+                    IndexType::Enabled,
+                )])
+                .with_constraints(get_pk_constraints(&["name"], Arc::clone(&schema))),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES 
+                ('Alice', 1, 30, 'active'), 
+                ('Bob', 2, 25, 'inactive'), 
+                ('Charlie', 3, 35, 'active'),
+                ('David', 4, 30, 'pending'),
+                ('Eve', 5, 40, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let queries = [
+            // Test index on id column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name, status FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            // Test primary key
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE name = 'Alice'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, status FROM {} WHERE name = 'Bob'",
+                table_definition.name()
+            ),
+        ];
+
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
+
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_primary_key_and_index_{idx}"), explain_result);
+            });
+        }
+
+        tx.rollback().expect("should rollback transaction");
+    }
 }
