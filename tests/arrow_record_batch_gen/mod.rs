@@ -715,32 +715,6 @@ pub(crate) fn get_arrow_map_record_batch() -> (RecordBatch, SchemaRef) {
     (rb, schema)
 }
 
-// Custom Test Case for Sqlite <-> Arrow Decimal Roundtrip
-// SQLite supports up to 16 precision for decimal numbers through REAL type, conforming to IEEE 754 Binary-64 format - https://www.sqlite.org/floatingpoint.html
-pub(crate) fn get_sqlite_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
-    let decimal128_array =
-        Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)])
-            .with_precision_and_scale(16, 10)
-            .expect("Fail to create Decimal128 array");
-    let decimal256_array =
-        Decimal256Array::from(vec![i256::from(-123), i256::from(222), i256::from(0)])
-            .with_precision_and_scale(16, 10)
-            .expect("Fail to create Decimal256 array");
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("decimal128", DataType::Decimal128(16, 10), false),
-        Field::new("decimal256", DataType::Decimal256(16, 10), false),
-    ]));
-
-    let record_batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(decimal128_array), Arc::new(decimal256_array)],
-    )
-    .expect("Failed to created arrow decimal record batch");
-
-    (record_batch, schema)
-}
-
 fn parse_json_to_batch(json_data: &str, schema: SchemaRef) -> RecordBatch {
     let reader = arrow_json::ReaderBuilder::new(schema)
         .build(std::io::Cursor::new(json_data))
