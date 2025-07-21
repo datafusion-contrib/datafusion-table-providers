@@ -7,7 +7,7 @@ expression: explain_result
 ││    Query Profiling Information    ││
 │└───────────────────────────────────┘│
 └─────────────────────────────────────┘
-EXPLAIN ANALYZE SELECT id, name FROM test_table WHERE age = 30
+EXPLAIN ANALYZE SELECT * FROM test_table WHERE name = 'Alice'
 ┌────────────────────────────────────────────────┐
 │┌──────────────────────────────────────────────┐│
 ││              Total Time: replaced             ││
@@ -23,15 +23,6 @@ EXPLAIN ANALYZE SELECT id, name FROM test_table WHERE age = 30
 │          (0.00s)          │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
-│         PROJECTION        │
-│    ────────────────────   │
-│             id            │
-│            name           │
-│                           │
-│           2 Rows          │
-│          (0.00s)          │
-└─────────────┬─────────────┘
-┌─────────────┴─────────────┐
 │         TABLE_SCAN        │
 │    ────────────────────   │
 │           Table:          │
@@ -43,9 +34,11 @@ EXPLAIN ANALYZE SELECT id, name FROM test_table WHERE age = 30
 │        Projections:       │
 │            name           │
 │             id            │
+│            age            │
+│           status          │
 │                           │
-│      Filters: age=30      │
+│   Filters: name='Alice'   │
 │                           │
-│           2 Rows          │
+│           1 Rows          │
 │          (0.00s)          │
 └───────────────────────────┘
