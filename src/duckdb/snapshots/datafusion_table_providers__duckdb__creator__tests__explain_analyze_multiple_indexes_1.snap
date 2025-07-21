@@ -29,7 +29,7 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE id = 1
 │__data_test_table_redacted│
 │     redacted     │
 │                           │
-│      Type: Index Scan     │
+│   Type: Sequential Scan   │
 │     Projections: name     │
 │       Filters: id=1       │
 │                           │

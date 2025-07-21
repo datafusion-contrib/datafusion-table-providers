@@ -23,6 +23,15 @@ EXPLAIN ANALYZE SELECT id, name FROM test_table WHERE age = 30
 │          (0.00s)          │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│             id            │
+│            name           │
+│                           │
+│           2 Rows          │
+│          (0.00s)          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
 │         TABLE_SCAN        │
 │    ────────────────────   │
 │           Table:          │
@@ -32,8 +41,8 @@ EXPLAIN ANALYZE SELECT id, name FROM test_table WHERE age = 30
 │   Type: Sequential Scan   │
 │                           │
 │        Projections:       │
-│             id            │
 │            name           │
+│             id            │
 │                           │
 │      Filters: age=30      │
 │                           │

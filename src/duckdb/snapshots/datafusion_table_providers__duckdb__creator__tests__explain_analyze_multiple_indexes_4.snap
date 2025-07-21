@@ -29,7 +29,7 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE age = 30
 │__data_test_table_redacted│
 │     redacted     │
 │                           │
-│      Type: Index Scan     │
+│   Type: Sequential Scan   │
 │     Projections: name     │
 │      Filters: age=30      │
 │                           │

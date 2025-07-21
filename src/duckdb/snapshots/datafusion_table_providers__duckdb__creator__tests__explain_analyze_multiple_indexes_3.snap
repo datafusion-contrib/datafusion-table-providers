@@ -32,10 +32,10 @@ EXPLAIN ANALYZE SELECT * FROM test_table WHERE age = 30
 │   Type: Sequential Scan   │
 │                           │
 │        Projections:       │
+│            name           │
 │             id            │
 │            age            │
 │           status          │
-│            name           │
 │                           │
 │      Filters: age=30      │
 │                           │
