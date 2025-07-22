@@ -40,7 +40,7 @@ arrow-json = "55.0.0"
 arrow-odbc = { version = "16.0.2" }
 datafusion = { version = "48", default-features = false }
 datafusion-expr = { version = "48" }
-datafusion-federation = { version = "=0.4.5" }
+datafusion-federation = { version = "0.4.6" }
 datafusion-ffi = { version = "48" }
 datafusion-proto = { version = "48" }
 datafusion-physical-expr = { version = "48" }
