@@ -78,7 +78,18 @@ fn build_connection_uri(params: &HashMap<String, SecretString>) -> Result<(Strin
         (None, None) => String::new(),
     };
 
-    let uri = format!("mongodb://{}{}:{}/{}", auth, host, port, db_name);
+    let mut query_params = Vec::new();
+    if let Some(auth_source) = params.get("auth_source") {
+        query_params.push(format!("authSource={}", auth_source.expose_secret()));
+    }
+
+    let query_string = if query_params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", query_params.join("&"))
+    };
+
+    let uri = format!("mongodb://{}{}:{}/{}{}", auth, host, port, db_name, query_string);
     Ok((uri, Some(db_name.to_string())))
 }
 
