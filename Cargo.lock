@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "arrow",
@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-python"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "arrow",
  "arrow-flight",
