@@ -32,10 +32,10 @@ EXPLAIN ANALYZE SELECT * FROM test_table WHERE id = 1
 │      Type: Index Scan     │
 │                           │
 │        Projections:       │
+│            name           │
 │             id            │
 │            age            │
 │           status          │
-│            name           │
 │                           │
 │       Filters: id=1       │
 │                           │
