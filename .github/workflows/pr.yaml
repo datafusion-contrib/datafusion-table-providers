@@ -50,12 +50,11 @@ jobs:
       - name: Build with only mysql
         run: cargo check --no-default-features --features mysql
 
-  integration-test:
-    name: Tests
+  integration-test-mysql:
+    name: Tests mysql
     runs-on: ubuntu-latest
 
     env:
-      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
       MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
 
     steps:
@@ -65,42 +64,121 @@ jobs:
 
       - name: Pull the Postgres/MySQL images
         run: |
-          docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
 
-      - name: Free Disk Space
-        run: |
-          sudo docker rmi $(docker image ls -aq) >/dev/null 2>&1 || true
-          sudo rm -rf \
-            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
-            /usr/lib/jvm || true
-          echo "some directories deleted"
-          sudo apt install aptitude -y >/dev/null 2>&1
-          sudo aptitude purge aria2 ansible azure-cli shellcheck rpm xorriso zsync \
-            esl-erlang firefox gfortran-8 gfortran-9 google-chrome-stable \
-            google-cloud-sdk imagemagick \
-            libmagickcore-dev libmagickwand-dev libmagic-dev ant ant-optional kubectl \
-            mercurial apt-transport-https mono-complete libmysqlclient \
-            yarn chrpath libssl-dev libxft-dev \
-            libfreetype6 libfreetype6-dev libfontconfig1 libfontconfig1-dev \
-            snmp pollinate libpq-dev postgresql-client powershell ruby-full \
-            sphinxsearch subversion mongodb-org azure-cli microsoft-edge-stable \
-            -y -f >/dev/null 2>&1
-          sudo aptitude purge google-cloud-sdk -f -y >/dev/null 2>&1
-          sudo aptitude purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
-          sudo apt purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
-          sudo aptitude purge '~n ^php' -f -y >/dev/null 2>&1
-          sudo aptitude purge '~n ^dotnet' -f -y >/dev/null 2>&1
-          sudo apt-get autoremove -y >/dev/null 2>&1
-          sudo apt-get autoclean -y >/dev/null 2>&1
-          echo "some packages purged"
-          df -h
-
-      - name: Install ODBC & Sqlite
-        run: |
-          sudo apt-get install -y unixodbc-dev
-          sudo apt-get install -y libsqlite3-dev
+      - uses: ./.github/actions/setup-integration-test
 
       - name: Run tests
-        run: make test
+        run: cargo test --features mysql
+
+  integration-test-postgres:
+    name: Tests postgres
+    runs-on: ubuntu-latest
+
+    env:
+      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Pull the Postgres/MySQL images
+        run: |
+          docker pull ${{ env.PG_DOCKER_IMAGE }}
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features postgres
+
+  integration-test-sqlite:
+    name: Tests sqlite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features sqlite
+
+  integration-test-duckdb:
+    name: Tests duckdb
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features duckdb
+
+  integration-test-flight:
+    name: Tests flight
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features flight
+
+  integration-test-duckdb-federation:
+    name: Tests duckdb-federation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features duckdb-federation
+
+  integration-test-sqlite-federation:
+    name: Tests sqlite-federation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features sqlite-federation
+
+  integration-test-postgres-federation:
+    name: Tests postgres-federation
+    runs-on: ubuntu-latest
+
+    env:
+      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Pull the Postgres/MySQL images
+        run: |
+          docker pull ${{ env.PG_DOCKER_IMAGE }}
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Run tests
+        run: cargo test --features postgres-federation
