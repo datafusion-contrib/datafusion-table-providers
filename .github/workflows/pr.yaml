@@ -51,7 +51,7 @@ jobs:
         run: cargo check --no-default-features --features mysql
 
   integration-test-mysql:
-    name: Tests
+    name: Tests mysql
     runs-on: ubuntu-latest
 
     env:
@@ -72,7 +72,7 @@ jobs:
         run: cargo test --features mysql
 
   integration-test-postgres:
-    name: Tests
+    name: Tests postgres
     runs-on: ubuntu-latest
 
     env:
@@ -93,7 +93,7 @@ jobs:
         run: cargo test --features postgres
 
   integration-test-sqlite:
-    name: Tests
+    name: Tests sqlite
     runs-on: ubuntu-latest
 
     steps:
@@ -107,7 +107,7 @@ jobs:
         run: cargo test --features sqlite
 
   integration-test-duckdb:
-    name: Tests
+    name: Tests duckdb
     runs-on: ubuntu-latest
 
     steps:
@@ -121,7 +121,7 @@ jobs:
         run: cargo test --features duckdb
 
   integration-test-flight:
-    name: Tests
+    name: Tests flight
     runs-on: ubuntu-latest
 
     steps:
@@ -135,7 +135,7 @@ jobs:
         run: cargo test --features flight
 
   integration-test-duckdb-federation:
-    name: Tests
+    name: Tests duckdb-federation
     runs-on: ubuntu-latest
 
     steps:
@@ -149,7 +149,7 @@ jobs:
         run: cargo test --features duckdb-federation
 
   integration-test-sqlite-federation:
-    name: Tests
+    name: Tests sqlite-federation
     runs-on: ubuntu-latest
 
     steps:
@@ -163,7 +163,7 @@ jobs:
         run: cargo test --features sqlite-federation
 
   integration-test-postgres-federation:
-    name: Tests
+    name: Tests postgres-federation
     runs-on: ubuntu-latest
 
     env:
