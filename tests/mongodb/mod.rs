@@ -88,7 +88,7 @@ async fn test_mongodb_numeric_types(port: usize) {
         Field::new("int32_field", DataType::Int32, true),
         Field::new("int64_field", DataType::Int64, true),
         Field::new("double_field", DataType::Float64, true),
-        Field::new("decimal_field", DataType::Decimal128(38, 10), true),
+        Field::new("decimal_field", DataType::Decimal128(18, 6), true),
     ]));
 
     let expected_record = RecordBatch::try_new(
@@ -98,8 +98,8 @@ async fn test_mongodb_numeric_types(port: usize) {
             Arc::new(Int64Array::from(vec![9223372036854775807i64])),
             Arc::new(Float64Array::from(vec![3.14159265359])),
             Arc::new(
-                Decimal128Array::from(vec![Some(1234560000000i128)])
-                    .with_precision_and_scale(38, 10)
+                Decimal128Array::from(vec![Some(123456000i128)])
+                    .with_precision_and_scale(18, 6)
                     .unwrap(),
             ),
         ],
@@ -111,8 +111,6 @@ async fn test_mongodb_numeric_types(port: usize) {
         .as_any()
         .downcast_ref::<Decimal128Array>()
         .unwrap();
-
-    println!("Decimal as i128: {:?}", array.value(0));
 
     arrow_mongodb_one_way(port, "numeric_collection", test_docs, expected_record).await;
 }
