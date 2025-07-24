@@ -83,11 +83,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: ./.github/actions/setup-integration-test
+
       - name: Pull the Postgres images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
-
-      - uses: ./.github/actions/setup-integration-test
 
       - name: Run tests
         run: cargo test --features postgres
@@ -146,11 +146,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: ./.github/actions/setup-integration-test
+
       - name: Pull the MongoDB images
         run: |
           docker pull ${{ env.MONGODB_DOCKER_IMAGE }}
-
-      - uses: ./.github/actions/setup-integration-test
 
       - name: Run tests
         run: cargo test --features mongodb
