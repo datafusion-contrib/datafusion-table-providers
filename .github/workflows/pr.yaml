@@ -62,11 +62,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: ./.github/actions/setup-integration-test
-
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
 
       - name: Run tests
-        run: cargo test --features postgres
+        run: cargo test -- --nocapture
