@@ -83,8 +83,6 @@ async fn arrow_duckdb_round_trip(
 }
 
 #[rstest]
-#[ignore]
-// Binder Error: Unsupported data type: FixedSizeBinary(2), please file an issue https://github.com/wangfenjin/duckdb-rs"
 #[case::binary(get_arrow_binary_record_batch(), "binary")]
 #[case::int(get_arrow_int_record_batch(), "int")]
 #[case::float(get_arrow_float_record_batch(), "float")]
@@ -93,11 +91,11 @@ async fn arrow_duckdb_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
-#[ignore] // Decimal256(76,10) is not yet supported for ArrowVTab
+#[ignore] // DuckDB does not support Decimal256 / duckdb_arrow_scan failed to register view
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // Interval(DayTime) is not yet supported for ArrowVTab
+#[ignore] // Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
-#[ignore] // Duration(NanoSecond) is not yet supported for ArrowVTab
+#[ignore] // TimeUnit::Nanosecond is not correctly supported; written values are zeros
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
 #[case::list(get_arrow_list_record_batch(), "list")]
 #[case::null(get_arrow_null_record_batch(), "null")]
@@ -107,6 +105,8 @@ async fn arrow_duckdb_round_trip(
     "list_of_fixed_size_lists"
 )]
 #[case::list_of_lists(get_arrow_list_of_lists_record_batch(), "list_of_lists")]
+#[case::map(get_arrow_map_record_batch(), "map")]
+#[case::dictionary(get_arrow_dictionary_array_record_batch(), "dictionary")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_duckdb_roundtrip(
     #[case] arrow_result: (RecordBatch, SchemaRef),

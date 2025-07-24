@@ -165,7 +165,14 @@ impl PostgresConnectionPool {
         };
 
         connection_string.push_str(format!("sslmode={mode} ").as_str());
-        let config = Config::from_str(connection_string.as_str()).context(ConnectionPoolSnafu)?;
+        let mut config =
+            Config::from_str(connection_string.as_str()).context(ConnectionPoolSnafu)?;
+
+        if let Some(application_name) = params.get("application_name").map(SecretBox::expose_secret)
+        {
+            config.application_name(application_name);
+        }
+
         verify_postgres_config(&config).await?;
 
         let mut certs: Option<Vec<Certificate>> = None;
@@ -359,7 +366,7 @@ where
     E: std::fmt::Display,
 {
     fn sink(&self, error: E) {
-        tracing::error!("Postgres Connection Error: {:?}", error);
+        tracing::debug!("Postgres Pool Error: {}", error);
     }
 
     fn boxed_clone(&self) -> Box<dyn ErrorSink<E>> {

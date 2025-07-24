@@ -2,6 +2,7 @@ use std::{any::Any, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::{
     catalog::Session,
     common::Constraints,
@@ -9,11 +10,7 @@ use datafusion::{
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{dml::InsertOp, Expr},
-    physical_plan::{
-        insert::{DataSink, DataSinkExec},
-        metrics::MetricsSet,
-        DisplayAs, DisplayFormatType, ExecutionPlan,
-    },
+    physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use futures::StreamExt;
 use snafu::prelude::*;

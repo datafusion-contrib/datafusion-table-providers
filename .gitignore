@@ -12,6 +12,7 @@ target/
 *.db
 
 .vscode/settings.json
+.zed/settings.json
 
 .DS_Store
 

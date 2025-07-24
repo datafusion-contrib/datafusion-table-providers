@@ -40,6 +40,7 @@ use datafusion::{
     sql::{unparser::Unparser, TableReference},
 };
 
+mod expr;
 #[cfg(feature = "federation")]
 pub mod federation;
 
@@ -203,7 +204,12 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
             .map(|f| match Unparser::new(self.dialect()).expr_to_sql(f) {
-                Ok(_) => TableProviderFilterPushDown::Exact,
+                // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
+                Ok(_) => match expr::expr_contains_subquery(f) {
+                    Ok(true) => TableProviderFilterPushDown::Unsupported,
+                    Ok(false) => TableProviderFilterPushDown::Exact,
+                    Err(_) => TableProviderFilterPushDown::Unsupported,
+                },
                 Err(_) => TableProviderFilterPushDown::Unsupported,
             })
             .collect();
