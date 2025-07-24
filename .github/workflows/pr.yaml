@@ -153,4 +153,4 @@ jobs:
       - uses: ./.github/actions/setup-integration-test
 
       - name: Run tests
-        run: cargo test --features flight
+        run: cargo test --features mongodb
