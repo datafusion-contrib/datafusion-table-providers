@@ -29,7 +29,7 @@ pub(super) async fn start_postgres_docker_container(
     let port = port.try_into().unwrap_or(15432);
 
     let pg_docker_image = std::env::var("PG_DOCKER_IMAGE")
-        .unwrap_or_else(|_| format!("{}postgres:latest", "public.ecr.aws/docker/library/"));
+        .unwrap_or_else(|_| format!("{}postgres:latest", container_registry()));
 
     let running_container = ContainerRunnerBuilder::new(container_name)
         .image(pg_docker_image)

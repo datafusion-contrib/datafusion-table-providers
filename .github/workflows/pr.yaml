@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+      PG_DOCKER_IMAGE: public.ecr.aws/docker/library/postgres:latest
 
     steps:
       - uses: actions/checkout@v4
