@@ -35,17 +35,17 @@ pub(super) async fn start_postgres_docker_container(
         .image(pg_docker_image)
         .add_port_binding(5432, port)
         .add_env_var("POSTGRES_PASSWORD", PG_PASSWORD)
-        // .healthcheck(HealthConfig {
-        //     test: Some(vec![
-        //         "CMD-SHELL".to_string(),
-        //         "pg_isready -U postgres".to_string(),
-        //     ]),
-        //     interval: Some(1_000_000),
-        //     timeout: Some(1_000_000_000),
-        //     retries: Some(100),
-        //     start_period: Some(60_000_000_000),
-        //     start_interval: None,
-        // })
+        .healthcheck(HealthConfig {
+            test: Some(vec![
+                "CMD-SHELL".to_string(),
+                "pg_isready -U postgres".to_string(),
+            ]),
+            interval: Some(1_000_000),
+            timeout: Some(1_000_000_000),
+            retries: Some(100),
+            start_period: Some(60_000_000_000),
+            start_interval: None,
+        })
         .build()?
         .run()
         .await?;

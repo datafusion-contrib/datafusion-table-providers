@@ -169,6 +169,11 @@ impl<'a> ContainerRunner<'a> {
 
             if let Some(ContainerState {
                 status: Some(ContainerStateStatusEnum::RUNNING),
+                health:
+                    Some(Health {
+                        status: Some(HealthStatusEnum::HEALTHY),
+                        ..
+                    }),
                 ..
             }) = inspect_container.state
             {
@@ -176,11 +181,29 @@ impl<'a> ContainerRunner<'a> {
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 300 {
+            if start_time.elapsed().as_secs() > 30 {
+
+                let logs = self.docker.logs(
+                    &self.name,
+                    Some(bollard::container::LogsOptions::<String> {
+                        stdout: true,
+                        stderr: true,
+                        follow: false,
+                        ..Default::default()
+                    }),
+                ).collect::<Vec<_>>().await;
+
+                for entry in logs {
+                    if let Ok(log) = entry {
+                        print!("{:?}", log);
+                    }
+                }
+
+
                 return Err(anyhow::anyhow!("Container failed to start"));
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         }
 
         Ok(RunningContainer {
