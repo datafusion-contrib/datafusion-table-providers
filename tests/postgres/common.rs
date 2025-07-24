@@ -40,10 +40,10 @@ pub(super) async fn start_postgres_docker_container(
                 "CMD-SHELL".to_string(),
                 "pg_isready -U postgres".to_string(),
             ]),
-            interval: Some(500_000_000),
+            interval: Some(1_000_000),
             timeout: Some(500_000_000),
             retries: Some(10),
-            start_period: Some(3_000_000_000),
+            start_period: Some(30_000_000_000),
             start_interval: None,
         })
         .build()?
