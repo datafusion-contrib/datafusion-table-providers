@@ -105,7 +105,7 @@ impl MongoDBExec {
         let mut projected_schema = project_schema(&schema, projections)?;
 
         // If no columns are specified, use _id - otherwise mongo returns an error
-        if (projected_schema.fields.is_empty()) {
+        if projected_schema.fields.is_empty() {
             let idx = schema.index_of("_id")?;
             projected_schema = SchemaRef::from(schema.project(&[idx])?);
         }
