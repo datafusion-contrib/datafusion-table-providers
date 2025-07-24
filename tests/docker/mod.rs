@@ -169,11 +169,6 @@ impl<'a> ContainerRunner<'a> {
 
             if let Some(ContainerState {
                 status: Some(ContainerStateStatusEnum::RUNNING),
-                health:
-                    Some(Health {
-                        status: Some(HealthStatusEnum::HEALTHY),
-                        ..
-                    }),
                 ..
             }) = inspect_container.state
             {
