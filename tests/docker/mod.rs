@@ -165,7 +165,7 @@ impl<'a> ContainerRunner<'a> {
         let start_time = std::time::Instant::now();
         loop {
             let inspect_container = self.docker.inspect_container(&self.name, None).await?;
-            tracing::trace!("Container status: {:?}", inspect_container.state);
+            println!("Container status: {:?}", inspect_container.state);
 
             if let Some(ContainerState {
                 status: Some(ContainerStateStatusEnum::RUNNING),
@@ -177,11 +177,11 @@ impl<'a> ContainerRunner<'a> {
                 ..
             }) = inspect_container.state
             {
-                tracing::debug!("Container running & healthy");
+                println!("Container running & healthy");
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 30 {
+            if start_time.elapsed().as_secs() > 300 {
                 return Err(anyhow::anyhow!("Container failed to start"));
             }
 
