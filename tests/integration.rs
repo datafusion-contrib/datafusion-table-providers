@@ -1,17 +1,9 @@
 use rand::Rng;
 
-mod arrow_record_batch_gen;
 mod docker;
-#[cfg(feature = "duckdb")]
-mod duckdb;
-#[cfg(feature = "flight")]
-mod flight;
-#[cfg(feature = "mysql")]
-mod mysql;
-#[cfg(feature = "postgres")]
+
+
 mod postgres;
-#[cfg(feature = "sqlite")]
-mod sqlite;
 
 fn container_registry() -> String {
     std::env::var("CONTAINER_REGISTRY")

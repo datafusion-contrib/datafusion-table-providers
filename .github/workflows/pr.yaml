@@ -50,27 +50,6 @@ jobs:
       - name: Build with only mysql
         run: cargo check --no-default-features --features mysql
 
-  integration-test-mysql:
-    name: Tests mysql
-    runs-on: ubuntu-latest
-
-    env:
-      MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Pull the Postgres/MySQL images
-        run: |
-          docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
-
-      - uses: ./.github/actions/setup-integration-test
-
-      - name: Run tests
-        run: cargo test --features mysql
-
   integration-test-postgres:
     name: Tests postgres
     runs-on: ubuntu-latest
@@ -83,53 +62,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: ./.github/actions/setup-integration-test
+
       - name: Pull the Postgres/MySQL images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
 
-      - uses: ./.github/actions/setup-integration-test
-
       - name: Run tests
         run: cargo test --features postgres
-
-  integration-test-sqlite:
-    name: Tests sqlite
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: ./.github/actions/setup-integration-test
-
-      - name: Run tests
-        run: cargo test --features sqlite
-
-  integration-test-duckdb:
-    name: Tests duckdb
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: ./.github/actions/setup-integration-test
-
-      - name: Run tests
-        run: cargo test --features duckdb
-
-  integration-test-flight:
-    name: Tests flight
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: ./.github/actions/setup-integration-test
-
-      - name: Run tests
-        run: cargo test --features flight
