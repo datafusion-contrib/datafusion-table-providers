@@ -1,11 +1,11 @@
-use std::time::SystemTime;
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion::{error::DataFusionError, execution::context::SessionContext};
 use datafusion_table_providers::mongodb::table::MongoDBTable;
-use mongodb::bson::{doc, Document, Bson, DateTime as BsonDateTime, Decimal128};
-use std::str::FromStr;
+use mongodb::bson::{doc, Bson, DateTime as BsonDateTime, Decimal128, Document};
 use rstest::rstest;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use arrow::{
     array::*,
@@ -17,25 +17,47 @@ use crate::docker::RunningContainer;
 mod common;
 
 async fn test_mongodb_datetime_types(port: usize) {
-    let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z").unwrap().with_timezone(&Utc);
-    let ts1 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.1Z").unwrap().with_timezone(&Utc);
-    let ts2 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.12Z").unwrap().with_timezone(&Utc);
-    let ts3 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123Z").unwrap().with_timezone(&Utc);
+    let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ts1 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.1Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ts2 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.12Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ts3 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123Z")
+        .unwrap()
+        .with_timezone(&Utc);
 
-    let test_docs = vec![
-        doc! {
-            "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
-            "timestamp_one_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts1))),
-            "timestamp_two_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts2))),
-            "timestamp_three_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts3))),
-        }
-    ];
+    let test_docs = vec![doc! {
+        "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
+        "timestamp_one_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts1))),
+        "timestamp_two_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts2))),
+        "timestamp_three_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts3))),
+    }];
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new("timestamp_field", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-        Field::new("timestamp_one_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-        Field::new("timestamp_two_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-        Field::new("timestamp_three_fraction", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+        Field::new(
+            "timestamp_field",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
+        Field::new(
+            "timestamp_one_fraction",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
+        Field::new(
+            "timestamp_two_fraction",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
+        Field::new(
+            "timestamp_three_fraction",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
     ]));
 
     let expected_record = RecordBatch::try_new(
@@ -49,27 +71,18 @@ async fn test_mongodb_datetime_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "timestamp_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "timestamp_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_numeric_types(port: usize) {
-
     let decimal = Decimal128::from_str("123.456").unwrap();
 
-    let test_docs = vec![
-        doc! {
-            "int32_field": 2147483647i32,
-            "int64_field": 9223372036854775807i64,
-            "double_field": 3.14159265359,
-            "decimal_field": Bson::Decimal128(decimal),
-        }
-    ];
+    let test_docs = vec![doc! {
+        "int32_field": 2147483647i32,
+        "int64_field": 9223372036854775807i64,
+        "double_field": 3.14159265359,
+        "decimal_field": Bson::Decimal128(decimal),
+    }];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("int32_field", DataType::Int32, true),
@@ -101,13 +114,7 @@ async fn test_mongodb_numeric_types(port: usize) {
 
     println!("Decimal as i128: {:?}", array.value(0));
 
-    arrow_mongodb_one_way(
-        port,
-        "numeric_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "numeric_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_string_types(port: usize) {
@@ -119,7 +126,7 @@ async fn test_mongodb_string_types(port: usize) {
         },
         doc! {
             "name": "Bob",
-            "description": "Data Scientist", 
+            "description": "Data Scientist",
             "notes": "Likes MongoDB",
         },
     ];
@@ -134,19 +141,16 @@ async fn test_mongodb_string_types(port: usize) {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["Alice", "Bob"])),
-            Arc::new(StringArray::from(vec!["Software Engineer", "Data Scientist"])),
+            Arc::new(StringArray::from(vec![
+                "Software Engineer",
+                "Data Scientist",
+            ])),
             Arc::new(StringArray::from(vec![None, Some("Likes MongoDB")])),
         ],
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "string_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "string_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_boolean_types(port: usize) {
@@ -179,28 +183,20 @@ async fn test_mongodb_boolean_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "boolean_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "boolean_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_binary_types(port: usize) {
-    let test_docs = vec![
-        doc! {
-            "binary_data": Bson::Binary(mongodb::bson::Binary {
-                subtype: mongodb::bson::spec::BinarySubtype::Generic,
-                bytes: b"hello world".to_vec(),
-            }),
-            "file_content": Bson::Binary(mongodb::bson::Binary {
-                subtype: mongodb::bson::spec::BinarySubtype::Generic,
-                bytes: b"binary file content".to_vec(),
-            }),
-        }
-    ];
+    let test_docs = vec![doc! {
+        "binary_data": Bson::Binary(mongodb::bson::Binary {
+            subtype: mongodb::bson::spec::BinarySubtype::Generic,
+            bytes: b"hello world".to_vec(),
+        }),
+        "file_content": Bson::Binary(mongodb::bson::Binary {
+            subtype: mongodb::bson::spec::BinarySubtype::Generic,
+            bytes: b"binary file content".to_vec(),
+        }),
+    }];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("binary_data", DataType::Binary, true),
@@ -216,25 +212,17 @@ async fn test_mongodb_binary_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "binary_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "binary_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_object_id_types(port: usize) {
     let oid1 = mongodb::bson::oid::ObjectId::new();
     let oid2 = mongodb::bson::oid::ObjectId::new();
-    
-    let test_docs = vec![
-        doc! {
-            "_id": oid1,
-            "ref_id": oid2,
-        }
-    ];
+
+    let test_docs = vec![doc! {
+        "_id": oid1,
+        "ref_id": oid2,
+    }];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("_id", DataType::Utf8, true), // ObjectId typically converted to string
@@ -250,13 +238,7 @@ async fn test_mongodb_object_id_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "objectid_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "objectid_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_array_types(port: usize) {
@@ -301,65 +283,65 @@ async fn test_mongodb_array_types(port: usize) {
     // Create the expected ListArrays manually
     let string_tags_builder = ListBuilder::new(StringBuilder::new());
     let mut string_tags_list = string_tags_builder;
-    
+
     // First document string_tags: ["rust", "mongodb", "arrow"]
     string_tags_list.values().append_value("rust");
     string_tags_list.values().append_value("mongodb");
     string_tags_list.values().append_value("arrow");
     string_tags_list.append(true);
-    
+
     // Second document string_tags: ["python", "sql"]
     string_tags_list.values().append_value("python");
     string_tags_list.values().append_value("sql");
     string_tags_list.append(true);
-    
+
     let string_tags_array = Arc::new(string_tags_list.finish());
 
     // Mixed array (all converted to strings)
     let mixed_array_builder = ListBuilder::new(StringBuilder::new());
     let mut mixed_array_list = mixed_array_builder;
-    
+
     // First document mixed_array: ["text", "42", "true", "3.14"]
     mixed_array_list.values().append_value("text");
     mixed_array_list.values().append_value("42");
     mixed_array_list.values().append_value("true");
     mixed_array_list.values().append_value("3.14");
     mixed_array_list.append(true);
-    
+
     // Second document mixed_array: ["another", "false", "99"]
     mixed_array_list.values().append_value("another");
     mixed_array_list.values().append_value("false");
     mixed_array_list.values().append_value("99");
     mixed_array_list.append(true);
-    
+
     let mixed_array_array = Arc::new(mixed_array_list.finish());
 
     // Empty arrays
     let empty_array_builder = ListBuilder::new(StringBuilder::new());
     let mut empty_array_list = empty_array_builder;
-    
+
     // First document: empty array
     empty_array_list.append(true);
-    // Second document: empty array  
+    // Second document: empty array
     empty_array_list.append(true);
-    
+
     let empty_array_array = Arc::new(empty_array_list.finish());
 
     // Numbers as strings array
     let numbers_builder = ListBuilder::new(StringBuilder::new());
     let mut numbers_list = numbers_builder;
-    
+
     // First document: [1, 2, 3] -> ["1", "2", "3"]
     numbers_list.values().append_value("1");
     numbers_list.values().append_value("2");
     numbers_list.values().append_value("3");
     numbers_list.append(true);
-    
+
     // Second document: [4, 5] -> ["4", "5"]
     numbers_list.values().append_value("4");
     numbers_list.values().append_value("5");
     numbers_list.append(true);
-    
+
     let numbers_array = Arc::new(numbers_list.finish());
 
     let expected_record = RecordBatch::try_new(
@@ -373,13 +355,7 @@ async fn test_mongodb_array_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "array_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "array_collection", test_docs, expected_record).await;
 }
 
 async fn test_mongodb_nested_object_types(port: usize) {
@@ -406,14 +382,14 @@ async fn test_mongodb_nested_object_types(port: usize) {
         },
         doc! {
             "user": {
-                "name": "Bob", 
+                "name": "Bob",
                 "age": 25,
                 "contact": {
                     "email": "bob@example.com"
                 }
             },
             "metadata": {
-                "created_at": "2024-01-02", 
+                "created_at": "2024-01-02",
                 "tags": ["user"],
                 "settings": {
                     "theme": "light",
@@ -434,7 +410,7 @@ async fn test_mongodb_nested_object_types(port: usize) {
     // Insert test data into MongoDB collection
     let db = client.database("testdb");
     let collection = db.collection::<Document>("nested_object_collection");
-    
+
     // Drop collection if it exists
     let _ = collection.drop().await;
 
@@ -502,26 +478,44 @@ async fn test_mongodb_nested_object_types(port: usize) {
 
     let record_batches = df.collect().await.expect("RecordBatch should be collected");
     assert_eq!(record_batches.len(), 1);
-    
+
     let batch = &record_batches[0];
     assert_eq!(batch.num_rows(), 2);
     assert_eq!(batch.num_columns(), 4);
 
     // Verify the JSON content by parsing and comparing structure
-    let user_array = batch.column_by_name("user").unwrap()
-        .as_any().downcast_ref::<StringArray>().unwrap();
-    let metadata_array = batch.column_by_name("metadata").unwrap()
-        .as_any().downcast_ref::<StringArray>().unwrap();
-    let empty_array = batch.column_by_name("empty_object").unwrap()
-        .as_any().downcast_ref::<StringArray>().unwrap();
-    let string_array = batch.column_by_name("simple_string").unwrap()
-        .as_any().downcast_ref::<StringArray>().unwrap();
+    let user_array = batch
+        .column_by_name("user")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let metadata_array = batch
+        .column_by_name("metadata")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let empty_array = batch
+        .column_by_name("empty_object")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let string_array = batch
+        .column_by_name("simple_string")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
 
     // Parse actual JSON strings and compare with expected JSON objects
     let actual_user1: serde_json::Value = serde_json::from_str(user_array.value(0)).unwrap();
     let actual_user2: serde_json::Value = serde_json::from_str(user_array.value(1)).unwrap();
-    let actual_metadata1: serde_json::Value = serde_json::from_str(metadata_array.value(0)).unwrap();
-    let actual_metadata2: serde_json::Value = serde_json::from_str(metadata_array.value(1)).unwrap();
+    let actual_metadata1: serde_json::Value =
+        serde_json::from_str(metadata_array.value(0)).unwrap();
+    let actual_metadata2: serde_json::Value =
+        serde_json::from_str(metadata_array.value(1)).unwrap();
     let actual_empty1: serde_json::Value = serde_json::from_str(empty_array.value(0)).unwrap();
     let actual_empty2: serde_json::Value = serde_json::from_str(empty_array.value(1)).unwrap();
 
@@ -569,19 +563,17 @@ async fn test_mongodb_null_and_missing_fields(port: usize) {
         vec![
             Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
             Arc::new(Int32Array::from(vec![Some(30), None, Some(25)])),
-            Arc::new(StringArray::from(vec![Some("alice@example.com"), None, None])),
+            Arc::new(StringArray::from(vec![
+                Some("alice@example.com"),
+                None,
+                None,
+            ])),
             Arc::new(StringArray::from(vec![None, Some("555-1234"), None])),
         ],
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(
-        port,
-        "null_fields_collection",
-        test_docs,
-        expected_record,
-    )
-    .await;
+    arrow_mongodb_one_way(port, "null_fields_collection", test_docs, expected_record).await;
 }
 
 async fn arrow_mongodb_one_way(
@@ -600,7 +592,7 @@ async fn arrow_mongodb_one_way(
     // Insert test data into MongoDB collection
     let db = client.database("testdb");
     let collection = db.collection::<Document>(collection_name);
-    
+
     // Drop collection if it exists
     let _ = collection.drop().await;
 
@@ -673,8 +665,7 @@ fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<Recor
         .map(|&i| schema.field(i).clone())
         .collect::<Vec<_>>();
     let projected_schema = Arc::new(arrow::datatypes::Schema::new(fields));
-    RecordBatch::try_new(projected_schema, arrays)
-         .map_err(|e| DataFusionError::ArrowError(e, None))
+    RecordBatch::try_new(projected_schema, arrays).map_err(|e| DataFusionError::ArrowError(e, None))
 }
 
 async fn start_mongodb_container(port: usize) -> RunningContainer {

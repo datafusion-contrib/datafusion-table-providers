@@ -3,7 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers::{
-    mongodb::{connection_pool::MongoDBConnectionPool, MongoDBTableFactory}, util::secrets::to_secret_map,
+    mongodb::{connection_pool::MongoDBConnectionPool, MongoDBTableFactory},
+    util::secrets::to_secret_map,
 };
 
 /// This example demonstrates how to:
@@ -34,16 +35,13 @@ use datafusion_table_providers::{
 /// EOF
 /// ```
 #[tokio::main]
-async fn main(){
-   
+async fn main() {
     // Create MongoDB connection parameters
     // Including connection string and SSL mode settings
-    let mongodb_params = to_secret_map(HashMap::from([
-        (
-            "connection_string".to_string(),
-            "mongodb://root:password@localhost:27017/mongo_db?authSource=admin&tls=false".to_string(),
-        ),
-    ]));
+    let mongodb_params = to_secret_map(HashMap::from([(
+        "connection_string".to_string(),
+        "mongodb://root:password@localhost:27017/mongo_db?authSource=admin&tls=false".to_string(),
+    )]));
 
     // Create MongoDB connection pool
     let mongodb_pool = Arc::new(

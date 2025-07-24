@@ -1,6 +1,6 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
-    array::{Decimal128Array, RecordBatch, Array, StringArray},
+    array::{Array, Decimal128Array, RecordBatch, StringArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion::logical_expr::CreateExternalTable;
@@ -18,7 +18,7 @@ use datafusion_table_providers::{
     UnsupportedTypeAction,
 };
 use rstest::{fixture, rstest};
-use serde_json::{Value, from_str};
+use serde_json::{from_str, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
@@ -291,7 +291,7 @@ async fn test_postgres_jsonb_type(port: usize) {
         r#"{"name": "John", "age": 30}"#,
         r#"{"name": "Jane", "age": 25}"#,
         "[1, 2, 3]",
-        "null", 
+        "null",
         r#"{"nested": {"key": "value"}}"#,
     ];
 
@@ -324,7 +324,7 @@ async fn test_postgres_jsonb_type(port: usize) {
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    
+
     let actual_json: Vec<Value> = (0..actual_data_column.len())
         .map(|i| from_str(actual_data_column.value(i)).unwrap())
         .collect();

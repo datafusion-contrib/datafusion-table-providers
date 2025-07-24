@@ -1,13 +1,15 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use crate::mongodb::{
+    connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result,
+};
 use mongodb::{
-    error::ErrorKind,
     bson::doc,
+    error::ErrorKind,
     options::{ClientOptions, Tls, TlsOptions},
     Client,
 };
 use secrecy::{ExposeSecret, SecretString};
 use snafu::ResultExt;
-use crate::mongodb::{connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct MongoDBConnectionPool {
     client: Arc<Client>,
@@ -16,7 +18,7 @@ pub struct MongoDBConnectionPool {
 
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: &str = "27017";
-const DEFAULT_DATABASE : &str = "default";
+const DEFAULT_DATABASE: &str = "default";
 const DEFAULT_MIN_POOL_SIZE: u32 = 10;
 const DEFAULT_MAX_POOL_SIZE: u32 = 100;
 const DEFAULT_SSL_MODE: &str = "required";
@@ -26,10 +28,8 @@ impl MongoDBConnectionPool {
         let params = crate::util::remove_prefix_from_hashmap_keys(params, "mongodb_");
 
         let (uri, explicit_db_name) = build_connection_uri(&params)?;
-        
-        let mut client_options = ClientOptions::parse(&uri)
-            .await
-            .context(InvalidUriSnafu)?;
+
+        let mut client_options = ClientOptions::parse(&uri).await.context(InvalidUriSnafu)?;
 
         configure_pool_size(&mut client_options, &params)?;
         configure_tls(&mut client_options, &params)?;
@@ -39,7 +39,7 @@ impl MongoDBConnectionPool {
             .unwrap_or(DEFAULT_DATABASE.to_string());
 
         let client = Client::with_options(client_options).context(ConnectionFailedSnafu)?;
-        
+
         test_connection(&client, &db_name).await?;
 
         Ok(Self {
@@ -53,10 +53,12 @@ impl MongoDBConnectionPool {
             Arc::clone(&self.client),
             self.db_name.clone(),
         )))
-    }  
+    }
 }
 
-fn build_connection_uri(params: &HashMap<String, SecretString>) -> Result<(String, Option<String>)> {
+fn build_connection_uri(
+    params: &HashMap<String, SecretString>,
+) -> Result<(String, Option<String>)> {
     if let Some(uri) = params.get("connection_string") {
         return Ok((uri.expose_secret().to_string(), None));
     }
@@ -64,16 +66,20 @@ fn build_connection_uri(params: &HashMap<String, SecretString>) -> Result<(Strin
     let db_name = get_param_or_default(params, "db", DEFAULT_DATABASE);
     let host = get_param_or_default(params, "host", DEFAULT_HOST);
     let port = get_param_or_default(params, "port", DEFAULT_PORT);
-    
+
     let auth = match (params.get("user"), params.get("pass")) {
         (Some(user), Some(pass)) => {
             format!("{}:{}@", user.expose_secret(), pass.expose_secret())
         }
         (Some(_), None) => {
-            return Err(Error::InvalidParameter {parameter_name: "pass".to_string(),});
+            return Err(Error::InvalidParameter {
+                parameter_name: "pass".to_string(),
+            });
         }
         (None, Some(_)) => {
-            return Err(Error::InvalidParameter {parameter_name: "user".to_string()});
+            return Err(Error::InvalidParameter {
+                parameter_name: "user".to_string(),
+            });
         }
         (None, None) => String::new(),
     };
@@ -89,11 +95,17 @@ fn build_connection_uri(params: &HashMap<String, SecretString>) -> Result<(Strin
         format!("?{}", query_params.join("&"))
     };
 
-    let uri = format!("mongodb://{}{}:{}/{}{}", auth, host, port, db_name, query_string);
+    let uri = format!(
+        "mongodb://{}{}:{}/{}{}",
+        auth, host, port, db_name, query_string
+    );
     Ok((uri, Some(db_name.to_string())))
 }
 
-fn configure_pool_size(client_options: &mut ClientOptions, params: &HashMap<String, SecretString>) -> Result<()> {
+fn configure_pool_size(
+    client_options: &mut ClientOptions,
+    params: &HashMap<String, SecretString>,
+) -> Result<()> {
     let pool_min = parse_u32_param(params, "pool_min", DEFAULT_MIN_POOL_SIZE)?;
     let pool_max = parse_u32_param(params, "pool_max", DEFAULT_MAX_POOL_SIZE)?;
 
@@ -105,21 +117,25 @@ fn configure_pool_size(client_options: &mut ClientOptions, params: &HashMap<Stri
 
     client_options.min_pool_size = Some(pool_min);
     client_options.max_pool_size = Some(pool_max);
-    
+
     Ok(())
 }
 
-fn configure_tls(client_options: &mut ClientOptions, params: &HashMap<String, SecretString>) -> Result<()> {
-    let has_explicit_tls_params = params.contains_key("sslmode") || params.contains_key("sslrootcert");
-        
+fn configure_tls(
+    client_options: &mut ClientOptions,
+    params: &HashMap<String, SecretString>,
+) -> Result<()> {
+    let has_explicit_tls_params =
+        params.contains_key("sslmode") || params.contains_key("sslrootcert");
+
     if client_options.tls.is_some() && !has_explicit_tls_params {
         return Ok(());
     }
-    
+
     let ssl_mode = get_param_or_default(params, "sslmode", DEFAULT_SSL_MODE);
-    
+
     match ssl_mode.to_lowercase().as_str() {
-        "disabled" | "required" | "preferred" => {},
+        "disabled" | "required" | "preferred" => {}
         _ => {
             return Err(Error::InvalidParameter {
                 parameter_name: "sslmode".to_string(),
@@ -149,25 +165,23 @@ fn build_tls_options(ssl_mode: &str, rootcert_path: Option<PathBuf>) -> Option<T
     }
 
     let tls_options = match (rootcert_path, ssl_mode) {
-        // Root cert + preferred 
+        // Root cert + preferred
         (Some(path), "preferred") => TlsOptions::builder()
             .ca_file_path(Some(path))
             .allow_invalid_certificates(Some(true))
             .allow_invalid_hostnames(Some(true))
             .build(),
-        
-        // Root cert + required 
-        (Some(path), _) => TlsOptions::builder()
-            .ca_file_path(Some(path))
-            .build(),
-        
-        // No root cert + preferred 
+
+        // Root cert + required
+        (Some(path), _) => TlsOptions::builder().ca_file_path(Some(path)).build(),
+
+        // No root cert + preferred
         (None, "preferred") => TlsOptions::builder()
             .allow_invalid_certificates(Some(true))
             .allow_invalid_hostnames(Some(true))
             .build(),
-        
-        // No root cert + required 
+
+        // No root cert + required
         (None, _) => TlsOptions::builder().build(),
     };
 
@@ -186,7 +200,11 @@ async fn test_connection(client: &Client, db_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn get_param_or_default(params: &HashMap<String, SecretString>, key: &str, default: &str) -> String {
+fn get_param_or_default(
+    params: &HashMap<String, SecretString>,
+    key: &str,
+    default: &str,
+) -> String {
     params
         .get(key)
         .map(|s| s.expose_secret().to_string())
@@ -207,9 +225,9 @@ fn parse_u32_param(params: &HashMap<String, SecretString>, key: &str, default: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use secrecy::SecretString;
     use mongodb::options::{Tls, TlsOptions};
+    use secrecy::SecretString;
+    use std::collections::HashMap;
 
     fn create_secret_string(value: &str) -> SecretString {
         SecretString::new(value.to_string().into_boxed_str())
@@ -224,9 +242,10 @@ mod tests {
 
     #[test]
     fn test_build_connection_uri_with_connection_string() {
-        let params = create_params(vec![
-            ("connection_string", "mongodb://user:pass@example.com:27017/testdb"),
-        ]);
+        let params = create_params(vec![(
+            "connection_string",
+            "mongodb://user:pass@example.com:27017/testdb",
+        )]);
 
         let result = build_connection_uri(&params).unwrap();
         assert_eq!(result.0, "mongodb://user:pass@example.com:27017/testdb");
@@ -244,7 +263,10 @@ mod tests {
         ]);
 
         let result = build_connection_uri(&params).unwrap();
-        assert_eq!(result.0, "mongodb://testuser:testpass@example.com:27018/mydb");
+        assert_eq!(
+            result.0,
+            "mongodb://testuser:testpass@example.com:27018/mydb"
+        );
         assert_eq!(result.1, Some("mydb".to_string()));
     }
 
@@ -272,9 +294,7 @@ mod tests {
 
     #[test]
     fn test_build_connection_uri_user_without_password() {
-        let params = create_params(vec![
-            ("user", "testuser"),
-        ]);
+        let params = create_params(vec![("user", "testuser")]);
 
         let result = build_connection_uri(&params);
         assert!(result.is_err());
@@ -287,9 +307,7 @@ mod tests {
 
     #[test]
     fn test_build_connection_uri_password_without_user() {
-        let params = create_params(vec![
-            ("pass", "testpass"),
-        ]);
+        let params = create_params(vec![("pass", "testpass")]);
 
         let result = build_connection_uri(&params);
         assert!(result.is_err());
@@ -303,10 +321,7 @@ mod tests {
     #[test]
     fn test_configure_pool_size_with_valid_params() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("pool_min", "5"),
-            ("pool_max", "50"),
-        ]);
+        let params = create_params(vec![("pool_min", "5"), ("pool_max", "50")]);
 
         let result = configure_pool_size(&mut client_options, &params);
         assert!(result.is_ok());
@@ -328,10 +343,7 @@ mod tests {
     #[test]
     fn test_configure_pool_size_min_greater_than_max() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("pool_min", "100"),
-            ("pool_max", "50"),
-        ]);
+        let params = create_params(vec![("pool_min", "100"), ("pool_max", "50")]);
 
         let result = configure_pool_size(&mut client_options, &params);
         assert!(result.is_err());
@@ -346,14 +358,15 @@ mod tests {
     fn test_configure_tls_skips_when_already_configured() {
         let mut client_options = ClientOptions::default();
         client_options.tls = Some(Tls::Enabled(TlsOptions::builder().build()));
-        
-        let params = HashMap::new(); 
+
+        let params = HashMap::new();
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
+
         assert!(client_options.tls.is_some());
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to remain enabled");
         }
     }
@@ -362,15 +375,14 @@ mod tests {
     fn test_configure_tls_overrides_when_explicit_params() {
         let mut client_options = ClientOptions::default();
         client_options.tls = Some(Tls::Enabled(TlsOptions::builder().build()));
-        
-        let params = create_params(vec![
-            ("sslmode", "disabled"),
-        ]);
+
+        let params = create_params(vec![("sslmode", "disabled")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Disabled) = client_options.tls {} else {
+
+        if let Some(Tls::Disabled) = client_options.tls {
+        } else {
             panic!("Expected TLS to be disabled");
         }
     }
@@ -378,14 +390,13 @@ mod tests {
     #[test]
     fn test_configure_tls_with_required_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "required"),
-        ]);
+        let params = create_params(vec![("sslmode", "required")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to be enabled");
         }
     }
@@ -393,14 +404,13 @@ mod tests {
     #[test]
     fn test_configure_tls_with_preferred_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "preferred"),
-        ]);
+        let params = create_params(vec![("sslmode", "preferred")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to be enabled");
         }
     }
@@ -408,14 +418,13 @@ mod tests {
     #[test]
     fn test_configure_tls_with_disabled_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "disabled"),
-        ]);
+        let params = create_params(vec![("sslmode", "disabled")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Disabled) = client_options.tls {} else {
+
+        if let Some(Tls::Disabled) = client_options.tls {
+        } else {
             panic!("Expected TLS to be disabled");
         }
     }
@@ -423,9 +432,7 @@ mod tests {
     #[test]
     fn test_configure_tls_with_invalid_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "invalid_mode"),
-        ]);
+        let params = create_params(vec![("sslmode", "invalid_mode")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_err());
@@ -456,8 +463,9 @@ mod tests {
     #[test]
     fn test_build_tls_options_disabled() {
         let result = build_tls_options("disabled", None);
-        
-        if let Some(Tls::Disabled) = result {} else {
+
+        if let Some(Tls::Disabled) = result {
+        } else {
             panic!("Expected TLS to be disabled");
         }
     }
@@ -465,8 +473,9 @@ mod tests {
     #[test]
     fn test_build_tls_options_required_without_cert() {
         let result = build_tls_options("required", None);
-        
-        if let Some(Tls::Enabled(_)) = result {} else {
+
+        if let Some(Tls::Enabled(_)) = result {
+        } else {
             panic!("Expected TLS to be enabled");
         }
     }
@@ -474,8 +483,9 @@ mod tests {
     #[test]
     fn test_build_tls_options_preferred_without_cert() {
         let result = build_tls_options("preferred", None);
-        
-        if let Some(Tls::Enabled(_)) = result {} else {
+
+        if let Some(Tls::Enabled(_)) = result {
+        } else {
             panic!("Expected TLS to be enabled");
         }
     }
@@ -489,7 +499,8 @@ mod tests {
         let result = build_tls_options("required", Some(cert_path.clone()));
         std::fs::remove_file(&cert_path).ok();
 
-        if let Some(Tls::Enabled(_)) = result {} else {
+        if let Some(Tls::Enabled(_)) = result {
+        } else {
             panic!("Expected TLS to be enabled with certificate");
         }
     }
@@ -502,8 +513,9 @@ mod tests {
 
         let result = build_tls_options("preferred", Some(cert_path.clone()));
         std::fs::remove_file(&cert_path).ok();
-        
-        if let Some(Tls::Enabled(_)) = result {} else {
+
+        if let Some(Tls::Enabled(_)) = result {
+        } else {
             panic!("Expected TLS to be enabled with certificate in preferred mode");
         }
     }
@@ -511,14 +523,13 @@ mod tests {
     #[test]
     fn test_configure_tls_case_insensitive_ssl_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "REQUIRED"),
-        ]);
+        let params = create_params(vec![("sslmode", "REQUIRED")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to be enabled with uppercase mode");
         }
     }
@@ -526,14 +537,13 @@ mod tests {
     #[test]
     fn test_configure_tls_mixed_case_ssl_mode() {
         let mut client_options = ClientOptions::default();
-        let params = create_params(vec![
-            ("sslmode", "Preferred"),
-        ]);
+        let params = create_params(vec![("sslmode", "Preferred")]);
 
         let result = configure_tls(&mut client_options, &params);
         assert!(result.is_ok());
-        
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to be enabled with mixed case mode");
         }
     }
@@ -542,21 +552,20 @@ mod tests {
     fn test_configure_tls_with_rootcert_param_triggers_override() {
         let mut client_options = ClientOptions::default();
         client_options.tls = Some(Tls::Enabled(TlsOptions::builder().build()));
-        
+
         let temp_dir = std::env::temp_dir();
         let cert_path = temp_dir.join("test_override_cert.pem");
         std::fs::write(&cert_path, "dummy cert content").unwrap();
-        
-        let params = create_params(vec![
-            ("sslrootcert", cert_path.to_str().unwrap()),
-        ]);
+
+        let params = create_params(vec![("sslrootcert", cert_path.to_str().unwrap())]);
 
         let result = configure_tls(&mut client_options, &params);
         std::fs::remove_file(&cert_path).ok();
 
         assert!(result.is_ok());
-        
-        if let Some(Tls::Enabled(_)) = client_options.tls {} else {
+
+        if let Some(Tls::Enabled(_)) = client_options.tls {
+        } else {
             panic!("Expected TLS to be enabled after override");
         }
     }

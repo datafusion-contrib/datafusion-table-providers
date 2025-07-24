@@ -2,23 +2,24 @@ use crate::mongodb::connection_pool::MongoDBConnectionPool;
 use crate::mongodb::utils::expression::{combine_exprs_with_and, expr_to_mongo_filter};
 use crate::mongodb::Error;
 use async_trait::async_trait;
-use datafusion::common::project_schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::project_schema;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
-use datafusion::execution::{TaskContext};
-use datafusion::logical_expr::{Expr, TableType};
+use datafusion::execution::TaskContext;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream,
 };
 use datafusion::sql::TableReference;
-use mongodb::bson::Document;
-use std::{any::Any, fmt, sync::Arc};
-use serde_json;
 use futures::TryStreamExt;
+use mongodb::bson::Document;
+use serde_json;
+use std::{any::Any, fmt, sync::Arc};
 
 #[derive(Debug)]
 pub struct MongoDBTable {
@@ -32,13 +33,8 @@ impl MongoDBTable {
         pool: &Arc<MongoDBConnectionPool>,
         table_reference: impl Into<TableReference>,
     ) -> Result<Self, Error> {
-        
         let table_reference = table_reference.into();
-        let schema= pool
-            .connect()
-            .await?
-            .get_schema(&table_reference)
-            .await?;
+        let schema = pool.connect().await?.get_schema(&table_reference).await?;
 
         Ok(Self {
             pool: Arc::clone(pool),
@@ -46,8 +42,6 @@ impl MongoDBTable {
             table_reference: Arc::new(table_reference),
         })
     }
-
-    
 }
 
 #[async_trait]
@@ -80,6 +74,13 @@ impl TableProvider for MongoDBTable {
             limit,
         )?))
     }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
+    }
 }
 
 #[derive(Debug)]
@@ -92,7 +93,6 @@ struct MongoDBExec {
     properties: PlanProperties,
 }
 
-
 impl MongoDBExec {
     pub fn new(
         table_reference: Arc<TableReference>,
@@ -102,7 +102,6 @@ impl MongoDBExec {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Self> {
-        
         let projected_schema = project_schema(&schema, projections)?;
         let limit = limit
             .map(|u| {
@@ -124,8 +123,9 @@ impl MongoDBExec {
         let combined_exprs = combine_exprs_with_and(filters);
 
         let mongo_filters_doc = match combined_exprs {
-            Some(e) => expr_to_mongo_filter(&e)
-                .ok_or(DataFusionError::Execution("Failed to convert expressions".to_string()))?,
+            Some(e) => expr_to_mongo_filter(&e).ok_or(DataFusionError::Execution(
+                "Failed to convert expressions".to_string(),
+            ))?,
             None => Document::new(),
         };
 
@@ -153,9 +153,8 @@ impl DisplayAs for MongoDBExec {
             .iter()
             .map(|f| f.name().as_str())
             .collect::<Vec<_>>();
-        
-        let filters = serde_json::to_string(&self.filters_doc)
-            .map_err(|_| fmt::Error)?;
+
+        let filters = serde_json::to_string(&self.filters_doc).map_err(|_| fmt::Error)?;
 
         write!(
             f,
@@ -200,32 +199,29 @@ impl ExecutionPlan for MongoDBExec {
         _context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let schema = self.schema();
-        
+
         let table_reference = Arc::clone(&self.table_reference);
         let pool = Arc::clone(&self.pool);
         let projected_schema = Arc::clone(&self.projected_schema);
         let filters_doc = self.filters_doc.clone();
         let limit = self.limit;
-        
+
         let stream = futures::stream::once(async move {
-            let conn = pool
-                .connect()
-                .await
-                .map_err(to_execution_error)?;
-                
+            let conn = pool.connect().await.map_err(to_execution_error)?;
+
             conn.query_arrow(&table_reference, &projected_schema, &filters_doc, limit)
                 .await
                 .map_err(to_execution_error)
         })
         .try_flatten();
-        
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
-
-    
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub fn to_execution_error(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> DataFusionError {
+pub fn to_execution_error(
+    e: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> DataFusionError {
     DataFusionError::Execution(format!("{}", e.into()).to_string())
 }

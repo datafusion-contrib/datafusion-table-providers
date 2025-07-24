@@ -1,4 +1,7 @@
-use datafusion::{logical_expr::{Expr, Operator}, scalar::ScalarValue};
+use datafusion::{
+    logical_expr::{Expr, Operator},
+    scalar::ScalarValue,
+};
 use mongodb::bson::{doc, Bson, Document};
 
 pub fn combine_exprs_with_and(exprs: &[Expr]) -> Option<Expr> {
@@ -9,58 +12,56 @@ pub fn combine_exprs_with_and(exprs: &[Expr]) -> Option<Expr> {
 
 pub fn expr_to_mongo_filter(expr: &Expr) -> Option<Document> {
     match expr {
-        Expr::BinaryExpr(binary) => {
-            match binary.op {
-                Operator::And => {
-                    let l = expr_to_mongo_filter(&binary.left)?;
-                    let r = expr_to_mongo_filter(&binary.right)?;
-                    Some(doc! { "$and": [l, r] })
-                }
-                Operator::Or => {
-                    let l = expr_to_mongo_filter(&binary.left)?;
-                    let r = expr_to_mongo_filter(&binary.right)?;
-                    Some(doc! { "$or": [l, r] })
-                }
-                Operator::Eq => {
-                    let field = extract_column_name(&binary.left);
-                    let value = extract_literal_value(&binary.right);
-                    let field = field?;
-                    let value = value?;
-                    Some(doc! { field: value })
-                }
-                Operator::Gt => {
-                    let field = extract_column_name(&binary.left);
-                    let value = extract_literal_value(&binary.right);
-                    let field = field?;
-                    let value = value?;
-                    Some(doc! { field: { "$gt": value } })
-                }
-                Operator::Lt => {
-                    let field = extract_column_name(&binary.left)?;
-                    let value = extract_literal_value(&binary.right)?;
-                    Some(doc! { field: { "$lt": value } })
-                }
-                Operator::GtEq => {
-                    let field = extract_column_name(&binary.left)?;
-                    let value = extract_literal_value(&binary.right)?;
-                    Some(doc! { field: { "$gte": value } })
-                }
-                Operator::LtEq => {
-                    let field = extract_column_name(&binary.left)?;
-                    let value = extract_literal_value(&binary.right)?;
-                    Some(doc! { field: { "$lte": value } })
-                }
-                Operator::NotEq => {
-                    let field = extract_column_name(&binary.left)?;
-                    let value = extract_literal_value(&binary.right)?;
-                    Some(doc! { field: { "$ne": value } })
-                }
-                _ => {
-                    println!("Unsupported operator: {:?}", binary.op);
-                    None
-                }
+        Expr::BinaryExpr(binary) => match binary.op {
+            Operator::And => {
+                let l = expr_to_mongo_filter(&binary.left)?;
+                let r = expr_to_mongo_filter(&binary.right)?;
+                Some(doc! { "$and": [l, r] })
             }
-        }
+            Operator::Or => {
+                let l = expr_to_mongo_filter(&binary.left)?;
+                let r = expr_to_mongo_filter(&binary.right)?;
+                Some(doc! { "$or": [l, r] })
+            }
+            Operator::Eq => {
+                let field = extract_column_name(&binary.left);
+                let value = extract_literal_value(&binary.right);
+                let field = field?;
+                let value = value?;
+                Some(doc! { field: value })
+            }
+            Operator::Gt => {
+                let field = extract_column_name(&binary.left);
+                let value = extract_literal_value(&binary.right);
+                let field = field?;
+                let value = value?;
+                Some(doc! { field: { "$gt": value } })
+            }
+            Operator::Lt => {
+                let field = extract_column_name(&binary.left)?;
+                let value = extract_literal_value(&binary.right)?;
+                Some(doc! { field: { "$lt": value } })
+            }
+            Operator::GtEq => {
+                let field = extract_column_name(&binary.left)?;
+                let value = extract_literal_value(&binary.right)?;
+                Some(doc! { field: { "$gte": value } })
+            }
+            Operator::LtEq => {
+                let field = extract_column_name(&binary.left)?;
+                let value = extract_literal_value(&binary.right)?;
+                Some(doc! { field: { "$lte": value } })
+            }
+            Operator::NotEq => {
+                let field = extract_column_name(&binary.left)?;
+                let value = extract_literal_value(&binary.right)?;
+                Some(doc! { field: { "$ne": value } })
+            }
+            _ => {
+                println!("Unsupported operator: {:?}", binary.op);
+                None
+            }
+        },
         _ => {
             println!("Non-binary expr: {:?}", expr);
             None
@@ -90,17 +91,21 @@ fn extract_literal_value(expr: &Expr) -> Option<Bson> {
             ScalarValue::Float64(None) => Some(Bson::Null),
             ScalarValue::Boolean(Some(b)) => Some(Bson::Boolean(*b)),
             ScalarValue::Boolean(None) => Some(Bson::Null),
-            
+
             ScalarValue::UInt8(Some(i)) => Some(Bson::Int32(*i as i32)),
             ScalarValue::UInt16(Some(i)) => Some(Bson::Int32(*i as i32)),
             ScalarValue::UInt32(Some(i)) => Some(Bson::Int64(*i as i64)),
             ScalarValue::UInt64(Some(i)) => Some(Bson::Int64(*i as i64)),
             ScalarValue::Int8(Some(i)) => Some(Bson::Int32(*i as i32)),
             ScalarValue::Int16(Some(i)) => Some(Bson::Int32(*i as i32)),
-            
-            ScalarValue::UInt8(None) | ScalarValue::UInt16(None) | ScalarValue::UInt32(None) |
-            ScalarValue::UInt64(None) | ScalarValue::Int8(None) | ScalarValue::Int16(None) => Some(Bson::Null),
-            
+
+            ScalarValue::UInt8(None)
+            | ScalarValue::UInt16(None)
+            | ScalarValue::UInt32(None)
+            | ScalarValue::UInt64(None)
+            | ScalarValue::Int8(None)
+            | ScalarValue::Int16(None) => Some(Bson::Null),
+
             _ => None,
         },
         _ => None,
@@ -110,15 +115,12 @@ fn extract_literal_value(expr: &Expr) -> Option<Bson> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::prelude::{col, lit};
     use datafusion::logical_expr::BinaryExpr;
+    use datafusion::prelude::{col, lit};
 
     #[test]
     fn test_combine_exprs_with_and() {
-        let exprs = vec![
-            col("age").gt(lit(30)),
-            col("active").eq(lit(true)),
-        ];
+        let exprs = vec![col("age").gt(lit(30)), col("active").eq(lit(true))];
 
         let combined = combine_exprs_with_and(&exprs).unwrap();
 
@@ -145,7 +147,6 @@ mod tests {
             op: Operator::And,
             right: Box::new(col("status").eq(lit("active"))),
         });
-
 
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! {
@@ -198,7 +199,9 @@ mod tests {
 
     #[test]
     fn test_or_filter() {
-        let expr = col("department").eq(lit("sales")).or(col("department").eq(lit("marketing")));
+        let expr = col("department")
+            .eq(lit("sales"))
+            .or(col("department").eq(lit("marketing")));
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! {
             "$or": [
@@ -213,7 +216,7 @@ mod tests {
     fn test_complex_and_or_filter() {
         let age_and_status = col("age").gt(lit(25)).and(col("status").eq(lit("active")));
         let expr = age_and_status.or(col("priority").eq(lit("high")));
-        
+
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! {
             "$or": [
@@ -233,7 +236,7 @@ mod tests {
     fn test_nested_and_filters() {
         let age_range = col("age").gt(lit(18)).and(col("age").lt(lit(65)));
         let expr = age_range.and(col("country").eq(lit("US")));
-        
+
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! {
             "$and": [
@@ -267,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_string_comparison_filters() {
-        let expr = col("name").gt(lit("M")); 
+        let expr = col("name").gt(lit("M"));
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! { "name": { "$gt": "M" } };
         assert_eq!(filter, expected);
@@ -290,7 +293,7 @@ mod tests {
     fn test_single_expr_combine() {
         let exprs = vec![col("status").eq(lit("active"))];
         let combined = combine_exprs_with_and(&exprs).unwrap();
-        
+
         if let Expr::BinaryExpr(bin) = &combined {
             assert_eq!(bin.op, Operator::Eq);
         } else {
@@ -313,7 +316,7 @@ mod tests {
             col("department").eq(lit("engineering")),
         ];
         let combined = combine_exprs_with_and(&exprs).unwrap();
-        
+
         if let Expr::BinaryExpr(bin) = &combined {
             assert_eq!(bin.op, Operator::And);
             if let Expr::BinaryExpr(left_bin) = &*bin.left {
@@ -330,7 +333,7 @@ mod tests {
     fn test_null_literal_filter() {
         let expr = col("optional_field").eq(lit(ScalarValue::Utf8(None)));
         let filter = expr_to_mongo_filter(&expr);
-        
+
         if let Some(doc) = filter {
             let expected = doc! { "optional_field": mongodb::bson::Bson::Null };
             assert_eq!(doc, expected);
@@ -340,23 +343,27 @@ mod tests {
     #[test]
     fn test_wrong_operand_order_returns_none() {
         use datafusion::logical_expr::Expr;
-        
+
         let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(lit("Alice")), 
+            left: Box::new(lit("Alice")),
             op: Operator::Eq,
             right: Box::new(col("name")),
         });
-        
+
         let filter = expr_to_mongo_filter(&expr);
-        assert!(filter.is_none(), "Should return None for unsupported operand order");
+        assert!(
+            filter.is_none(),
+            "Should return None for unsupported operand order"
+        );
     }
 
     #[test]
     fn test_multiple_or_conditions() {
-        let expr = col("status").eq(lit("active"))
+        let expr = col("status")
+            .eq(lit("active"))
             .or(col("status").eq(lit("pending")))
             .or(col("status").eq(lit("review")));
-            
+
         let filter = expr_to_mongo_filter(&expr).unwrap();
         let expected = doc! {
             "$or": [

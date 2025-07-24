@@ -1,20 +1,22 @@
-use std::sync::Arc;
 use async_stream::stream;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::TableReference;
-use futures::TryStreamExt;
 use futures::StreamExt;
-use mongodb::{bson::{Document, doc}, Client, Collection};
+use futures::TryStreamExt;
+use mongodb::{
+    bson::{doc, Document},
+    Client, Collection,
+};
 use snafu::prelude::*;
+use std::sync::Arc;
 
 use crate::mongodb::utils::arrow::mongo_docs_to_arrow;
 use crate::mongodb::utils::schema::infer_arrow_schema_from_documents;
 use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu};
 
 const NUM_DOCUMENTS_TO_INFER_SCHEMA: i64 = 20;
-
 
 pub struct MongoDBConnection {
     pub client: Arc<Client>,
@@ -30,10 +32,7 @@ impl MongoDBConnection {
         self.client.database(&self.db_name).collection(collection)
     }
 
-    pub async fn get_schema(
-        &self,
-        table_reference: &TableReference,
-    ) -> Result<SchemaRef, Error> {
+    pub async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error> {
         let collection_name = table_reference.table();
         let coll = self.get_collection(collection_name);
 
@@ -44,7 +43,11 @@ impl MongoDBConnection {
             .boxed()
             .context(UnableToGetSchemaSnafu)?;
 
-        let docs: Vec<Document> = sample.try_collect().await.boxed().context(UnableToGetSchemaSnafu)?;
+        let docs: Vec<Document> = sample
+            .try_collect()
+            .await
+            .boxed()
+            .context(UnableToGetSchemaSnafu)?;
 
         infer_arrow_schema_from_documents(&docs)
             .boxed()
@@ -104,19 +107,18 @@ impl MongoDBConnection {
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, full_stream)))
     }
-
 }
 
 pub fn schema_to_mongo_projection(projected_schema: &SchemaRef) -> Document {
     let mut projection = Document::new();
-    
+
     if projected_schema.fields().is_empty() {
         return projection;
     }
-    
+
     for field in projected_schema.fields() {
         projection.insert(field.name(), 1);
     }
-    
+
     projection
 }

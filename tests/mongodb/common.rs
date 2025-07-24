@@ -1,6 +1,6 @@
 use bollard::secret::HealthConfig;
 use datafusion_table_providers::mongodb::connection_pool::MongoDBConnectionPool;
-use mongodb::{Client, options::ClientOptions};
+use mongodb::{options::ClientOptions, Client};
 use secrecy::SecretString;
 use std::collections::HashMap;
 use tracing::instrument;
@@ -40,7 +40,9 @@ pub(super) fn get_mongodb_params(port: usize) -> HashMap<String, SecretString> {
     );
     params.insert(
         "mongodb_connection_string".to_string(),
-        SecretString::from(format!("mongodb://root:integration-test-pw@localhost:{port}/testdb?authSource=admin")),
+        SecretString::from(format!(
+            "mongodb://root:integration-test-pw@localhost:{port}/testdb?authSource=admin"
+        )),
     );
     params.insert(
         "mongodb_pool_min".to_string(),
@@ -58,7 +60,9 @@ pub(super) fn get_mongodb_params(port: usize) -> HashMap<String, SecretString> {
 }
 
 #[instrument]
-pub async fn start_mongodb_docker_container(port: usize) -> Result<RunningContainer, anyhow::Error> {
+pub async fn start_mongodb_docker_container(
+    port: usize,
+) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{MONGODB_DOCKER_CONTAINER}-{port}");
 
     let port = port.try_into().unwrap_or(27017);
@@ -76,7 +80,8 @@ pub async fn start_mongodb_docker_container(port: usize) -> Result<RunningContai
             test: Some(vec![
                 "CMD".to_string(),
                 "mongosh".to_string(),
-                "mongodb://root:integration-test-pw@localhost:27017/testdb?authSource=admin".to_string(),
+                "mongodb://root:integration-test-pw@localhost:27017/testdb?authSource=admin"
+                    .to_string(),
                 "--quiet".to_string(),
                 "--eval".to_string(),
                 "db.runCommand({ ping: 1 }).ok".to_string(),
@@ -108,15 +113,15 @@ pub(super) async fn get_mongodb_connection_pool(
 
 #[instrument]
 pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Error> {
-    let connection_string = format!("mongodb://root:integration-test-pw@localhost:{port}/testdb?authSource=admin");
-    
+    let connection_string =
+        format!("mongodb://root:integration-test-pw@localhost:{port}/testdb?authSource=admin");
+
     let client_options = ClientOptions::parse(connection_string)
         .await
         .expect("Failed to parse MongoDB connection string");
-    
-    let client = Client::with_options(client_options)
-        .expect("Failed to create MongoDB client");
-    
+
+    let client = Client::with_options(client_options).expect("Failed to create MongoDB client");
+
     let mut retries = 10;
     let mut last_err = None;
     while retries > 0 {
@@ -125,7 +130,10 @@ pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Er
             .run_command(mongodb::bson::doc! { "ping": 1 })
             .await
         {
-            Ok(_) => {println!("Client created"); return Ok(client)},
+            Ok(_) => {
+                println!("Client created");
+                return Ok(client);
+            }
             Err(e) => {
                 last_err = Some(e);
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
