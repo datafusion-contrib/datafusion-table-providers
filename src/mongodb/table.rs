@@ -1,6 +1,7 @@
 use crate::mongodb::connection_pool::MongoDBConnectionPool;
 use crate::mongodb::utils::expression::{combine_exprs_with_and, expr_to_mongo_filter};
 use crate::mongodb::Error;
+use crate::sql::sql_provider_datafusion::expr;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
@@ -79,8 +80,22 @@ impl TableProvider for MongoDBTable {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
+        supports_filters_pushdown(filters)
     }
+}
+
+fn supports_filters_pushdown(
+    filters: &[&Expr],
+) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+    let filter_push_down: Vec<TableProviderFilterPushDown> = filters
+        .iter()
+        .map(|f| match expr_to_mongo_filter(f) {
+            Some(_) => TableProviderFilterPushDown::Exact,
+            None => TableProviderFilterPushDown::Unsupported,
+        })
+        .collect();
+
+    Ok(filter_push_down)
 }
 
 #[derive(Debug)]
@@ -231,4 +246,47 @@ pub fn to_execution_error(
     e: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> DataFusionError {
     DataFusionError::Execution(format!("{}", e.into()).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::logical_expr::{col, lit, BinaryExpr, Expr, Operator};
+
+    #[tokio::test]
+    async fn test_supports_filters_pushdown_supported() {
+        let expr = col("foo").eq(lit(42));
+        let res = supports_filters_pushdown(&[&expr]).unwrap();
+        assert_eq!(res, vec![TableProviderFilterPushDown::Exact]);
+    }
+
+    #[tokio::test]
+    async fn test_supports_filters_pushdown_unsupported() {
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("foo")),
+            op: Operator::Modulo,
+            right: Box::new(lit("bar")),
+        });
+        let res = supports_filters_pushdown(&[&expr]).unwrap();
+        assert_eq!(res, vec![TableProviderFilterPushDown::Unsupported]);
+    }
+
+    #[tokio::test]
+    async fn test_supports_filters_pushdown_mixed() {
+        let exprs = vec![
+            col("foo").eq(lit(10)),
+            col("bar").not_eq(lit("baz")),
+            col("foo").is_null(),
+        ];
+        let refs: Vec<&Expr> = exprs.iter().collect();
+        let res = supports_filters_pushdown(&refs).unwrap();
+        assert_eq!(
+            res,
+            vec![
+                TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Unsupported,
+            ]
+        );
+    }
 }
