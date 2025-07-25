@@ -13,6 +13,7 @@ Many of the table providers in this repo are for querying data from other databa
 - SQLite
 - DuckDB
 - Flight SQL
+- MongoDB
 
 ## Examples
 
@@ -103,4 +104,31 @@ brew install roapi
 roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet &
 
 cargo run --example flight-sql --features flight
+```
+
+### MongoDB
+
+In order to run the MongoDB example, you need to have a MongoDB server running. You can use the following command to start a MongoDB server in a Docker container the example can use:
+
+```bash
+docker run --name mongodb \
+  -e MONGO_INITDB_ROOT_USERNAME=root \
+  -e MONGO_INITDB_ROOT_PASSWORD=password \
+  -e MONGO_INITDB_DATABASE=mongo_db \
+  -p 27017:27017 \
+  -d mongo:7.0
+# Wait for the MongoDB server to start
+sleep 30
+
+# Create a table in the MongoDB server and insert some data
+docker exec -i mongodb mongosh -u root -p password --authenticationDatabase admin <<EOF
+use mongo_db;
+db.companies.insertOne({
+  id: 1,
+  name: "Acme Corporation"
+});
+EOF
+
+# Run from repo folder
+cargo run -p datafusion-table-providers --example mongodb --features mongodb
 ```

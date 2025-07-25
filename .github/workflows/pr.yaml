@@ -62,7 +62,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Pull the Postgres/MySQL images
+      - name: Pull the MySQL images
         run: |
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
 
@@ -83,11 +83,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Pull the Postgres/MySQL images
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Pull the Postgres images
         run: |
           docker pull ${{ env.PG_DOCKER_IMAGE }}
-
-      - uses: ./.github/actions/setup-integration-test
 
       - name: Run tests
         run: cargo test --features postgres
@@ -133,3 +133,24 @@ jobs:
 
       - name: Run tests
         run: cargo test --features flight
+
+  integration-test-mongodb:
+    name: Tests mongoDB
+    runs-on: ubuntu-latest
+
+    env:
+      MONGODB_DOCKER_IMAGE: public.ecr.aws/docker/library/mongo:7
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./.github/actions/setup-integration-test
+
+      - name: Pull the MongoDB images
+        run: |
+          docker pull ${{ env.MONGODB_DOCKER_IMAGE }}
+
+      - name: Run tests
+        run: cargo test --features mongodb
