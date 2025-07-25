@@ -29,6 +29,9 @@ pub enum Error {
         "Invalid DuckDB file path: {path}. Ensure it contains a valid database name."
     ))]
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
+
+    #[snafu(display("Unable to attach DuckDB file: {source}"))]
+    UnableToAttachFile { source: duckdb::Error },
 }
 
 pub struct DuckDbConnectionPoolBuilder {
@@ -313,6 +316,14 @@ impl DuckDbConnectionPool {
                 &self.attached_databases,
             ))))
         }
+    }
+
+    pub fn attach_file(&self, file_path: &str) -> Result<()> {
+        tracing::debug!("attaching {file_path}");
+        let conn = self.pool.get()?;
+        conn.execute(&format!("ATTACH '{file_path}'"), [])
+            .context(UnableToAttachFileSnafu)?;
+        Ok(())
     }
 }
 

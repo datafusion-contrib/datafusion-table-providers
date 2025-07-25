@@ -48,6 +48,7 @@ use self::sql_table::DuckDBTable;
 #[cfg(feature = "duckdb-federation")]
 mod federation;
 
+pub mod attached_factory;
 mod creator;
 mod settings;
 mod sql_table;
