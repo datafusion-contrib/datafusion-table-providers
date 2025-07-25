@@ -1,7 +1,6 @@
 use crate::mongodb::connection_pool::MongoDBConnectionPool;
 use crate::mongodb::utils::expression::{combine_exprs_with_and, expr_to_mongo_filter};
 use crate::mongodb::Error;
-use crate::sql::sql_provider_datafusion::expr;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
