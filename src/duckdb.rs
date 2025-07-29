@@ -421,7 +421,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let table_definition =
-            TableDefinition::new(RelationName::new(name.clone()), Arc::clone(&schema))
+            TableDefinition::new(RelationName::from(name.as_str()), Arc::clone(&schema))
                 .with_constraints(cmd.constraints.clone())
                 .with_indexes(indexes.clone());
 

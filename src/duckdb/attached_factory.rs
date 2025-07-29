@@ -104,7 +104,7 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
         let schema = Arc::new(cmd.schema.as_ref().into());
 
         let table_definition = TableDefinition::new(
-            RelationName::new(table_ref_for_duckdb.to_string()),
+            RelationName::from(table_ref_for_duckdb.clone()),
             Arc::clone(&schema),
         )
         .with_constraints(cmd.constraints.clone());

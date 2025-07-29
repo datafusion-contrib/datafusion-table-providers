@@ -602,7 +602,7 @@ fn write_to_table(
         .context(super::UnableToRegisterArrowScanViewSnafu)
         .map_err(to_datafusion_error)?;
 
-    let view = ViewCreator::from_name(RelationName::new(view_name));
+    let view = ViewCreator::from_name(RelationName::from(view_name.as_str()));
     let rows = view
         .insert_into(table, tx, on_conflict)
         .map_err(to_datafusion_error)?;
@@ -1041,7 +1041,7 @@ mod test {
         ]));
 
         let table_definition = Arc::new(
-            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+            TableDefinition::new(RelationName::from("test_table"), Arc::clone(&schema))
                 .with_indexes(
                     vec![(
                         ColumnReference::try_from("id").expect("valid column ref"),
