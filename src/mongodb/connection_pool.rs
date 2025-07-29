@@ -89,6 +89,10 @@ fn build_connection_uri(
         query_params.push(format!("authSource={}", auth_source.expose_secret()));
     }
 
+    if let Some(direct_connection) = params.get("direct_connection") {
+        query_params.push(format!("directConnection={}", direct_connection.expose_secret()));
+    }
+
     let query_string = if query_params.is_empty() {
         String::new()
     } else {
