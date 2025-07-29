@@ -50,6 +50,16 @@ impl RelationName {
         &self.0
     }
 
+    pub(crate) fn use_database(&self, tx: &Transaction<'_>) -> duckdb::Result<()> {
+        if let Some(db) = self.0.catalog() {
+            let sql = format!("USE {db}");
+            tracing::debug!("{sql}");
+            tx.execute(&sql, [])?;
+        }
+
+        Ok(())
+    }
+
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
     pub(crate) fn generate_internal_name(&self, prefix: &str) -> super::Result<Self> {
         let unix_ms = std::time::SystemTime::now()
@@ -185,11 +195,11 @@ impl TableDefinition {
         let (sql, params) = match table_ref {
             TableReference::Bare { table } => (
                 "SELECT table_name FROM duckdb_tables() WHERE table_name LIKE ? AND schema_name = 'main'",
-                vec![format!("__data_{}%", table)],
+                vec![format!("__data_{table}%")],
             ),
             TableReference::Partial { schema, table } => (
                 "SELECT table_name FROM duckdb_tables() WHERE table_name LIKE ? AND schema_name = ?",
-                vec![format!("__data_{}%", table), schema.to_string()],
+                vec![format!("__data_{table}%"), schema.to_string()],
             ),
             TableReference::Full {
                 catalog,
@@ -197,7 +207,7 @@ impl TableDefinition {
                 table,
             } => (
                 "SELECT table_name FROM duckdb_tables() WHERE table_name LIKE ? AND schema_name = ? AND database_name = ?",
-                vec![format!("__data_{}%", table), schema.to_string(), catalog.to_string()],
+                vec![format!("__data_{table}%"), schema.to_string(), catalog.to_string()],
             ),
         };
 
@@ -460,15 +470,22 @@ impl TableManager {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
+
+        table_name
+            .use_database(&tx)
+            .context(super::UnableToCreateDuckDBTableSnafu)?;
+
         let record_batch_reader =
             create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));
         let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
 
         let view_name = table_name.generate_internal_name("scan")?;
-        tx.register_arrow_scan_view(&view_name.to_string(), &stream)
+        tx.register_arrow_scan_view(view_name.0.table(), &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
-        let sql = format!(r#"CREATE TABLE {table_name} AS SELECT * FROM {view_name}"#);
+        print_tables(&tx);
+
+        let sql = format!(r#"CREATE TABLE {table_name} AS SELECT * FROM {view_name}"#,);
         tracing::debug!("{sql}");
 
         tx.execute(&sql, [])
@@ -817,6 +834,15 @@ impl ViewCreator {
             .context(super::UnableToDropDuckDBTableSnafu)?;
 
         Ok(())
+    }
+}
+
+fn print_tables(tx: &Transaction<'_>) {
+    let mut stmt = tx.prepare("SELECT table_catalog || '.' || table_schema || '.' || table_name AS full_name FROM information_schema.tables").unwrap();
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+
+    for row in rows {
+        println!("{}", row.unwrap());
     }
 }
 

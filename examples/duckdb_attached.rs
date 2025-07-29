@@ -20,9 +20,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 /// to query multiple DuckDB database files from a single in-memory instance.
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG) // Set log level (TRACE, DEBUG, INFO, etc.)
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_max_level(tracing::Level::DEBUG) // Set log level (TRACE, DEBUG, INFO, etc.)
+    //     .init();
 
     // Create a new factory. This initializes a single in-memory DuckDB instance.
     let factory =
@@ -67,14 +67,14 @@ fn create_external_table(name: &str) -> Result<CreateExternalTable> {
 
     let name = TableReference::bare(name);
 
-    // let location = TEMPDIR.path().join(format!("{name}.{FILE_TYPE}"));
-    let location = format!("/tmp/{name}.{FILE_TYPE}");
+    let location = TEMPDIR.path().join(format!("{name}.{FILE_TYPE}"));
+    // let location = format!("/tmp/{name}.{FILE_TYPE}");
 
     Ok(CreateExternalTable {
         schema,
         name,
-        // location: location.to_string_lossy().to_string(),
-        location,
+        location: location.to_string_lossy().to_string(),
+        // location,
         file_type: FILE_TYPE.to_string(),
         table_partition_cols: vec![],
         if_not_exists: true,

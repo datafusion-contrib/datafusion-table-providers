@@ -99,7 +99,7 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
             .to_string_lossy()
             .to_string();
 
-        let table_ref_for_duckdb = TableReference::partial(db_name, cmd.name.table());
+        let table_ref_for_duckdb = TableReference::full(db_name, "main", cmd.name.table());
 
         let schema = Arc::new(cmd.schema.as_ref().into());
 
@@ -108,8 +108,6 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
             Arc::clone(&schema),
         )
         .with_constraints(cmd.constraints.clone());
-
-        eprintln!("{}", table_definition.name());
 
         make_initial_table(Arc::new(table_definition.clone()), &self.pool)?;
 
