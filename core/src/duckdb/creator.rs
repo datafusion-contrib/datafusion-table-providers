@@ -409,9 +409,8 @@ impl TableManager {
         tx.register_arrow_scan_view(&view_name, &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
-        let sql = format!(
-            r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,
-        );
+        let sql =
+            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,);
         tracing::debug!("{sql}");
 
         tx.execute(&sql, [])

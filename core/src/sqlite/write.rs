@@ -290,7 +290,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
         };

@@ -152,7 +152,7 @@ impl MySQLTableFactory {
             table_name,
             Arc::clone(&self.pool),
             schema,
-            Constraints::empty(),
+            Constraints::default(),
         );
 
         Ok(MySQLTableWriter::create(read_provider, mysql, None))

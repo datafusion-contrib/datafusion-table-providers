@@ -161,7 +161,9 @@ pub enum Error {
     #[snafu(display("Failed to register Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToRegisterArrowScanView { source: duckdb::Error },
 
-    #[snafu(display("Failed to register Arrow scan view to build table creation statement: {source}"))]
+    #[snafu(display(
+        "Failed to register Arrow scan view to build table creation statement: {source}"
+    ))]
     UnableToRegisterArrowScanViewForTableCreation { source: duckdb::Error },
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
@@ -717,7 +719,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -778,7 +780,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -835,7 +837,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -890,7 +892,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -948,7 +950,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
         };
