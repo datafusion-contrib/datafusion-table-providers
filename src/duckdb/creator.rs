@@ -27,6 +27,14 @@ use crate::util::{
 #[derive(Debug, Clone, Eq)]
 pub struct RelationName(TableReference);
 
+impl std::ops::Deref for RelationName {
+    type Target = TableReference;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl PartialEq for RelationName {
     fn eq(&self, other: &Self) -> bool {
         self.0.to_string() == other.0.to_string()
@@ -480,10 +488,8 @@ impl TableManager {
         let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
 
         let view_name = table_name.generate_internal_name("scan")?;
-        tx.register_arrow_scan_view(view_name.0.table(), &stream)
+        tx.register_arrow_scan_view(view_name.table(), &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
-
-        print_tables(&tx);
 
         let sql = format!(r#"CREATE TABLE {table_name} AS SELECT * FROM {view_name}"#,);
         tracing::debug!("{sql}");
@@ -834,15 +840,6 @@ impl ViewCreator {
             .context(super::UnableToDropDuckDBTableSnafu)?;
 
         Ok(())
-    }
-}
-
-fn print_tables(tx: &Transaction<'_>) {
-    let mut stmt = tx.prepare("SELECT table_catalog || '.' || table_schema || '.' || table_name AS full_name FROM information_schema.tables").unwrap();
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
-
-    for row in rows {
-        println!("{}", row.unwrap());
     }
 }
 

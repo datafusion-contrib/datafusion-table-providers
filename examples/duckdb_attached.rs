@@ -38,23 +38,26 @@ async fn main() -> Result<()> {
     let db2 = factory.create(&state, &cmd).await?;
 
     ctx.register_table("db1", db1).expect("to register table");
-
     ctx.register_table("db2", db2).expect("to register table");
 
-    ctx.sql("INSERT INTO db1 (i) VALUES (1), (2), (3)")
+    let df = ctx
+        .sql("INSERT INTO db1 (i) VALUES (1), (2), (3)")
         .await
         .expect("db1 insert");
-    ctx.sql("INSERT INTO db2 (i) VALUES (4), (5), (6)")
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("INSERT INTO db2 (i) VALUES (4), (5), (6)")
         .await
         .expect("db2 insert");
+    df.show().await.expect("show failed");
 
     let df = ctx.sql("SELECT * FROM db1").await.expect("select failed");
-
     df.show().await.expect("show failed");
 
     let df = ctx.sql("SELECT * FROM db2").await.expect("select failed");
-
     df.show().await.expect("show failed");
+
     Ok(())
 }
 

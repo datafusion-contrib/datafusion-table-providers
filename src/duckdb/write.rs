@@ -1,4 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
@@ -31,7 +30,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use super::creator::{TableDefinition, TableManager, ViewCreator};
-use super::{to_datafusion_error, RelationName};
+use super::to_datafusion_error;
 
 // checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
 // e.g. List(Field { name: 'a', data_type: Int32 }) != List(Field { name: 'b', data_type: Int32 })
@@ -591,18 +590,18 @@ fn write_to_table(
         schema,
     )));
 
-    let current_ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context(super::UnableToGetSystemTimeSnafu)
-        .map_err(to_datafusion_error)?
-        .as_millis();
+    let view_name = table
+        .table_name()
+        .generate_internal_name("scan")
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let view_name = format!("__scan_{}_{current_ts}", table.table_name());
-    tx.register_arrow_scan_view(&view_name, &stream)
+    view_name.use_database(tx).unwrap();
+
+    tx.register_arrow_scan_view(view_name.table(), &stream)
         .context(super::UnableToRegisterArrowScanViewSnafu)
         .map_err(to_datafusion_error)?;
 
-    let view = ViewCreator::from_name(RelationName::from(view_name.as_str()));
+    let view = ViewCreator::from_name(view_name);
     let rows = view
         .insert_into(table, tx, on_conflict)
         .map_err(to_datafusion_error)?;
@@ -644,7 +643,10 @@ mod test {
 
     use super::*;
     use crate::{
-        duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+        duckdb::{
+            creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+            RelationName,
+        },
         util::{column_reference::ColumnReference, indexes::IndexType},
     };
 

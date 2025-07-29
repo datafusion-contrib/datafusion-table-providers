@@ -15,6 +15,7 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
+use duckdb::AccessMode;
 use snafu::prelude::*;
 use std::{path::PathBuf, sync::Arc};
 
@@ -58,6 +59,7 @@ impl AttachedDuckDBTableProviderFactory {
     /// Returns an error if the in-memory DuckDB connection pool cannot be created.
     pub fn new() -> Result<Self, crate::duckdb::Error> {
         let pool = DuckDbConnectionPoolBuilder::memory()
+            .with_access_mode(AccessMode::ReadWrite)
             .build()
             .context(super::DbConnectionPoolSnafu)?;
         Ok(Self {
