@@ -20,6 +20,10 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 /// to query multiple DuckDB database files from a single in-memory instance.
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG) // Set log level (TRACE, DEBUG, INFO, etc.)
+        .init();
+
     // Create a new factory. This initializes a single in-memory DuckDB instance.
     let factory =
         Arc::new(AttachedDuckDBTableProviderFactory::new().expect("Failed to create factory"));
@@ -36,6 +40,13 @@ async fn main() -> Result<()> {
     ctx.register_table("db1", db1).expect("to register table");
 
     ctx.register_table("db2", db2).expect("to register table");
+
+    ctx.sql("INSERT INTO db1 (i) VALUES (1), (2), (3)")
+        .await
+        .expect("db1 insert");
+    ctx.sql("INSERT INTO db2 (i) VALUES (4), (5), (6)")
+        .await
+        .expect("db2 insert");
 
     let df = ctx.sql("SELECT * FROM db1").await.expect("select failed");
 
