@@ -162,6 +162,7 @@ impl DuckDBSettingsRegistry {
         registry.register(Box::new(MemoryLimitSetting));
         registry.register(Box::new(TempDirectorySetting));
         registry.register(Box::new(PreserveInsertionOrderSetting));
+        registry.register(Box::new(ThreadsSetting));
 
         registry
     }
@@ -274,6 +275,28 @@ impl DuckDBSetting for MemoryLimitSetting {
 
     fn format_sql_value(&self, value: &str) -> String {
         format!("'{}'", value)
+    }
+}
+
+/// Threads setting implementation
+#[derive(Debug)]
+pub struct ThreadsSetting;
+
+impl DuckDBSetting for ThreadsSetting {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn setting_name(&self) -> &'static str {
+        "threads"
+    }
+
+    fn scope(&self) -> DuckDBSettingScope {
+        DuckDBSettingScope::Global
+    }
+
+    fn get_value(&self, options: &HashMap<String, String>) -> Option<String> {
+        options.get("threads").cloned()
     }
 }
 
