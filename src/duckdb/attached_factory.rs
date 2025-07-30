@@ -139,10 +139,12 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::{Array, Int32Array, RecordBatch};
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
+    use datafusion_expr::dml::InsertOp;
     use duckdb::Connection;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -207,6 +209,92 @@ mod tests {
             .to_string();
         let actual: Vec<&str> = formatted.trim().split('\n').collect();
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_to_attached_db() -> DataFusionResult<()> {
+        // 1. Setup
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_write.db");
+        let factory = AttachedDuckDBTableProviderFactory::new().expect("failed to create factory");
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let df_schema = Arc::clone(&schema).try_into()?;
+
+        let cmd = CreateExternalTable {
+            schema: Arc::new(df_schema),
+            name: TableReference::bare("write_table"),
+            location: db_path.to_str().unwrap().to_string(),
+            file_type: String::new(),
+            table_partition_cols: Vec::new(),
+            if_not_exists: false,
+            definition: None,
+            order_exprs: Vec::new(),
+            unbounded: false,
+            options: Default::default(),
+            constraints: Default::default(),
+            column_defaults: Default::default(),
+            temporary: false,
+        };
+
+        let ctx = SessionContext::new();
+        let state: &dyn Session = &ctx.state();
+
+        // 2. Create the table provider
+        let table_provider = factory
+            .create(state, &cmd)
+            .await
+            .expect("Failed to create table provider");
+
+        // 3. First write
+        let data = vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>];
+        let batch = RecordBatch::try_new(Arc::clone(&schema), data)?;
+        let insert_plan = ctx.read_batch(batch)?.create_physical_plan().await?;
+        let write_exec = table_provider
+            .insert_into(state, insert_plan, InsertOp::Append)
+            .await?;
+        collect(write_exec, ctx.task_ctx()).await?;
+
+        // 4. First read
+        let read_exec = table_provider
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .expect("scan failed");
+        let batches = collect(read_exec, ctx.task_ctx()).await?;
+        let expected = vec![
+            "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        ];
+        let formatted = arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string();
+        let actual: Vec<&str> = formatted.trim().split('\n').collect();
+        assert_eq!(actual, expected);
+
+        // 5. Second write (append)
+        let data2 = vec![Arc::new(Int32Array::from(vec![4, 5])) as Arc<dyn Array>];
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), data2)?;
+        let insert_plan2 = ctx.read_batch(batch2)?.create_physical_plan().await?;
+        let write_exec2 = table_provider
+            .insert_into(state, insert_plan2, InsertOp::Append)
+            .await?;
+        collect(write_exec2, ctx.task_ctx()).await?;
+
+        // 6. Second read
+        let read_exec2 = table_provider
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .expect("scan failed");
+        let batches2 = collect(read_exec2, ctx.task_ctx()).await?;
+        let expected2 = vec![
+            "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 5 |", "+---+",
+        ];
+        let formatted2 = arrow::util::pretty::pretty_format_batches(&batches2)
+            .unwrap()
+            .to_string();
+        let actual2: Vec<&str> = formatted2.trim().split('\n').collect();
+        assert_eq!(actual2, expected2);
 
         Ok(())
     }
