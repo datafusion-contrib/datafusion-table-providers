@@ -1,4 +1,3 @@
-use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPoolBuilder;
 use crate::{
     duckdb::{
         make_initial_table, to_datafusion_error, write::DuckDBTableWriterBuilder, DuckDBTable,
@@ -15,11 +14,10 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::AccessMode;
 use snafu::prelude::*;
 use std::{path::PathBuf, sync::Arc};
 
-use super::DynDuckDbConnectionPool;
+use super::{DuckDBTableProviderFactory, DynDuckDbConnectionPool};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -43,9 +41,15 @@ pub enum Error {
 /// from the filename of the attached database. For example, if you attach a database
 /// at `/path/to/my_data.db`, you can query tables within that database using
 /// `my_data.table_name`.
-#[derive(Debug)]
 pub struct AttachedDuckDBTableProviderFactory {
     pool: Arc<DuckDbConnectionPool>,
+}
+
+impl std::fmt::Debug for AttachedDuckDBTableProviderFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttachedDuckDBTableProviderFactory")
+            .finish()
+    }
 }
 
 impl AttachedDuckDBTableProviderFactory {
@@ -57,28 +61,9 @@ impl AttachedDuckDBTableProviderFactory {
     /// # Errors
     ///
     /// Returns an error if the in-memory DuckDB connection pool cannot be created.
-    pub fn new() -> Result<Self, crate::duckdb::Error> {
-        Self::new_with_threads(None)
-    }
-
-    /// Creates a new `AttachedDuckDBTableProviderFactory` with a specific number of threads.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the in-memory DuckDB connection pool cannot be created.
-    pub fn new_with_threads(threads: Option<u64>) -> Result<Self, crate::duckdb::Error> {
-        let mut builder =
-            DuckDbConnectionPoolBuilder::memory().with_access_mode(AccessMode::ReadWrite);
-
-        if let Some(threads) = threads {
-            builder = builder.with_connection_setup_query(format!("SET threads = {threads}"));
-        }
-
-        let pool = builder.build().context(super::DbConnectionPoolSnafu)?;
-
-        Ok(Self {
-            pool: Arc::new(pool),
-        })
+    pub async fn new(factory: DuckDBTableProviderFactory) -> super::Result<Self> {
+        let pool = Arc::new(factory.get_or_init_memory_instance().await?);
+        Ok(Self { pool })
     }
 }
 
@@ -159,7 +144,7 @@ mod tests {
     use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
-    use duckdb::Connection;
+    use duckdb::{AccessMode, Connection};
     use insta::assert_snapshot;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -181,7 +166,10 @@ mod tests {
         drop(conn);
 
         // 2. Setup factory and create command
-        let factory = AttachedDuckDBTableProviderFactory::new().expect("failed to create factory");
+        let factory = DuckDBTableProviderFactory::new(AccessMode::ReadWrite);
+        let factory = AttachedDuckDBTableProviderFactory::new(factory)
+            .await
+            .expect("failed to create factory");
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let df_schema = schema.try_into()?;
@@ -231,7 +219,10 @@ mod tests {
         // 1. Setup
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test_write.db");
-        let factory = AttachedDuckDBTableProviderFactory::new().expect("failed to create factory");
+        let factory = DuckDBTableProviderFactory::new(AccessMode::ReadWrite);
+        let factory = AttachedDuckDBTableProviderFactory::new(factory)
+            .await
+            .expect("failed to create factory");
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let df_schema = Arc::clone(&schema).try_into()?;

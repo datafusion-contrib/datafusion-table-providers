@@ -11,7 +11,10 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
     sql::TableReference,
 };
-use datafusion_table_providers::duckdb::attached_factory::AttachedDuckDBTableProviderFactory;
+use datafusion_table_providers::duckdb::{
+    attached_factory::AttachedDuckDBTableProviderFactory, DuckDBTableProviderFactory,
+};
+use duckdb::AccessMode;
 use tempfile::TempDir;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -21,8 +24,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create a new factory. This initializes a single in-memory DuckDB instance.
-    let factory =
-        Arc::new(AttachedDuckDBTableProviderFactory::new().expect("Failed to create factory"));
+    let factory = DuckDBTableProviderFactory::new(AccessMode::ReadWrite);
+    let factory = Arc::new(
+        AttachedDuckDBTableProviderFactory::new(factory)
+            .await
+            .expect("Failed to create factory"),
+    );
 
     let config = SessionConfig::new().with_information_schema(true);
     let ctx = SessionContext::new_with_config(config);
