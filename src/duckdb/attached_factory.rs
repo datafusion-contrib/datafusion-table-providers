@@ -139,12 +139,12 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::{Array, Int32Array, RecordBatch};
+    use datafusion::common::arrow::array::{Array, Int32Array, RecordBatch};
+    use datafusion::logical_expr::logical_plan::dml::InsertOp;
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
-    use datafusion_expr::dml::InsertOp;
     use duckdb::Connection;
     use insta::assert_snapshot;
     use std::sync::Arc;
