@@ -368,7 +368,10 @@ impl TableManager {
     fn drop_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop this table
         tx.execute(
-            &format!(r#"DROP TABLE IF EXISTS {}"#, self.table_name()),
+            &format!(
+                r#"DROP TABLE IF EXISTS {}"#,
+                self.table_name().to_quoted_string()
+            ),
             [],
         )
         .context(super::UnableToDropDuckDBTableSnafu)?;
@@ -388,8 +391,8 @@ impl TableManager {
         // insert from this table, into the target table
         let mut insert_sql = format!(
             r#"INSERT INTO {} SELECT * FROM {}"#,
-            table.table_name(),
-            self.table_name()
+            table.table_name().to_quoted_string(),
+            self.table_name().to_quoted_string()
         );
 
         if let Some(on_conflict) = on_conflict {
@@ -491,7 +494,11 @@ impl TableManager {
         tx.register_arrow_scan_view(view_name.table(), &stream)
             .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
-        let sql = format!(r#"CREATE TABLE {table_name} AS SELECT * FROM {view_name}"#,);
+        let sql = format!(
+            r#"CREATE TABLE {} AS SELECT * FROM {}"#,
+            table_name.to_quoted_string(),
+            view_name.to_quoted_string()
+        );
         tracing::debug!("{sql}");
 
         tx.execute(&sql, [])
@@ -566,8 +573,8 @@ impl TableManager {
         tx.execute(
             &format!(
                 "CREATE OR REPLACE VIEW {base_table} AS SELECT * FROM {internal_table}",
-                base_table = self.definition_name(),
-                internal_table = self.table_name()
+                base_table = self.definition_name().to_quoted_string(),
+                internal_table = self.table_name().to_quoted_string()
             ),
             [],
         )
@@ -587,7 +594,7 @@ impl TableManager {
         // '"<name>"', otherwise it will be parsed to schema and table name
         let sql = format!(
             "SELECT name FROM pragma_table_info('{table_name}') WHERE pk = true",
-            table_name = self.table_name()
+            table_name = self.table_name().to_quoted_string()
         );
         tracing::debug!("{sql}");
 
@@ -768,7 +775,7 @@ impl TableManager {
     pub(crate) fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
         let sql = format!(
             "SELECT * FROM {table_name} LIMIT 0",
-            table_name = self.table_name()
+            table_name = self.table_name().to_quoted_string()
         );
         let mut stmt = tx.prepare(&sql).context(super::UnableToQueryDataSnafu)?;
         let result: duckdb::Arrow<'_> = stmt
@@ -780,7 +787,7 @@ impl TableManager {
     pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
         let sql = format!(
             "SELECT COUNT(1) FROM {table_name}",
-            table_name = self.table_name()
+            table_name = self.table_name().to_quoted_string()
         );
         let count = tx
             .query_row(&sql, [], |r| r.get::<usize, u64>(0))
@@ -816,8 +823,8 @@ impl ViewCreator {
         // insert from this view, into the target table
         let mut insert_sql = format!(
             r#"INSERT INTO {} SELECT * FROM {}"#,
-            table.table_name(),
-            self.name
+            table.table_name().to_quoted_string(),
+            self.name.to_quoted_string()
         );
 
         if let Some(on_conflict) = on_conflict {
@@ -932,22 +939,25 @@ pub(crate) mod tests {
         let schema = batches[0].schema();
 
         let table_definition = Arc::new(
-            TableDefinition::new(RelationName::from("eth.logs"), Arc::clone(&schema))
-                .with_constraints(get_unique_constraints(
-                    &["log_index", "transaction_hash"],
-                    Arc::clone(&schema),
-                ))
-                .with_indexes(vec![
-                    (
-                        ColumnReference::try_from("block_number").expect("valid column ref"),
-                        IndexType::Enabled,
-                    ),
-                    (
-                        ColumnReference::try_from("(log_index, transaction_hash)")
-                            .expect("valid column ref"),
-                        IndexType::Unique,
-                    ),
-                ]),
+            TableDefinition::new(
+                RelationName::from(TableReference::bare("eth.logs")),
+                Arc::clone(&schema),
+            )
+            .with_constraints(get_unique_constraints(
+                &["log_index", "transaction_hash"],
+                Arc::clone(&schema),
+            ))
+            .with_indexes(vec![
+                (
+                    ColumnReference::try_from("block_number").expect("valid column ref"),
+                    IndexType::Enabled,
+                ),
+                (
+                    ColumnReference::try_from("(log_index, transaction_hash)")
+                        .expect("valid column ref"),
+                    IndexType::Unique,
+                ),
+            ]),
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
@@ -1049,19 +1059,22 @@ pub(crate) mod tests {
 
         let schema = batches[0].schema();
         let table_definition = Arc::new(
-            TableDefinition::new(RelationName::from("eth.logs"), Arc::clone(&schema))
-                .with_constraints(get_pk_constraints(
-                    &["log_index", "transaction_hash"],
-                    Arc::clone(&schema),
-                ))
-                .with_indexes(
-                    vec![(
-                        ColumnReference::try_from("block_number").expect("valid column ref"),
-                        IndexType::Enabled,
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
+            TableDefinition::new(
+                RelationName::from(TableReference::bare("eth.logs")),
+                Arc::clone(&schema),
+            )
+            .with_constraints(get_pk_constraints(
+                &["log_index", "transaction_hash"],
+                Arc::clone(&schema),
+            ))
+            .with_indexes(
+                vec![(
+                    ColumnReference::try_from("block_number").expect("valid column ref"),
+                    IndexType::Enabled,
+                )]
+                .into_iter()
+                .collect(),
+            ),
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
@@ -1394,7 +1407,10 @@ pub(crate) mod tests {
         // check if the rows were inserted
         let rows = tx
             .query_row(
-                &format!(r#"SELECT COUNT(1) FROM {}"#, internal_table.table_name()),
+                &format!(
+                    r#"SELECT COUNT(1) FROM {}"#,
+                    internal_table.table_name().to_quoted_string()
+                ),
                 [],
                 |r| r.get::<usize, u64>(0),
             )
