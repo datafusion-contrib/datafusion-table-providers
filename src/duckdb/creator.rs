@@ -484,7 +484,7 @@ impl TableManager {
 
         table_name
             .use_database(&tx)
-            .context(super::UnableToCreateDuckDBTableSnafu)?;
+            .context(super::UnableToExecuteUseDatabaseSnafu)?;
 
         let record_batch_reader =
             create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));

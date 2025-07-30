@@ -169,6 +169,9 @@ pub enum Error {
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToDropArrowScanView { source: duckdb::Error },
+
+    #[snafu(display("Unable to execute USE database: {source}"))]
+    UnableToExecuteUseDatabase { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -671,7 +674,7 @@ pub(crate) fn make_initial_table(
     table_definition
         .name()
         .use_database(&tx)
-        .context(UnableToCreateDuckDBTableSnafu)
+        .context(UnableToExecuteUseDatabaseSnafu)
         .map_err(to_datafusion_error)?;
 
     let has_table = table_definition

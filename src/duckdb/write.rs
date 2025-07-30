@@ -593,9 +593,12 @@ fn write_to_table(
     let view_name = table
         .table_name()
         .generate_internal_name("scan")
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        .map_err(to_datafusion_error)?;
 
-    view_name.use_database(tx).unwrap();
+    view_name
+        .use_database(tx)
+        .context(super::UnableToExecuteUseDatabaseSnafu)
+        .map_err(to_datafusion_error)?;
 
     tx.register_arrow_scan_view(view_name.table(), &stream)
         .context(super::UnableToRegisterArrowScanViewSnafu)
