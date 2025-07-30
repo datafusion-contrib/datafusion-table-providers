@@ -183,6 +183,7 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
+    threads: Option<u64>,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -205,6 +206,7 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
+            threads: None,
         }
     }
 
@@ -310,7 +312,12 @@ impl DuckDBTableProviderFactory {
             AccessMode::ReadWrite => AccessMode::ReadWrite,
             AccessMode::Automatic => AccessMode::Automatic,
         };
-        let pool_builder = pool_builder.with_access_mode(access_mode);
+        let mut pool_builder = pool_builder.with_access_mode(access_mode);
+
+        if let Some(threads) = self.threads {
+            pool_builder =
+                pool_builder.with_connection_setup_query(format!("SET threads = {threads}"));
+        }
 
         let mut instances = self.instances.lock().await;
 

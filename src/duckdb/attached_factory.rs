@@ -58,10 +58,24 @@ impl AttachedDuckDBTableProviderFactory {
     ///
     /// Returns an error if the in-memory DuckDB connection pool cannot be created.
     pub fn new() -> Result<Self, crate::duckdb::Error> {
-        let pool = DuckDbConnectionPoolBuilder::memory()
-            .with_access_mode(AccessMode::ReadWrite)
-            .build()
-            .context(super::DbConnectionPoolSnafu)?;
+        Self::new_with_threads(None)
+    }
+
+    /// Creates a new `AttachedDuckDBTableProviderFactory` with a specific number of threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the in-memory DuckDB connection pool cannot be created.
+    pub fn new_with_threads(threads: Option<u64>) -> Result<Self, crate::duckdb::Error> {
+        let mut builder =
+            DuckDbConnectionPoolBuilder::memory().with_access_mode(AccessMode::ReadWrite);
+
+        if let Some(threads) = threads {
+            builder = builder.with_connection_setup_query(format!("SET threads = {threads}"));
+        }
+
+        let pool = builder.build().context(super::DbConnectionPoolSnafu)?;
+
         Ok(Self {
             pool: Arc::new(pool),
         })
