@@ -122,13 +122,13 @@ datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", 
 datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" }         # spiceai-47
 
 [[example]]
-name = "odbc_sqlite"
-path = "examples/odbc_sqlite.rs"
-required-features = ["sqlite", "odbc"]
-
-[[example]]
 name = "duckdb"
 path = "examples/duckdb.rs"
+required-features = ["duckdb"]
+
+[[example]]
+name = "duckdb_attached"
+path = "examples/duckdb_attached.rs"
 required-features = ["duckdb"]
 
 [[example]]
@@ -150,11 +150,6 @@ required-features = ["flight"]
 name = "sqlite"
 path = "examples/sqlite.rs"
 required-features = ["sqlite"]
-
-[[example]]
-name = "clickhouse"
-path = "examples/clickhouse.rs"
-required-features = ["clickhouse"]
 
 [[example]]
 name = "mysql"
