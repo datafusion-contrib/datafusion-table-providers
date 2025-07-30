@@ -134,3 +134,80 @@ impl TableProviderFactory for AttachedDuckDBTableProviderFactory {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::logical_expr::CreateExternalTable;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+    use datafusion::sql::TableReference;
+    use duckdb::Connection;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_create_attached_db() -> DataFusionResult<()> {
+        // 1. Create a DuckDB database file with a table
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).expect("Failed to open DuckDB");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE test_table (a INTEGER);
+            INSERT INTO test_table VALUES (7);
+        "#,
+        )
+        .expect("Failed to create table and insert data");
+        // Connection must be dropped, to release the write lock on the file.
+        drop(conn);
+
+        // 2. Setup factory and create command
+        let factory = AttachedDuckDBTableProviderFactory::new().expect("failed to create factory");
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let df_schema = schema.try_into()?;
+
+        let cmd = CreateExternalTable {
+            schema: Arc::new(df_schema),
+            name: TableReference::bare("test_table"),
+            location: db_path.to_str().unwrap().to_string(),
+            file_type: String::new(),
+            table_partition_cols: Vec::new(),
+            if_not_exists: false,
+            definition: None,
+            order_exprs: Vec::new(),
+            unbounded: false,
+            options: Default::default(),
+            constraints: Default::default(),
+            column_defaults: Default::default(),
+            temporary: false,
+        };
+
+        let ctx = SessionContext::new();
+        let state: &dyn Session = &ctx.state();
+
+        // 3. Create the table provider
+        let table_provider = factory
+            .create(state, &cmd)
+            .await
+            .expect("Failed to create table provider");
+
+        // 4. Verify by querying the data
+        let exec = table_provider
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .expect("scan failed");
+        let batches = collect(exec, ctx.task_ctx()).await?;
+
+        let expected = vec!["+---+", "| a |", "+---+", "| 7 |", "+---+"];
+        let formatted = arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string();
+        let actual: Vec<&str> = formatted.trim().split('\n').collect();
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+}
