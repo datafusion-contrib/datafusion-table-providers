@@ -146,6 +146,7 @@ mod tests {
     use datafusion::sql::TableReference;
     use datafusion_expr::dml::InsertOp;
     use duckdb::Connection;
+    use insta::assert_snapshot;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -203,12 +204,10 @@ mod tests {
             .expect("scan failed");
         let batches = collect(exec, ctx.task_ctx()).await?;
 
-        let expected = vec!["+---+", "| a |", "+---+", "| 7 |", "+---+"];
         let formatted = arrow::util::pretty::pretty_format_batches(&batches)
             .unwrap()
             .to_string();
-        let actual: Vec<&str> = formatted.trim().split('\n').collect();
-        assert_eq!(actual, expected);
+        assert_snapshot!(formatted);
 
         Ok(())
     }
@@ -263,38 +262,30 @@ mod tests {
             .await
             .expect("scan failed");
         let batches = collect(read_exec, ctx.task_ctx()).await?;
-        let expected = vec![
-            "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
-        ];
         let formatted = arrow::util::pretty::pretty_format_batches(&batches)
             .unwrap()
             .to_string();
-        let actual: Vec<&str> = formatted.trim().split('\n').collect();
-        assert_eq!(actual, expected);
+        assert_snapshot!(formatted);
 
         // 5. Second write (append)
-        let data2 = vec![Arc::new(Int32Array::from(vec![4, 5])) as Arc<dyn Array>];
-        let batch2 = RecordBatch::try_new(Arc::clone(&schema), data2)?;
-        let insert_plan2 = ctx.read_batch(batch2)?.create_physical_plan().await?;
-        let write_exec2 = table_provider
-            .insert_into(state, insert_plan2, InsertOp::Append)
+        let data = vec![Arc::new(Int32Array::from(vec![4, 5])) as Arc<dyn Array>];
+        let batch = RecordBatch::try_new(Arc::clone(&schema), data)?;
+        let insert_plan = ctx.read_batch(batch)?.create_physical_plan().await?;
+        let write_exec = table_provider
+            .insert_into(state, insert_plan, InsertOp::Append)
             .await?;
-        collect(write_exec2, ctx.task_ctx()).await?;
+        collect(write_exec, ctx.task_ctx()).await?;
 
         // 6. Second read
-        let read_exec2 = table_provider
+        let read_exec = table_provider
             .scan(&ctx.state(), None, &[], None)
             .await
             .expect("scan failed");
-        let batches2 = collect(read_exec2, ctx.task_ctx()).await?;
-        let expected2 = vec![
-            "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 5 |", "+---+",
-        ];
-        let formatted2 = arrow::util::pretty::pretty_format_batches(&batches2)
+        let batches = collect(read_exec, ctx.task_ctx()).await?;
+        let formatted = arrow::util::pretty::pretty_format_batches(&batches)
             .unwrap()
             .to_string();
-        let actual2: Vec<&str> = formatted2.trim().split('\n').collect();
-        assert_eq!(actual2, expected2);
+        assert_snapshot!(formatted);
 
         Ok(())
     }
