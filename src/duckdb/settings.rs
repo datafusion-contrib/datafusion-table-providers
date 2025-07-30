@@ -500,8 +500,8 @@ mod tests {
     fn test_settings_registry_new() {
         let registry = DuckDBSettingsRegistry::new();
 
-        // Registry should have 3 default settings
-        assert_eq!(registry.settings.len(), 3);
+        // Registry should have 4 default settings
+        assert_eq!(registry.settings.len(), 4);
 
         // Check that default settings are present by testing their names
         let setting_names: Vec<&'static str> =
@@ -525,7 +525,7 @@ mod tests {
         let registry = DuckDBSettingsRegistry::default();
 
         // Default should be the same as new()
-        assert_eq!(registry.settings.len(), 3);
+        assert_eq!(registry.settings.len(), 4);
     }
 
     #[test]

@@ -60,7 +60,7 @@ impl RelationName {
 
     pub(crate) fn use_database(&self, tx: &Transaction<'_>) -> duckdb::Result<()> {
         if let Some(db) = self.0.catalog() {
-            let sql = format!("USE {db}");
+            let sql = format!("USE '{db}'");
             tracing::debug!("{sql}");
             tx.execute(&sql, [])?;
         }
