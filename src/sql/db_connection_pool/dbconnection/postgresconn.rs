@@ -140,7 +140,7 @@ ORDER BY a.attnum;
 
 pub enum PostgresVariant {
     Default,
-    Redshift
+    Redshift,
 }
 
 #[derive(Debug, Snafu)]
@@ -239,9 +239,9 @@ impl<'a>
                 PostgresVariant::Default => row.get::<usize, Option<serde_json::Value>>(3),
                 // Redshift has no json* functions, so we make and parse the same value struct
                 // from a text column instead.
-                PostgresVariant::Redshift =>
-                    row.get::<usize, Option<&str>>(3)
-                       .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
+                PostgresVariant::Redshift => row
+                    .get::<usize, Option<&str>>(3)
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
             };
 
             let mut context =
@@ -347,11 +347,15 @@ impl PostgresConnection {
             .conn
             .query_one("SELECT version()", &[])
             .await
-            .map_err(|e| super::Error::UnableToGetSchema { source: Box::new(e)})?;
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
 
         let version: String = row
             .try_get(0)
-            .map_err(|e| super::Error::UnableToGetSchema { source: Box::new(e)})?;
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
 
         let variant = if version.contains("Redshift") {
             PostgresVariant::Redshift
@@ -362,7 +366,10 @@ impl PostgresConnection {
         Ok(variant)
     }
 
-    async fn query_variant_and_schema(&self, table_reference: &TableReference) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
+    async fn query_variant_and_schema(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
         let table_name = table_reference.table();
         let schema_name = table_reference.schema().unwrap_or("public");
 

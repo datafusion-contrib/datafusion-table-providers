@@ -43,9 +43,13 @@ fn get_schema() -> SchemaRef {
 #[tokio::test]
 async fn test_postgres_redshift_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
-        .await
-        .expect("Postgres container to start");
+    let container = common::start_postgres_docker_container(
+        "docker-pgredshift:latest",
+        port,
+        Some("ghcr.io/hearthsim"),
+    )
+    .await
+    .expect("Postgres container to start");
 
     let factory = PostgresTableProviderFactory::new();
     let ctx = SessionContext::new();
@@ -95,9 +99,13 @@ async fn test_postgres_redshift_schema_inference() {
 #[tokio::test]
 async fn test_postgres_redshift_schema_inference_complex_types() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
-        .await
-        .expect("Postgres container to start");
+    let container = common::start_postgres_docker_container(
+        "docker-pgredshift:latest",
+        port,
+        Some("ghcr.io/hearthsim"),
+    )
+    .await
+    .expect("Postgres container to start");
 
     let table_name = "example_table";
 
@@ -138,9 +146,13 @@ async fn test_postgres_redshift_schema_inference_complex_types() {
 #[tokio::test]
 async fn test_postgres_redshift_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
-        .await
-        .expect("Postgres container to start");
+    let container = common::start_postgres_docker_container(
+        "docker-pgredshift:latest",
+        port,
+        Some("ghcr.io/hearthsim"),
+    )
+    .await
+    .expect("Postgres container to start");
 
     let postgres_pool = Arc::new(
         PostgresConnectionPool::new(to_secret_map(common::get_pg_params(port)))
@@ -182,9 +194,13 @@ async fn test_postgres_redshift_view_schema_inference() {
 #[tokio::test]
 async fn test_postgres_redshift_materialized_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
-        .await
-        .expect("Postgres container to start");
+    let container = common::start_postgres_docker_container(
+        "docker-pgredshift:latest",
+        port,
+        Some("ghcr.io/hearthsim"),
+    )
+    .await
+    .expect("Postgres container to start");
 
     let postgres_pool = Arc::new(
         PostgresConnectionPool::new(to_secret_map(common::get_pg_params(port)))

@@ -46,7 +46,7 @@ pub(super) async fn start_postgres_docker_container(
                 "pg_isready -U postgres".to_string(),
             ]),
             interval: Some(1_000_000_000), // 1s
-            timeout: Some(500_000_000),  // 500ms
+            timeout: Some(500_000_000),    // 500ms
             retries: Some(5),
             start_period: Some(100_000_000), // 100ms
             start_interval: None,
