@@ -14,7 +14,7 @@ use datafusion_table_providers::postgres::PostgresTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::util::secrets::to_secret_map;
 
-const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table_pg.sql");
+const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table_redshift.sql");
 
 fn get_schema() -> SchemaRef {
     let fields = vec![
@@ -41,9 +41,9 @@ fn get_schema() -> SchemaRef {
 }
 
 #[tokio::test]
-async fn test_postgres_schema_inference() {
+async fn test_postgres_redshift_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
         .await
         .expect("Postgres container to start");
 
@@ -93,9 +93,9 @@ async fn test_postgres_schema_inference() {
 }
 
 #[tokio::test]
-async fn test_postgres_schema_inference_complex_types() {
+async fn test_postgres_redshift_schema_inference_complex_types() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
         .await
         .expect("Postgres container to start");
 
@@ -136,9 +136,9 @@ async fn test_postgres_schema_inference_complex_types() {
 }
 
 #[tokio::test]
-async fn test_postgres_view_schema_inference() {
+async fn test_postgres_redshift_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
         .await
         .expect("Postgres container to start");
 
@@ -160,7 +160,7 @@ async fn test_postgres_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table_redshift.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool.clone());
@@ -180,9 +180,9 @@ async fn test_postgres_view_schema_inference() {
 }
 
 #[tokio::test]
-async fn test_postgres_materialized_view_schema_inference() {
+async fn test_postgres_redshift_materialized_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container("docker-pgredshift:latest", port, Some("ghcr.io/hearthsim"))
         .await
         .expect("Postgres container to start");
 
@@ -204,7 +204,7 @@ async fn test_postgres_materialized_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table_redshift.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool);

@@ -26,13 +26,15 @@ pub(super) fn get_pg_params(port: usize) -> HashMap<String, String> {
 
 #[instrument]
 pub(super) async fn start_postgres_docker_container(
+    image: &str,
     port: usize,
+    registry: Option<&str>,
 ) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{PG_DOCKER_CONTAINER}-{port}");
     let port = port.try_into().unwrap_or(15432);
 
     let pg_docker_image = std::env::var("PG_DOCKER_IMAGE")
-        .unwrap_or_else(|_| format!("{}postgres:latest", container_registry()));
+        .unwrap_or_else(|_| format!("{}/{}", registry.unwrap_or(&container_registry()), image));
 
     let running_container = ContainerRunnerBuilder::new(container_name)
         .image(pg_docker_image)
@@ -43,10 +45,10 @@ pub(super) async fn start_postgres_docker_container(
                 "CMD-SHELL".to_string(),
                 "pg_isready -U postgres".to_string(),
             ]),
-            interval: Some(250_000_000), // 250ms
-            timeout: Some(100_000_000),  // 100ms
+            interval: Some(1_000_000_000), // 1s
+            timeout: Some(500_000_000),  // 500ms
             retries: Some(5),
-            start_period: Some(500_000_000), // 100ms
+            start_period: Some(100_000_000), // 100ms
             start_interval: None,
         })
         .build()?
