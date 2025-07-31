@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, MutexGuard};
 
 mod common;
 mod schema;
+mod schema_redshift;
 
 async fn arrow_postgres_round_trip(
     port: usize,
@@ -127,9 +128,10 @@ fn container_manager() -> Mutex<ContainerManager> {
 }
 
 async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
-    let running_container = common::start_postgres_docker_container(manager.port)
-        .await
-        .expect("Postgres container to start");
+    let running_container =
+        common::start_postgres_docker_container("postgres:latest", manager.port, None)
+            .await
+            .expect("Postgres container to start");
 
     manager.running_container = Some(running_container);
 
