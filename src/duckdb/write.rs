@@ -437,7 +437,6 @@ fn insert_overwrite(
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    let cloned_pool = Arc::clone(&pool);
     let mut db_conn = pool
         .connect_sync()
         .context(super::DbConnectionPoolSnafu)
@@ -456,7 +455,7 @@ fn insert_overwrite(
         .map_err(to_retriable_data_write_error)?;
 
     new_table
-        .create_table(cloned_pool, &tx)
+        .create_table(&tx)
         .map_err(to_retriable_data_write_error)?;
 
     let existing_tables = new_table
@@ -750,9 +749,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        overwrite_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        overwrite_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -856,9 +853,7 @@ mod test {
             .with_internal(true)
             .expect("to create table");
 
-        overwrite_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        overwrite_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -956,9 +951,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        append_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        append_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -1064,9 +1057,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        append_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        append_table.create_table(&tx).expect("to create table");
 
         // don't apply indexes, and leave the table empty to simulate a new table from TableProviderFactory::create()
 

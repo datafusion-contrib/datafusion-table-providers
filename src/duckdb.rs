@@ -172,6 +172,12 @@ pub enum Error {
 
     #[snafu(display("Unable to execute USE database: {source}"))]
     UnableToExecuteUseDatabase { source: duckdb::Error },
+
+    #[snafu(display("Failed to drop temporary table for DuckDB ingestion: {source}"))]
+    UnableToDropTemporaryTable { source: duckdb::Error },
+
+    #[snafu(display("Failed to drop temporary view for DuckDB ingestion: {source}"))]
+    UnableToDropTemporaryView { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -692,7 +698,7 @@ pub(crate) fn make_initial_table(
     let table_manager = TableManager::new(table_definition);
 
     table_manager
-        .create_table(cloned_pool, &tx)
+        .create_table(&tx)
         .map_err(to_datafusion_error)?;
 
     tx.commit()
