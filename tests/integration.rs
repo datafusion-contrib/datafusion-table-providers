@@ -4,6 +4,8 @@ mod arrow_record_batch_gen;
 mod docker;
 #[cfg(feature = "duckdb")]
 mod duckdb;
+#[cfg(feature = "duckdb")]
+mod duckdb_attached_factory;
 #[cfg(feature = "flight")]
 mod flight;
 #[cfg(feature = "mongodb")]
