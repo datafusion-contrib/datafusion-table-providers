@@ -29,7 +29,9 @@ use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use super::creator::{TableDefinition, TableManager, ViewCreator};
+use super::creator::{
+    run_with_specific_database_schema, TableDefinition, TableManager, ViewCreator,
+};
 use super::to_datafusion_error;
 
 // checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
@@ -595,14 +597,14 @@ fn write_to_table(
         .generate_internal_name("scan")
         .map_err(to_datafusion_error)?;
 
-    view_name
-        .use_database(tx)
-        .context(super::UnableToExecuteUseDatabaseSnafu)
-        .map_err(to_datafusion_error)?;
-
-    tx.register_arrow_scan_view(view_name.table(), &stream)
-        .context(super::UnableToRegisterArrowScanViewSnafu)
-        .map_err(to_datafusion_error)?;
+    let f = |tx: &Transaction<'_>| tx.register_arrow_scan_view(view_name.table(), &stream);
+    if let (Some(database), Some(schema)) = (view_name.catalog(), view_name.schema()) {
+        run_with_specific_database_schema(database, schema, tx, f)
+    } else {
+        f(tx)
+    }
+    .context(super::UnableToRegisterArrowScanViewSnafu)
+    .map_err(to_datafusion_error)?;
 
     let view = ViewCreator::from_name(view_name);
     let rows = view

@@ -58,16 +58,6 @@ impl RelationName {
         &self.0
     }
 
-    pub(crate) fn use_database(&self, tx: &Transaction<'_>) -> duckdb::Result<()> {
-        if let Some(db) = self.0.catalog() {
-            let sql = format!("USE '{db}'");
-            tracing::debug!("{sql}");
-            tx.execute(&sql, [])?;
-        }
-
-        Ok(())
-    }
-
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
     pub(crate) fn generate_internal_name(&self, prefix: &str) -> super::Result<Self> {
         let unix_ms = std::time::SystemTime::now()
@@ -104,6 +94,37 @@ impl From<&str> for RelationName {
     fn from(table_ref: &str) -> Self {
         RelationName(TableReference::from(table_ref))
     }
+}
+
+pub(crate) fn run_with_specific_database_schema<F, T>(
+    database: &str,
+    schema: &str,
+    tx: &Transaction<'_>,
+    f: F,
+) -> duckdb::Result<T>
+where
+    F: Fn(&Transaction<'_>) -> duckdb::Result<T>,
+{
+    let (previous_db, previous_schema) = get_current_db_schema(tx)?;
+
+    set_default_db_schema(tx, database, schema)?;
+    let t = f(tx)?;
+    set_default_db_schema(tx, &previous_db, &previous_schema)?;
+
+    Ok(t)
+}
+
+fn get_current_db_schema(tx: &Transaction<'_>) -> duckdb::Result<(String, String)> {
+    let mut stmt = tx.prepare("SELECT current_database(), current_schema()")?;
+    stmt.query_row([], |row| {
+        let db: String = row.get(0)?;
+        let schema: String = row.get(1)?;
+        Ok((db, schema))
+    })
+}
+
+fn set_default_db_schema(tx: &Transaction<'_>, db: &str, schema: &str) -> duckdb::Result<usize> {
+    tx.execute(&format!("USE \"{}\".\"{}\"", db, schema), [])
 }
 
 /// A table definition, which includes the table name, schema, constraints, and indexes.
@@ -348,8 +369,15 @@ impl TableManager {
             create_stmt = create_stmt.replace(");", &primary_key_clause);
         }
 
-        tx.execute(&create_stmt, [])
-            .context(super::UnableToCreateDuckDBTableSnafu)?;
+        let f = |tx: &Transaction<'_>| tx.execute(&create_stmt, []);
+
+        let table_name = self.table_name();
+        if let (Some(database), Some(schema)) = (table_name.catalog(), table_name.schema()) {
+            run_with_specific_database_schema(database, schema, tx, f)
+        } else {
+            f(tx)
+        }
+        .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         Ok(())
     }
@@ -482,17 +510,21 @@ impl TableManager {
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
 
-        table_name
-            .use_database(&tx)
-            .context(super::UnableToExecuteUseDatabaseSnafu)?;
-
         let record_batch_reader =
             create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));
         let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
 
         let view_name = table_name.generate_internal_name("scan")?;
-        tx.register_arrow_scan_view(view_name.table(), &stream)
-            .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
+
+        let f = |tx: &Transaction<'_>| tx.register_arrow_scan_view(view_name.table(), &stream);
+
+        let table_name = self.table_name();
+        if let (Some(database), Some(schema)) = (table_name.catalog(), table_name.schema()) {
+            run_with_specific_database_schema(database, schema, &tx, f)
+        } else {
+            f(&tx)
+        }
+        .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
 
         let sql = format!(
             r#"CREATE TABLE {} AS SELECT * FROM {}"#,
@@ -789,6 +821,7 @@ impl TableManager {
             "SELECT COUNT(1) FROM {table_name}",
             table_name = self.table_name().to_quoted_string()
         );
+
         let count = tx
             .query_row(&sql, [], |r| r.get::<usize, u64>(0))
             .context(super::UnableToQueryDataSnafu)?;
@@ -843,8 +876,11 @@ impl ViewCreator {
 
     pub(crate) fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop this view
-        tx.execute(&format!(r#"DROP VIEW IF EXISTS {}"#, self.name), [])
-            .context(super::UnableToDropDuckDBTableSnafu)?;
+        tx.execute(
+            &format!(r#"DROP VIEW IF EXISTS {}"#, self.name.to_quoted_string()),
+            [],
+        )
+        .context(super::UnableToDropDuckDBTableSnafu)?;
 
         Ok(())
     }

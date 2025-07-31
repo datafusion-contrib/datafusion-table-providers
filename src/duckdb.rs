@@ -678,12 +678,6 @@ pub(crate) fn make_initial_table(
         .context(UnableToBeginTransactionSnafu)
         .map_err(to_datafusion_error)?;
 
-    table_definition
-        .name()
-        .use_database(&tx)
-        .context(UnableToExecuteUseDatabaseSnafu)
-        .map_err(to_datafusion_error)?;
-
     let has_table = table_definition
         .has_table(&tx)
         .map_err(to_datafusion_error)?;
