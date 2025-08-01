@@ -70,7 +70,7 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             _ => Ok(format!("\"{name}\"")),
         },
         Expr::Cast(cast) => handle_cast(cast, engine, expr),
-        Expr::Literal(value) => match value {
+        Expr::Literal(value, _) => match value {
             ScalarValue::Date32(Some(value)) => match engine {
                 Some(Engine::SQLite) => {
                     Ok(format!("date({}, 'unixepoch')", value * SECONDS_IN_DAY))
