@@ -32,7 +32,7 @@ async fn arrow_duckdb_round_trip(
         order_exprs: vec![],
         unbounded: false,
         options: HashMap::new(),
-        constraints: Constraints::empty(),
+        constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -93,7 +93,8 @@ async fn arrow_duckdb_round_trip(
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
 #[ignore] // DuckDB does not support Decimal256 / duckdb_arrow_scan failed to register view
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
-#[ignore] // Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
+#[ignore]
+// Interval(DayTime) is not supported: / "Conversion Error: Could not convert Interval to Microsecond"
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[ignore] // TimeUnit::Nanosecond is not correctly supported; written values are zeros
 #[case::duration(get_arrow_duration_record_batch(), "duration")]

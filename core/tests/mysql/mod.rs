@@ -704,7 +704,7 @@ async fn arrow_mysql_round_trip(
             .into_iter()
             .map(|(k, v)| (k, v.expose_secret().to_string()))
             .collect(),
-        constraints: Constraints::empty(),
+        constraints: Constraints::default(),
         column_defaults: Default::default(),
     };
     let table_provider = factory

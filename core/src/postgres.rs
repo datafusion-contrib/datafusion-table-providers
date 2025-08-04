@@ -179,7 +179,7 @@ impl PostgresTableFactory {
             table_reference,
             Arc::clone(&self.pool),
             schema,
-            Constraints::empty(),
+            Constraints::default(),
         );
 
         Ok(PostgresTableWriter::create(read_provider, postgres, None))

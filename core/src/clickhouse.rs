@@ -53,7 +53,7 @@ impl ClickHouseTableFactory {
             args,
             self.pool.clone(),
             schema,
-            Constraints::empty(),
+            Constraints::default(),
         ));
 
         #[cfg(feature = "clickhouse-federation")]
