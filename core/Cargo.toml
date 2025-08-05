@@ -108,7 +108,7 @@ insta = { version = "1.43.1", features = ["filters"] }
 prost = { version = "0.13.5" }
 rand = "0.9"
 reqwest = "0.12"
-rstest = "0.25.0"
+rstest = "0.26.1"
 test-log = { version = "0.2", features = ["trace"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
