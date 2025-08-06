@@ -421,6 +421,12 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
+        // Skip empty batches to avoid SQL syntax errors
+        if batch.num_rows() == 0 {
+            tracing::debug!("Skipping insert of empty batch");
+            return Ok(());
+        }
+
         let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
 
         let sea_query_on_conflict =
