@@ -242,12 +242,14 @@ impl DataSink for PostgresDataSink {
                 self.num_records_before_stop
             );
 
+            // Skip empty batches to avoid SQL syntax errors
+            if batch_num_rows == 0 {
+                tracing::debug!("Skipping empty batch");
+                continue;
+            }
+
             // Check if we've reached the record limit before processing this batch
             if let Some(max_records) = self.num_records_before_stop {
-                if batch_num_rows == 0 && num_rows < max_records {
-                    continue;
-                };
-
                 if num_rows + batch_num_rows as u64 >= max_records {
                     // Truncate the batch to only include records up to the limit
                     let records_to_take = (max_records - num_rows) as usize;
@@ -278,6 +280,11 @@ impl DataSink for PostgresDataSink {
                     .map_err(to_datafusion_error)?;
 
                 for batch in &batches_buffer {
+                    // Skip empty batches
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+
                     constraints::validate_batch_with_constraints(
                         &[batch.clone()],
                         self.postgres.constraints(),
