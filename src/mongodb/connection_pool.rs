@@ -123,9 +123,7 @@ fn build_connection_uri(
         format!("?{}", query_params.join("&"))
     };
 
-    let uri = format!(
-        "mongodb://{auth}{host}:{port}/{db_name}{query_string}"
-    );
+    let uri = format!("mongodb://{auth}{host}:{port}/{db_name}{query_string}");
     Ok((uri, Some(db_name.to_string())))
 }
 

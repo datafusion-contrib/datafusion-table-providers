@@ -30,7 +30,7 @@ pub fn infer_arrow_schema_from_documents(
 
 fn analyze_document(doc: &Document, field_types: &mut HashMap<String, DataType>, tz: Option<&str>) {
     for (key, value) in doc {
-        let inferred_type = infer_bson_type(key, value, tz);
+        let inferred_type = infer_bson_type(value, tz);
 
         match field_types.get(key) {
             Some(existing_type) => {
@@ -45,7 +45,7 @@ fn analyze_document(doc: &Document, field_types: &mut HashMap<String, DataType>,
     }
 }
 
-fn infer_bson_type(field_name: &String, value: &Bson, tz: Option<&str>) -> DataType {
+fn infer_bson_type(value: &Bson, tz: Option<&str>) -> DataType {
     match value {
         Bson::Double(_) => DataType::Float64,
         Bson::String(_) => DataType::Utf8,
@@ -404,12 +404,12 @@ mod tests {
         // Generate 100 documents with varying schemas
         for i in 0..100 {
             let mut doc = Document::new();
-            doc.insert("id", i);
-            doc.insert("name", format!("user_{i}"));
+            doc.insert("id", i as i32);
+            doc.insert("name", format!("user_{}", i));
 
             // Add optional fields for some documents
             if i % 2 == 0 {
-                doc.insert("age", ((20 + i % 50)));
+                doc.insert("age", (20 + i % 50) as i32);
             }
             if i % 3 == 0 {
                 doc.insert("city", "NYC");
