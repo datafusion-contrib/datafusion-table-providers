@@ -55,6 +55,9 @@ pub enum Error {
 
     #[snafu(display("Authentication failed. Verify username and password."))]
     InvalidUsernameOrPassword,
+
+    #[snafu(display("Invalid document access: {message}"))]
+    InvalidDocumentAccess { message: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;

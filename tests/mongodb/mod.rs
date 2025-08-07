@@ -29,49 +29,74 @@ async fn test_mongodb_datetime_types(port: usize) {
     let ts3 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00.123Z")
         .unwrap()
         .with_timezone(&Utc);
+    let ts4 = DateTime::parse_from_rfc3339("2024-09-12T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
 
     let test_docs = vec![doc! {
         "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
         "timestamp_one_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts1))),
         "timestamp_two_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts2))),
         "timestamp_three_fraction": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts3))),
+        "created_date": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts4))),
     }];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp_field",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
         Field::new(
             "timestamp_one_fraction",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
         Field::new(
             "timestamp_two_fraction",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
         Field::new(
             "timestamp_three_fraction",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
+        Field::new("created_date", DataType::Date32, true),
     ]));
 
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_000])),
-            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_100])),
-            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_120])),
-            Arc::new(TimestampMillisecondArray::from(vec![1_726_135_200_123])),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![1_726_135_200_000])
+                    .with_timezone(Arc::from("UTC")),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![1_726_135_200_100])
+                    .with_timezone(Arc::from("UTC")),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![1_726_135_200_120])
+                    .with_timezone(Arc::from("UTC")),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![1_726_135_200_123])
+                    .with_timezone(Arc::from("UTC")),
+            ),
+            Arc::new(Date32Array::from(vec![19_978])),
         ],
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "timestamp_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(
+        port,
+        "timestamp_collection",
+        test_docs,
+        expected_record,
+        None,
+    )
+    .await;
 }
 
 async fn test_mongodb_numeric_types(port: usize) {
@@ -112,7 +137,7 @@ async fn test_mongodb_numeric_types(port: usize) {
         .downcast_ref::<Decimal128Array>()
         .unwrap();
 
-    arrow_mongodb_one_way(port, "numeric_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(port, "numeric_collection", test_docs, expected_record, None).await;
 }
 
 async fn test_mongodb_string_types(port: usize) {
@@ -148,7 +173,7 @@ async fn test_mongodb_string_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "string_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(port, "string_collection", test_docs, expected_record, None).await;
 }
 
 async fn test_mongodb_boolean_types(port: usize) {
@@ -181,7 +206,7 @@ async fn test_mongodb_boolean_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "boolean_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(port, "boolean_collection", test_docs, expected_record, None).await;
 }
 
 async fn test_mongodb_binary_types(port: usize) {
@@ -210,7 +235,7 @@ async fn test_mongodb_binary_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "binary_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(port, "binary_collection", test_docs, expected_record, None).await;
 }
 
 async fn test_mongodb_object_id_types(port: usize) {
@@ -236,7 +261,14 @@ async fn test_mongodb_object_id_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "objectid_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(
+        port,
+        "objectid_collection",
+        test_docs,
+        expected_record,
+        None,
+    )
+    .await;
 }
 
 async fn test_mongodb_array_types(port: usize) {
@@ -353,7 +385,7 @@ async fn test_mongodb_array_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "array_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(port, "array_collection", test_docs, expected_record, None).await;
 }
 
 async fn test_mongodb_nested_object_types(port: usize) {
@@ -456,7 +488,7 @@ async fn test_mongodb_nested_object_types(port: usize) {
     let expected_empty = serde_json::json!({});
 
     // Register DataFusion table
-    let mongo_conn_pool = common::get_mongodb_connection_pool(port)
+    let mongo_conn_pool = common::get_mongodb_connection_pool(port, None)
         .await
         .expect("MongoDB connection pool should be created");
 
@@ -470,7 +502,7 @@ async fn test_mongodb_nested_object_types(port: usize) {
     // Query the data
     let sql = r#"SELECT "user", "metadata", "empty_object", "simple_string" FROM nested_object_collection"#;
     let df = ctx
-        .sql(&sql)
+        .sql(sql)
         .await
         .expect("DataFrame should be created from query");
 
@@ -571,7 +603,14 @@ async fn test_mongodb_null_and_missing_fields(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    arrow_mongodb_one_way(port, "null_fields_collection", test_docs, expected_record).await;
+    arrow_mongodb_one_way(
+        port,
+        "null_fields_collection",
+        test_docs,
+        expected_record,
+        None,
+    )
+    .await;
 }
 
 async fn arrow_mongodb_one_way(
@@ -579,6 +618,7 @@ async fn arrow_mongodb_one_way(
     collection_name: &str,
     test_docs: Vec<Document>,
     expected_record: RecordBatch,
+    unnest_depth: Option<usize>,
 ) -> Vec<RecordBatch> {
     tracing::debug!("Running MongoDB tests on {collection_name}");
 
@@ -603,7 +643,7 @@ async fn arrow_mongodb_one_way(
     }
 
     // Register DataFusion table
-    let mongo_conn_pool = common::get_mongodb_connection_pool(port)
+    let mongo_conn_pool = common::get_mongodb_connection_pool(port, unnest_depth)
         .await
         .expect("MongoDB connection pool should be created");
 
@@ -650,6 +690,83 @@ async fn arrow_mongodb_one_way(
     record_batches
 }
 
+async fn test_mongodb_unnesting_depth_1(port: usize) {
+    let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ts4 = DateTime::parse_from_rfc3339("2024-09-12T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let test_docs = vec![
+        doc! {
+            "id": 1,
+           "user": {
+                "name": "John",
+                "age": 10,
+            },
+            "created_date": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts4))),
+        },
+        doc! {
+            "id": 2,
+            "user": {
+                "name": "Jane",
+                "age": 20,
+            },
+            "timestamp_field": Bson::DateTime(BsonDateTime::from(SystemTime::from(ts0))),
+        },
+        doc! {
+            "id": 3,
+            "user": {
+                "name": "Bob",
+            },
+            "active": true,
+        },
+    ];
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("user.name", DataType::Utf8, true),
+        Field::new("user.age", DataType::Int32, true),
+        Field::new("created_date", DataType::Date32, true),
+        Field::new(
+            "timestamp_field",
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            true,
+        ),
+        Field::new("active", DataType::Boolean, true),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+            Arc::new(StringArray::from(vec![
+                Some("John"),
+                Some("Jane"),
+                Some("Bob"),
+            ])),
+            Arc::new(Int32Array::from(vec![Some(10), Some(20), None])),
+            Arc::new(Date32Array::from(vec![Some(19_978), None, None])),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![None, Some(1_726_135_200_000), None])
+                    .with_timezone(Arc::from("UTC")),
+            ),
+            Arc::new(BooleanArray::from(vec![None, None, Some(true)])),
+        ],
+    )
+    .expect("Failed to create arrow record batch");
+
+    arrow_mongodb_one_way(
+        port,
+        "unnesting_collection",
+        test_docs,
+        expected_record,
+        Some(1),
+    )
+    .await;
+}
+
 use datafusion::common::Result as DFResult;
 fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<RecordBatch> {
     let schema = batch.schema();
@@ -691,6 +808,7 @@ async fn test_mongodb_arrow_oneway() {
     test_mongodb_array_types(port).await;
     test_mongodb_nested_object_types(port).await;
     test_mongodb_null_and_missing_fields(port).await;
+    test_mongodb_unnesting_depth_1(port).await;
 
     mongodb_container.remove().await.expect("container to stop");
 }
