@@ -12,7 +12,10 @@ use crate::{
 
 const MONGODB_DOCKER_CONTAINER: &str = "runtime-integration-test-mongodb";
 
-pub(super) fn get_mongodb_params(port: usize) -> HashMap<String, SecretString> {
+pub(super) fn get_mongodb_params(
+    port: usize,
+    unnest_depth: Option<usize>,
+) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
     params.insert(
         "mongodb_host".to_string(),
@@ -56,6 +59,14 @@ pub(super) fn get_mongodb_params(port: usize) -> HashMap<String, SecretString> {
         "mongodb_sslmode".to_string(),
         SecretString::from("disabled".to_string()),
     );
+
+    if let Some(unnest_depth) = unnest_depth {
+        params.insert(
+            "unnest_depth".to_string(),
+            SecretString::from(unnest_depth.to_string()),
+        );
+    }
+
     params
 }
 
@@ -103,8 +114,9 @@ pub async fn start_mongodb_docker_container(
 #[instrument]
 pub(super) async fn get_mongodb_connection_pool(
     port: usize,
+    unnest_depth: Option<usize>,
 ) -> Result<MongoDBConnectionPool, anyhow::Error> {
-    let mongodb_pool = MongoDBConnectionPool::new(get_mongodb_params(port))
+    let mongodb_pool = MongoDBConnectionPool::new(get_mongodb_params(port, unnest_depth))
         .await
         .expect("Failed to create MongoDB Connection Pool");
 

@@ -14,18 +14,31 @@ use std::sync::Arc;
 
 use crate::mongodb::utils::arrow::mongo_docs_to_arrow;
 use crate::mongodb::utils::schema::infer_arrow_schema_from_documents;
+use crate::mongodb::utils::unnest::{unnest_bson_documents, UnnestBehavior, UnnestParameters};
 use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu};
 
-const NUM_DOCUMENTS_TO_INFER_SCHEMA: i64 = 20;
+const NUM_DOCUMENTS_TO_INFER_SCHEMA: i64 = 400;
 
 pub struct MongoDBConnection {
     pub client: Arc<Client>,
     pub db_name: String,
+    tz: Option<String>,
+    unnest_parameters: UnnestParameters,
 }
 
 impl MongoDBConnection {
-    pub fn new(client: Arc<Client>, db_name: String) -> Self {
-        MongoDBConnection { client, db_name }
+    pub fn new(
+        client: Arc<Client>,
+        db_name: String,
+        tz: Option<String>,
+        unnest_parameters: UnnestParameters,
+    ) -> Self {
+        MongoDBConnection {
+            client,
+            db_name,
+            tz,
+            unnest_parameters,
+        }
     }
 
     fn get_collection(&self, collection: &str) -> Collection<Document> {
@@ -49,7 +62,12 @@ impl MongoDBConnection {
             .boxed()
             .context(UnableToGetSchemaSnafu)?;
 
-        infer_arrow_schema_from_documents(&docs)
+        let unnested_docs = match self.unnest_parameters.behavior {
+            UnnestBehavior::Depth(0) => docs,
+            _ => unnest_bson_documents(docs, &self.unnest_parameters)?,
+        };
+
+        infer_arrow_schema_from_documents(&unnested_docs, self.tz.clone().as_deref())
             .boxed()
             .context(UnableToGetSchemaSnafu)
     }
@@ -75,12 +93,20 @@ impl MongoDBConnection {
         let cursor = find.await.boxed().context(QuerySnafu)?;
         let chunked_stream = cursor.try_chunks(4_000);
         let projected_schema_clone = Arc::clone(projected_schema);
+        let unnest_parameters = self.unnest_parameters.clone();
 
         let mut batch_stream = Box::pin(stream! {
             for await chunk in chunked_stream {
                 match chunk {
                     Ok(docs) => {
-                        let batch = mongo_docs_to_arrow(&docs, Arc::clone(&projected_schema_clone))?;
+                        let unnested_docs = match unnest_parameters.behavior {
+                            UnnestBehavior::Depth(0) => docs,
+                            _ => {
+                                unnest_bson_documents(docs, &unnest_parameters)?
+                            }
+                        };
+
+                        let batch = mongo_docs_to_arrow(&unnested_docs, Arc::clone(&projected_schema_clone))?;
                         yield Ok(batch);
                     }
                     Err(e) => yield Err(Error::QueryError { source: Box::new(e) }),

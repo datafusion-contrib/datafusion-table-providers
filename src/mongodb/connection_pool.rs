@@ -1,3 +1,4 @@
+use crate::mongodb::utils::unnest::{DuplicateBehavior, UnnestBehavior, UnnestParameters};
 use crate::mongodb::{
     connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result,
 };
@@ -10,10 +11,13 @@ use mongodb::{
 use secrecy::{ExposeSecret, SecretString};
 use snafu::ResultExt;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
 #[derive(Clone, Debug)]
 pub struct MongoDBConnectionPool {
     client: Arc<Client>,
     db_name: String,
+    tz: Option<String>,
+    unnest_parameters: UnnestParameters,
 }
 
 const DEFAULT_HOST: &str = "localhost";
@@ -22,6 +26,7 @@ const DEFAULT_DATABASE: &str = "default";
 const DEFAULT_MIN_POOL_SIZE: u32 = 10;
 const DEFAULT_MAX_POOL_SIZE: u32 = 100;
 const DEFAULT_SSL_MODE: &str = "required";
+const DEFAULT_UNNEST_DEPTH: &str = "0";
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
@@ -40,11 +45,25 @@ impl MongoDBConnectionPool {
 
         let client = Client::with_options(client_options).context(ConnectionFailedSnafu)?;
 
+        let unnest_depth: usize =
+            get_param_or_default(&params, "unnest_depth", DEFAULT_UNNEST_DEPTH)
+                .parse()
+                .map_err(|_| Error::InvalidParameter {
+                    parameter_name: "unnest_depth".to_string(),
+                })?;
+
         test_connection(&client, &db_name).await?;
 
         Ok(Self {
             client: Arc::new(client),
             db_name,
+            tz: params
+                .get("time_zone")
+                .map(|t| t.expose_secret().to_string()),
+            unnest_parameters: UnnestParameters {
+                behavior: UnnestBehavior::Depth(unnest_depth),
+                duplicate_behavior: DuplicateBehavior::Error,
+            },
         })
     }
 
@@ -52,6 +71,8 @@ impl MongoDBConnectionPool {
         Ok(Box::new(MongoDBConnection::new(
             Arc::clone(&self.client),
             self.db_name.clone(),
+            self.tz.clone(),
+            self.unnest_parameters.clone(),
         )))
     }
 }
@@ -87,6 +108,13 @@ fn build_connection_uri(
     let mut query_params = Vec::new();
     if let Some(auth_source) = params.get("auth_source") {
         query_params.push(format!("authSource={}", auth_source.expose_secret()));
+    }
+
+    if let Some(direct_connection) = params.get("direct_connection") {
+        query_params.push(format!(
+            "directConnection={}",
+            direct_connection.expose_secret()
+        ));
     }
 
     let query_string = if query_params.is_empty() {
