@@ -502,7 +502,7 @@ async fn test_mongodb_nested_object_types(port: usize) {
     // Query the data
     let sql = r#"SELECT "user", "metadata", "empty_object", "simple_string" FROM nested_object_collection"#;
     let df = ctx
-        .sql(&sql)
+        .sql(sql)
         .await
         .expect("DataFrame should be created from query");
 

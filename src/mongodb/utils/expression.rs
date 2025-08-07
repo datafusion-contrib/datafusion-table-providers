@@ -63,7 +63,7 @@ pub fn expr_to_mongo_filter(expr: &Expr) -> Option<Document> {
             }
         },
         _ => {
-            println!("Non-binary expr: {:?}", expr);
+            println!("Non-binary expr: {expr:?}");
             None
         }
     }

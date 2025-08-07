@@ -4,7 +4,7 @@ use arrow::array::{
     Int32Builder, Int64Builder, ListBuilder, NullBuilder, RecordBatch, StringBuilder,
     TimestampMillisecondBuilder,
 };
-use chrono::{LocalResult, TimeZone, Timelike, Utc};
+use chrono::{LocalResult, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use mongodb::bson::{Bson, Document};
 use num_traits::ToPrimitive;
@@ -139,7 +139,7 @@ fn finish_builders(mut builders: BuilderMap, schema: &SchemaRef) -> Result<Vec<A
             return Err(Error::ConversionError {
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Missing builder for field: {}", field_name),
+                    format!("Missing builder for field: {field_name}"),
                 )),
             });
         }
@@ -273,7 +273,7 @@ impl ArrayBuilderTrait for StringArrayBuilder {
             }
             Some(Bson::Null) => self.0.append_null(),
             Some(other) => {
-                self.0.append_value(format!("{}", other));
+                self.0.append_value(format!("{other}"));
             }
             None => self.0.append_null(),
         }
@@ -467,7 +467,7 @@ impl ArrayBuilderTrait for ListArrayBuilder {
                 for item in arr {
                     match item {
                         Bson::String(s) => self.0.values().append_value(s),
-                        other => self.0.values().append_value(format!("{}", other)),
+                        other => self.0.values().append_value(format!("{other}")),
                     }
                 }
                 self.0.append(true);
@@ -580,7 +580,7 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(active_array.value(0), true);
+        assert!(active_array.value(0));
     }
 
     #[test]

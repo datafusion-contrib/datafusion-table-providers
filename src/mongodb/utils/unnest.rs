@@ -1,5 +1,5 @@
 use crate::mongodb::Error;
-use mongodb::bson::{doc, Bson, Document};
+use mongodb::bson::{Bson, Document};
 
 #[derive(Debug, Clone)]
 pub enum DuplicateBehavior {
@@ -65,7 +65,7 @@ fn flatten_document_recursive(
         let new_path = if current_path.is_empty() {
             key.clone()
         } else {
-            format!("{}.{}", current_path, key)
+            format!("{current_path}.{key}")
         };
 
         match value {
@@ -110,7 +110,7 @@ fn handle_duplicate_key(
 mod tests {
     use super::*;
     use crate::mongodb::Error;
-    use mongodb::bson::{doc, Bson};
+    use mongodb::bson::doc;
 
     #[test]
     fn test_unnest_empty_documents() {
@@ -143,7 +143,7 @@ mod tests {
         let flattened = &result[0];
         assert_eq!(flattened.get_str("name").unwrap(), "John");
         assert_eq!(flattened.get_i32("age").unwrap(), 30);
-        assert_eq!(flattened.get_bool("active").unwrap(), true);
+        assert!(flattened.get_bool("active").unwrap());
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
         assert!(flattened.contains_key("hobbies")); // Array should remain as-is
         assert!(flattened.contains_key("metadata.created"));
         assert_eq!(flattened.get_i32("metadata.count").unwrap(), 42);
-        assert_eq!(flattened.get_bool("metadata.active").unwrap(), true);
+        assert!(flattened.get_bool("metadata.active").unwrap());
         assert_eq!(flattened.get_f64("metadata.score").unwrap(), 95.5);
     }
 
@@ -313,7 +313,7 @@ mod tests {
 
             // Add all top-level keys with "custom_" prefix
             for (key, value) in doc {
-                result.insert(format!("custom_{}", key), value.clone());
+                result.insert(format!("custom_{key}"), value.clone());
             }
 
             Ok(result)
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(result.len(), 1);
 
         let processed = &result[0];
-        assert_eq!(processed.get_bool("custom_processed").unwrap(), true);
+        assert!(processed.get_bool("custom_processed").unwrap());
         assert_eq!(processed.get_str("custom_name").unwrap(), "John");
         assert_eq!(processed.get_i32("custom_age").unwrap(), 30);
     }
