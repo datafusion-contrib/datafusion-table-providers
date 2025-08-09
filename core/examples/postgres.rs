@@ -118,4 +118,16 @@ async fn main() {
         .expect("select from materialized view failed");
 
     df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT count(*) FROM postgres.public.companies")
+        .await
+        .expect("select from materialized view failed");
+    df.show().await.expect("show failed");
+
+    let df = ctx
+        .sql("SELECT 1 FROM postgres.public.companies")
+        .await
+        .expect("select from materialized view failed");
+    df.show().await.expect("show failed");
 }
