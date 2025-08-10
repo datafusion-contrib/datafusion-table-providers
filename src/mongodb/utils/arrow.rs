@@ -350,11 +350,6 @@ impl ArrayBuilderTrait for Date32ArrayBuilder {
                     _ => self.0.append_null(),
                 }
             }
-            // Some(Bson::Timestamp(ts)) => {
-            //     // Bson::Timestamp time is seconds since epoch, convert to days
-            //     let days = (ts.time as i64) / 86_400;
-            //     self.0.append_value(days as i32);
-            // }
             Some(_) => self.0.append_null(),
             None => self.0.append_null(),
         }

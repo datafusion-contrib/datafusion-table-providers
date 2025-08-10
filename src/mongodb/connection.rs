@@ -17,13 +17,12 @@ use crate::mongodb::utils::schema::infer_arrow_schema_from_documents;
 use crate::mongodb::utils::unnest::{unnest_bson_documents, UnnestBehavior, UnnestParameters};
 use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu};
 
-const NUM_DOCUMENTS_TO_INFER_SCHEMA: i64 = 400;
-
 pub struct MongoDBConnection {
     pub client: Arc<Client>,
     pub db_name: String,
     tz: Option<String>,
     unnest_parameters: UnnestParameters,
+    num_documents_to_infer_schema: i64,
 }
 
 impl MongoDBConnection {
@@ -32,12 +31,14 @@ impl MongoDBConnection {
         db_name: String,
         tz: Option<String>,
         unnest_parameters: UnnestParameters,
+        num_documents_to_infer_schema: i64,
     ) -> Self {
         MongoDBConnection {
             client,
             db_name,
             tz,
             unnest_parameters,
+            num_documents_to_infer_schema,
         }
     }
 
@@ -51,7 +52,7 @@ impl MongoDBConnection {
 
         let sample = coll
             .find(doc! {})
-            .limit(NUM_DOCUMENTS_TO_INFER_SCHEMA)
+            .limit(self.num_documents_to_infer_schema)
             .await
             .boxed()
             .context(UnableToGetSchemaSnafu)?;

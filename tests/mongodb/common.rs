@@ -79,7 +79,7 @@ pub async fn start_mongodb_docker_container(
     let port = port.try_into().unwrap_or(27017);
 
     let mongodb_docker_image = std::env::var("MONGODB_DOCKER_IMAGE")
-        .unwrap_or_else(|_| format!("{}mongo:7", container_registry()));
+        .unwrap_or_else(|_| format!("{}/mongo:7", container_registry()));
 
     let running_container = ContainerRunnerBuilder::new(container_name)
         .image(mongodb_docker_image)
