@@ -72,7 +72,7 @@ impl MongoDBConnectionPool {
                 behavior: UnnestBehavior::Depth(unnest_depth),
                 duplicate_behavior: DuplicateBehavior::Error,
             },
-            num_documents_to_infer_schema: num_documents_to_infer_schema,
+            num_documents_to_infer_schema,
         })
     }
 
