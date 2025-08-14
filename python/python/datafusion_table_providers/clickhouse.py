@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Python interface for Postgres table provider."""
+"""Python interface for Clickhouse table provider."""
 
 from typing import Any, List
 from . import _internal
