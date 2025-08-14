@@ -1,11 +1,15 @@
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use mongodb::bson::{Bson, Document};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::mongodb::{Error, Result};
+use chrono::{LocalResult, TimeZone, Timelike, Utc};
 
-pub fn infer_arrow_schema_from_documents(docs: &[Document]) -> Result<SchemaRef, Error> {
+pub fn infer_arrow_schema_from_documents(
+    docs: &[Document],
+    tz: Option<&str>,
+) -> Result<SchemaRef, Error> {
     if docs.is_empty() {
         return Ok(Arc::new(Schema::empty()));
     }
@@ -13,7 +17,7 @@ pub fn infer_arrow_schema_from_documents(docs: &[Document]) -> Result<SchemaRef,
     let mut field_types: HashMap<String, DataType> = HashMap::new();
 
     for doc in docs {
-        analyze_document(doc, &mut field_types);
+        analyze_document(doc, &mut field_types, tz);
     }
 
     let fields: Vec<Field> = field_types
@@ -24,9 +28,9 @@ pub fn infer_arrow_schema_from_documents(docs: &[Document]) -> Result<SchemaRef,
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn analyze_document(doc: &Document, field_types: &mut HashMap<String, DataType>) {
+fn analyze_document(doc: &Document, field_types: &mut HashMap<String, DataType>, tz: Option<&str>) {
     for (key, value) in doc {
-        let inferred_type = infer_bson_type(value);
+        let inferred_type = infer_bson_type(value, tz);
 
         match field_types.get(key) {
             Some(existing_type) => {
@@ -41,7 +45,7 @@ fn analyze_document(doc: &Document, field_types: &mut HashMap<String, DataType>)
     }
 }
 
-fn infer_bson_type(value: &Bson) -> DataType {
+fn infer_bson_type(value: &Bson, tz: Option<&str>) -> DataType {
     match value {
         Bson::Double(_) => DataType::Float64,
         Bson::String(_) => DataType::Utf8,
@@ -65,7 +69,26 @@ fn infer_bson_type(value: &Bson) -> DataType {
         Bson::Timestamp(_) => DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
         Bson::Binary(_) => DataType::Binary,
         Bson::ObjectId(_) => DataType::Utf8,
-        Bson::DateTime(_) => DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
+        Bson::DateTime(dt) => {
+            let millis = dt.timestamp_millis();
+            match Utc.timestamp_millis_opt(millis) {
+                LocalResult::Single(chrono_dt) => {
+                    let is_midnight = chrono_dt.time().num_seconds_from_midnight() == 0
+                        && chrono_dt.time().nanosecond() == 0;
+                    if is_midnight {
+                        DataType::Date32
+                    } else {
+                        DataType::Timestamp(
+                            TimeUnit::Millisecond,
+                            Some(Arc::from(tz.unwrap_or("UTC"))),
+                        )
+                    }
+                }
+                _ => {
+                    DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from(tz.unwrap_or("UTC"))))
+                }
+            }
+        }
         Bson::Symbol(_) => DataType::Utf8,
         Bson::Decimal128(_) => DataType::Decimal128(18, 6),
         Bson::Undefined => DataType::Null,
@@ -88,6 +111,7 @@ fn unify_types(type1: &DataType, type2: &DataType) -> DataType {
         (DataType::Int64, DataType::Float64) | (DataType::Float64, DataType::Int64) => {
             DataType::Float64
         }
+        (DataType::Date32, DataType::Timestamp(tu, tz)) => DataType::Timestamp(*tu, tz.clone()),
 
         // Otherwise use string
         _ => DataType::Utf8,
@@ -104,7 +128,7 @@ mod tests {
     #[test]
     fn test_empty_documents() {
         let docs: Vec<Document> = vec![];
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         assert_eq!(schema.fields().len(), 0);
     }
 
@@ -118,7 +142,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
 
         // Check field count
         assert_eq!(schema.fields().len(), 4);
@@ -152,7 +176,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -162,7 +186,10 @@ mod tests {
         assert_eq!(field_map.get("id"), Some(&&DataType::Utf8)); // ObjectId as string
         assert_eq!(
             field_map.get("created_at"),
-            Some(&&DataType::Timestamp(TimeUnit::Millisecond, None))
+            Some(&&DataType::Timestamp(
+                TimeUnit::Millisecond,
+                Some("UTC".into())
+            ))
         );
         assert_eq!(
             field_map.get("timestamp"),
@@ -176,6 +203,46 @@ mod tests {
     }
 
     #[test]
+    fn test_mongodb_custom_timezone() {
+        let doc = doc! {
+            "created_at": mongodb::bson::DateTime::now(),
+        };
+        let docs = vec![doc];
+
+        let schema = infer_arrow_schema_from_documents(&docs, Some("+02:00")).unwrap();
+        let field_map: HashMap<String, &DataType> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type()))
+            .collect();
+
+        assert_eq!(
+            field_map.get("created_at"),
+            Some(&&DataType::Timestamp(
+                TimeUnit::Millisecond,
+                Some("+02:00".into())
+            ))
+        );
+    }
+
+    #[test]
+    fn test_date32_detection() {
+        let doc = doc! {
+            "created_date": mongodb::bson::DateTime::builder().year(2021).month(1).day(1).build().unwrap(),
+        };
+        let docs = vec![doc];
+
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
+        let field_map: HashMap<String, &DataType> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type()))
+            .collect();
+
+        assert_eq!(field_map.get("created_date"), Some(&&DataType::Date32));
+    }
+
+    #[test]
     fn test_array_types() {
         let doc = doc! {
             "empty_array": [],
@@ -186,7 +253,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -234,7 +301,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -253,7 +320,7 @@ mod tests {
             doc! { "value": 20_i64 }, // Int64 -> should promote to Int64
         ];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field = schema.field_with_name("value").unwrap();
         assert_eq!(field.data_type(), &DataType::Int64);
     }
@@ -265,7 +332,7 @@ mod tests {
             doc! { "value": 3.14_f64 }, // Float64 -> should promote to Float64
         ];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field = schema.field_with_name("value").unwrap();
         assert_eq!(field.data_type(), &DataType::Float64);
     }
@@ -277,7 +344,7 @@ mod tests {
             doc! { "value": "text" }, // String -> should fallback to String
         ];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field = schema.field_with_name("value").unwrap();
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
@@ -289,7 +356,7 @@ mod tests {
             doc! { "value": "text" },     // String -> should be String
         ];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field = schema.field_with_name("value").unwrap();
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
@@ -298,7 +365,7 @@ mod tests {
     fn test_only_null_values() {
         let docs = vec![doc! { "value": Bson::Null }, doc! { "value": Bson::Null }];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
         let field = schema.field_with_name("value").unwrap();
         assert_eq!(field.data_type(), &DataType::Null);
     }
@@ -311,7 +378,7 @@ mod tests {
             doc! { "age": 25_i32, "country": "US" },
         ];
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
 
         // Should have all unique fields
         assert_eq!(schema.fields().len(), 4);
@@ -354,7 +421,7 @@ mod tests {
             docs.push(doc);
         }
 
-        let schema = infer_arrow_schema_from_documents(&docs).unwrap();
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
 
         // Should have all the fields
         let field_names: std::collections::HashSet<&str> =

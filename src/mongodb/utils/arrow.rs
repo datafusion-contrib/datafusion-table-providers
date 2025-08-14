@@ -1,9 +1,10 @@
 use crate::mongodb::{Error, InvalidDecimalSnafu, Result};
 use arrow::array::{
-    ArrayRef, BinaryBuilder, BooleanBuilder, Decimal128Builder, Float64Builder, Int32Builder,
-    Int64Builder, ListBuilder, NullBuilder, RecordBatch, StringBuilder,
+    ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float64Builder,
+    Int32Builder, Int64Builder, ListBuilder, NullBuilder, RecordBatch, StringBuilder,
     TimestampMillisecondBuilder,
 };
+use chrono::{LocalResult, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use mongodb::bson::{Bson, Document};
 use num_traits::ToPrimitive;
@@ -53,9 +54,12 @@ fn create_empty_array(data_type: &DataType) -> ArrayRef {
         DataType::Float64 => Arc::new(Float64Builder::new().finish()),
         DataType::Utf8 => Arc::new(StringBuilder::new().finish()),
         DataType::Binary => Arc::new(BinaryBuilder::new().finish()),
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            Arc::new(TimestampMillisecondBuilder::new().finish())
-        }
+        DataType::Date32 => Arc::new(Date32Builder::new().finish()),
+        DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => Arc::new(
+            TimestampMillisecondBuilder::new()
+                .with_timezone_opt(tz_opt.clone())
+                .finish(),
+        ),
         DataType::Decimal128(_, _) => Arc::new(Decimal128Builder::new().finish()),
         DataType::List(_) => {
             let values_builder = StringBuilder::new();
@@ -87,9 +91,10 @@ fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Er
             DataType::Float64 => Box::new(Float64ArrayBuilder::new(capacity)),
             DataType::Utf8 => Box::new(StringArrayBuilder::new(capacity)),
             DataType::Binary => Box::new(BinaryArrayBuilder::new(capacity)),
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                Box::new(TimestampArrayBuilder::new(capacity))
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                Box::new(TimestampArrayBuilder::new(capacity, tz_opt.clone()))
             }
+            DataType::Date32 => Box::new(Date32ArrayBuilder::new(capacity)),
             DataType::Decimal128(precision, scale) => {
                 Box::new(Decimal128ArrayBuilder::new(capacity, *precision, *scale)?)
             }
@@ -134,7 +139,7 @@ fn finish_builders(mut builders: BuilderMap, schema: &SchemaRef) -> Result<Vec<A
             return Err(Error::ConversionError {
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Missing builder for field: {}", field_name),
+                    format!("Missing builder for field: {field_name}"),
                 )),
             });
         }
@@ -150,6 +155,7 @@ struct Float64ArrayBuilder(Float64Builder);
 struct StringArrayBuilder(StringBuilder);
 struct BinaryArrayBuilder(BinaryBuilder);
 struct TimestampArrayBuilder(TimestampMillisecondBuilder);
+struct Date32ArrayBuilder(Date32Builder);
 pub struct Decimal128ArrayBuilder {
     builder: Decimal128Builder,
     scale: i8,
@@ -267,7 +273,7 @@ impl ArrayBuilderTrait for StringArrayBuilder {
             }
             Some(Bson::Null) => self.0.append_null(),
             Some(other) => {
-                self.0.append_value(format!("{}", other));
+                self.0.append_value(format!("{other}"));
             }
             None => self.0.append_null(),
         }
@@ -301,8 +307,8 @@ impl ArrayBuilderTrait for BinaryArrayBuilder {
 }
 
 impl TimestampArrayBuilder {
-    fn new(capacity: usize) -> Self {
-        Self(TimestampMillisecondBuilder::with_capacity(capacity))
+    fn new(capacity: usize, tz: Option<Arc<str>>) -> Self {
+        Self(TimestampMillisecondBuilder::with_capacity(capacity).with_timezone_opt(tz))
     }
 }
 
@@ -311,6 +317,39 @@ impl ArrayBuilderTrait for TimestampArrayBuilder {
         match value {
             Some(Bson::DateTime(dt)) => self.0.append_value(dt.timestamp_millis()),
             Some(Bson::Timestamp(ts)) => self.0.append_value((ts.time as i64) * 1000),
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl Date32ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(Date32Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for Date32ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::DateTime(dt)) => {
+                let millis = dt.timestamp_millis();
+                match Utc.timestamp_millis_opt(millis) {
+                    LocalResult::Single(chrono_dt) => {
+                        // Arrow Date32 is days since Unix epoch (1970-01-01)
+                        let days = (chrono_dt.date_naive()
+                            - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                        .num_days() as i32;
+                        self.0.append_value(days);
+                    }
+                    _ => self.0.append_null(),
+                }
+            }
             Some(_) => self.0.append_null(),
             None => self.0.append_null(),
         }
@@ -423,7 +462,7 @@ impl ArrayBuilderTrait for ListArrayBuilder {
                 for item in arr {
                     match item {
                         Bson::String(s) => self.0.values().append_value(s),
-                        other => self.0.values().append_value(format!("{}", other)),
+                        other => self.0.values().append_value(format!("{other}")),
                     }
                 }
                 self.0.append(true);
@@ -536,7 +575,7 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(active_array.value(0), true);
+        assert!(active_array.value(0));
     }
 
     #[test]
