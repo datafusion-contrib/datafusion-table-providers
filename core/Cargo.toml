@@ -63,7 +63,7 @@ num-bigint = "0.4"
 odbc-api = { version = "13.0", optional = true }
 pem = { version = "3.0.4", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
-prost = { version = "0.13.5", optional = true }
+prost = { version = "0.14.1", optional = true }
 rand = { version = "0.9" }
 regex = { version = "1" }
 r2d2 = { version = "0.8", optional = true }
@@ -105,7 +105,7 @@ anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
 insta = { version = "1.43.1", features = ["filters"] }
-prost = { version = "0.13.5" }
+prost = { version = "0.14.1" }
 rand = "0.9"
 reqwest = "0.12"
 rstest = "0.26.1"
