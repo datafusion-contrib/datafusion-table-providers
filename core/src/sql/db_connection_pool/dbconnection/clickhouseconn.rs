@@ -49,7 +49,7 @@ impl AsyncDbConnection<Client, ()> for Client {
         }
 
         let tables: Vec<Row> = self
-            .query("SHOW TABLES FROM ?")
+            .query("SELECT name FROM system.tables WHERE database = ?")
             .bind(schema)
             .fetch_all()
             .await
@@ -65,7 +65,7 @@ impl AsyncDbConnection<Client, ()> for Client {
             name: String,
         }
         let tables: Vec<Row> = self
-            .query("SHOW DATABASES")
+            .query("SELECT name FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')")
             .fetch_all()
             .await
             .boxed()
