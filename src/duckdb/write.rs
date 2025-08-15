@@ -1,4 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
@@ -30,8 +29,10 @@ use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use super::creator::{TableDefinition, TableManager, ViewCreator};
-use super::{to_datafusion_error, RelationName};
+use super::creator::{
+    run_with_specific_database_schema, TableDefinition, TableManager, ViewCreator,
+};
+use super::to_datafusion_error;
 
 // checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
 // e.g. List(Field { name: 'a', data_type: Int32 }) != List(Field { name: 'b', data_type: Int32 })
@@ -436,7 +437,6 @@ fn insert_overwrite(
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
-    let cloned_pool = Arc::clone(&pool);
     let mut db_conn = pool
         .connect_sync()
         .context(super::DbConnectionPoolSnafu)
@@ -455,7 +455,7 @@ fn insert_overwrite(
         .map_err(to_retriable_data_write_error)?;
 
     new_table
-        .create_table(cloned_pool, &tx)
+        .create_table(&tx)
         .map_err(to_retriable_data_write_error)?;
 
     let existing_tables = new_table
@@ -591,18 +591,21 @@ fn write_to_table(
         schema,
     )));
 
-    let current_ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context(super::UnableToGetSystemTimeSnafu)
-        .map_err(to_datafusion_error)?
-        .as_millis();
-
-    let view_name = format!("__scan_{}_{current_ts}", table.table_name());
-    tx.register_arrow_scan_view(&view_name, &stream)
-        .context(super::UnableToRegisterArrowScanViewSnafu)
+    let view_name = table
+        .table_name()
+        .generate_internal_name("scan")
         .map_err(to_datafusion_error)?;
 
-    let view = ViewCreator::from_name(RelationName::new(view_name));
+    let f = |tx: &Transaction<'_>| tx.register_arrow_scan_view(view_name.table(), &stream);
+    if let (Some(database), Some(schema)) = (view_name.catalog(), view_name.schema()) {
+        run_with_specific_database_schema(database, schema, tx, f)
+    } else {
+        f(tx)
+    }
+    .context(super::UnableToRegisterArrowScanViewSnafu)
+    .map_err(to_datafusion_error)?;
+
+    let view = ViewCreator::from_name(view_name);
     let rows = view
         .insert_into(table, tx, on_conflict)
         .map_err(to_datafusion_error)?;
@@ -644,7 +647,10 @@ mod test {
 
     use super::*;
     use crate::{
-        duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+        duckdb::{
+            creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+            RelationName,
+        },
         util::{column_reference::ColumnReference, indexes::IndexType},
     };
 
@@ -743,9 +749,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        overwrite_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        overwrite_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -849,9 +853,7 @@ mod test {
             .with_internal(true)
             .expect("to create table");
 
-        overwrite_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        overwrite_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -949,9 +951,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        append_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        append_table.create_table(&tx).expect("to create table");
 
         tx.execute(
             &format!(
@@ -1041,7 +1041,7 @@ mod test {
         ]));
 
         let table_definition = Arc::new(
-            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+            TableDefinition::new(RelationName::from("test_table"), Arc::clone(&schema))
                 .with_indexes(
                     vec![(
                         ColumnReference::try_from("id").expect("valid column ref"),
@@ -1057,9 +1057,7 @@ mod test {
             .with_internal(false)
             .expect("to create table");
 
-        append_table
-            .create_table(Arc::clone(&pool), &tx)
-            .expect("to create table");
+        append_table.create_table(&tx).expect("to create table");
 
         // don't apply indexes, and leave the table empty to simulate a new table from TableProviderFactory::create()
 
