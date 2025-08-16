@@ -48,6 +48,7 @@ use self::sql_table::DuckDBTable;
 #[cfg(feature = "duckdb-federation")]
 mod federation;
 
+pub mod attached_factory;
 mod creator;
 mod settings;
 mod sql_table;
@@ -168,6 +169,15 @@ pub enum Error {
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
     UnableToDropArrowScanView { source: duckdb::Error },
+
+    #[snafu(display("Unable to execute USE database: {source}"))]
+    UnableToExecuteUseDatabase { source: duckdb::Error },
+
+    #[snafu(display("Failed to drop temporary table for DuckDB ingestion: {source}"))]
+    UnableToDropTemporaryTable { source: duckdb::Error },
+
+    #[snafu(display("Failed to drop temporary view for DuckDB ingestion: {source}"))]
+    UnableToDropTemporaryView { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -182,6 +192,7 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
+    threads: Option<u64>,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -191,6 +202,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
+            .field("threads", &self.threads)
             .finish()
     }
 }
@@ -204,6 +216,7 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
+            threads: None,
         }
     }
 
@@ -219,6 +232,12 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_threads(mut self, threads: u64) -> Self {
+        self.threads = Some(threads);
         self
     }
 
@@ -309,7 +328,12 @@ impl DuckDBTableProviderFactory {
             AccessMode::ReadWrite => AccessMode::ReadWrite,
             AccessMode::Automatic => AccessMode::Automatic,
         };
-        let pool_builder = pool_builder.with_access_mode(access_mode);
+        let mut pool_builder = pool_builder.with_access_mode(access_mode);
+
+        if let Some(threads) = self.threads {
+            pool_builder =
+                pool_builder.with_connection_setup_query(format!("SET threads = {threads}"));
+        }
 
         let mut instances = self.instances.lock().await;
 
@@ -420,7 +444,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
         let table_definition =
-            TableDefinition::new(RelationName::new(name.clone()), Arc::clone(&schema))
+            TableDefinition::new(RelationName::from(name.as_str()), Arc::clone(&schema))
                 .with_constraints(cmd.constraints.clone())
                 .with_indexes(indexes.clone());
 
@@ -674,7 +698,7 @@ pub(crate) fn make_initial_table(
     let table_manager = TableManager::new(table_definition);
 
     table_manager
-        .create_table(cloned_pool, &tx)
+        .create_table(&tx)
         .map_err(to_datafusion_error)?;
 
     tx.commit()

@@ -1,0 +1,9 @@
+---
+source: src/duckdb/attached_factory.rs
+expression: formatted
+---
++---+
+| a |
++---+
+| 7 |
++---+
