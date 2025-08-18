@@ -8,6 +8,7 @@ license = { workspace = true }
 description = { workspace = true }
 
 [dependencies]
+streamling-telemetry = { git = "https://github.com/goldsky-io/streamling.git", branch="extract-telemetry", package="streamling-telemetry" }
 arrow = { workspace = true }
 arrow-array = { workspace = true, optional = true }
 arrow-flight = { workspace = true, optional = true, features = [

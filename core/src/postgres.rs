@@ -32,7 +32,7 @@ use datafusion::{
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
-
+use streamling_telemetry::PipelineMetricMetadata;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -315,12 +315,16 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             .get_extension::<write::PostgresWriteConfig>()
             .map(|ext| (*ext).clone())
             .unwrap_or_default();
-
+        
+        let metric_metadata = state.config()
+            .get_extension::<PipelineMetricMetadata>()
+            .map(|ext| (*ext).clone());
         Ok(PostgresTableWriter::create(
             read_provider,
             postgres,
             on_conflict,
             write_config,
+            metric_metadata,
         ))
     }
 }
