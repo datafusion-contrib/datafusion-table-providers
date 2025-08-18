@@ -184,6 +184,7 @@ impl PostgresTableFactory {
             postgres,
             None,
             default_write_config,
+            None,
         ))
     }
 }

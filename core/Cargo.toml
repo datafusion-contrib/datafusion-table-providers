@@ -93,7 +93,7 @@ tonic = { version = "0.12", optional = true, features = [
   "tls-native-roots",
   "tls-webpki-roots",
 ] }
-tracing = "0.1"
+tracing = { version="0.1", features = ["log"] }
 trust-dns-resolver = "0.23.2"
 url = "2.5.4"
 uuid = { version = "1.17", optional = true }

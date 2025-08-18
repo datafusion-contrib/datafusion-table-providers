@@ -18,8 +18,7 @@ use datafusion::{
 use futures::StreamExt;
 use snafu::prelude::*;
 use std::{any::Any, fmt, sync::Arc, time::Duration};
-use streamling_telemetry::operators::telemetry_data_sink;
-use streamling_telemetry::{PipelineMetricMetadata, TelemetryDataSink, TopologyNodeType};
+use streamling_telemetry::{PipelineMetricMetadata, TelemetryDataSink};
 
 use crate::postgres::Postgres;
 
@@ -124,7 +123,7 @@ impl TableProvider for PostgresTableWriter {
             batch_size,
             num_records_before_stop,
         ));
-        let execution_plan: Arc<dyn ExecutionPlan> = match &self.metric_metadata {
+        let execution_plan: Arc<dyn DataSink> = match &self.metric_metadata {
             None => postgres_sink,
             Some(metadata) => Arc::new(TelemetryDataSink::new(postgres_sink, metadata.clone())),
         };
