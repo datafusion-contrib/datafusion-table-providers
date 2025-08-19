@@ -365,8 +365,13 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
         let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), name)
-                .with_decimal_between(self.decimal_between),
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                name,
+                Some(cmd.constraints.clone()),
+            )
+            .with_decimal_between(self.decimal_between),
         );
 
         let sqlite = Arc::into_inner(sqlite)
@@ -419,7 +424,7 @@ impl SqliteTableFactory {
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
         let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference)
+            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference, None)
                 .with_decimal_between(self.decimal_between),
         );
 

@@ -419,16 +419,17 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
 
-        let table_definition =
+        let table_definition = Arc::new(
             TableDefinition::new(RelationName::new(name.clone()), Arc::clone(&schema))
                 .with_constraints(cmd.constraints.clone())
-                .with_indexes(indexes.clone());
+                .with_indexes(indexes.clone()),
+        );
 
         let pool = Arc::new(pool);
-        make_initial_table(Arc::new(table_definition.clone()), &pool)?;
+        make_initial_table(Arc::clone(&table_definition), &pool)?;
 
         let table_writer_builder = DuckDBTableWriterBuilder::new()
-            .with_table_definition(table_definition)
+            .with_table_definition(Arc::clone(&table_definition))
             .with_pool(pool)
             .set_on_conflict(on_conflict);
 
@@ -453,6 +454,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             TableReference::bare(name.clone()),
             None,
             Some(self.dialect.clone()),
+            Some(cmd.constraints.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -591,6 +593,7 @@ impl DuckDBTableFactory {
             tbl_ref,
             cte,
             Some(self.dialect.clone()),
+            None,
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -612,7 +615,7 @@ impl DuckDBTableFactory {
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_read_provider(read_provider)
             .with_pool(Arc::clone(&self.pool))
-            .with_table_definition(table_definition);
+            .with_table_definition(Arc::new(table_definition));
 
         Ok(Arc::new(table_writer_builder.build()?))
     }

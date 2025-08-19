@@ -3,6 +3,7 @@ use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::MySqlDialect;
 use futures::TryStreamExt;
 use mysql_async::prelude::ToValue;
@@ -42,6 +43,7 @@ impl MySQLTable {
     pub async fn new(
         pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
+        constraints: Option<Constraints>,
     ) -> Result<Self, sql_provider_datafusion::Error> {
         let dyn_pool = Arc::clone(pool)
             as Arc<
@@ -51,7 +53,8 @@ impl MySQLTable {
             >;
         let base_table = SqlTable::new("mysql", &dyn_pool, table_reference, None)
             .await?
-            .with_dialect(Arc::new(MySqlDialect {}));
+            .with_dialect(Arc::new(MySqlDialect {}))
+            .with_constraints_opt(constraints);
 
         Ok(Self {
             pool: Arc::clone(pool),
@@ -85,6 +88,10 @@ impl TableProvider for MySQLTable {
 
     fn schema(&self) -> SchemaRef {
         self.base_table.schema()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.base_table.constraints()
     }
 
     fn table_type(&self) -> TableType {

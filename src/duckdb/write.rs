@@ -44,7 +44,7 @@ pub struct DuckDBTableWriterBuilder {
     read_provider: Option<Arc<dyn TableProvider>>,
     pool: Option<Arc<DuckDbConnectionPool>>,
     on_conflict: Option<OnConflict>,
-    table_definition: Option<TableDefinition>,
+    table_definition: Option<Arc<TableDefinition>>,
 }
 
 impl DuckDBTableWriterBuilder {
@@ -72,7 +72,7 @@ impl DuckDBTableWriterBuilder {
     }
 
     #[must_use]
-    pub fn with_table_definition(mut self, table_definition: TableDefinition) -> Self {
+    pub fn with_table_definition(mut self, table_definition: Arc<TableDefinition>) -> Self {
         self.table_definition = Some(table_definition);
         self
     }
@@ -101,7 +101,7 @@ impl DuckDBTableWriterBuilder {
         Ok(DuckDBTableWriter {
             read_provider,
             on_conflict: self.on_conflict,
-            table_definition: Arc::new(table_definition),
+            table_definition,
             pool,
         })
     }
