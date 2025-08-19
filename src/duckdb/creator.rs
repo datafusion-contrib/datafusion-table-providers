@@ -84,6 +84,7 @@ impl TableDefinition {
         &self.name
     }
 
+    #[cfg(test)]
     pub(crate) fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
