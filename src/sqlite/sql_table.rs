@@ -53,7 +53,7 @@ impl<T, P> SQLiteTable<T, P> {
             Some(Engine::SQLite),
         )
         .with_dialect(Arc::new(SqliteDialect {}))
-        .set_constraints(constraints);
+        .with_constraints_opt(constraints);
 
         Self {
             base_table,

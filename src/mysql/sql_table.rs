@@ -54,7 +54,7 @@ impl MySQLTable {
         let base_table = SqlTable::new("mysql", &dyn_pool, table_reference, None)
             .await?
             .with_dialect(Arc::new(MySqlDialect {}))
-            .set_constraints(constraints);
+            .with_constraints_opt(constraints);
 
         Ok(Self {
             pool: Arc::clone(pool),

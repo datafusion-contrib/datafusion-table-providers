@@ -57,7 +57,7 @@ impl<T, P> DuckDBTable<T, P> {
             Some(Engine::DuckDB),
         )
         .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())))
-        .set_constraints(constraints);
+        .with_constraints_opt(constraints);
 
         Self {
             base_table,

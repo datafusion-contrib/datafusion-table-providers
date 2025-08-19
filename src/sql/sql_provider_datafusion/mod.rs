@@ -129,7 +129,7 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
-    pub fn set_constraints(mut self, constraints: Option<Constraints>) -> Self {
+    pub fn with_constraints_opt(mut self, constraints: Option<Constraints>) -> Self {
         self.constraints = constraints;
         self
     }
