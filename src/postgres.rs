@@ -320,7 +320,8 @@ impl TableProviderFactory for PostgresTableProviderFactory {
                 name,
                 Some(Engine::Postgres),
             )
-            .with_dialect(Arc::new(PostgreSqlDialect {})),
+            .with_dialect(Arc::new(PostgreSqlDialect {}))
+            .with_constraints(cmd.constraints.clone()),
         );
 
         #[cfg(feature = "postgres-federation")]

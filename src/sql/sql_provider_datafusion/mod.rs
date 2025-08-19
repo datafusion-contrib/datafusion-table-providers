@@ -12,6 +12,7 @@ use crate::sql::db_connection_pool::{
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
+    common::Constraints,
     sql::unparser::{
         dialect::{DefaultDialect, Dialect},
         Unparser,
@@ -68,6 +69,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     pub table_reference: TableReference,
     engine: Option<Engine>,
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    constraints: Option<Constraints>,
 }
 
 impl<T, P> std::fmt::Debug for SqlTable<T, P> {
@@ -105,6 +107,7 @@ impl<T, P> SqlTable<T, P> {
             table_reference,
             engine,
             dialect: None,
+            constraints: None,
         })
     }
 
@@ -122,7 +125,18 @@ impl<T, P> SqlTable<T, P> {
             table_reference: table_reference.into(),
             engine,
             dialect: None,
+            constraints: None,
         }
+    }
+
+    pub fn set_constraints(mut self, constraints: Option<Constraints>) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = Some(constraints);
+        self
     }
 
     #[must_use]
@@ -175,6 +189,10 @@ impl<T, P> TableProvider for SqlTable<T, P> {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 
     fn table_type(&self) -> TableType {
