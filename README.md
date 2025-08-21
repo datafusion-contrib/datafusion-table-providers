@@ -132,3 +132,16 @@ EOF
 # Run from repo folder
 cargo run -p datafusion-table-providers --example mongodb --features mongodb
 ```
+
+### Trino
+
+In order to run the Trino example, you need to have a Trino server running. You can use the following command to start a Trino server in a Docker container the example can use:
+
+```bash
+docker run -d --name trino   -p 8080:8080   trinodb/trino:latest
+# Wait for the Trino server to start
+sleep 30
+
+# Run from repo folder
+cargo run -p datafusion-table-providers --example trino --features trino
+```
