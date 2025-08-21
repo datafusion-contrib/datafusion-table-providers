@@ -458,7 +458,7 @@ mod tests {
     use mockito::Server;
     use secrecy::SecretString;
     use std::collections::HashMap;
-    
+
     use tempfile::NamedTempFile;
 
     fn create_basic_params() -> HashMap<String, SecretString> {

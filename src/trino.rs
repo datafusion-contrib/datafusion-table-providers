@@ -23,16 +23,6 @@ use std::sync::Arc;
 
 pub mod sql_table;
 
-#[derive(Debug, Snafu)]
-pub enum Error {
-    #[snafu(display("Unable to construct SQL table: {source}"))]
-    UnableToConstructSQLTable {
-        source: sql_provider_datafusion::Error,
-    },
-}
-
-type Result<T, E = Error> = std::result::Result<T, E>;
-
 pub struct TrinoTableFactory {
     pool: Arc<TrinoConnectionPool>,
 }
