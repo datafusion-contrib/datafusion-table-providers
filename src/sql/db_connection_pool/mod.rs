@@ -11,6 +11,8 @@ pub mod mysqlpool;
 pub mod postgrespool;
 #[cfg(feature = "sqlite")]
 pub mod sqlitepool;
+#[cfg(feature = "trino")]
+pub mod trinodbpool;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T, E = Error> = std::result::Result<T, E>;

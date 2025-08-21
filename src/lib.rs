@@ -16,6 +16,8 @@ pub mod mysql;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "trino")]
+pub mod trino;
 
 #[derive(Debug, Snafu)]
 pub enum Error {

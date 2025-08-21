@@ -67,6 +67,9 @@ itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 fundu = "2.0.1"
+reqwest = { version = "0.12.5", optional = true, features = ["json", "rustls-tls"] }
+regex = { version = "1.11.1", optional = true }
+chrono-tz = {  version = "0.8", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.86"
@@ -82,6 +85,7 @@ tokio-stream = { version = "0.1.15", features = ["net"] }
 insta = { version = "1.40.0", features = ["filters"] }
 datafusion-physical-plan = { version = "47" }
 tempfile = "3.8.1"
+mockito = "1.7.0"
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -111,6 +115,14 @@ mongodb = [
   "dep:rust_decimal",
   "dep:num-traits",
 ]
+trino = [
+  "dep:arrow-schema",
+  "dep:async-stream",
+  "dep:base64",
+  "dep:regex",
+  "dep:reqwest",
+  "dep:chrono-tz",
+]
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "9db74a4b360df6be1bb554c59a474a2fd4bfb7e9" } # spiceai-47
@@ -121,11 +133,6 @@ datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "b5
 datafusion-physical-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" } # spiceai-47
 datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" } # spiceai-47
 datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "b5c62f29d2c70c5331ff50015b67b5e1cafcd578" }         # spiceai-47
-
-[[example]]
-name = "odbc_sqlite"
-path = "examples/odbc_sqlite.rs"
-required-features = ["sqlite", "odbc"]
 
 [[example]]
 name = "duckdb"
@@ -153,11 +160,6 @@ path = "examples/sqlite.rs"
 required-features = ["sqlite"]
 
 [[example]]
-name = "clickhouse"
-path = "examples/clickhouse.rs"
-required-features = ["clickhouse"]
-
-[[example]]
 name = "mysql"
 path = "examples/mysql.rs"
 required-features = ["mysql"]
@@ -171,3 +173,8 @@ required-features = ["postgres"]
 name = "mongodb"
 path = "examples/mongodb.rs"
 required-features = ["mongodb"]
+
+[[example]]
+name = "trino"
+path = "examples/trino.rs"
+required-features = ["trino"]
