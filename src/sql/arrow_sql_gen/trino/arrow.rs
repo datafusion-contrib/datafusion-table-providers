@@ -322,7 +322,7 @@ fn create_list_builder_for_field(
 }
 
 fn append_row_to_builders(
-    row: &Vec<Value>,
+    row: &[Value],
     schema: &SchemaRef,
     builders: &mut BuilderMap,
 ) -> Result<()> {
