@@ -174,7 +174,7 @@ jobs:
 
       - name: Pull the Trino image
         run: |
-          docker pull ${{ env.MONGODB_DOCKER_IMAGE }}
+          docker pull ${{ env.TRINO_DOCKER_IMAGE }}
 
       - name: Run tests
         run: cargo test --features trino

@@ -22,10 +22,12 @@ use datafusion_table_providers::util::secrets::to_secret_map;
 async fn main() {
     // Create Trino connection parameters
     let trino_params = to_secret_map(HashMap::from([
-        ("url".to_string(), "http://localhost:8080".to_string()),
+        ("host".to_string(), "localhost".to_string()),
+        ("port".to_string(), "8080".to_string()),
         ("catalog".to_string(), "tpch".to_string()),
         ("schema".to_string(), "tiny".to_string()),
         ("user".to_string(), "test".to_string()),
+        ("sslmode".to_string(), "disabled".to_string()),
     ]));
 
     // Create Trino connection pool
