@@ -15,9 +15,7 @@ limitations under the License.
 */
 
 use crate::sql::db_connection_pool::trinodbpool::TrinoConnectionPool;
-use crate::sql::sql_provider_datafusion::{self};
 use datafusion::{datasource::TableProvider, sql::TableReference};
-use snafu::prelude::*;
 use sql_table::TrinoTable;
 use std::sync::Arc;
 

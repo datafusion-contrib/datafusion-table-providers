@@ -439,19 +439,6 @@ fn parse_u16_param(params: &HashMap<String, SecretString>, key: &str, default: u
         })
 }
 
-fn parse_bool_param(
-    params: &HashMap<String, SecretString>,
-    key: &str,
-    default: bool,
-) -> Result<bool> {
-    params
-        .get(key)
-        .map(ExposeSecret::expose_secret)
-        .unwrap_or(&default.to_string())
-        .parse::<bool>()
-        .or_else(|_| Ok(default))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,12 +794,10 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
 
         assert_eq!(parse_u64_param(&params, "timeout", 300).unwrap(), 120);
         assert_eq!(parse_u16_param(&params, "port", 8080).unwrap(), 9080);
-        assert!(!parse_bool_param(&params, "ssl_verification", true).unwrap());
 
         // Test defaults
         assert_eq!(parse_u64_param(&params, "nonexistent", 300).unwrap(), 300);
         assert_eq!(parse_u16_param(&params, "nonexistent", 8080).unwrap(), 8080);
-        assert!(parse_bool_param(&params, "nonexistent", true).unwrap());
     }
 
     #[test]
