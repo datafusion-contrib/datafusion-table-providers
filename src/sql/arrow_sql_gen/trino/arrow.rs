@@ -864,7 +864,7 @@ fn parse_timestamp_to_utc_datetime(ts: &str) -> Result<Option<DateTime<Utc>>> {
     }
 
     // 3. Try parsing with numeric timezone offset (e.g., "+05:30", "-08:00")
-    if let Ok(dt_with_tz) = DateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S%.f %z") {
+    if let Ok(dt_with_tz) = DateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S%.f %z") {
         let utc_dt = dt_with_tz.with_timezone(&Utc);
         return Ok(Some(utc_dt));
     }

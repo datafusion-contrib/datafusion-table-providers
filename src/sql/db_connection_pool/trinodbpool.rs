@@ -326,7 +326,7 @@ fn validate_auth(
 }
 
 fn configure_tls(
-    mut client_builder: ClientBuilder,
+    client_builder: ClientBuilder,
     params: &HashMap<String, SecretString>,
 ) -> Result<(ClientBuilder, String)> {
     let ssl_mode = params
@@ -458,8 +458,8 @@ mod tests {
     use mockito::Server;
     use secrecy::SecretString;
     use std::collections::HashMap;
-    use std::io::Write;
-    use tempfile::{tempdir, NamedTempFile};
+    
+    use tempfile::NamedTempFile;
 
     fn create_basic_params() -> HashMap<String, SecretString> {
         let mut params = HashMap::new();
