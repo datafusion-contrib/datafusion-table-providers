@@ -68,8 +68,8 @@ pub(super) fn get_trino_params(port: usize) -> HashMap<String, SecretString> {
         SecretString::from("test".to_string()),
     );
     params.insert(
-        "trino_ssl".to_string(),
-        SecretString::from("false".to_string()),
+        "trino_sslmode".to_string(),
+        SecretString::from("disabled".to_string()),
     );
     params
 }

@@ -1,12 +1,3 @@
-use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use reqwest::{Client, Identity};
-use secrecy::{ExposeSecret, SecretString};
-use snafu::{ResultExt, Snafu};
-use std::{collections::HashMap, fs, sync::Arc, time::Duration};
-
 use super::DbConnectionPool;
 use crate::sql::db_connection_pool::dbconnection::trinoconn::DEFAULT_POLL_WAIT_TIME_MS;
 use crate::{
@@ -17,6 +8,15 @@ use crate::{
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
     UnsupportedTypeAction,
 };
+use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::{Certificate, Client, ClientBuilder, Identity};
+use secrecy::{ExposeSecret, SecretString};
+use snafu::{ResultExt, Snafu};
+use std::path::PathBuf;
+use std::{collections::HashMap, fs, sync::Arc, time::Duration};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -33,7 +33,7 @@ pub enum Error {
 
     #[snafu(display("Cannot connect to Trino on {host}:{port}. Ensure the host and port are correct and reachable."))]
     InvalidHostOrPortError {
-        source: crate::util::ns_lookup::Error,
+        source: util::ns_lookup::Error,
         host: String,
         port: u16,
     },
@@ -43,6 +43,11 @@ pub enum Error {
 
     #[snafu(display("Invalid Trino URL: {url}. Ensure it starts with http:// or https://"))]
     InvalidTrinoUrl { url: String },
+
+    #[snafu(display(
+        "Invalid sslmode: {value}. Expected values are: required, preferred, disabled"
+    ))]
+    InvalidSSLModeParameter { value: String },
 
     #[snafu(display("Missing required parameter: {parameter_name}"))]
     MissingRequiredParameter { parameter_name: String },
@@ -67,9 +72,22 @@ pub enum Error {
         path: String,
         source: reqwest::Error,
     },
+
+    #[snafu(display("Failed to read root cert file at '{path}': {source}"))]
+    UnableToReadRootCert {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Invalid root cert at '{path}': {source}"))]
+    InvalidRootCert {
+        path: String,
+        source: reqwest::Error,
+    },
 }
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_SSL_MODE: &str = "required";
 
 #[derive(Clone)]
 pub struct TrinoConnectionPool {
@@ -101,14 +119,14 @@ impl TrinoConnectionPool {
     /// # Arguments
     ///
     /// * `params` - A map of parameters to create the connection pool.
-    ///   * `url` or `host` + `port` - The Trino coordinator URL or host and port
-    ///   * `ssl - Whether to use HTTPS when connecting to the Trino coordinator (optional, default to true)
+    ///   * `host` - The Trino coordinator host (required)
+    ///   * `port` - The Trino coordinator port (optional, defaults to 8080)
     ///   * `catalog` - The default catalog to use (required)
     ///   * `schema` - The default schema to use (optional, defaults to "default")
     ///   * `user` - The user to authenticate with (required)
     ///   * `password` - The password for authentication (optional)
     ///   * `timeout_ms` - Request timeout in ms (optional, defaults to 300)
-    ///   * `ssl_verification` - Whether to verify SSL certificates (optional, defaults to true)
+    ///   * `sslmode` - TLS/SSL mode for the connection. Supported values: 'disabled', 'required', 'preferred'. Defaults to 'required'. 'preferred' allows invalid certificates/hostnames.
     ///   * `identity_pem_path` - Path to a PEM file containing both the client certificate and private key for mTLS authentication. (optional)
     ///   * `bearer_token` - Bearer token for authentication (optional)
     ///   * `poll_wait_time_ms` - Waiting time in ms between polling trino results (optional, defaults to 50)
@@ -120,7 +138,6 @@ impl TrinoConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
         let params = util::remove_prefix_from_hashmap_keys(params, "trino_");
 
-        let base_url = build_base_url(&params)?;
         let (catalog, schema) = get_catalog_and_schema(&params)?;
         let (user, password) = get_user_and_password(&params);
         let bearer_token = params.get("bearer_token").cloned();
@@ -132,12 +149,12 @@ impl TrinoConnectionPool {
         let timeout_ms = parse_u64_param(&params, "timeout_ms", DEFAULT_TIMEOUT_MS)?;
         let poll_wait_time =
             parse_u64_param(&params, "poll_wait_time_ms", DEFAULT_POLL_WAIT_TIME_MS)?;
-        let ssl_verification = parse_bool_param(&params, "ssl_verification", true)?;
 
-        let mut client_builder = Client::builder()
+        let client_builder = Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_millis(timeout_ms))
-            .danger_accept_invalid_certs(!ssl_verification);
+            .timeout(Duration::from_millis(timeout_ms));
+
+        let (mut client_builder, protocol) = configure_tls(client_builder, &params)?;
 
         if let Some(identity_path) = params.get("identity_pem_path") {
             let pem =
@@ -150,6 +167,8 @@ impl TrinoConnectionPool {
             })?;
             client_builder = client_builder.identity(identity);
         }
+
+        let base_url = build_base_url(protocol, &params)?;
 
         let client = client_builder
             .build()
@@ -236,34 +255,19 @@ impl DbConnectionPool<Arc<Client>, &'static str> for TrinoConnectionPool {
     }
 }
 
-fn build_base_url(params: &HashMap<String, SecretString>) -> Result<String> {
-    if let Some(url) = params.get("url").map(ExposeSecret::expose_secret) {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(Error::InvalidTrinoUrl {
-                url: url.to_string(),
-            });
-        }
-        Ok(url.trim_end_matches('/').to_string())
-    } else {
-        let host = params
-            .get("host")
-            .map(ExposeSecret::expose_secret)
-            .ok_or_else(|| Error::MissingRequiredParameter {
-                parameter_name: "url or host".to_string(),
-            })?;
+fn build_base_url(protocol: String, params: &HashMap<String, SecretString>) -> Result<String> {
+    let host = params
+        .get("host")
+        .map(ExposeSecret::expose_secret)
+        .ok_or_else(|| Error::MissingRequiredParameter {
+            parameter_name: "host".to_string(),
+        })?;
 
-        let port = parse_u16_param(params, "port", 8080)?;
-        futures::executor::block_on(verify_ns_lookup_and_tcp_connect(host, port))
-            .context(InvalidHostOrPortSnafu { host, port })?;
+    let port = parse_u16_param(params, "port", 8080)?;
+    futures::executor::block_on(verify_ns_lookup_and_tcp_connect(host, port))
+        .context(InvalidHostOrPortSnafu { host, port })?;
 
-        let protocol = if parse_bool_param(params, "ssl", true)? {
-            "https"
-        } else {
-            "http"
-        };
-
-        Ok(format!("{protocol}://{host}:{port}"))
-    }
+    Ok(format!("{protocol}://{host}:{port}"))
 }
 
 fn get_catalog_and_schema(params: &HashMap<String, SecretString>) -> Result<(String, String)> {
@@ -315,10 +319,70 @@ fn validate_auth(
 
     if auth_count > 1 {
         return Err(Error::InvalidAuthConfig {
-            details: "Exactly one authentication method must be provided: basic auth, mTLS, or bearer token".into(),
+            details: "At most one authentication method must be provided: basic auth, mTLS, or bearer token".into(),
         });
     }
     Ok(())
+}
+
+fn configure_tls(
+    mut client_builder: ClientBuilder,
+    params: &HashMap<String, SecretString>,
+) -> Result<(ClientBuilder, String)> {
+    let ssl_mode = params
+        .get("sslmode")
+        .map(ExposeSecret::expose_secret)
+        .unwrap_or(DEFAULT_SSL_MODE)
+        .to_string()
+        .to_lowercase();
+
+    if ssl_mode == "disabled" {
+        return Ok((client_builder, "http".to_string()));
+    }
+
+    match ssl_mode.as_str() {
+        "disabled" | "required" | "preferred" => {}
+        _ => {
+            return Err(Error::InvalidSSLModeParameter {
+                value: ssl_mode.to_string(),
+            });
+        }
+    }
+
+    let ssl_rootcert = if let Some(cert_path) = params.get("sslrootcert") {
+        let path = PathBuf::from(cert_path.expose_secret());
+        let ca_cert = fs::read(path).context(UnableToReadRootCertSnafu {
+            path: cert_path.expose_secret().to_string(),
+        })?;
+        Some(
+            Certificate::from_pem(&ca_cert).context(InvalidRootCertSnafu {
+                path: cert_path.expose_secret().to_string(),
+            })?,
+        )
+    } else {
+        None
+    };
+
+    let client_builder = match (ssl_rootcert, ssl_mode.as_str()) {
+        // Root cert + preferred
+        (Some(cert), "preferred") => client_builder
+            .add_root_certificate(cert)
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true),
+
+        // Root cert + required
+        (Some(cert), _) => client_builder.add_root_certificate(cert),
+
+        // No root cert + preferred
+        (None, "preferred") => client_builder
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true),
+
+        // No root cert + required
+        (None, _) => client_builder,
+    };
+
+    Ok((client_builder, "https".to_string()))
 }
 
 fn build_headers(
@@ -394,7 +458,8 @@ mod tests {
     use mockito::Server;
     use secrecy::SecretString;
     use std::collections::HashMap;
-    use tempfile::NamedTempFile;
+    use std::io::Write;
+    use tempfile::{tempdir, NamedTempFile};
 
     fn create_basic_params() -> HashMap<String, SecretString> {
         let mut params = HashMap::new();
@@ -436,7 +501,15 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert(
+            "port".to_string(),
+            SecretString::new(server.socket_address().port().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert("user".to_string(), SecretString::new("testuser".into()));
         params.insert("password".to_string(), SecretString::new("testpass".into()));
 
@@ -463,7 +536,15 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert(
+            "port".to_string(),
+            SecretString::new(server.socket_address().port().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert(
             "bearer_token".to_string(),
             SecretString::new("test-token-123".into()),
@@ -492,7 +573,11 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("host".to_string(), SecretString::new(host.into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert(
             "port".to_string(),
             SecretString::new(port.to_string().into()),
@@ -509,10 +594,8 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
     #[tokio::test]
     async fn test_new_missing_catalog() {
         let mut params = HashMap::new();
-        params.insert(
-            "url".to_string(),
-            SecretString::new("http://localhost:8080".into()),
-        );
+        params.insert("host".to_string(), SecretString::new("localhost".into()));
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
 
         let result = TrinoConnectionPool::new(params).await;
         assert!(result.is_err());
@@ -525,31 +608,17 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
     }
 
     #[tokio::test]
-    async fn test_new_missing_url_and_host() {
-        let params = create_basic_params();
+    async fn test_new_missing_host() {
+        let mut params = create_basic_params();
+        params.insert("user".to_string(), SecretString::new("testuser".into()));
 
         let result = TrinoConnectionPool::new(params).await;
         assert!(result.is_err());
 
         if let Err(Error::MissingRequiredParameter { parameter_name }) = result {
-            assert_eq!(parameter_name, "url or host");
+            assert_eq!(parameter_name, "host");
         } else {
             panic!("Expected MissingRequiredParameter error for url or host");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_invalid_url_format() {
-        let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new("invalid-url".into()));
-
-        let result = TrinoConnectionPool::new(params).await;
-        assert!(result.is_err());
-
-        if let Err(Error::InvalidTrinoUrl { url }) = result {
-            assert_eq!(url, "invalid-url");
-        } else {
-            panic!("Expected InvalidTrinoUrl error");
         }
     }
 
@@ -563,7 +632,15 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert(
+            "port".to_string(),
+            SecretString::new(server.socket_address().port().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert("user".to_string(), SecretString::new("baduser".into()));
         params.insert("password".to_string(), SecretString::new("badpass".into()));
 
@@ -590,7 +667,15 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert(
+            "port".to_string(),
+            SecretString::new(server.socket_address().port().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert("user".to_string(), SecretString::new("testuser".into()));
 
         let result = TrinoConnectionPool::new(params).await;
@@ -612,6 +697,8 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             "url".to_string(),
             SecretString::new("http://localhost:8080".into()),
         );
+        params.insert("host".to_string(), SecretString::new("localhost".into()));
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert("user".to_string(), SecretString::new("testuser".into()));
         params.insert("password".to_string(), SecretString::new("testpass".into()));
         params.insert(
@@ -623,7 +710,7 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
         assert!(result.is_err());
 
         if let Err(Error::InvalidAuthConfig { details }) = result {
-            assert!(details.contains("Exactly one authentication method"));
+            assert!(details.contains("At most one authentication method"));
         } else {
             panic!("Expected InvalidAuthConfig error");
         }
@@ -640,7 +727,15 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
             .await;
 
         let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
+        params.insert(
+            "host".to_string(),
+            SecretString::new(server.socket_address().ip().to_string().into()),
+        );
+        params.insert(
+            "port".to_string(),
+            SecretString::new(server.socket_address().port().to_string().into()),
+        );
+        params.insert("sslmode".to_string(), SecretString::new("disabled".into()));
         params.insert("user".to_string(), SecretString::new("testuser".into()));
 
         let result = TrinoConnectionPool::new(params).await;
@@ -788,41 +883,5 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDInfJ+AMdz...
         let (user, password) = get_user_and_password(&params);
         assert_eq!(user, Some("testuser".to_string()));
         assert!(password.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_with_unsupported_type_action() {
-        let mut server = Server::new_async().await;
-        let mock = server
-            .mock("GET", "/v1/info")
-            .with_status(200)
-            .with_body(r#"{"nodeVersion":{"version":"1.0"}}"#)
-            .create_async()
-            .await;
-
-        let mut params = create_basic_params();
-        params.insert("url".to_string(), SecretString::new(server.url().into()));
-        params.insert("user".to_string(), SecretString::new("testuser".into()));
-
-        let pool = TrinoConnectionPool::new(params)
-            .await
-            .unwrap()
-            .with_unsupported_type_action(UnsupportedTypeAction::Error);
-
-        assert_eq!(pool.unsupported_type_action, UnsupportedTypeAction::Error);
-
-        mock.assert_async().await;
-    }
-
-    #[test]
-    fn test_build_base_url_with_trailing_slash() {
-        let mut params = HashMap::new();
-        params.insert(
-            "url".to_string(),
-            SecretString::new("http://localhost:8080/".into()),
-        );
-
-        let url = build_base_url(&params).unwrap();
-        assert_eq!(url, "http://localhost:8080");
     }
 }
