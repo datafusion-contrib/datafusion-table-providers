@@ -115,7 +115,10 @@ pub fn get_primary_keys_from_constraints(
 pub(crate) mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::SchemaRef;
+    use arrow::{
+        array::{ArrayRef, Int32Array, RecordBatch, StringArray},
+        datatypes::{DataType, Field, Schema, SchemaRef},
+    };
     use datafusion::{
         common::{Constraint, Constraints},
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
@@ -183,5 +186,445 @@ pub(crate) mod tests {
             .collect();
 
         Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
+    }
+
+    /// Builder for creating test RecordBatches with specific data patterns
+    #[derive(Debug)]
+    pub struct TestDataBuilder {
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    }
+
+    impl TestDataBuilder {
+        pub fn new(schema: SchemaRef) -> Self {
+            Self {
+                schema,
+                batches: Vec::new(),
+            }
+        }
+
+        pub fn with_columns(columns: &[(&str, DataType)]) -> Self {
+            let fields: Vec<Field> = columns
+                .iter()
+                .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
+                .collect();
+            let schema = Arc::new(Schema::new(fields));
+            Self::new(schema)
+        }
+
+        pub fn add_string_batch(
+            self,
+            data: Vec<Vec<Option<&str>>>,
+        ) -> Result<Self, arrow::error::ArrowError> {
+            let columns: Result<Vec<ArrayRef>, arrow::error::ArrowError> =
+                (0..self.schema.fields().len())
+                    .map(|col_idx| {
+                        let column_data: Vec<Option<String>> = data
+                            .iter()
+                            .map(|row| row.get(col_idx).and_then(|v| v.map(|s| s.to_string())))
+                            .collect();
+                        Ok(Arc::new(StringArray::from(column_data)) as ArrayRef)
+                    })
+                    .collect();
+
+            let batch = RecordBatch::try_new(self.schema.clone(), columns?)?;
+            let mut new_self = self;
+            new_self.batches.push(batch);
+            Ok(new_self)
+        }
+
+        pub fn add_int_batch(
+            self,
+            data: Vec<Vec<Option<i32>>>,
+        ) -> Result<Self, arrow::error::ArrowError> {
+            let columns: Result<Vec<ArrayRef>, arrow::error::ArrowError> =
+                (0..self.schema.fields().len())
+                    .map(|col_idx| {
+                        let column_data: Vec<Option<i32>> = data
+                            .iter()
+                            .map(|row| row.get(col_idx).copied().flatten())
+                            .collect();
+                        Ok(Arc::new(Int32Array::from(column_data)) as ArrayRef)
+                    })
+                    .collect();
+
+            let batch = RecordBatch::try_new(self.schema.clone(), columns?)?;
+            let mut new_self = self;
+            new_self.batches.push(batch);
+            Ok(new_self)
+        }
+
+        pub fn build(self) -> Vec<RecordBatch> {
+            self.batches
+        }
+    }
+
+    /// Builder for creating different types of constraints
+    #[derive(Debug)]
+    pub struct ConstraintBuilder {
+        schema: SchemaRef,
+    }
+
+    impl ConstraintBuilder {
+        pub fn new(schema: SchemaRef) -> Self {
+            Self { schema }
+        }
+
+        /// Create a unique constraint on the specified columns
+        pub fn unique_on(&self, column_names: &[&str]) -> Constraints {
+            get_unique_constraints(column_names, self.schema.clone())
+        }
+
+        /// Create a primary key constraint on the specified columns
+        pub fn primary_key_on(&self, column_names: &[&str]) -> Constraints {
+            get_pk_constraints(column_names, self.schema.clone())
+        }
+    }
+
+    pub enum Expect {
+        Pass,
+        Fail,
+    }
+
+    /// Helper for testing constraint validation scenarios
+    pub struct ConstraintTestCase {
+        pub name: String,
+        pub batches: Vec<RecordBatch>,
+        pub constraints: Constraints,
+        pub should_pass: Expect,
+        pub expected_error_contains: Option<String>,
+    }
+
+    impl ConstraintTestCase {
+        /// Create a new test case
+        pub fn new(
+            name: &str,
+            batches: Vec<RecordBatch>,
+            constraints: Constraints,
+            should_pass: Expect,
+        ) -> Self {
+            Self {
+                name: name.to_string(),
+                batches,
+                constraints,
+                should_pass,
+                expected_error_contains: None,
+            }
+        }
+
+        /// Set expected error message substring
+        pub fn with_expected_error(mut self, error_substr: &str) -> Self {
+            self.expected_error_contains = Some(error_substr.to_string());
+            self
+        }
+
+        /// Run the test case
+        pub async fn run(self) -> Result<(), anyhow::Error> {
+            let result =
+                super::validate_batch_with_constraints(&self.batches, &self.constraints).await;
+
+            match (self.should_pass, result) {
+                (Expect::Pass, Ok(())) => {
+                    println!("✓ Test '{}' passed as expected", self.name);
+                    Ok(())
+                }
+                (Expect::Fail, Err(err)) => {
+                    if let Some(expected_substr) = &self.expected_error_contains {
+                        let err_str = err.to_string();
+                        if err_str.contains(expected_substr) {
+                            println!(
+                                "✓ Test '{}' failed as expected with error: {}",
+                                self.name, err_str
+                            );
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "Test '{}' failed with unexpected error. Expected substring '{}', got: {}",
+                                self.name, expected_substr, err_str
+                            ))
+                        }
+                    } else {
+                        println!(
+                            "✓ Test '{}' failed as expected with error: {}",
+                            self.name, err
+                        );
+                        Ok(())
+                    }
+                }
+                (Expect::Pass, Err(err)) => Err(anyhow::anyhow!(
+                    "Test '{}' was expected to pass but failed with error: {}",
+                    self.name,
+                    err
+                )),
+                (Expect::Fail, Ok(())) => Err(anyhow::anyhow!(
+                    "Test '{}' was expected to fail but passed",
+                    self.name
+                )),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_valid_unique_constraint_no_duplicates() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("id", DataType::Utf8),
+            ("name", DataType::Utf8),
+            ("category", DataType::Utf8),
+        ]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("Alice"), Some("A")],
+                vec![Some("2"), Some("Bob"), Some("B")],
+                vec![Some("3"), Some("Charlie"), Some("A")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        ConstraintTestCase::new(
+            "valid unique constraint on id",
+            batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_invalid_unique_constraint_duplicate_values() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("name", DataType::Utf8)]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("Alice")],
+                vec![Some("1"), Some("Bob")],
+                vec![Some("2"), Some("Charlie")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        ConstraintTestCase::new(
+            "invalid unique constraint - duplicate ids",
+            batches,
+            constraints,
+            Expect::Fail,
+        )
+        .with_expected_error("violates uniqueness constraint on column(s): id")
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_valid_composite_unique_constraint() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("user_id", DataType::Utf8),
+            ("product_id", DataType::Utf8),
+            ("rating", DataType::Utf8),
+        ]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("A"), Some("5")],
+                vec![Some("1"), Some("B"), Some("4")],
+                vec![Some("2"), Some("A"), Some("3")],
+                vec![Some("2"), Some("B"), Some("5")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["user_id", "product_id"]);
+
+        ConstraintTestCase::new(
+            "valid composite unique constraint",
+            batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_invalid_composite_unique_constraint() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("user_id", DataType::Utf8),
+            ("product_id", DataType::Utf8),
+        ]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("A")],
+                vec![Some("1"), Some("B")],
+                vec![Some("1"), Some("A")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["user_id", "product_id"]);
+
+        ConstraintTestCase::new(
+            "invalid composite unique constraint",
+            batches,
+            constraints,
+            Expect::Fail,
+        )
+        .with_expected_error("violates uniqueness constraint on column(s): user_id, product_id")
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_valid_primary_key_constraint() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("pk", DataType::Utf8), ("data", DataType::Utf8)]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("pk1"), Some("data1")],
+                vec![Some("pk2"), Some("data2")],
+                vec![Some("pk3"), Some("data3")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.primary_key_on(&["pk"]);
+
+        ConstraintTestCase::new(
+            "valid primary key constraint",
+            batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_invalid_primary_key_constraint() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("pk", DataType::Utf8), ("data", DataType::Utf8)]);
+
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("pk1"), Some("data1")],
+                vec![Some("pk1"), Some("data2")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.primary_key_on(&["pk"]);
+
+        ConstraintTestCase::new(
+            "invalid primary key constraint",
+            batches,
+            constraints,
+            Expect::Fail,
+        )
+        .with_expected_error("violates uniqueness constraint on column(s): pk")
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_multiple_batches_with_valid_constraints() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("value", DataType::Utf8)]);
+
+        let batches = data_builder
+            .add_string_batch(vec![vec![Some("1"), Some("A")], vec![Some("2"), Some("B")]])?
+            .add_string_batch(vec![vec![Some("3"), Some("C")], vec![Some("4"), Some("D")]])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        ConstraintTestCase::new(
+            "multiple batches with valid constraints",
+            batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_multiple_batches_with_cross_batch_violations() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("value", DataType::Utf8)]);
+
+        let batches = data_builder
+            .add_string_batch(vec![vec![Some("1"), Some("A")], vec![Some("2"), Some("B")]])?
+            .add_string_batch(vec![
+                vec![Some("1"), Some("C")],
+                vec![Some("4"), Some("D")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        ConstraintTestCase::new(
+            "multiple batches with cross-batch violations",
+            batches,
+            constraints,
+            Expect::Fail,
+        )
+        .with_expected_error("violates uniqueness constraint on column(s): id")
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_integer_data_with_valid_constraints() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("int_id", DataType::Int32),
+            ("value", DataType::Int32),
+        ]);
+
+        let batches = data_builder
+            .add_int_batch(vec![
+                vec![Some(1), Some(100)],
+                vec![Some(2), Some(200)],
+                vec![Some(3), Some(300)],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["int_id"]);
+
+        ConstraintTestCase::new(
+            "integer data with valid constraints",
+            batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_empty_batch_handling() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[("id", DataType::Utf8)]);
+        let empty_batches = data_builder.build();
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let constraint_builder = ConstraintBuilder::new(schema);
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        ConstraintTestCase::new(
+            "empty batches should pass",
+            empty_batches,
+            constraints,
+            Expect::Pass,
+        )
+        .run()
+        .await
     }
 }
