@@ -1,13 +1,17 @@
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{
+    array::{Int64Array, RecordBatch},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 use datafusion::{
     common::{Constraint, Constraints},
     execution::context::SessionContext,
     functions_aggregate::count::count,
-    logical_expr::{col, lit, utils::COUNT_STAR_EXPANSION},
+    logical_expr::{col, expr::WindowFunctionParams, lit, utils::COUNT_STAR_EXPANSION, Expr},
     prelude::ident,
 };
 use futures::future;
 use snafu::prelude::*;
+use std::sync::Arc;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -22,33 +26,104 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Configuration options for constraint validation behavior
+#[derive(Debug, Clone, Default)]
+pub struct ValidationOptions {
+    /// Remove duplicates before validation to resolve primary key conflicts
+    pub remove_duplicates: bool,
+    /// Use "last write wins" behavior - when duplicates are found, keep the row with the highest row number
+    pub last_write_wins: bool,
+}
+
+impl ValidationOptions {
+    /// Create a new instance with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_remove_duplicates(self: Self, remove_duplicates: bool) -> Self {
+        Self {
+            remove_duplicates,
+            ..self
+        }
+    }
+
+    pub fn with_last_write_wins(self: Self, last_write_wins: bool) -> Self {
+        Self {
+            last_write_wins,
+            ..self
+        }
+    }
+}
+
 /// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
 ///
 /// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.
+///
+/// Returns the potentially modified batches (e.g., with duplicates removed or last-write-wins applied).
 pub async fn validate_batch_with_constraints(
-    batches: &[RecordBatch],
+    batches: Vec<RecordBatch>,
     constraints: &Constraints,
-) -> Result<()> {
-    if batches.is_empty() || constraints.is_empty() {
-        return Ok(());
-    }
-
-    let mut futures = Vec::new();
-    for constraint in &**constraints {
-        let fut = validate_batch_with_constraint(batches.to_vec(), constraint.clone());
-        futures.push(fut);
-    }
-
-    future::try_join_all(futures).await?;
-
-    Ok(())
+) -> Result<Vec<RecordBatch>> {
+    validate_batch_with_constraints_with_options(
+        batches,
+        constraints,
+        &ValidationOptions::default(),
+    )
+    .await
 }
 
-#[tracing::instrument(level = "debug", skip(batches))]
-async fn validate_batch_with_constraint(
+/// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
+///
+/// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.
+///
+/// The `options` parameter allows customizing validation behavior such as duplicate removal.
+///
+/// Returns the potentially modified batches (e.g., with duplicates removed or last-write-wins applied).
+pub async fn validate_batch_with_constraints_with_options(
+    batches: Vec<RecordBatch>,
+    constraints: &Constraints,
+    options: &ValidationOptions,
+) -> Result<Vec<RecordBatch>> {
+    if batches.is_empty() || constraints.is_empty() {
+        return Ok(batches);
+    }
+
+    // If options modify batches, we need to process constraints sequentially
+    if options.remove_duplicates || options.last_write_wins {
+        let mut processed_batches = batches;
+        for constraint in &**constraints {
+            processed_batches = validate_batch_with_constraint_with_options(
+                processed_batches,
+                constraint.clone(),
+                options.clone(),
+            )
+            .await?;
+        }
+        Ok(processed_batches)
+    } else {
+        // No modifications needed, use parallel validation
+        let mut futures = Vec::new();
+        for constraint in &**constraints {
+            let fut = validate_batch_with_constraint_with_options(
+                batches.clone(),
+                constraint.clone(),
+                options.clone(),
+            );
+            futures.push(fut);
+        }
+
+        future::try_join_all(futures).await?;
+        Ok(batches)
+    }
+}
+
+#[tracing::instrument(level = "debug", skip(batches, options))]
+async fn validate_batch_with_constraint_with_options(
     batches: Vec<RecordBatch>,
     constraint: Constraint,
-) -> Result<()> {
+    options: ValidationOptions,
+) -> Result<Vec<RecordBatch>> {
     let unique_cols = match constraint {
         Constraint::PrimaryKey(cols) | Constraint::Unique(cols) => cols,
     };
@@ -59,8 +134,29 @@ async fn validate_batch_with_constraint(
         .map(|col| schema.field(*col))
         .collect::<Vec<_>>();
 
+    // Prepare data with row numbers if last write wins is enabled
+    let batches_with_row_nums = if options.last_write_wins {
+        add_row_numbers_to_batches(batches)?
+    } else {
+        batches
+    };
+
     let ctx = SessionContext::new();
-    let df = ctx.read_batches(batches).context(DataFusionSnafu)?;
+    let mut df = ctx
+        .read_batches(batches_with_row_nums)
+        .context(DataFusionSnafu)?;
+
+    // Apply last write wins logic - keep only the row with the highest row number for each unique key
+    if options.last_write_wins {
+        df = apply_last_write_wins(&mut df, &unique_fields)
+            .await
+            .context(DataFusionSnafu)?;
+    }
+
+    // Remove duplicates first if requested to resolve primary key conflicts for duplicate rows
+    if options.remove_duplicates {
+        df = df.distinct().context(DataFusionSnafu)?;
+    }
 
     let count_name = count(lit(COUNT_STAR_EXPANSION)).schema_name().to_string();
 
@@ -69,6 +165,7 @@ async fn validate_batch_with_constraint(
     // SELECT COUNT(1), <unique_field_names> FROM mem_table GROUP BY <unique_field_names> HAVING COUNT(1) > 1
     // ```
     let num_rows = df
+        .clone()
         .aggregate(
             unique_fields.iter().map(|f| ident(f.name())).collect(),
             vec![count(lit(COUNT_STAR_EXPANSION))],
@@ -90,7 +187,104 @@ async fn validate_batch_with_constraint(
         .fail()?;
     }
 
-    Ok(())
+    // Return the processed batches
+    let final_batches = df.collect().await.context(DataFusionSnafu)?;
+    Ok(final_batches)
+}
+
+/// Add row numbers to batches for tracking insertion order in last write wins logic
+fn add_row_numbers_to_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
+    let mut batches_with_row_nums = Vec::new();
+    let mut global_row_number = 0i64;
+
+    for batch in batches {
+        let num_rows = batch.num_rows();
+        let row_numbers: Vec<i64> =
+            (global_row_number..global_row_number + num_rows as i64).collect();
+        global_row_number += num_rows as i64;
+
+        // Create new schema with additional row_num column
+        let mut fields = batch.schema().fields().iter().cloned().collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new("__row_num", DataType::Int64, false)));
+        let new_schema = Arc::new(Schema::new(fields));
+
+        // Create new columns including row_num
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(Int64Array::from(row_numbers)) as arrow::array::ArrayRef);
+
+        let new_batch =
+            RecordBatch::try_new(new_schema, columns).map_err(|e| Error::DataFusion {
+                source: datafusion::error::DataFusionError::ArrowError(e, None),
+            })?;
+        batches_with_row_nums.push(new_batch);
+    }
+
+    Ok(batches_with_row_nums)
+}
+
+/// Apply last write wins logic using window functions to keep only the row with highest row number for each unique key
+async fn apply_last_write_wins(
+    df: &mut datafusion::dataframe::DataFrame,
+    unique_fields: &[&arrow::datatypes::Field],
+) -> datafusion::error::Result<datafusion::dataframe::DataFrame> {
+    use datafusion::functions_aggregate::min_max::max_udaf;
+    use datafusion::logical_expr::{WindowFrame, WindowFunctionDefinition};
+
+    // Create partition by expressions for the unique fields
+    let partition_by: Vec<Expr> = unique_fields
+        .iter()
+        .map(|field| col(field.name()))
+        .collect();
+
+    // Create a MAX window function to get the maximum row number for each partition
+    let max_row_num_expr = Expr::WindowFunction(datafusion::logical_expr::expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(max_udaf()),
+        params: WindowFunctionParams {
+            args: vec![col("__row_num")],
+            partition_by,
+            order_by: vec![col("__row_num").sort(false, true)], // Order by row_num DESC
+            window_frame: WindowFrame::new(Some(false)),
+            null_treatment: None,
+        },
+    });
+
+    // Add the maximum row number as a column
+    let df_with_max = df.clone().with_column("__max_row_num", max_row_num_expr)?;
+
+    // Get all original columns from the dataframe (excluding __row_num)
+    let df_schema = df.schema();
+    let mut all_original_columns = Vec::new();
+    for field in df_schema.fields() {
+        if field.name() != "__row_num" {
+            all_original_columns.push(field.as_ref().clone());
+        }
+    }
+    let full_original_schema = arrow::datatypes::Schema::new(all_original_columns);
+
+    // Get the actual column name for the max row number column
+    let df_with_max_clone = df_with_max.clone();
+    let schema_with_max = df_with_max_clone.schema();
+    let max_column_name = schema_with_max
+        .fields()
+        .iter()
+        .find(|field| !full_original_schema.fields().iter().any(|orig_field| orig_field.name() == field.name()))
+        .map(|field| field.name().clone())
+        .unwrap_or_else(|| "__max_row_num".to_string());
+
+    // Filter to keep only rows where __row_num equals the max row number for its partition
+    let filtered_df = df_with_max
+        .filter(col("__row_num").eq(col(&max_column_name)))?;
+    
+    // Select only the original columns (exclude __row_num and the max column)
+    let original_column_exprs: Vec<Expr> = full_original_schema
+        .fields()
+        .iter()
+        .map(|field| col(field.name()))
+        .collect();
+    
+    let final_df = filtered_df.select(original_column_exprs)?;
+
+    Ok(final_df)
 }
 
 #[must_use]
@@ -113,6 +307,7 @@ pub fn get_primary_keys_from_constraints(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
     use std::sync::Arc;
 
     use arrow::{
@@ -141,7 +336,7 @@ pub(crate) mod tests {
             Arc::clone(&schema),
         );
 
-        let result = super::validate_batch_with_constraints(&records, &constraints).await;
+        let result = validate_batch_with_constraints(records.clone(), &constraints).await;
         assert!(
             result.is_ok(),
             "{}",
@@ -149,7 +344,7 @@ pub(crate) mod tests {
         );
 
         let invalid_constraints = get_unique_constraints(&["VendorID"], Arc::clone(&schema));
-        let result = super::validate_batch_with_constraints(&records, &invalid_constraints).await;
+        let result = validate_batch_with_constraints(records.clone(), &invalid_constraints).await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
@@ -158,7 +353,7 @@ pub(crate) mod tests {
 
         let invalid_constraints =
             get_unique_constraints(&["VendorID", "tpep_pickup_datetime"], Arc::clone(&schema));
-        let result = super::validate_batch_with_constraints(&records, &invalid_constraints).await;
+        let result = validate_batch_with_constraints(records, &invalid_constraints).await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
@@ -321,10 +516,10 @@ pub(crate) mod tests {
         /// Run the test case
         pub async fn run(self) -> Result<(), anyhow::Error> {
             let result =
-                super::validate_batch_with_constraints(&self.batches, &self.constraints).await;
+                validate_batch_with_constraints(self.batches.clone(), &self.constraints).await;
 
             match (self.should_pass, result) {
-                (Expect::Pass, Ok(())) => {
+                (Expect::Pass, Ok(_)) => {
                     println!("✓ Test '{}' passed as expected", self.name);
                     Ok(())
                 }
@@ -356,7 +551,7 @@ pub(crate) mod tests {
                     self.name,
                     err
                 )),
-                (Expect::Fail, Ok(())) => Err(anyhow::anyhow!(
+                (Expect::Fail, Ok(_)) => Err(anyhow::anyhow!(
                     "Test '{}' was expected to fail but passed",
                     self.name
                 )),
@@ -561,10 +756,7 @@ pub(crate) mod tests {
 
         let batches = data_builder
             .add_string_batch(vec![vec![Some("1"), Some("A")], vec![Some("2"), Some("B")]])?
-            .add_string_batch(vec![
-                vec![Some("1"), Some("C")],
-                vec![Some("4"), Some("D")],
-            ])?
+            .add_string_batch(vec![vec![Some("1"), Some("C")], vec![Some("4"), Some("D")]])?
             .build();
 
         let constraint_builder = ConstraintBuilder::new(batches[0].schema());
@@ -626,5 +818,351 @@ pub(crate) mod tests {
         )
         .run()
         .await
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_removal_resolves_primary_key_conflicts() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("name", DataType::Utf8)]);
+
+        // Create batches with duplicate rows that would violate primary key constraint
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("Alice")],
+                vec![Some("1"), Some("Alice")], // Exact duplicate
+                vec![Some("2"), Some("Bob")],
+                vec![Some("2"), Some("Bob")], // Another exact duplicate
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.primary_key_on(&["id"]);
+
+        // Without duplicate removal, this should fail
+        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        assert!(
+            result.is_err(),
+            "Expected validation to fail with duplicates"
+        );
+
+        // With duplicate removal, this should pass
+        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let result =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        assert!(
+            result.is_ok(),
+            "Expected validation to pass after removing duplicates: {:?}",
+            result
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_removal_with_partial_duplicates() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("id", DataType::Utf8),
+            ("name", DataType::Utf8),
+            ("category", DataType::Utf8),
+        ]);
+
+        // Create batches where some rows are duplicates and others are unique
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("Alice"), Some("A")],
+                vec![Some("1"), Some("Alice"), Some("A")], // Exact duplicate
+                vec![Some("2"), Some("Bob"), Some("B")],   // Unique
+                vec![Some("3"), Some("Charlie"), Some("C")], // Unique
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        // With duplicate removal, this should pass
+        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let result =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        assert!(
+            result.is_ok(),
+            "Expected validation to pass after removing duplicates: {:?}",
+            result
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_removal_across_multiple_batches() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("value", DataType::Utf8)]);
+
+        // Create multiple batches where duplicates occur across batches
+        let batches = data_builder
+            .add_string_batch(vec![vec![Some("1"), Some("A")], vec![Some("2"), Some("B")]])?
+            .add_string_batch(vec![
+                vec![Some("1"), Some("A")], // Duplicate from first batch
+                vec![Some("3"), Some("C")],
+            ])?
+            .add_string_batch(vec![
+                vec![Some("2"), Some("B")], // Duplicate from first batch
+                vec![Some("4"), Some("D")],
+            ])?
+            .build();
+
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        // Without duplicate removal, this should fail due to cross-batch duplicates
+        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        assert!(
+            result.is_err(),
+            "Expected validation to fail with cross-batch duplicates"
+        );
+
+        // With duplicate removal, this should pass
+        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let result =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        assert!(
+            result.is_ok(),
+            "Expected validation to pass after removing cross-batch duplicates: {:?}",
+            result
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_write_wins_basic_behavior() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("value", DataType::Utf8)]);
+
+        // Create batches with duplicate keys but different values - last one should win
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("first")],
+                vec![Some("2"), Some("A")],
+            ])?
+            .add_string_batch(vec![
+                vec![Some("1"), Some("second")], // Should override first value
+                vec![Some("3"), Some("B")],
+            ])?
+            .add_string_batch(vec![
+                vec![Some("1"), Some("third")], // Should be the final value
+                vec![Some("4"), Some("C")],
+            ])?
+            .build();
+
+        let original_schema = batches[0].schema();
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        // Without last write wins, this should fail due to duplicate keys
+        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        assert!(
+            result.is_err(),
+            "Expected validation to fail with duplicate keys"
+        );
+
+        // With last write wins, this should pass and keep the last value
+        let options = ValidationOptions::new().with_last_write_wins(true);
+        let result_batches =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+
+        // Verify schema matches
+        assert_eq!(
+            result_batches[0].schema(),
+            original_schema,
+            "Output schema should match input schema"
+        );
+
+        // Verify expected row count (should be 4: one for each unique id)
+        let total_rows: usize = result_batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 4, "Expected 4 rows after deduplication");
+
+        // Use DataFusion to verify the data
+        let ctx = SessionContext::new();
+        let df = ctx.read_batches(result_batches)?;
+
+        // Verify that id "1" has value "third"
+        let result = df
+            .clone()
+            .filter(col("id").eq(lit("1")))?
+            .select(vec![col("value")])?
+            .collect()
+            .await?;
+
+        assert_eq!(result.len(), 1, "Should have exactly one batch");
+        assert_eq!(
+            result[0].num_rows(),
+            1,
+            "Should have exactly one row for id '1'"
+        );
+
+        let value_array = result[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Failed to cast value column");
+        assert_eq!(
+            value_array.value(0),
+            "third",
+            "Expected last value 'third' for id '1'"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_write_wins_within_single_batch() -> Result<(), anyhow::Error> {
+        let data_builder =
+            TestDataBuilder::with_columns(&[("id", DataType::Utf8), ("name", DataType::Utf8)]);
+
+        // Create batch with duplicates within the same batch
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("Alice")],
+                vec![Some("2"), Some("Bob")],
+                vec![Some("1"), Some("Alice_Updated")], // Should win over first Alice
+                vec![Some("3"), Some("Charlie")],
+            ])?
+            .build();
+
+        let original_schema = batches[0].schema();
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["id"]);
+
+        // With last write wins, this should pass and keep the updated name
+        let options = ValidationOptions::new().with_last_write_wins(true);
+        let result_batches =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+
+        // Verify schema matches
+        assert_eq!(
+            result_batches[0].schema(),
+            original_schema,
+            "Output schema should match input schema"
+        );
+
+        // Verify expected row count (should be 3: one for each unique id)
+        let total_rows: usize = result_batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3, "Expected 3 rows after deduplication");
+
+        // Use DataFusion to verify the data
+        let ctx = SessionContext::new();
+        let df = ctx.read_batches(result_batches)?;
+
+        // Verify that id "1" has the updated name
+        let result = df
+            .clone()
+            .filter(col("id").eq(lit("1")))?
+            .select(vec![col("name")])?
+            .collect()
+            .await?;
+
+        assert_eq!(result.len(), 1, "Should have exactly one batch");
+        assert_eq!(
+            result[0].num_rows(),
+            1,
+            "Should have exactly one row for id '1'"
+        );
+
+        let name_array = result[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Failed to cast name column");
+        assert_eq!(
+            name_array.value(0),
+            "Alice_Updated",
+            "Expected updated name 'Alice_Updated' for id '1'"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_write_wins_with_composite_keys() -> Result<(), anyhow::Error> {
+        let data_builder = TestDataBuilder::with_columns(&[
+            ("user_id", DataType::Utf8),
+            ("product_id", DataType::Utf8),
+            ("rating", DataType::Utf8),
+        ]);
+
+        // Create data with composite key conflicts
+        let batches = data_builder
+            .add_string_batch(vec![
+                vec![Some("1"), Some("A"), Some("3")], // First rating for user 1, product A
+                vec![Some("2"), Some("B"), Some("4")],
+            ])?
+            .add_string_batch(vec![
+                vec![Some("1"), Some("A"), Some("5")], // Updated rating (should win)
+                vec![Some("3"), Some("C"), Some("2")],
+            ])?
+            .build();
+
+        let original_schema = batches[0].schema();
+        let constraint_builder = ConstraintBuilder::new(batches[0].schema());
+        let constraints = constraint_builder.unique_on(&["user_id", "product_id"]);
+
+        // Without last write wins, this should fail
+        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        assert!(
+            result.is_err(),
+            "Expected validation to fail with composite key duplicates"
+        );
+
+        // With last write wins, this should pass and keep the updated rating
+        let options = ValidationOptions::new().with_last_write_wins(true);
+        let result_batches =
+            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+
+        // Verify schema matches
+        assert_eq!(
+            result_batches[0].schema(),
+            original_schema,
+            "Output schema should match input schema"
+        );
+
+        // Verify expected row count (should be 3: one for each unique combination)
+        let total_rows: usize = result_batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3, "Expected 3 rows after deduplication");
+
+        // Use DataFusion to verify the data
+        let ctx = SessionContext::new();
+        let df = ctx.read_batches(result_batches)?;
+
+        // Verify that user "1", product "A" has rating "5"
+        let result = df
+            .clone()
+            .filter(
+                col("user_id")
+                    .eq(lit("1"))
+                    .and(col("product_id").eq(lit("A"))),
+            )?
+            .select(vec![col("rating")])?
+            .collect()
+            .await?;
+
+        assert_eq!(result.len(), 1, "Should have exactly one batch");
+        assert_eq!(
+            result[0].num_rows(),
+            1,
+            "Should have exactly one row for user '1', product 'A'"
+        );
+
+        let rating_array = result[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Failed to cast rating column");
+        assert_eq!(
+            rating_array.value(0),
+            "5",
+            "Expected updated rating '5' for user '1', product 'A'"
+        );
+
+        Ok(())
     }
 }
