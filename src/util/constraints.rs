@@ -248,37 +248,19 @@ async fn apply_last_write_wins(
         },
     });
 
-    // Add the maximum row number as a column
-    let df_with_max = df.clone().with_column("__max_row_num", max_row_num_expr)?;
-
-    // Get all original columns from the dataframe (excluding __row_num)
-    let df_schema = df.schema();
-    let mut all_original_columns = Vec::new();
-    for field in df_schema.fields() {
-        if field.name() != "__row_num" {
-            all_original_columns.push(field.as_ref().clone());
-        }
-    }
-    let full_original_schema = arrow::datatypes::Schema::new(all_original_columns);
-
-    // Get the actual column name for the max row number column
-    let df_with_max_clone = df_with_max.clone();
-    let schema_with_max = df_with_max_clone.schema();
-    let max_column_name = schema_with_max
-        .fields()
-        .iter()
-        .find(|field| !full_original_schema.fields().iter().any(|orig_field| orig_field.name() == field.name()))
-        .map(|field| field.name().clone())
-        .unwrap_or_else(|| "__max_row_num".to_string());
+    // Add the maximum row number as a column with explicit alias
+    let df_with_max = df.clone().with_column("max_row_num_col", max_row_num_expr)?;
 
     // Filter to keep only rows where __row_num equals the max row number for its partition
     let filtered_df = df_with_max
-        .filter(col("__row_num").eq(col(&max_column_name)))?;
+        .filter(col("__row_num").eq(col("max_row_num_col")))?;
     
-    // Select only the original columns (exclude __row_num and the max column)
-    let original_column_exprs: Vec<Expr> = full_original_schema
+    // Get all original columns from the dataframe (excluding __row_num)
+    let df_schema = df.schema();
+    let original_column_exprs: Vec<Expr> = df_schema
         .fields()
         .iter()
+        .filter(|field| field.name() != "__row_num")
         .map(|field| col(field.name()))
         .collect();
     
