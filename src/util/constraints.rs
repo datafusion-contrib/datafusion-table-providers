@@ -29,7 +29,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Configuration options for upsert behavior
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UpsertOptions {
-    /// Remove duplicates before validation to resolve primary key conflicts
+    /// Remove duplicates after validation to resolve primary key conflicts
     pub remove_duplicates: bool,
     /// Use "last write wins" behavior - when duplicates are found, keep the row with the highest row number
     pub last_write_wins: bool,
