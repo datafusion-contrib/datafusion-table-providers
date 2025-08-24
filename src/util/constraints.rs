@@ -11,7 +11,7 @@ use datafusion::{
 };
 use futures::future;
 use snafu::prelude::*;
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -26,16 +26,16 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Configuration options for constraint validation behavior
-#[derive(Debug, Clone, Default)]
-pub struct ValidationOptions {
+/// Configuration options for upsert behavior
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpsertOptions {
     /// Remove duplicates before validation to resolve primary key conflicts
     pub remove_duplicates: bool,
     /// Use "last write wins" behavior - when duplicates are found, keep the row with the highest row number
     pub last_write_wins: bool,
 }
 
-impl ValidationOptions {
+impl UpsertOptions {
     /// Create a new instance with default settings
     pub fn new() -> Self {
         Self::default()
@@ -60,6 +60,46 @@ impl ValidationOptions {
     }
 }
 
+impl Display for UpsertOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut options = Vec::new();
+        if self.remove_duplicates {
+            options.push("remove_duplicates");
+        }
+        if self.last_write_wins {
+            options.push("last_write_wins");
+        }
+        write!(f, "{}", options.join(","))
+    }
+}
+
+impl TryFrom<&str> for UpsertOptions {
+    type Error = Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        let options = value.split(',').map(str::trim).collect::<Vec<_>>();
+        let mut upsert_options = Self::default();
+
+        for option in options {
+            match option {
+                "remove_duplicates" => upsert_options.remove_duplicates = true,
+                "last_write_wins" => upsert_options.last_write_wins = true,
+                "" => {}
+                _ => {
+                    return Err(Error::DataFusion {
+                        source: datafusion::error::DataFusionError::Plan(format!(
+                            "Unknown upsert option: {}",
+                            option
+                        )),
+                    });
+                }
+            }
+        }
+
+        Ok(upsert_options)
+    }
+}
+
 /// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
 ///
 /// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.
@@ -69,12 +109,8 @@ pub async fn validate_batch_with_constraints(
     batches: Vec<RecordBatch>,
     constraints: &Constraints,
 ) -> Result<Vec<RecordBatch>> {
-    validate_batch_with_constraints_with_options(
-        batches,
-        constraints,
-        &ValidationOptions::default(),
-    )
-    .await
+    validate_batch_with_constraints_with_options(batches, constraints, &UpsertOptions::default())
+        .await
 }
 
 /// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
@@ -87,7 +123,7 @@ pub async fn validate_batch_with_constraints(
 pub async fn validate_batch_with_constraints_with_options(
     batches: Vec<RecordBatch>,
     constraints: &Constraints,
-    options: &ValidationOptions,
+    options: &UpsertOptions,
 ) -> Result<Vec<RecordBatch>> {
     if batches.is_empty() || constraints.is_empty() {
         return Ok(batches);
@@ -99,7 +135,7 @@ pub async fn validate_batch_with_constraints_with_options(
         let fut = validate_batch_with_constraint_with_options(
             batches.clone(),
             constraint.clone(),
-            ValidationOptions::default(),
+            UpsertOptions::default(),
         );
         futures.push(fut);
     }
@@ -135,7 +171,7 @@ pub async fn validate_batch_with_constraints_with_options(
 async fn validate_batch_with_constraint_with_options(
     batches: Vec<RecordBatch>,
     constraint: Constraint,
-    options: ValidationOptions,
+    options: UpsertOptions,
 ) -> Result<Vec<RecordBatch>> {
     let unique_cols = match constraint {
         Constraint::PrimaryKey(cols) | Constraint::Unique(cols) => cols,
@@ -842,7 +878,7 @@ pub(crate) mod tests {
         );
 
         // With duplicate removal, this should pass
-        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let options = UpsertOptions::new().with_remove_duplicates(true);
         let result =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
         assert!(
@@ -876,7 +912,7 @@ pub(crate) mod tests {
         let constraints = constraint_builder.unique_on(&["id"]);
 
         // With duplicate removal, this should pass
-        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let options = UpsertOptions::new().with_remove_duplicates(true);
         let result =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
         assert!(
@@ -917,7 +953,7 @@ pub(crate) mod tests {
         );
 
         // With duplicate removal, this should pass
-        let options = ValidationOptions::new().with_remove_duplicates(true);
+        let options = UpsertOptions::new().with_remove_duplicates(true);
         let result =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
         assert!(
@@ -962,7 +998,7 @@ pub(crate) mod tests {
         );
 
         // With last write wins, this should pass and keep the last value
-        let options = ValidationOptions::new().with_last_write_wins(true);
+        let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
 
@@ -1030,7 +1066,7 @@ pub(crate) mod tests {
         let constraints = constraint_builder.unique_on(&["id"]);
 
         // With last write wins, this should pass and keep the updated name
-        let options = ValidationOptions::new().with_last_write_wins(true);
+        let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
 
@@ -1110,7 +1146,7 @@ pub(crate) mod tests {
         );
 
         // With last write wins, this should pass and keep the updated rating
-        let options = ValidationOptions::new().with_last_write_wins(true);
+        let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
             validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
 
@@ -1160,5 +1196,105 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_empty() {
+        let result = UpsertOptions::try_from("");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(!options.remove_duplicates);
+        assert!(!options.last_write_wins);
+        assert!(options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_remove_duplicates() {
+        let result = UpsertOptions::try_from("remove_duplicates");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(options.remove_duplicates);
+        assert!(!options.last_write_wins);
+        assert!(!options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_last_write_wins() {
+        let result = UpsertOptions::try_from("last_write_wins");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(!options.remove_duplicates);
+        assert!(options.last_write_wins);
+        assert!(!options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_both_options() {
+        let result = UpsertOptions::try_from("remove_duplicates,last_write_wins");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(options.remove_duplicates);
+        assert!(options.last_write_wins);
+        assert!(!options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_both_options_reverse_order() {
+        let result = UpsertOptions::try_from("last_write_wins,remove_duplicates");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(options.remove_duplicates);
+        assert!(options.last_write_wins);
+        assert!(!options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_with_spaces() {
+        let result = UpsertOptions::try_from(" remove_duplicates , last_write_wins ");
+        assert!(result.is_ok());
+        let options = result.unwrap();
+        assert!(options.remove_duplicates);
+        assert!(options.last_write_wins);
+        assert!(!options.is_default());
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_invalid_option() {
+        let result = UpsertOptions::try_from("invalid_option");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unknown upsert option: invalid_option"));
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_mixed_valid_invalid() {
+        let result = UpsertOptions::try_from("remove_duplicates,invalid_option");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unknown upsert option: invalid_option"));
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_multiple_invalid_options() {
+        let result = UpsertOptions::try_from("invalid1,invalid2");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unknown upsert option: invalid1"));
+    }
+
+    #[test]
+    fn test_upsert_options_try_from_str_case_sensitive() {
+        let result = UpsertOptions::try_from("Remove_Duplicates");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unknown upsert option: Remove_Duplicates"));
     }
 }
