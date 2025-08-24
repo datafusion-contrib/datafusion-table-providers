@@ -54,6 +54,10 @@ impl ValidationOptions {
             ..self
         }
     }
+
+    pub fn is_default(&self) -> bool {
+        !self.remove_duplicates && !self.last_write_wins
+    }
 }
 
 /// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
@@ -89,33 +93,42 @@ pub async fn validate_batch_with_constraints_with_options(
         return Ok(batches);
     }
 
-    // If options modify batches, we need to process constraints sequentially
-    if options.remove_duplicates || options.last_write_wins {
-        let mut processed_batches = batches;
-        for constraint in &**constraints {
-            processed_batches = validate_batch_with_constraint_with_options(
-                processed_batches,
-                constraint.clone(),
-                options.clone(),
-            )
-            .await?;
-        }
-        Ok(processed_batches)
-    } else {
-        // No modifications needed, use parallel validation
-        let mut futures = Vec::new();
-        for constraint in &**constraints {
-            let fut = validate_batch_with_constraint_with_options(
-                batches.clone(),
-                constraint.clone(),
-                options.clone(),
-            );
-            futures.push(fut);
-        }
-
-        future::try_join_all(futures).await?;
-        Ok(batches)
+    // First check if any constraints are violated without attempting to fix them.
+    let mut futures = Vec::new();
+    for constraint in &**constraints {
+        let fut = validate_batch_with_constraint_with_options(
+            batches.clone(),
+            constraint.clone(),
+            ValidationOptions::default(),
+        );
+        futures.push(fut);
     }
+
+    match future::try_join_all(futures).await {
+        Ok(_) => {
+            // No constraints were violated, just return.
+            return Ok(batches);
+        }
+        Err(e) => {
+            // Some constraints were violated, if we have the default validation options we need to return an error, otherwise we'll try to fix the batches
+            if options.is_default() {
+                return Err(e);
+            }
+        }
+    };
+
+    // Some constraints were violated, but we can potentially fix them
+    // These need to run sequentially since the batches are modified to fix the constraint violations.
+    let mut processed_batches = batches;
+    for constraint in &**constraints {
+        processed_batches = validate_batch_with_constraint_with_options(
+            processed_batches,
+            constraint.clone(),
+            options.clone(),
+        )
+        .await?;
+    }
+    Ok(processed_batches)
 }
 
 #[tracing::instrument(level = "debug", skip(batches, options))]
@@ -249,12 +262,13 @@ async fn apply_last_write_wins(
     });
 
     // Add the maximum row number as a column with explicit alias
-    let df_with_max = df.clone().with_column("max_row_num_col", max_row_num_expr)?;
+    let df_with_max = df
+        .clone()
+        .with_column("max_row_num_col", max_row_num_expr)?;
 
     // Filter to keep only rows where __row_num equals the max row number for its partition
-    let filtered_df = df_with_max
-        .filter(col("__row_num").eq(col("max_row_num_col")))?;
-    
+    let filtered_df = df_with_max.filter(col("__row_num").eq(col("max_row_num_col")))?;
+
     // Get all original columns from the dataframe (excluding __row_num)
     let df_schema = df.schema();
     let original_column_exprs: Vec<Expr> = df_schema
@@ -263,7 +277,7 @@ async fn apply_last_write_wins(
         .filter(|field| field.name() != "__row_num")
         .map(|field| col(field.name()))
         .collect();
-    
+
     let final_df = filtered_df.select(original_column_exprs)?;
 
     Ok(final_df)
