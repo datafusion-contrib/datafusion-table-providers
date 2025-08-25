@@ -47,18 +47,14 @@ impl UpsertOptions {
         Self::default()
     }
 
-    pub fn with_remove_duplicates(self: Self, remove_duplicates: bool) -> Self {
-        Self {
-            remove_duplicates,
-            ..self
-        }
+    pub fn with_remove_duplicates(mut self, remove_duplicates: bool) -> Self {
+        self.remove_duplicates = remove_duplicates;
+        self
     }
 
-    pub fn with_last_write_wins(self: Self, last_write_wins: bool) -> Self {
-        Self {
-            last_write_wins,
-            ..self
-        }
+    pub fn with_last_write_wins(mut self, last_write_wins: bool) -> Self {
+        self.last_write_wins = last_write_wins;
+        self
     }
 
     pub fn is_default(&self) -> bool {

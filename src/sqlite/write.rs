@@ -142,10 +142,12 @@ impl DataSink for SqliteDataSink {
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
-        let upsert_options = self.on_conflict.as_ref().map_or_else(
-            || UpsertOptions::default(),
-            |conflict| conflict.get_upsert_options(),
-        );
+        let upsert_options = self
+            .on_conflict
+            .as_ref()
+            .map_or_else(UpsertOptions::default, |conflict| {
+                conflict.get_upsert_options()
+            });
         let task = tokio::spawn(async move {
             let mut num_rows: u64 = 0;
             while let Some(data_batch) = data.next().await {

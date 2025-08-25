@@ -165,10 +165,12 @@ impl DataSink for PostgresDataSink {
 
         let postgres_schema = Arc::new(Schema::new(postgres_fields));
 
-        let upsert_options = self.on_conflict.as_ref().map_or_else(
-            || UpsertOptions::default(),
-            |conflict| conflict.get_upsert_options(),
-        );
+        let upsert_options = self
+            .on_conflict
+            .as_ref()
+            .map_or_else(UpsertOptions::default, |conflict| {
+                conflict.get_upsert_options()
+            });
 
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
