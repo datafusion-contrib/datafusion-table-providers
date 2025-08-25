@@ -3,6 +3,7 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
@@ -244,14 +245,23 @@ impl DataSink for DuckDBDataSink {
                 Ok(num_rows)
             });
 
+        let upsert_options = self.on_conflict.as_ref().map_or_else(
+            || UpsertOptions::default(),
+            |conflict| conflict.get_upsert_options(),
+        );
+
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
             let batches = if let Some(constraints) = self.table_definition.constraints() {
-                constraints::validate_batch_with_constraints(vec![batch], constraints)
-                    .await
-                    .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?
+                constraints::validate_batch_with_constraints(
+                    vec![batch],
+                    constraints,
+                    &upsert_options,
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?
             } else {
                 vec![batch]
             };

@@ -103,6 +103,13 @@ impl OnConflict {
             }
         }
     }
+
+    pub fn get_upsert_options(&self) -> UpsertOptions {
+        match self {
+            OnConflict::Upsert(_, options) => options.clone(),
+            _ => UpsertOptions::default(),
+        }
+    }
 }
 
 impl Display for OnConflict {

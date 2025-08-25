@@ -5,8 +5,11 @@ use arrow::{
 use datafusion::{
     common::{Constraint, Constraints},
     execution::context::SessionContext,
-    functions_aggregate::count::count,
-    logical_expr::{col, expr::WindowFunctionParams, lit, utils::COUNT_STAR_EXPANSION, Expr},
+    functions_aggregate::{count::count, min_max::max_udaf},
+    logical_expr::{
+        col, expr::WindowFunctionParams, lit, utils::COUNT_STAR_EXPANSION, Expr, WindowFrame,
+        WindowFunctionDefinition,
+    },
     prelude::ident,
 };
 use futures::future;
@@ -25,6 +28,9 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+const BATCH_ROW_NUMBER_COLUMN_NAME: &str = "__row_num";
+const MAX_ROW_NUMBER_COLUMN_NAME: &str = "__max_row_num";
 
 /// Configuration options for upsert behavior
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -104,23 +110,10 @@ impl TryFrom<&str> for UpsertOptions {
 ///
 /// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.
 ///
-/// Returns the potentially modified batches (e.g., with duplicates removed or last-write-wins applied).
-pub async fn validate_batch_with_constraints(
-    batches: Vec<RecordBatch>,
-    constraints: &Constraints,
-) -> Result<Vec<RecordBatch>> {
-    validate_batch_with_constraints_with_options(batches, constraints, &UpsertOptions::default())
-        .await
-}
-
-/// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
-///
-/// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.
-///
 /// The `options` parameter allows customizing validation behavior such as duplicate removal.
 ///
 /// Returns the potentially modified batches (e.g., with duplicates removed or last-write-wins applied).
-pub async fn validate_batch_with_constraints_with_options(
+pub async fn validate_batch_with_constraints(
     batches: Vec<RecordBatch>,
     constraints: &Constraints,
     options: &UpsertOptions,
@@ -254,7 +247,11 @@ fn add_row_numbers_to_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBat
 
         // Create new schema with additional row_num column
         let mut fields = batch.schema().fields().iter().cloned().collect::<Vec<_>>();
-        fields.push(Arc::new(Field::new("__row_num", DataType::Int64, false)));
+        fields.push(Arc::new(Field::new(
+            BATCH_ROW_NUMBER_COLUMN_NAME,
+            DataType::Int64,
+            false,
+        )));
         let new_schema = Arc::new(Schema::new(fields));
 
         // Create new columns including row_num
@@ -276,9 +273,6 @@ async fn apply_last_write_wins(
     df: &mut datafusion::dataframe::DataFrame,
     unique_fields: &[&arrow::datatypes::Field],
 ) -> datafusion::error::Result<datafusion::dataframe::DataFrame> {
-    use datafusion::functions_aggregate::min_max::max_udaf;
-    use datafusion::logical_expr::{WindowFrame, WindowFunctionDefinition};
-
     // Create partition by expressions for the unique fields
     let partition_by: Vec<Expr> = unique_fields
         .iter()
@@ -289,9 +283,9 @@ async fn apply_last_write_wins(
     let max_row_num_expr = Expr::WindowFunction(datafusion::logical_expr::expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(max_udaf()),
         params: WindowFunctionParams {
-            args: vec![col("__row_num")],
+            args: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME)],
             partition_by,
-            order_by: vec![col("__row_num").sort(false, true)], // Order by row_num DESC
+            order_by: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME).sort(false, true)], // Order by row_num DESC
             window_frame: WindowFrame::new(Some(false)),
             null_treatment: None,
         },
@@ -300,17 +294,18 @@ async fn apply_last_write_wins(
     // Add the maximum row number as a column with explicit alias
     let df_with_max = df
         .clone()
-        .with_column("max_row_num_col", max_row_num_expr)?;
+        .with_column(MAX_ROW_NUMBER_COLUMN_NAME, max_row_num_expr)?;
 
     // Filter to keep only rows where __row_num equals the max row number for its partition
-    let filtered_df = df_with_max.filter(col("__row_num").eq(col("max_row_num_col")))?;
+    let filtered_df = df_with_max
+        .filter(col(BATCH_ROW_NUMBER_COLUMN_NAME).eq(col(MAX_ROW_NUMBER_COLUMN_NAME)))?;
 
     // Get all original columns from the dataframe (excluding __row_num)
     let df_schema = df.schema();
     let original_column_exprs: Vec<Expr> = df_schema
         .fields()
         .iter()
-        .filter(|field| field.name() != "__row_num")
+        .filter(|field| field.name() != BATCH_ROW_NUMBER_COLUMN_NAME)
         .map(|field| col(field.name()))
         .collect();
 
@@ -368,7 +363,12 @@ pub(crate) mod tests {
             Arc::clone(&schema),
         );
 
-        let result = validate_batch_with_constraints(records.clone(), &constraints).await;
+        let result = validate_batch_with_constraints(
+            records.clone(),
+            &constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(
             result.is_ok(),
             "{}",
@@ -376,7 +376,12 @@ pub(crate) mod tests {
         );
 
         let invalid_constraints = get_unique_constraints(&["VendorID"], Arc::clone(&schema));
-        let result = validate_batch_with_constraints(records.clone(), &invalid_constraints).await;
+        let result = validate_batch_with_constraints(
+            records.clone(),
+            &invalid_constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
@@ -385,7 +390,12 @@ pub(crate) mod tests {
 
         let invalid_constraints =
             get_unique_constraints(&["VendorID", "tpep_pickup_datetime"], Arc::clone(&schema));
-        let result = validate_batch_with_constraints(records, &invalid_constraints).await;
+        let result = validate_batch_with_constraints(
+            records,
+            &invalid_constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(
             result.expect_err("this returned an error").to_string(),
@@ -547,8 +557,12 @@ pub(crate) mod tests {
 
         /// Run the test case
         pub async fn run(self) -> Result<(), anyhow::Error> {
-            let result =
-                validate_batch_with_constraints(self.batches.clone(), &self.constraints).await;
+            let result = validate_batch_with_constraints(
+                self.batches.clone(),
+                &self.constraints,
+                &UpsertOptions::default(),
+            )
+            .await;
 
             match (self.should_pass, result) {
                 (Expect::Pass, Ok(_)) => {
@@ -871,7 +885,12 @@ pub(crate) mod tests {
         let constraints = constraint_builder.primary_key_on(&["id"]);
 
         // Without duplicate removal, this should fail
-        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        let result = validate_batch_with_constraints(
+            batches.clone(),
+            &constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(
             result.is_err(),
             "Expected validation to fail with duplicates"
@@ -879,8 +898,7 @@ pub(crate) mod tests {
 
         // With duplicate removal, this should pass
         let options = UpsertOptions::new().with_remove_duplicates(true);
-        let result =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        let result = validate_batch_with_constraints(batches, &constraints, &options).await;
         assert!(
             result.is_ok(),
             "Expected validation to pass after removing duplicates: {:?}",
@@ -913,8 +931,7 @@ pub(crate) mod tests {
 
         // With duplicate removal, this should pass
         let options = UpsertOptions::new().with_remove_duplicates(true);
-        let result =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        let result = validate_batch_with_constraints(batches, &constraints, &options).await;
         assert!(
             result.is_ok(),
             "Expected validation to pass after removing duplicates: {:?}",
@@ -946,7 +963,12 @@ pub(crate) mod tests {
         let constraints = constraint_builder.unique_on(&["id"]);
 
         // Without duplicate removal, this should fail due to cross-batch duplicates
-        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        let result = validate_batch_with_constraints(
+            batches.clone(),
+            &constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(
             result.is_err(),
             "Expected validation to fail with cross-batch duplicates"
@@ -954,8 +976,7 @@ pub(crate) mod tests {
 
         // With duplicate removal, this should pass
         let options = UpsertOptions::new().with_remove_duplicates(true);
-        let result =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await;
+        let result = validate_batch_with_constraints(batches, &constraints, &options).await;
         assert!(
             result.is_ok(),
             "Expected validation to pass after removing cross-batch duplicates: {:?}",
@@ -991,7 +1012,12 @@ pub(crate) mod tests {
         let constraints = constraint_builder.unique_on(&["id"]);
 
         // Without last write wins, this should fail due to duplicate keys
-        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        let result = validate_batch_with_constraints(
+            batches.clone(),
+            &constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(
             result.is_err(),
             "Expected validation to fail with duplicate keys"
@@ -1000,7 +1026,7 @@ pub(crate) mod tests {
         // With last write wins, this should pass and keep the last value
         let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+            validate_batch_with_constraints(batches, &constraints, &options).await?;
 
         // Verify schema matches
         assert_eq!(
@@ -1068,7 +1094,7 @@ pub(crate) mod tests {
         // With last write wins, this should pass and keep the updated name
         let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+            validate_batch_with_constraints(batches, &constraints, &options).await?;
 
         // Verify schema matches
         assert_eq!(
@@ -1139,7 +1165,12 @@ pub(crate) mod tests {
         let constraints = constraint_builder.unique_on(&["user_id", "product_id"]);
 
         // Without last write wins, this should fail
-        let result = validate_batch_with_constraints(batches.clone(), &constraints).await;
+        let result = validate_batch_with_constraints(
+            batches.clone(),
+            &constraints,
+            &UpsertOptions::default(),
+        )
+        .await;
         assert!(
             result.is_err(),
             "Expected validation to fail with composite key duplicates"
@@ -1148,7 +1179,7 @@ pub(crate) mod tests {
         // With last write wins, this should pass and keep the updated rating
         let options = UpsertOptions::new().with_last_write_wins(true);
         let result_batches =
-            validate_batch_with_constraints_with_options(batches, &constraints, &options).await?;
+            validate_batch_with_constraints(batches, &constraints, &options).await?;
 
         // Verify schema matches
         assert_eq!(
