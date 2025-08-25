@@ -123,6 +123,7 @@ datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", 
 datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" }         # spiceai-48
 
 arrow = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
+arrow-array = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
 arrow-buffer = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" } # spiceai-55.2
 arrow-cast = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
 arrow-flight = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" } # spiceai-55.2
