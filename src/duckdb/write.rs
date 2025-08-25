@@ -3,6 +3,7 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
@@ -244,32 +245,47 @@ impl DataSink for DuckDBDataSink {
                 Ok(num_rows)
             });
 
+        let upsert_options = self
+            .on_conflict
+            .as_ref()
+            .map_or_else(UpsertOptions::default, |conflict| {
+                conflict.get_upsert_options()
+            });
+
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            if let Some(constraints) = self.table_definition.constraints() {
-                constraints::validate_batch_with_constraints(&[batch.clone()], constraints)
-                    .await
-                    .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?;
-            }
+            let batches = if let Some(constraints) = self.table_definition.constraints() {
+                constraints::validate_batch_with_constraints(
+                    vec![batch],
+                    constraints,
+                    &upsert_options,
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?
+            } else {
+                vec![batch]
+            };
 
-            if let Err(send_error) = batch_tx.send(batch).await {
-                match duckdb_write_handle.await {
-                    Err(join_error) => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Error writing to DuckDB: {join_error}"
-                        )));
-                    }
-                    Ok(Err(datafusion_error)) => {
-                        return Err(datafusion_error);
-                    }
-                    _ => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Unable to send RecordBatch to DuckDB writer: {send_error}"
-                        )))
-                    }
-                };
+            for batch in batches {
+                if let Err(send_error) = batch_tx.send(batch).await {
+                    match duckdb_write_handle.await {
+                        Err(join_error) => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Error writing to DuckDB: {join_error}"
+                            )));
+                        }
+                        Ok(Err(datafusion_error)) => {
+                            return Err(datafusion_error);
+                        }
+                        _ => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Unable to send RecordBatch to DuckDB writer: {send_error}"
+                            )))
+                        }
+                    };
+                }
             }
         }
 
