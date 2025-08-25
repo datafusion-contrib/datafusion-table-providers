@@ -70,7 +70,7 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             _ => Ok(format!("\"{name}\"")),
         },
         Expr::Cast(cast) => handle_cast(cast, engine, expr),
-        Expr::Literal(value) => match value {
+        Expr::Literal(value, _) => match value {
             ScalarValue::Date32(Some(value)) => match engine {
                 Some(Engine::SQLite) => {
                     Ok(format!("date({}, 'unixepoch')", value * SECONDS_IN_DAY))
@@ -296,7 +296,10 @@ mod tests {
         ] {
             let expr = Expr::Like(Like {
                 expr: Box::new(col("name")),
-                pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some("%John%".to_string())))),
+                pattern: Box::new(Expr::Literal(
+                    ScalarValue::Utf8(Some("%John%".to_string())),
+                    None,
+                )),
                 case_insensitive,
                 negated,
                 escape_char: None,
@@ -310,13 +313,13 @@ mod tests {
 
     #[test]
     fn test_decimal128_literal_to_sql() -> Result<()> {
-        let expr = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 2));
+        let expr = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 2), None);
         assert_eq!(to_sql_with_engine(&expr, None)?, "12345678.90");
 
-        let expr_negative = Expr::Literal(ScalarValue::Decimal128(Some(-1234567890), 38, 4));
+        let expr_negative = Expr::Literal(ScalarValue::Decimal128(Some(-1234567890), 38, 4), None);
         assert_eq!(to_sql_with_engine(&expr_negative, None)?, "-123456.7890");
 
-        let expr_int = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 0));
+        let expr_int = Expr::Literal(ScalarValue::Decimal128(Some(1234567890), 38, 0), None);
         assert_eq!(to_sql_with_engine(&expr_int, None)?, "1234567890");
 
         Ok(())
@@ -327,9 +330,9 @@ mod tests {
         let expr = Expr::InList(InList {
             expr: Box::new(col("a")),
             list: vec![
-                Expr::Literal(ScalarValue::Int32(Some(1))),
-                Expr::Literal(ScalarValue::Int32(Some(2))),
-                Expr::Literal(ScalarValue::Int32(Some(3))),
+                Expr::Literal(ScalarValue::Int32(Some(1)), None),
+                Expr::Literal(ScalarValue::Int32(Some(2)), None),
+                Expr::Literal(ScalarValue::Int32(Some(3)), None),
             ],
             negated: false,
         });
@@ -338,9 +341,9 @@ mod tests {
         let expr_negated = Expr::InList(InList {
             expr: Box::new(col("a")),
             list: vec![
-                Expr::Literal(ScalarValue::Int32(Some(4))),
-                Expr::Literal(ScalarValue::Int32(Some(5))),
-                Expr::Literal(ScalarValue::Int32(Some(6))),
+                Expr::Literal(ScalarValue::Int32(Some(4)), None),
+                Expr::Literal(ScalarValue::Int32(Some(5)), None),
+                Expr::Literal(ScalarValue::Int32(Some(6)), None),
             ],
             negated: true,
         });
@@ -393,9 +396,9 @@ mod tests {
         let expr = Expr::ScalarFunction(ScalarFunction {
             func: substring_udf,
             args: vec![
-                Expr::Literal(ScalarValue::Utf8(Some("hello world".to_string()))),
-                Expr::Literal(ScalarValue::Int32(Some(1))),
-                Expr::Literal(ScalarValue::Int32(Some(5))),
+                Expr::Literal(ScalarValue::Utf8(Some("hello world".to_string())), None),
+                Expr::Literal(ScalarValue::Int32(Some(1)), None),
+                Expr::Literal(ScalarValue::Int32(Some(5)), None),
             ],
         });
         assert_eq!(
@@ -408,66 +411,75 @@ mod tests {
 
     #[test]
     fn test_expr_timestamp_scalar_value_to_sql() -> Result<()> {
-        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
-            Some(1_693_219_803_001_000_000),
+        let expr = Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(1_693_219_803_001_000_000), None),
             None,
-        ));
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
         );
-        let expr = Expr::Literal(ScalarValue::TimestampNanosecond(
-            Some(1_693_219_803_001_000_000),
-            Some(Arc::from("+10:00")),
-        ));
+        let expr = Expr::Literal(
+            ScalarValue::TimestampNanosecond(
+                Some(1_693_219_803_001_000_000),
+                Some(Arc::from("+10:00")),
+            ),
+            None,
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001)"
         );
 
-        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
-            Some(1_693_219_803_001_000),
+        let expr = Expr::Literal(
+            ScalarValue::TimestampMicrosecond(Some(1_693_219_803_001_000), None),
             None,
-        ));
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
         );
-        let expr = Expr::Literal(ScalarValue::TimestampMicrosecond(
-            Some(1_693_219_803_001_000),
-            Some(Arc::from("+10:00")),
-        ));
+        let expr = Expr::Literal(
+            ScalarValue::TimestampMicrosecond(
+                Some(1_693_219_803_001_000),
+                Some(Arc::from("+10:00")),
+            ),
+            None,
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001)"
         );
 
-        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
-            Some(1_693_219_803_001),
+        let expr = Expr::Literal(
+            ScalarValue::TimestampMillisecond(Some(1_693_219_803_001), None),
             None,
-        ));
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001) AT TIME ZONE 'UTC'"
         );
-        let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
-            Some(1_693_219_803_001),
-            Some(Arc::from("+10:00")),
-        ));
+        let expr = Expr::Literal(
+            ScalarValue::TimestampMillisecond(Some(1_693_219_803_001), Some(Arc::from("+10:00"))),
+            None,
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803.001)"
         );
 
-        let expr = Expr::Literal(ScalarValue::TimestampSecond(Some(1_693_219_803), None));
+        let expr = Expr::Literal(
+            ScalarValue::TimestampSecond(Some(1_693_219_803), None),
+            None,
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803) AT TIME ZONE 'UTC'"
         );
-        let expr = Expr::Literal(ScalarValue::TimestampSecond(
-            Some(1_693_219_803),
-            Some(Arc::from("+10:00")),
-        ));
+        let expr = Expr::Literal(
+            ScalarValue::TimestampSecond(Some(1_693_219_803), Some(Arc::from("+10:00"))),
+            None,
+        );
         assert_eq!(
             to_sql_with_engine(&expr, Some(Engine::Postgres))?,
             "TO_TIMESTAMP(1693219803)"
