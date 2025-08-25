@@ -276,16 +276,17 @@ async fn apply_last_write_wins(
         .collect();
 
     // Create a MAX window function to get the maximum row number for each partition
-    let max_row_num_expr = Expr::WindowFunction(datafusion::logical_expr::expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(max_udaf()),
-        params: WindowFunctionParams {
-            args: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME)],
-            partition_by,
-            order_by: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME).sort(false, true)], // Order by row_num DESC
-            window_frame: WindowFrame::new(Some(false)),
-            null_treatment: None,
-        },
-    });
+    let max_row_num_expr =
+        Expr::WindowFunction(Box::new(datafusion::logical_expr::expr::WindowFunction {
+            fun: WindowFunctionDefinition::AggregateUDF(max_udaf()),
+            params: WindowFunctionParams {
+                args: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME)],
+                partition_by,
+                order_by: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME).sort(false, true)], // Order by row_num DESC
+                window_frame: WindowFrame::new(Some(false)),
+                null_treatment: None,
+            },
+        }));
 
     // Add the maximum row number as a column with explicit alias
     let df_with_max = df
