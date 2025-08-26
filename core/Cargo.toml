@@ -97,7 +97,7 @@ tonic = { version = "0.12", optional = true, features = [
 ] }
 tracing = "0.1"
 trust-dns-resolver = "0.23.2"
-url = "2.5.4"
+url = "2.5.7"
 uuid = { version = "1.18", optional = true }
 
 [dev-dependencies]
