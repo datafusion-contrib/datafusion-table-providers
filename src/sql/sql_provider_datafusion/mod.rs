@@ -154,7 +154,7 @@ impl<T, P> SqlTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SqlExec::new(
+        let mut exec = SqlExec::new(
             projections,
             schema,
             &self.table_reference,
@@ -162,7 +162,11 @@ impl<T, P> SqlTable<T, P> {
             filters,
             limit,
             self.engine,
-        )?))
+        )?;
+        if let Some(dialect) = &self.dialect {
+            exec = exec.with_dialect(Arc::clone(dialect));
+        }
+        Ok(Arc::new(exec))
     }
 
     // Return the current memory location of the object as a unique identifier
@@ -240,6 +244,7 @@ pub struct SqlExec<T, P> {
     limit: Option<usize>,
     properties: PlanProperties,
     engine: Option<Engine>,
+    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
 pub fn project_schema_safe(
@@ -284,24 +289,35 @@ impl<T, P> SqlExec<T, P> {
                 Boundedness::Bounded,
             ),
             engine,
+            dialect: None,
         })
     }
+
+    #[must_use]
+    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        Self {
+            dialect: Some(dialect),
+            ..self
+        }
+    }
+
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
     }
 
     pub fn sql(&self) -> Result<String> {
+        let dialect = self.dialect.clone().unwrap_or(self.engine.map_or(
+            Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+            |e| e.dialect(),
+        ));
         let columns = self
             .projected_schema
             .fields()
             .iter()
             .map(|f| {
-                if let Some(Engine::ODBC) = self.engine {
-                    f.name().to_owned()
-                } else {
-                    format!("\"{}\"", f.name())
-                }
+                let quote = dialect.identifier_quote_style(f.name()).unwrap_or_default();
+                format!("{quote}{}{quote}", f.name())
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -314,10 +330,6 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
-            let dialect = self.engine.map_or(
-                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
-                |e| e.dialect(),
-            );
             let unparser = Unparser::new(dialect.as_ref());
 
             let filter_expr = self
