@@ -134,11 +134,6 @@ arrow-schema = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed
 parquet = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }      # spiceai-55.2
 
 [[example]]
-name = "odbc_sqlite"
-path = "examples/odbc_sqlite.rs"
-required-features = ["sqlite", "odbc"]
-
-[[example]]
 name = "duckdb"
 path = "examples/duckdb.rs"
 required-features = ["duckdb"]
@@ -162,11 +157,6 @@ required-features = ["flight"]
 name = "sqlite"
 path = "examples/sqlite.rs"
 required-features = ["sqlite"]
-
-[[example]]
-name = "clickhouse"
-path = "examples/clickhouse.rs"
-required-features = ["clickhouse"]
 
 [[example]]
 name = "mysql"
