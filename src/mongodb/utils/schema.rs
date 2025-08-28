@@ -20,10 +20,13 @@ pub fn infer_arrow_schema_from_documents(
         analyze_document(doc, &mut field_types, tz);
     }
 
-    let fields: Vec<Field> = field_types
+    let mut fields: Vec<Field> = field_types
         .into_iter()
         .map(|(name, data_type)| Field::new(name, data_type, true))
         .collect();
+
+    // Sort fields by column name to make sure the schema is deterministic
+    fields.sort_by(|a, b| a.name().cmp(b.name()));
 
     Ok(Arc::new(Schema::new(fields)))
 }
@@ -395,6 +398,23 @@ mod tests {
         for field in schema.fields() {
             assert!(field.is_nullable());
         }
+    }
+
+    #[test]
+    fn test_fields_are_sorted() {
+        let doc = doc! {
+            "zebra": "striped",
+            "apple": "red",
+            "monkey": "brown",
+            "banana": "yellow"
+        };
+        let docs = vec![doc];
+
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
+
+
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(field_names, vec!["apple", "banana", "monkey", "zebra"]);
     }
 
     #[test]
