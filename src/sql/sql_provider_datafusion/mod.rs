@@ -307,16 +307,23 @@ impl<T, P> SqlExec<T, P> {
     }
 
     pub fn sql(&self) -> Result<String> {
-        let dialect = self.dialect.clone().unwrap_or(self.engine.map_or(
-            Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
-            |e| e.dialect(),
-        ));
         let columns = self
             .projected_schema
             .fields()
             .iter()
             .map(|f| {
-                let quote = dialect.identifier_quote_style(f.name()).unwrap_or_default();
+                // To ensure backwards compatibility, dialect only used when explicitly set
+                // (i.e. Don't use `DefaultDialect`, don't derive from `self.engine`).
+                let quote = if let Some(dialect) = &self.dialect {
+                    dialect
+                        .identifier_quote_style(f.name())
+                        .unwrap_or_default()
+                        .to_string()
+                } else if matches!(self.engine, Some(Engine::ODBC)) {
+                    String::new()
+                } else {
+                    '"'.to_string()
+                };
                 format!("{quote}{}{quote}", f.name())
             })
             .collect::<Vec<_>>()
@@ -330,6 +337,10 @@ impl<T, P> SqlExec<T, P> {
         let where_expr = if self.filters.is_empty() {
             String::new()
         } else {
+            let dialect = self.dialect.clone().unwrap_or(self.engine.map_or(
+                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+                |e| e.dialect(),
+            ));
             let unparser = Unparser::new(dialect.as_ref());
 
             let filter_expr = self
