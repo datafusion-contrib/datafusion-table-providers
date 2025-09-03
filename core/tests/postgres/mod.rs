@@ -410,7 +410,8 @@ async fn test_postgres_num_records_before_stop(
         start_container(&mut container_manager).await;
     }
 
-    let factory = PostgresTableProviderFactory::new();
+    let factory = 
+        PostgresTableProviderFactory::new();
 
     let write_config = PostgresWriteConfig {
         batch_flush_interval: Duration::from_secs(1),

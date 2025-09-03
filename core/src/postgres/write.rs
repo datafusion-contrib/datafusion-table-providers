@@ -20,6 +20,7 @@ use snafu::prelude::*;
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
+use streamling_telemetry::{PipelineMetricMetadata, TelemetryDataSink};
 
 use crate::postgres::Postgres;
 
@@ -48,6 +49,7 @@ pub struct PostgresTableWriter {
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
     pub write_config: PostgresWriteConfig,
+    metric_metadata: Option<PipelineMetricMetadata>,
 }
 
 impl PostgresTableWriter {
@@ -56,12 +58,14 @@ impl PostgresTableWriter {
         postgres: Postgres,
         on_conflict: Option<OnConflict>,
         write_config: PostgresWriteConfig,
+        metric_metadata: Option<PipelineMetricMetadata>,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_provider,
             postgres: Arc::new(postgres),
             on_conflict,
             write_config,
+            metric_metadata,
         })
     }
 
@@ -112,19 +116,20 @@ impl TableProvider for PostgresTableWriter {
             self.write_config.num_records_before_stop,
         );
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            Arc::new(PostgresDataSink::new(
-                Arc::clone(&self.postgres),
-                op,
-                self.on_conflict.clone(),
-                self.schema(),
-                batch_flush_interval,
-                batch_size,
-                num_records_before_stop,
-            )),
-            None,
-        )) as _)
+        let postgres_sink = Arc::new(PostgresDataSink::new(
+            Arc::clone(&self.postgres),
+            op,
+            self.on_conflict.clone(),
+            self.schema(),
+            batch_flush_interval,
+            batch_size,
+            num_records_before_stop,
+        ));
+        let execution_plan: Arc<dyn DataSink> = match &self.metric_metadata {
+            None => postgres_sink,
+            Some(metadata) => Arc::new(TelemetryDataSink::new(postgres_sink, metadata.clone())),
+        };
+        Ok(Arc::new(DataSinkExec::new(input, execution_plan, None)) as _)
     }
 }
 
