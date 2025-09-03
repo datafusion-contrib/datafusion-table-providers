@@ -1,4 +1,4 @@
-use std::{any::Any, fmt, sync::Arc};
+use std::{any::Any, fmt, sync::Arc, time::Duration};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
@@ -26,10 +26,28 @@ use crate::postgres::Postgres;
 use super::to_datafusion_error;
 
 #[derive(Debug, Clone)]
+pub struct PostgresWriteConfig {
+    pub batch_flush_interval: Duration,
+    pub batch_size: usize,
+    pub num_records_before_stop: Option<u64>,
+}
+
+impl Default for PostgresWriteConfig {
+    fn default() -> Self {
+        Self {
+            batch_flush_interval: Duration::from_secs(1),
+            batch_size: 100,
+            num_records_before_stop: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PostgresTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
+    pub write_config: PostgresWriteConfig,
 }
 
 impl PostgresTableWriter {
@@ -37,11 +55,13 @@ impl PostgresTableWriter {
         read_provider: Arc<dyn TableProvider>,
         postgres: Postgres,
         on_conflict: Option<OnConflict>,
+        write_config: PostgresWriteConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_provider,
             postgres: Arc::new(postgres),
             on_conflict,
+            write_config,
         })
     }
 
@@ -86,6 +106,12 @@ impl TableProvider for PostgresTableWriter {
         input: Arc<dyn ExecutionPlan>,
         op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let (batch_flush_interval, batch_size, num_records_before_stop) = (
+            self.write_config.batch_flush_interval,
+            self.write_config.batch_size,
+            self.write_config.num_records_before_stop,
+        );
+
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(PostgresDataSink::new(
@@ -93,6 +119,9 @@ impl TableProvider for PostgresTableWriter {
                 op,
                 self.on_conflict.clone(),
                 self.schema(),
+                batch_flush_interval,
+                batch_size,
+                num_records_before_stop,
             )),
             None,
         )) as _)
@@ -105,6 +134,9 @@ struct PostgresDataSink {
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
+    batch_flush_interval: Duration,
+    batch_size: usize,
+    num_records_before_stop: Option<u64>,
 }
 
 #[async_trait]
@@ -121,24 +153,24 @@ impl DataSink for PostgresDataSink {
         &self.schema
     }
 
+    // @Goldsky: change the commit behavior to commit in batches
     async fn write_all(
         &self,
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let mut num_rows = 0;
+        let mut num_rows = 0u64;
 
         let mut db_conn = self.postgres.connect().await.map_err(to_datafusion_error)?;
         let postgres_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
 
-        let tx = postgres_conn
-            .conn
-            .transaction()
-            .await
-            .context(super::UnableToBeginTransactionSnafu)
-            .map_err(to_datafusion_error)?;
-
         if matches!(self.overwrite, InsertOp::Overwrite) {
+            let tx = postgres_conn
+                .conn
+                .transaction()
+                .await
+                .context(super::UnableToBeginTransactionSnafu)
+                .map_err(to_datafusion_error)?;
             self.postgres
                 .delete_all_table_data(&tx)
                 .await
@@ -164,6 +196,13 @@ impl DataSink for PostgresDataSink {
             .collect::<Vec<_>>();
 
         let postgres_schema = Arc::new(Schema::new(postgres_fields));
+
+        let batch_flush_size = self.batch_size;
+        let flush_interval = self.batch_flush_interval;
+
+        let mut batches_buffer = Vec::new();
+        let mut buffer_row_count = 0;
+        let mut last_flush_time = std::time::Instant::now();
 
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
@@ -197,30 +236,118 @@ impl DataSink for PostgresDataSink {
 
             let batch_num_rows = batch.num_rows();
 
-            if batch_num_rows == 0 {
-                continue;
-            };
+            tracing::debug!(
+                "Processing batch with {} rows. max_row_count: {:?}",
+                batch_num_rows,
+                self.num_records_before_stop
+            );
 
-            num_rows += batch_num_rows as u64;
+            // Check if we've reached the record limit before processing this batch
+            if let Some(max_records) = self.num_records_before_stop {
+                if batch_num_rows == 0 && num_rows < max_records {
+                    continue;
+                };
 
-            constraints::validate_batch_with_constraints(
-                &[batch.clone()],
-                self.postgres.constraints(),
-            )
-            .await
-            .context(super::ConstraintViolationSnafu)
-            .map_err(to_datafusion_error)?;
+                if num_rows + batch_num_rows as u64 >= max_records {
+                    // Truncate the batch to only include records up to the limit
+                    let records_to_take = (max_records - num_rows) as usize;
+                    tracing::debug!("Truncating batch to {} rows", records_to_take);
+                    if records_to_take > 0 {
+                        let truncated_batch = batch.slice(0, records_to_take);
+                        batches_buffer.push(truncated_batch);
+                        buffer_row_count += records_to_take;
+                    }
+                    // Force flush of remaining batches and exit
+                    break;
+                }
+            }
 
-            self.postgres
-                .insert_batch(&tx, batch, self.on_conflict.clone())
-                .await
-                .map_err(to_datafusion_error)?;
+            batches_buffer.push(batch);
+            buffer_row_count += batch_num_rows;
+
+            // Check if we need to flush based on size or time
+            let should_flush =
+                buffer_row_count >= batch_flush_size || last_flush_time.elapsed() >= flush_interval;
+
+            if should_flush {
+                let tx = postgres_conn
+                    .conn
+                    .transaction()
+                    .await
+                    .context(super::UnableToBeginTransactionSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                for batch in &batches_buffer {
+                    constraints::validate_batch_with_constraints(
+                        &[batch.clone()],
+                        self.postgres.constraints(),
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                    self.postgres
+                        .insert_batch(&tx, batch.clone(), self.on_conflict.clone())
+                        .await
+                        .map_err(to_datafusion_error)?;
+                }
+
+                tx.commit()
+                    .await
+                    .context(super::UnableToCommitPostgresTransactionSnafu)
+                    .map_err(to_datafusion_error)?;
+
+                num_rows += buffer_row_count as u64;
+                batches_buffer.clear();
+                buffer_row_count = 0;
+                last_flush_time = std::time::Instant::now();
+
+                // Check if we've reached the record limit after flushing
+                if let Some(max_records) = self.num_records_before_stop {
+                    if num_rows >= max_records {
+                        break;
+                    }
+                }
+            }
         }
 
-        tx.commit()
-            .await
-            .context(super::UnableToCommitPostgresTransactionSnafu)
-            .map_err(to_datafusion_error)?;
+        // Flush any remaining batches
+        if !batches_buffer.is_empty() {
+            let tx = postgres_conn
+                .conn
+                .transaction()
+                .await
+                .context(super::UnableToBeginTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            for batch in &batches_buffer {
+                constraints::validate_batch_with_constraints(
+                    &[batch.clone()],
+                    self.postgres.constraints(),
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
+
+                self.postgres
+                    .insert_batch(&tx, batch.clone(), self.on_conflict.clone())
+                    .await
+                    .map_err(to_datafusion_error)?;
+            }
+
+            tx.commit()
+                .await
+                .context(super::UnableToCommitPostgresTransactionSnafu)
+                .map_err(to_datafusion_error)?;
+
+            num_rows += buffer_row_count as u64;
+            tracing::debug!("flushed final {} rows", num_rows);
+
+            // Ensure we don't exceed the limit even in final flush
+            if let Some(max_records) = self.num_records_before_stop {
+                assert_eq!(num_rows, max_records);
+            }
+        }
 
         Ok(num_rows)
     }
@@ -232,12 +359,18 @@ impl PostgresDataSink {
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
+        batch_flush_interval: Duration,
+        batch_size: usize,
+        num_records_before_stop: Option<u64>,
     ) -> Self {
         Self {
             postgres,
             overwrite,
             on_conflict,
             schema,
+            batch_flush_interval,
+            batch_size,
+            num_records_before_stop,
         }
     }
 }

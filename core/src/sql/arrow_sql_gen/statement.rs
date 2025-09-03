@@ -36,6 +36,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct CreateTableBuilder {
     schema: SchemaRef,
     table_name: String,
+    schema_name: Option<String>,
     primary_keys: Vec<String>,
     temporary: bool,
 }
@@ -46,9 +47,16 @@ impl CreateTableBuilder {
         Self {
             schema,
             table_name: table_name.to_string(),
+            schema_name: None,
             primary_keys: Vec::new(),
             temporary: false,
         }
+    }
+
+    #[must_use]
+    pub fn schema_name(mut self, schema_name: Option<String>) -> Self {
+        self.schema_name = schema_name;
+        self
     }
 
     #[must_use]
@@ -131,9 +139,18 @@ impl CreateTableBuilder {
         map_data_type_to_column_type_fn: &dyn Fn(&Arc<Field>) -> ColumnType,
     ) -> String {
         let mut create_stmt = Table::create();
-        create_stmt
-            .table(Alias::new(self.table_name.clone()))
-            .if_not_exists();
+
+        // Handle schema.table or just table
+        let table_ref = if let Some(schema_name) = &self.schema_name {
+            TableRef::SchemaTable(
+                SeaRc::new(Alias::new(schema_name.clone())),
+                SeaRc::new(Alias::new(self.table_name.clone())),
+            )
+        } else {
+            TableRef::Table(SeaRc::new(Alias::new(self.table_name.clone())))
+        };
+
+        create_stmt.table(table_ref).if_not_exists();
 
         for field in self.schema.fields() {
             let column_type = map_data_type_to_column_type_fn(field);
@@ -1600,6 +1617,20 @@ mod tests {
             sql,
             "INSERT INTO \"arrays\" (\"list\") VALUES (CAST(ARRAY [1,2,3] AS int4[])), (CAST(ARRAY [4,5,6] AS int4[])), (CAST(ARRAY [7,8,9] AS int4[]))"
         );
+    }
+
+    #[test]
+    fn test_table_creation_with_schema() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users")
+            .schema_name(Some("test_schema".to_string()))
+            .build_postgres();
+
+        assert!(sql.len() == 1);
+        assert_eq!(sql[0], "CREATE TABLE IF NOT EXISTS \"test_schema\".\"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL )");
     }
 
     #[test]

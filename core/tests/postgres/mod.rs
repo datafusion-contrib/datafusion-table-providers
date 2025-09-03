@@ -15,7 +15,9 @@ use datafusion::{
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
 use datafusion_table_providers::{
-    postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
+    postgres::{
+        write::PostgresTableWriter, DynPostgresConnectionPool, PostgresTableProviderFactory,
+    },
     sql::sql_provider_datafusion::SqlTable,
     UnsupportedTypeAction,
 };
@@ -281,7 +283,7 @@ async fn test_postgres_jsonb_type(port: usize) {
     );";
 
     let insert_table_stmt = r#"
-    INSERT INTO jsonb_values (data) VALUES 
+    INSERT INTO jsonb_values (data) VALUES
     ('{"name": "John", "age": 30}'),
     ('{"name": "Jane", "age": 25}'),
     ('[1, 2, 3]'),
@@ -384,4 +386,102 @@ async fn arrow_postgres_one_way(
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
     assert_eq!(record_batch[0], expected_record);
+}
+
+#[rstest]
+#[case::exact_limit(5, 5, "test_exact_limit", vec![(1..=5).collect()])]
+#[case::partial_batch(2, 3, "test_partial_batch", vec![(1..=4).collect()])]
+#[case::multiple_batches(5, 2, "test_multiple_batches", vec![(1..=2).collect(), (3..=4).collect(), (5..=8).collect()])]
+#[test_log::test(tokio::test)]
+async fn test_postgres_num_records_before_stop(
+    container_manager: &Mutex<ContainerManager>,
+    #[case] stop_at: u64,
+    #[case] batch_size: usize,
+    #[case] table_name: &str,
+    #[case] batch_data: Vec<Vec<i32>>,
+) {
+    use datafusion::execution::config::SessionConfig;
+    use datafusion_table_providers::postgres::write::PostgresWriteConfig;
+    use std::time::Duration;
+
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_container(&mut container_manager).await;
+    }
+
+    let factory = PostgresTableProviderFactory::new();
+
+    let write_config = PostgresWriteConfig {
+        batch_flush_interval: Duration::from_secs(1),
+        batch_size,
+        num_records_before_stop: Some(stop_at),
+    };
+
+    let config = SessionConfig::new().with_extension(Arc::new(write_config));
+    let ctx = SessionContext::new_with_config(config);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    let cmd = CreateExternalTable {
+        schema: Arc::new(schema.clone().to_dfschema().expect("to df schema")),
+        name: table_name.into(),
+        location: "".to_string(),
+        file_type: "".to_string(),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: common::get_pg_params(container_manager.port),
+        constraints: Constraints::empty(),
+        column_defaults: HashMap::new(),
+        temporary: false,
+    };
+
+    let table_provider = factory
+        .create(&ctx.state(), &cmd)
+        .await
+        .expect("table provider created");
+
+    // Create batches from the provided data
+    let batches: Vec<RecordBatch> = batch_data
+        .into_iter()
+        .map(|data| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int32Array::from(data))],
+            )
+            .expect("batch created")
+        })
+        .collect();
+
+    let mem_exec = MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)
+        .expect("memory exec created");
+
+    let insert_plan = table_provider
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
+        .await
+        .expect("insert plan created");
+
+    let result = collect(insert_plan, ctx.task_ctx())
+        .await
+        .expect("insert done");
+
+    // Should return exactly stop_at rows inserted
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].num_rows(), 1);
+    let count_array = result[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::UInt64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), stop_at);
+
+    // Verify that the PostgresTableWriter has the correct configuration
+    let writer = table_provider
+        .as_any()
+        .downcast_ref::<PostgresTableWriter>()
+        .expect("should be PostgresTableWriter");
+    assert_eq!(writer.write_config.num_records_before_stop, Some(stop_at));
 }
