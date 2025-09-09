@@ -18,7 +18,7 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use crate::util::{
-    constraints,
+    constraints::{self, UpsertOptions},
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -142,6 +142,12 @@ impl DataSink for SqliteDataSink {
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
+        let upsert_options = self
+            .on_conflict
+            .as_ref()
+            .map_or_else(UpsertOptions::default, |conflict| {
+                conflict.get_upsert_options()
+            });
         let task = tokio::spawn(async move {
             let mut num_rows: u64 = 0;
             while let Some(data_batch) = data.next().await {
@@ -150,14 +156,20 @@ impl DataSink for SqliteDataSink {
                     DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
                 })?;
 
-                constraints::validate_batch_with_constraints(&[data_batch.clone()], &constraints)
-                    .await
-                    .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?;
+                let batches = constraints::validate_batch_with_constraints(
+                    vec![data_batch],
+                    &constraints,
+                    &upsert_options,
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
 
-                batch_tx.send(data_batch).await.map_err(|err| {
-                    DataFusionError::Execution(format!("Error sending data batch: {err}"))
-                })?;
+                for batch in batches {
+                    batch_tx.send(batch).await.map_err(|err| {
+                        DataFusionError::Execution(format!("Error sending data batch: {err}"))
+                    })?;
+                }
             }
 
             if notify_commit_transaction.send(()).is_err() {

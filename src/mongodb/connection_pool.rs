@@ -28,7 +28,7 @@ const DEFAULT_MIN_POOL_SIZE: u32 = 10;
 const DEFAULT_MAX_POOL_SIZE: u32 = 100;
 const DEFAULT_SSL_MODE: &str = "required";
 const DEFAULT_UNNEST_DEPTH: &str = "0";
-const DEFAULT_NUM_DOCUMENTS_TO_INFER_SCHEMA: u32 = 400;
+const DEFAULT_SCHEMA_INFER_MAX_RECORDS: u32 = 400;
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
@@ -56,8 +56,8 @@ impl MongoDBConnectionPool {
 
         let num_documents_to_infer_schema = parse_u32_param(
             &params,
-            "num_docs_to_infer_schema",
-            DEFAULT_NUM_DOCUMENTS_TO_INFER_SCHEMA,
+            "schema_infer_max_records",
+            DEFAULT_SCHEMA_INFER_MAX_RECORDS,
         )? as i64;
 
         test_connection(&client, &db_name).await?;
