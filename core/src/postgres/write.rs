@@ -20,8 +20,8 @@ use snafu::prelude::*;
 use crate::util::{
     constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
 };
-use streamling_telemetry::{PipelineMetricMetadata, TelemetryDataSink};
-use streamling_telemetry::operators::telemetry::{create_time_from_duration, create_count_with_value, dispatch_metric_data, MetricData};
+use streamling_telemetry::{TelemetryDataSink};
+use streamling_telemetry::operators::telemetry::{MetricData};
 use crate::postgres::Postgres;
 
 use super::to_datafusion_error;
@@ -49,7 +49,7 @@ pub struct PostgresTableWriter {
     postgres: Arc<Postgres>,
     on_conflict: Option<OnConflict>,
     pub write_config: PostgresWriteConfig,
-    metric_metadata: Option<PipelineMetricMetadata>,
+    metric_metadata_id: Option<String>,
 }
 
 impl PostgresTableWriter {
@@ -58,14 +58,14 @@ impl PostgresTableWriter {
         postgres: Postgres,
         on_conflict: Option<OnConflict>,
         write_config: PostgresWriteConfig,
-        metric_metadata: Option<PipelineMetricMetadata>,
+        metric_metadata: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_provider,
             postgres: Arc::new(postgres),
             on_conflict,
             write_config,
-            metric_metadata,
+            metric_metadata_id: metric_metadata,
         })
     }
 
@@ -124,11 +124,11 @@ impl TableProvider for PostgresTableWriter {
             batch_flush_interval,
             batch_size,
             num_records_before_stop,
-            self.metric_metadata.clone()
+            self.metric_metadata_id.clone()
         ));
-        let execution_plan: Arc<dyn DataSink> = match &self.metric_metadata {
+        let execution_plan: Arc<dyn DataSink> = match &self.metric_metadata_id {
             None => postgres_sink,
-            Some(metadata) => Arc::new(TelemetryDataSink::new(postgres_sink, metadata.clone())),
+            Some(metadata) => Arc::new(TelemetryDataSink::new(postgres_sink, String::from(metadata))),
         };
         Ok(Arc::new(DataSinkExec::new(input, execution_plan, None)) as _)
     }
@@ -143,7 +143,7 @@ struct PostgresDataSink {
     batch_flush_interval: Duration,
     batch_size: usize,
     num_records_before_stop: Option<u64>,
-    metric_metadata: Option<PipelineMetricMetadata>
+    metric_metadata_id: Option<String>
 }
 
 #[async_trait]
@@ -379,7 +379,7 @@ impl PostgresDataSink {
         batch_flush_interval: Duration,
         batch_size: usize,
         num_records_before_stop: Option<u64>,
-        metric_metadata: Option<PipelineMetricMetadata>
+        metric_metadata_id: Option<String>
     ) -> Self {
         Self {
             postgres,
@@ -389,19 +389,19 @@ impl PostgresDataSink {
             batch_flush_interval,
             batch_size,
             num_records_before_stop,
-            metric_metadata
+            metric_metadata_id
         }
     }
 
     fn dispatch_count_and_latency_metrics(&self, buffer_row_count: usize, start_at: Instant) {
-        self.metric_metadata.clone().map(|md| {
-            dispatch_metric_data(
-                MetricData::new(
-                    vec!(
-                        MetricValue::OutputRows(create_count_with_value(buffer_row_count)),
-                        MetricValue::ElapsedCompute(create_time_from_duration(start_at.elapsed()))
-                    ),
-                    md));
+        self.metric_metadata_id.clone().map(|md| {
+            // dispatch_metric_data(
+            //     MetricData::new(
+            //         vec!(
+            //             MetricValue::OutputRows(create_count_with_value(buffer_row_count)),
+            //             MetricValue::ElapsedCompute(create_time_from_duration(start_at.elapsed()))
+            //         ),
+            //         md));
         });
     }
 }

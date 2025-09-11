@@ -32,7 +32,6 @@ use datafusion::{
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
-use streamling_telemetry::PipelineMetricMetadata;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -191,19 +190,19 @@ impl PostgresTableFactory {
 
 #[derive(Debug)]
 pub struct PostgresTableProviderFactory {
-    metric_metadata: Option<PipelineMetricMetadata>
+    metric_metadata_id: Option<String>
 }
 
 impl PostgresTableProviderFactory {
 
     #[must_use]
     pub fn new() -> Self {
-        Self{metric_metadata: None}
+        Self{ metric_metadata_id: None}
     }
 
     #[must_use]
-    pub fn new_with_telemetry(metric_metadata: PipelineMetricMetadata) -> Self {
-        Self {metric_metadata: Some(metric_metadata)}
+    pub fn new_with_telemetry(metric_metadata: String) -> Self {
+        Self { metric_metadata_id: Some(metric_metadata)}
     }
 }
 
@@ -330,7 +329,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
             postgres,
             on_conflict,
             write_config,
-            self.metric_metadata.clone(),
+            self.metric_metadata_id.clone(),
         ))
     }
 }
