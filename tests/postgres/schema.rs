@@ -63,7 +63,7 @@ async fn test_postgres_schema_inference() {
         order_exprs: vec![],
         unbounded: false,
         options: common::get_pg_params(port),
-        constraints: Constraints::empty(),
+        constraints: Constraints::new_unverified(vec![]),
         column_defaults: HashMap::new(),
         temporary: false,
     };
