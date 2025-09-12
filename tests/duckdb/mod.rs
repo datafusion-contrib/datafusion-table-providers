@@ -33,7 +33,7 @@ async fn arrow_duckdb_round_trip(
         order_exprs: vec![],
         unbounded: false,
         options: HashMap::new(),
-        constraints: Constraints::empty(),
+        constraints: Constraints::new_unverified(vec![]),
         column_defaults: HashMap::new(),
         temporary: false,
     };
