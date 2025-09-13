@@ -722,7 +722,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::new_unverified(vec![]),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -783,7 +783,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::new_unverified(vec![]),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -840,7 +840,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::new_unverified(vec![]),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -895,7 +895,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::new_unverified(vec![]),
             column_defaults: HashMap::new(),
             temporary: false,
         };
@@ -953,7 +953,7 @@ pub(crate) mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::new_unverified(vec![]),
             column_defaults: HashMap::new(),
             temporary: false,
         };
