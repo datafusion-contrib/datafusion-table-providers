@@ -30,6 +30,7 @@ pub enum Engine {
     ODBC,
     Postgres,
     MySQL,
+    Trino,
 }
 
 impl Engine {
@@ -39,7 +40,9 @@ impl Engine {
             Engine::SQLite => Arc::new(SqliteDialect {}),
             Engine::Postgres => Arc::new(PostgreSqlDialect {}),
             Engine::MySQL => Arc::new(MySqlDialect {}),
-            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
+            Engine::Spark | Engine::DuckDB | Engine::ODBC | Engine::Trino => {
+                Arc::new(DefaultDialect {})
+            }
         }
     }
 }

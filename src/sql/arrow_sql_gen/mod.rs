@@ -50,3 +50,5 @@ pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod statement;
+#[cfg(feature = "trino")]
+pub mod trino;

@@ -67,6 +67,9 @@ itertools = "0.13.0"
 dyn-clone = { version = "1.0.17", optional = true }
 geo-types = "0.7.13"
 fundu = "2.0.1"
+reqwest = { version = "0.12.5", optional = true, features = ["json", "rustls-tls"] }
+regex = { version = "1.11.1", optional = true }
+chrono-tz = {  version = "0.8", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.86"
@@ -82,6 +85,7 @@ tokio-stream = { version = "0.1.15", features = ["net"] }
 insta = { version = "1.40.0", features = ["filters"] }
 datafusion-physical-plan = { version = "49.0.2" }
 tempfile = "3.8.1"
+mockito = "1.7.0"
 
 [features]
 mysql = ["dep:mysql_async", "dep:async-stream"]
@@ -110,6 +114,14 @@ mongodb = [
   "dep:arrow-schema",
   "dep:rust_decimal",
   "dep:num-traits",
+]
+trino = [
+  "dep:arrow-schema",
+  "dep:async-stream",
+  "dep:base64",
+  "dep:regex",
+  "dep:reqwest",
+  "dep:chrono-tz",
 ]
 
 [patch.crates-io]
@@ -172,3 +184,8 @@ required-features = ["postgres"]
 name = "mongodb"
 path = "examples/mongodb.rs"
 required-features = ["mongodb"]
+
+[[example]]
+name = "trino"
+path = "examples/trino.rs"
+required-features = ["trino"]
