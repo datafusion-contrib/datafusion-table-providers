@@ -99,6 +99,7 @@ tracing = "0.1"
 trust-dns-resolver = "0.23.2"
 url = "2.5.4"
 uuid = { version = "1.18", optional = true }
+rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
 
 [dev-dependencies]
 anyhow = "1.0"
