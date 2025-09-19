@@ -194,7 +194,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut postgres_types: Vec<Type> = Vec::new();
-    let mut postgres_numeric_scales: Vec<Option<u16>> = Vec::new();
+    let mut postgres_numeric_scales: Vec<Option<u32>> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
 
     if !rows.is_empty() {
@@ -203,13 +203,13 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name();
             let column_type = column.type_();
 
-            let mut numeric_scale: Option<u16> = None;
+            let mut numeric_scale: Option<u32> = None;
 
             let data_type = if *column_type == Type::NUMERIC {
                 if let Some(schema) = projected_schema.as_ref() {
                     match get_decimal_column_precision_and_scale(column_name, schema) {
                         Some((precision, scale)) => {
-                            numeric_scale = Some(u16::try_from(scale).unwrap_or_default());
+                            numeric_scale = Some(u32::try_from(scale).unwrap_or_default());
                             Some(DataType::Decimal128(precision, scale))
                         }
                         None => None,
@@ -505,7 +505,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     }
 
                     if postgres_numeric_scale.is_none() {
-                        *postgres_numeric_scale = Some(scale as u16);
+                        *postgres_numeric_scale = Some(scale);
                     };
 
                     let Some(mut v) = v else {
@@ -516,7 +516,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     // Record Batch Scale is determined by first row, while Postgres Numeric Type doesn't have fixed scale
                     // Resolve scale difference for incoming records
                     let dest_scale = postgres_numeric_scale.unwrap_or_default();
-                    v.rescale(dest_scale as u32);
+                    v.rescale(dest_scale);
                     dec_builder.append_value(v.mantissa());
                 }
                 Type::TIMESTAMP => {
