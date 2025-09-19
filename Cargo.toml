@@ -40,9 +40,7 @@ arrow-json = "56.0.0"
 arrow-odbc = { version = "20.0.0" }
 datafusion = { version = "50", default-features = false }
 datafusion-expr = { version = "50" }
-#datafusion-federation = { version = "0.4.7" }
-# TODO: update
-datafusion-federation = { git = "https://github.com/datafusion-contrib/datafusion-federation/", rev = "5202ac748f8f5de054a02d79a23ad1284133f5f7" }
+datafusion-federation = { version = "0.4.10" }
 datafusion-ffi = { version = "50" }
 datafusion-proto = { version = "50" }
 datafusion-physical-expr = { version = "50" }

@@ -1683,8 +1683,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-federation"
-version = "0.4.9"
-source = "git+https://github.com/datafusion-contrib/datafusion-federation/?rev=5202ac748f8f5de054a02d79a23ad1284133f5f7#5202ac748f8f5de054a02d79a23ad1284133f5f7"
+version = "0.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e871fb96686c8891f1264440b832518dcffb35ec31a2bb2c06815dbfc84e0997"
 dependencies = [
  "arrow-json",
  "async-stream",
@@ -2103,7 +2104,7 @@ dependencies = [
  "geozero",
  "insta",
  "itertools",
- "libduckdb-sys 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libduckdb-sys",
  "mysql_async",
  "native-tls",
  "num-bigint",
@@ -3297,24 +3298,11 @@ checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 [[package]]
 name = "libduckdb-sys"
 version = "1.3.0"
-dependencies = [
- "autocfg",
- "cc",
- "flate2",
- "pkg-config",
- "serde",
- "serde_json",
- "tar",
- "vcpkg",
-]
-
-[[package]]
-name = "libduckdb-sys"
-version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25d3f1defe457d1ac0fbaef0fe6926953cb33419dd3c8dbac53882d020bee697"
 dependencies = [
  "autocfg",
+ "cc",
  "flate2",
  "pkg-config",
  "serde",
@@ -5388,14 +5376,16 @@ dependencies = [
 
 [[package]]
 name = "spiceai_duckdb_fork"
-version = "1.3.0"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9123cf2c73428e9ae68dba75c8b42023bea8fc2fca615ac8c8874dcf0c284140"
 dependencies = [
  "arrow",
  "cast",
  "fallible-iterator 0.3.0",
  "fallible-streaming-iterator",
  "hashlink",
- "libduckdb-sys 1.3.0",
+ "libduckdb-sys",
  "num",
  "num-integer",
  "r2d2",
