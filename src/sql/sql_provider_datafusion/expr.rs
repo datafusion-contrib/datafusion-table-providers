@@ -5,7 +5,7 @@ use datafusion::{
     logical_expr::{Cast, Expr},
     scalar::ScalarValue,
     sql::unparser::dialect::{
-        DefaultDialect, Dialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
+        DefaultDialect, Dialect, DuckDBDialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
     },
 };
 
@@ -39,7 +39,8 @@ impl Engine {
             Engine::SQLite => Arc::new(SqliteDialect {}),
             Engine::Postgres => Arc::new(PostgreSqlDialect {}),
             Engine::MySQL => Arc::new(MySqlDialect {}),
-            Engine::Spark | Engine::DuckDB | Engine::ODBC => Arc::new(DefaultDialect {}),
+            Engine::DuckDB => Arc::new(DuckDBDialect::new()),
+            Engine::Spark | Engine::ODBC => Arc::new(DefaultDialect {}),
         }
     }
 }
