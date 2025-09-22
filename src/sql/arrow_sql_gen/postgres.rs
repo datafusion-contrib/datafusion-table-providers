@@ -15,14 +15,12 @@ use arrow::datatypes::{
     DataType, Date32Type, Field, Int8Type, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit,
 };
-use bigdecimal::num_bigint::BigInt;
-use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
-use bigdecimal::ToPrimitive;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, Timelike, Utc};
 use composite::CompositeType;
 use geo_types::geometry::Point;
+use rust_decimal::Decimal;
 use sea_query::{Alias, ColumnType, SeaRc};
 use serde_json::Value;
 use snafu::prelude::*;
@@ -194,7 +192,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut postgres_types: Vec<Type> = Vec::new();
-    let mut postgres_numeric_scales: Vec<Option<u16>> = Vec::new();
+    let mut postgres_numeric_scales: Vec<Option<u32>> = Vec::new();
     let mut column_names: Vec<String> = Vec::new();
 
     if !rows.is_empty() {
@@ -203,13 +201,13 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name();
             let column_type = column.type_();
 
-            let mut numeric_scale: Option<u16> = None;
+            let mut numeric_scale: Option<u32> = None;
 
             let data_type = if *column_type == Type::NUMERIC {
                 if let Some(schema) = projected_schema.as_ref() {
                     match get_decimal_column_precision_and_scale(column_name, schema) {
                         Some((precision, scale)) => {
-                            numeric_scale = Some(u16::try_from(scale).unwrap_or_default());
+                            numeric_scale = Some(u32::try_from(scale).unwrap_or_default());
                             Some(DataType::Decimal128(precision, scale))
                         }
                         None => None,
@@ -433,10 +431,9 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     }
                 }
                 Type::NUMERIC => {
-                    let v: Option<BigDecimalFromSql> =
-                        row.try_get(i).context(FailedToGetRowValueSnafu {
-                            pg_type: Type::NUMERIC,
-                        })?;
+                    let v: Option<Decimal> = row.try_get(i).context(FailedToGetRowValueSnafu {
+                        pg_type: Type::NUMERIC,
+                    })?;
                     let scale = {
                         if let Some(v) = &v {
                             v.scale()
@@ -479,7 +476,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         *postgres_numeric_scale = Some(scale);
                     };
 
-                    let Some(v) = v else {
+                    let Some(mut v) = v else {
                         dec_builder.append_null();
                         continue;
                     };
@@ -487,13 +484,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     // Record Batch Scale is determined by first row, while Postgres Numeric Type doesn't have fixed scale
                     // Resolve scale difference for incoming records
                     let dest_scale = postgres_numeric_scale.unwrap_or_default();
-                    let Some(v_i128) = v.to_decimal_128_with_scale(dest_scale) else {
-                        return FailedToConvertBigDecimalToI128Snafu {
-                            big_decimal: v.inner,
-                        }
-                        .fail();
-                    };
-                    dec_builder.append_value(v_i128);
+                    v.rescale(dest_scale);
+                    dec_builder.append_value(v.mantissa());
                 }
                 Type::TIMESTAMP => {
                     let Some(builder) = builder else {
@@ -955,101 +947,6 @@ pub(crate) fn map_data_type_to_column_type_postgres(
 pub(crate) fn get_postgres_composite_type_name(table_name: &str, field_name: &str) -> String {
     format!("struct_{table_name}_{field_name}")
 }
-
-struct BigDecimalFromSql {
-    inner: BigDecimal,
-    scale: u16,
-}
-
-impl BigDecimalFromSql {
-    fn to_decimal_128_with_scale(&self, dest_scale: u16) -> Option<i128> {
-        // Resolve scale difference by upscaling / downscaling to the scale of arrow Decimal128 type
-        if dest_scale != self.scale {
-            return (&self.inner * 10i128.pow(u32::from(dest_scale))).to_i128();
-        }
-
-        (&self.inner * 10i128.pow(u32::from(self.scale))).to_i128()
-    }
-
-    fn scale(&self) -> u16 {
-        self.scale
-    }
-}
-
-#[allow(clippy::cast_sign_loss)]
-#[allow(clippy::cast_possible_wrap)]
-#[allow(clippy::cast_possible_truncation)]
-impl<'a> FromSql<'a> for BigDecimalFromSql {
-    fn from_sql(
-        _ty: &Type,
-        raw: &'a [u8],
-    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        let raw_u16: Vec<u16> = raw
-            .chunks(2)
-            .map(|chunk| {
-                if chunk.len() == 2 {
-                    u16::from_be_bytes([chunk[0], chunk[1]])
-                } else {
-                    u16::from_be_bytes([chunk[0], 0])
-                }
-            })
-            .collect();
-
-        let base_10_000_digit_count = raw_u16[0];
-        let weight = raw_u16[1] as i16;
-        let sign = raw_u16[2];
-        let scale = raw_u16[3];
-
-        let mut base_10_000_digits = Vec::new();
-        for i in 4..4 + base_10_000_digit_count {
-            base_10_000_digits.push(raw_u16[i as usize]);
-        }
-
-        let mut u8_digits = Vec::new();
-        for &base_10_000_digit in base_10_000_digits.iter().rev() {
-            let mut base_10_000_digit = base_10_000_digit;
-            let mut temp_result = Vec::new();
-            while base_10_000_digit > 0 {
-                temp_result.push((base_10_000_digit % 10) as u8);
-                base_10_000_digit /= 10;
-            }
-            while temp_result.len() < 4 {
-                temp_result.push(0);
-            }
-            u8_digits.extend(temp_result);
-        }
-        u8_digits.reverse();
-
-        let value_scale = 4 * (i64::from(base_10_000_digit_count) - i64::from(weight) - 1);
-        let size = i64::try_from(u8_digits.len())? + i64::from(scale) - value_scale;
-        u8_digits.resize(size as usize, 0);
-
-        let sign = match sign {
-            0x4000 => Sign::Minus,
-            0x0000 => Sign::Plus,
-            _ => {
-                return Err(Box::new(Error::FailedToParseBigDecimalFromPostgres {
-                    bytes: raw.to_vec(),
-                }))
-            }
-        };
-
-        let Some(digits) = BigInt::from_radix_be(sign, u8_digits.as_slice(), 10) else {
-            return Err(Box::new(Error::FailedToParseBigDecimalFromPostgres {
-                bytes: raw.to_vec(),
-            }));
-        };
-        Ok(BigDecimalFromSql {
-            inner: BigDecimal::new(digits, i64::from(scale)),
-            scale,
-        })
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        matches!(*ty, Type::NUMERIC)
-    }
-}
-
 // interval_send - Postgres C (https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/timestamp.c#L1032)
 // interval values are internally stored as three integral fields: months, days, and microseconds
 struct IntervalFromSql {
@@ -1156,28 +1053,28 @@ mod tests {
 
     #[allow(clippy::cast_possible_truncation)]
     #[tokio::test]
-    async fn test_big_decimal_from_sql() {
+    async fn test_decimal_from_sql() {
         let positive_u16: Vec<u16> = vec![5, 3, 0, 5, 9345, 1293, 2903, 1293, 932];
         let positive_raw: Vec<u8> = positive_u16
             .iter()
             .flat_map(|&x| vec![(x >> 8) as u8, x as u8])
             .collect();
-        let positive =
-            BigDecimal::from_str("9345129329031293.0932").expect("Failed to parse big decimal");
-        let positive_result = BigDecimalFromSql::from_sql(&Type::NUMERIC, positive_raw.as_slice())
+        let positive = Decimal::from_str("9345129329031293.0932").expect("Failed to parse decimal");
+        let positive_result = Decimal::from_sql(&Type::NUMERIC, positive_raw.as_slice())
             .expect("Failed to run FromSql");
-        assert_eq!(positive_result.inner, positive);
+        assert_eq!(positive_result, positive);
 
         let negative_u16: Vec<u16> = vec![5, 3, 0x4000, 5, 9345, 1293, 2903, 1293, 932];
         let negative_raw: Vec<u8> = negative_u16
             .iter()
             .flat_map(|&x| vec![(x >> 8) as u8, x as u8])
             .collect();
+
         let negative =
-            BigDecimal::from_str("-9345129329031293.0932").expect("Failed to parse big decimal");
-        let negative_result = BigDecimalFromSql::from_sql(&Type::NUMERIC, negative_raw.as_slice())
+            Decimal::from_str("-9345129329031293.0932").expect("Failed to parse decimal");
+        let negative_result = Decimal::from_sql(&Type::NUMERIC, negative_raw.as_slice())
             .expect("Failed to run FromSql");
-        assert_eq!(negative_result.inner, negative);
+        assert_eq!(negative_result, negative);
     }
 
     #[test]
