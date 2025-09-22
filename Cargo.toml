@@ -41,7 +41,7 @@ num-traits = { version = "0.2", optional = true }
 prost = { version = "0.13.2", optional = true }
 rand = "0.8.5"
 r2d2 = { version = "0.8.10", optional = true }
-rust_decimal = { version = "1.32", optional = true, features = ["db-postgres"] }
+rust_decimal = { version = "1.38", optional = true, features = ["db-postgres"] }
 rusqlite = { version = "0.31.0", optional = true }
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = ["backend-sqlite", "backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
 secrecy = "0.10.3"
