@@ -80,6 +80,8 @@ pub(crate) fn pg_data_type_to_arrow_type(
             2,
         )),
         "xml" | "json" => Ok(DataType::Utf8),
+        // `Name` is a 64 bytes (varchar) / internal type for object names
+       "\"Name\"" => Ok(DataType::Utf8),
         "array" => parse_array_type(context),
         "composite" => parse_composite_type(context),
         "geometry" | "geography" => Ok(DataType::Binary),
