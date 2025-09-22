@@ -256,7 +256,7 @@ fn add_row_numbers_to_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBat
 
         let new_batch =
             RecordBatch::try_new(new_schema, columns).map_err(|e| Error::DataFusion {
-                source: datafusion::error::DataFusionError::ArrowError(e, None),
+                source: datafusion::error::DataFusionError::ArrowError(Box::new(e), None),
             })?;
         batches_with_row_nums.push(new_batch);
     }

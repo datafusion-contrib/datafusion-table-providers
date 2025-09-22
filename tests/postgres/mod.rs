@@ -46,7 +46,7 @@ async fn arrow_postgres_round_trip(
         order_exprs: vec![],
         unbounded: false,
         options: common::get_pg_params(port),
-        constraints: Constraints::empty(),
+        constraints: Constraints::new_unverified(vec![]),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -279,7 +279,7 @@ async fn test_postgres_jsonb_type(port: usize) {
     );";
 
     let insert_table_stmt = r#"
-    INSERT INTO jsonb_values (data) VALUES 
+    INSERT INTO jsonb_values (data) VALUES
     ('{"name": "John", "age": 30}'),
     ('{"name": "Jane", "age": 25}'),
     ('[1, 2, 3]'),

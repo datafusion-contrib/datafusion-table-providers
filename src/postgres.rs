@@ -184,7 +184,7 @@ impl PostgresTableFactory {
             table_reference,
             Arc::clone(&self.pool),
             schema,
-            Constraints::empty(),
+            Constraints::new_unverified(vec![]),
         );
 
         Ok(PostgresTableWriter::create(read_provider, postgres, None))

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
-    ast_analyzer::AstAnalyzer, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -31,7 +31,7 @@ impl MySQLTable {
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            table_name,
+            RemoteTableRef::from(table_name),
             schema,
         )))
     }

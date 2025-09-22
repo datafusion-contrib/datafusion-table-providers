@@ -21,11 +21,11 @@ byte-unit = { version = "5.1.4", optional = true }
 bigdecimal = "0.4.5"
 byteorder = "1.5.0"
 chrono = "0.4"
-datafusion = "48.0.1"
-datafusion-expr = { version = "48.0.1", optional = true }
-datafusion-physical-expr = { version = "48.0.1", optional = true }
-datafusion-physical-plan = { version = "48.0.1", optional = true }
-datafusion-proto = { version = "48.0.1", optional = true }
+datafusion = "49.0.2"
+datafusion-expr = { version = "49.0.2", optional = true }
+datafusion-physical-expr = { version = "49.0.2", optional = true }
+datafusion-physical-plan = { version = "49.0.2", optional = true }
+datafusion-proto = { version = "49.0.2", optional = true }
 duckdb = { version = "1.3.2", features = [
   "bundled",
   "r2d2",
@@ -80,7 +80,7 @@ rstest = "0.22.0"
 geozero = { version = "0.13.0", features = ["with-wkb"] }
 tokio-stream = { version = "0.1.15", features = ["net"] }
 insta = { version = "1.40.0", features = ["filters"] }
-datafusion-physical-plan = { version = "48.0.1" }
+datafusion-physical-plan = { version = "49.0.2" }
 tempfile = "3.8.1"
 
 [features]
@@ -105,7 +105,7 @@ duckdb-federation = ["duckdb"]
 sqlite-federation = ["sqlite"]
 postgres-federation = ["postgres"]
 mongodb = [
-  "dep:mongodb", 
+  "dep:mongodb",
   "dep:async-stream",
   "dep:arrow-schema",
   "dep:rust_decimal",
@@ -113,14 +113,14 @@ mongodb = [
 ]
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "c920a7501cdbfe906bf8c7d4959367fd47f00774" } # spiceai-48
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "5ad2f52b9bafc6eaa50851f2e1fcf0585fb5184d" } # spiceai-49
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "a4b83432acfe1dfdd140e35d4603701ae76f6607" } # spiceai-1.3.2
 
-datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" }               # spiceai-48
-datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" }          # spiceai-48
-datafusion-physical-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" } # spiceai-48
-datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" } # spiceai-48
-datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "8c1051083ce452540f0c450f6cfef00ffcd255dc" }         # spiceai-48
+datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }               # spiceai-49
+datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }          # spiceai-49
+datafusion-physical-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" } # spiceai-49
+datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" } # spiceai-49
+datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }         # spiceai-49
 
 arrow = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
 arrow-array = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
