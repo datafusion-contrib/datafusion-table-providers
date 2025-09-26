@@ -105,7 +105,7 @@ rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
 anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
-insta = { version = "1.43.1", features = ["filters"] }
+insta = { version = "1.43.2", features = ["filters"] }
 prost = { version = "=0.13.5" }
 rand = "0.9"
 reqwest = "0.12"
