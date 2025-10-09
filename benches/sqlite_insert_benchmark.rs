@@ -134,8 +134,6 @@ async fn main() {
             "\n📊 Average speedup: {:.2}x faster with prepared statements",
             avg_speedup
         );
-        println!("✅ Prepared statements provide consistent high performance");
-        println!("✅ Strongly recommended for production use");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     }
 }
