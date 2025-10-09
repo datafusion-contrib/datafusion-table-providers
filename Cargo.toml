@@ -172,3 +172,9 @@ required-features = ["postgres"]
 name = "mongodb"
 path = "examples/mongodb.rs"
 required-features = ["mongodb"]
+
+[[bench]]
+name = "sqlite_insert_benchmark"
+path = "benches/sqlite_insert_benchmark.rs"
+harness = false
+required-features = ["sqlite"]
