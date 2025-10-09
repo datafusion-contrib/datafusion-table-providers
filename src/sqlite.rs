@@ -49,6 +49,9 @@ pub mod federation;
 #[cfg(feature = "sqlite-federation")]
 pub mod sqlite_interval;
 
+#[cfg(feature = "sqlite-federation")]
+pub mod between;
+
 pub mod sql_table;
 pub mod write;
 
@@ -370,11 +373,14 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
-            Arc::clone(&schema),
-            name,
-        ));
+        let read_provider = Arc::new(
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                name,
+                Some(cmd.constraints.clone()),
+            )
+        );
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
@@ -431,11 +437,9 @@ impl SqliteTableFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
-        let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
-            Arc::clone(&schema),
-            table_reference,
-        ));
+        let read_provider = Arc::new(
+            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference, None),
+        );
 
         Ok(read_provider)
     }
@@ -520,12 +524,12 @@ impl Sqlite {
 
     async fn table_exists(&self, sqlite_conn: &mut SqliteConnection) -> bool {
         let sql = format!(
-            r#"SELECT EXISTS (
+            "SELECT EXISTS (
           SELECT 1
           FROM sqlite_master
           WHERE type='table'
           AND name = '{name}'
-        )"#,
+        )",
             name = self.table
         );
         tracing::trace!("{sql}");
@@ -983,29 +987,6 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
-                    DataType::Decimal128(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::BigDecimal;
-                            let value =
-                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
-                    DataType::Decimal256(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::{num_bigint::BigInt, BigDecimal};
-                            let bigint =
-                                BigInt::from_signed_bytes_le(&array.value(row_idx).to_le_bytes());
-                            let value = BigDecimal::new(bigint, i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
                     DataType::Float16 => {
                         let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
                         if array.is_null(row_idx) {
@@ -1051,7 +1032,7 @@ impl Sqlite {
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
         transaction.execute(
-            format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+            format!("DELETE FROM {}", self.table.to_quoted_string()).as_str(),
             [],
         )?;
 
