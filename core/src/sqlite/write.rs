@@ -78,7 +78,7 @@ impl TableProvider for SqliteTableWriter {
                 self.sqlite.table_name()
             );
         }
-        
+
         self.read_provider.supports_filters_pushdown(filters)
     }
 
@@ -415,11 +415,8 @@ mod tests {
         // Insert initial data
         let arr1 = Int64Array::from(vec![1, 2, 3]);
         let arr2 = Int64Array::from(vec![10, 20, 30]);
-        let data = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(arr1), Arc::new(arr2)],
-        )
-        .expect("data should be created");
+        let data = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1), Arc::new(arr2)])
+            .expect("data should be created");
 
         let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
         let insertion = table
