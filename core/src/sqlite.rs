@@ -983,29 +983,6 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
-                    DataType::Decimal128(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::BigDecimal;
-                            let value =
-                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
-                    DataType::Decimal256(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::{num_bigint::BigInt, BigDecimal};
-                            let bigint =
-                                BigInt::from_signed_bytes_le(&array.value(row_idx).to_le_bytes());
-                            let value = BigDecimal::new(bigint, i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
                     DataType::Float16 => {
                         let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
                         if array.is_null(row_idx) {
