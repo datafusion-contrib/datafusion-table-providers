@@ -131,6 +131,8 @@ async fn arrow_sqlite_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
+#[ignore] // Requires a custom sqlite extension for decimal types
+#[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
