@@ -245,6 +245,8 @@ fn map_column_type_to_data_type(column_type: Type) -> DataType {
         Type::Text => DataType::Utf8,
         Type::Blob => DataType::Binary,
     }
+}
+
 /// Maps Arrow `DataType` to sea-query `ColumnType` for `SQLite`.
 /// SQLite has limited precision support for DECIMAL types (max precision 16),
 /// so high-precision decimals are stored as TEXT.
