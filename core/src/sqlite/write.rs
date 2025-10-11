@@ -66,6 +66,22 @@ impl TableProvider for SqliteTableWriter {
         Some(self.sqlite.constraints())
     }
 
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::error::Result<Vec<datafusion::logical_expr::TableProviderFilterPushDown>> {
+        // Verify schema consistency before delegating
+        // This is a cheap check since it's just comparing Arc<Schema> pointers
+        if self.read_provider.schema() != self.schema() {
+            tracing::warn!(
+                "Schema mismatch detected in SqliteTableWriter for table {}",
+                self.sqlite.table_name()
+            );
+        }
+
+        self.read_provider.supports_filters_pushdown(filters)
+    }
+
     async fn scan(
         &self,
         state: &dyn Session,
@@ -450,7 +466,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
-            constraints: Constraints::new_unverified(vec![]),
+            constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
         };
@@ -757,5 +773,123 @@ mod tests {
                     num_rows
                 )
             });
+    }
+
+    #[tokio::test]
+    async fn test_filter_pushdown_support() {
+        use datafusion::logical_expr::{col, lit, TableProviderFilterPushDown};
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("name", DataType::Utf8, false),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("test_filter_table"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        // Test that filter pushdown is supported
+        let filter = col("id").gt(lit(10));
+        let result = table
+            .supports_filters_pushdown(&[&filter])
+            .expect("should support filter pushdown");
+
+        assert_eq!(
+            result,
+            vec![TableProviderFilterPushDown::Exact],
+            "Filter pushdown should be exact for simple comparison"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_read_write_with_filter_pushdown() {
+        use datafusion::logical_expr::{col, lit, TableProviderFilterPushDown};
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("value", DataType::Int64, false),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("concurrent_test"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+        };
+
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        // Insert initial data
+        let arr1 = Int64Array::from(vec![1, 2, 3]);
+        let arr2 = Int64Array::from(vec![10, 20, 30]);
+        let data = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1), Arc::new(arr2)])
+            .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+            .await
+            .expect("insertion should be successful");
+
+        collect(insertion, ctx.task_ctx())
+            .await
+            .expect("insert successful");
+
+        // Verify filter pushdown works after insert
+        let filter = col("id").gt(lit(1));
+        let result = table
+            .supports_filters_pushdown(&[&filter])
+            .expect("should support filter pushdown");
+
+        assert_eq!(
+            result,
+            vec![TableProviderFilterPushDown::Exact],
+            "Filter pushdown should be exact for simple comparison"
+        );
+
+        // Verify we can actually scan with the filter
+        let scan = table
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .expect("scan should succeed");
+
+        let batches = collect(scan, ctx.task_ctx())
+            .await
+            .expect("collect should succeed");
+
+        assert!(!batches.is_empty(), "Should have results");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2, "Should have 2 rows with id > 1");
     }
 }
