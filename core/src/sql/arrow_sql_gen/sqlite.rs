@@ -245,4 +245,21 @@ fn map_column_type_to_data_type(column_type: Type) -> DataType {
         Type::Text => DataType::Utf8,
         Type::Blob => DataType::Binary,
     }
+/// Maps Arrow `DataType` to sea-query `ColumnType` for `SQLite`.
+/// SQLite has limited precision support for DECIMAL types (max precision 16),
+/// so high-precision decimals are stored as TEXT.
+pub(crate) fn map_data_type_to_column_type_sqlite(data_type: &DataType) -> sea_query::ColumnType {
+    use sea_query::ColumnType;
+
+    match data_type {
+        // For high-precision decimals, use TEXT in SQLite
+        DataType::Decimal128(p, _) | DataType::Decimal256(p, _) if *p > 16 => ColumnType::Text,
+        // For lower precision decimals, use the standard mapping
+        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
+            #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
+            ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
+        }
+        // Use standard mapping for all other types
+        _ => crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type(data_type),
+    }
 }

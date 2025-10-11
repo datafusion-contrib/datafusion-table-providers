@@ -108,7 +108,7 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
-            map_data_type_to_column_type(f.data_type())
+            crate::sql::arrow_sql_gen::sqlite::map_data_type_to_column_type_sqlite(f.data_type())
         })
     }
 
@@ -1341,7 +1341,7 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         // This caused the error: "Row size too large. The maximum row size for the used table type, not counting BLOBs, is 65535.
         // This includes storage overhead, check the manual. You have to change some columns to TEXT or BLOBs."
         // Changing to Blob fixes this issue. This change does not affect Postgres, and for Sqlite, the mapping type changes from varbinary_blob to blob.
-        DataType::Binary | DataType::LargeBinary => ColumnType::Blob,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => ColumnType::Blob,
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
         DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
