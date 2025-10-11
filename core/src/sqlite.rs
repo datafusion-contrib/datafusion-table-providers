@@ -520,12 +520,12 @@ impl Sqlite {
 
     async fn table_exists(&self, sqlite_conn: &mut SqliteConnection) -> bool {
         let sql = format!(
-            r#"SELECT EXISTS (
+            "SELECT EXISTS (
           SELECT 1
           FROM sqlite_master
           WHERE type='table'
           AND name = '{name}'
-        )"#,
+        )",
             name = self.table
         );
         tracing::trace!("{sql}");
@@ -995,6 +995,50 @@ impl Sqlite {
                     DataType::Null => {
                         params.push(Box::new(rusqlite::types::Null));
                     }
+                    DataType::Decimal128(_, _) => {
+                        // Handle Decimal128 by converting to string
+                        use arrow::util::display::{ArrayFormatter, FormatOptions};
+                        let formatter =
+                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
+                                .map_err(|e| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                                })?;
+                        let value_str = formatter.value(row_idx).to_string();
+                        params.push(Box::new(value_str));
+                    }
+                    DataType::Decimal256(_, _) => {
+                        // Handle Decimal256 by converting to string
+                        use arrow::util::display::{ArrayFormatter, FormatOptions};
+                        let formatter =
+                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
+                                .map_err(|e| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                                })?;
+                        let value_str = formatter.value(row_idx).to_string();
+                        params.push(Box::new(value_str));
+                    }
+                    DataType::Decimal32(_, _) => {
+                        // Handle Decimal32 by converting to string
+                        use arrow::util::display::{ArrayFormatter, FormatOptions};
+                        let formatter =
+                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
+                                .map_err(|e| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                                })?;
+                        let value_str = formatter.value(row_idx).to_string();
+                        params.push(Box::new(value_str));
+                    }
+                    DataType::Decimal64(_, _) => {
+                        // Handle Decimal64 by converting to string
+                        use arrow::util::display::{ArrayFormatter, FormatOptions};
+                        let formatter =
+                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
+                                .map_err(|e| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+                                })?;
+                        let value_str = formatter.value(row_idx).to_string();
+                        params.push(Box::new(value_str));
+                    }
                     DataType::List(_)
                     | DataType::LargeList(_)
                     | DataType::ListView(_)
@@ -1028,7 +1072,7 @@ impl Sqlite {
 
     fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
         transaction.execute(
-            format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+            format!("DELETE FROM {}", self.table.to_quoted_string()).as_str(),
             [],
         )?;
 

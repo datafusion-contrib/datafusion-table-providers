@@ -481,7 +481,7 @@ mod tests {
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
             let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
-            assert_eq!(result, r#"SELECT `users`.`name` FROM `users`"#);
+            assert_eq!(result, "SELECT `users`.`name` FROM `users`");
             Ok(())
         }
 
@@ -493,7 +493,7 @@ mod tests {
             let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
             assert_eq!(
                 result,
-                r#"SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"#
+                "SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"
             );
             Ok(())
         }
