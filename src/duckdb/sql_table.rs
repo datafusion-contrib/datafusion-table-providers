@@ -72,6 +72,20 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+
+        // partition_by_expressions
+
+
+        // let expressions = partition_by
+        // .iter()
+        // .map(|sql| {
+        //     let expr = ctx
+        //         .parse_sql_expr(sql, df_schema)
+        //         .unwrap();
+        //     Ok(expr)
+        // })
+        // .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Arc::new(DuckSqlExec::new(
             projections,
             schema,

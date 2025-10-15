@@ -593,19 +593,55 @@ fn insert_overwrite(
     Ok(num_rows)
 }
 
+const MAX_BATCH_SIZE: usize = 2048;
+
+fn split_batch(batch: &RecordBatch) -> Vec<RecordBatch> {
+    let mut result = vec![];
+    (0..=batch.num_rows())
+        .step_by(MAX_BATCH_SIZE)
+        .for_each(|offset| {
+            let length = std::cmp::min(MAX_BATCH_SIZE, batch.num_rows() - offset);
+            result.push(batch.slice(offset, length));
+        });
+    result
+}
+
 #[allow(clippy::doc_markdown)]
 /// Writes a stream of ``RecordBatch``es to a DuckDB table.
 fn write_to_table(
     table: &TableManager,
     tx: &Transaction<'_>,
     schema: SchemaRef,
-    data_batches: Receiver<RecordBatch>,
+    mut data_batches: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
 ) -> datafusion::common::Result<u64> {
     let stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchReaderFromStream::new(
         data_batches,
         schema,
     )));
+
+    // let mut num_rows = 0;
+    // let mut appender = tx
+    //     .appender(&table.table_name().to_string())
+    //     .context(super::UnableToGetAppenderToDuckDBTableSnafu)
+    //     .map_err(to_datafusion_error)?;
+
+    // while let Some(batch) = data_batches.blocking_recv() {
+    //     num_rows += u64::try_from(batch.num_rows()).map_err(|e| {
+    //         DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
+    //     })?;
+    //     for batch in split_batch(&batch) {
+    //             appender
+    //                 .append_record_batch(batch.clone())
+    //                 .context(super::UnableToInsertToDuckDBTableSnafu)
+    //                 .map_err(to_datafusion_error)?;
+    //         }
+    // }
+
+    // appender
+    //     .flush()
+    //     .context(super::UnableToInsertToDuckDBTableSnafu)
+    //     .map_err(to_datafusion_error)?;
 
     let current_ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -614,17 +650,20 @@ fn write_to_table(
         .as_millis();
 
     let view_name = format!("__scan_{}_{current_ts}", table.table_name());
+
+    // tx.execute("PRAGMA threads=2", []).unwrap();
+
     tx.register_arrow_scan_view(&view_name, &stream)
         .context(super::UnableToRegisterArrowScanViewSnafu)
         .map_err(to_datafusion_error)?;
 
     let view = ViewCreator::from_name(RelationName::new(view_name));
-    let rows = view
+    let num_rows = view
         .insert_into(table, tx, on_conflict)
         .map_err(to_datafusion_error)?;
     view.drop(tx).map_err(to_datafusion_error)?;
 
-    Ok(rows as u64)
+    Ok(num_rows as u64)
 }
 
 struct RecordBatchReaderFromStream {

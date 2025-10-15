@@ -51,7 +51,7 @@ impl From<TableReference> for RelationName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableDefinition {
     name: RelationName,
-    schema: SchemaRef,
+    pub schema: SchemaRef,
     constraints: Option<Constraints>,
     indexes: Vec<(ColumnReference, IndexType)>,
 }

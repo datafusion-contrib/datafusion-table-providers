@@ -52,6 +52,7 @@ mod creator;
 mod settings;
 mod sql_table;
 pub mod write;
+pub mod write_partitioned;
 pub use creator::{RelationName, TableDefinition};
 
 #[derive(Debug, Snafu)]
