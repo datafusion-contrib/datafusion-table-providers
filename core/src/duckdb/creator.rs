@@ -58,7 +58,7 @@ pub struct TableDefinition {
 
 impl TableDefinition {
     #[must_use]
-    pub(crate) fn new(name: RelationName, schema: SchemaRef) -> Self {
+    pub fn new(name: RelationName, schema: SchemaRef) -> Self {
         Self {
             name,
             schema,
@@ -176,13 +176,13 @@ impl TableDefinition {
 
 /// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
 #[derive(Debug, Clone)]
-pub(crate) struct TableManager {
+pub struct TableManager {
     table_definition: Arc<TableDefinition>,
     internal_name: Option<RelationName>,
 }
 
 impl TableManager {
-    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> Self {
+    pub fn new(table_definition: Arc<TableDefinition>) -> Self {
         Self {
             table_definition,
             internal_name: None,
@@ -190,7 +190,7 @@ impl TableManager {
     }
 
     /// Set the internal flag for the table creator.
-    pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
+    pub fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
         if is_internal {
             self.internal_name = Some(self.table_definition.generate_internal_name()?);
         } else {
@@ -200,12 +200,12 @@ impl TableManager {
         Ok(self)
     }
 
-    pub(crate) fn definition_name(&self) -> &RelationName {
+    pub fn definition_name(&self) -> &RelationName {
         &self.table_definition.name
     }
 
     /// Returns the canonical name for this table, which is the internal name if the table is internal, or the table name if it is not.
-    pub(crate) fn table_name(&self) -> &RelationName {
+    pub fn table_name(&self) -> &RelationName {
         self.internal_name
             .as_ref()
             .unwrap_or_else(|| &self.table_definition.name)
@@ -214,7 +214,7 @@ impl TableManager {
     /// Searches if a table by the name specified in the table definition exists in the database.
     /// Returns None if the table does not exist, or an instance of a `TableCreator` for the base table if it does.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
+    pub fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
         let mut stmt = tx
             .prepare("SELECT 1 FROM duckdb_tables() WHERE table_name = ?")
             .context(super::UnableToQueryDataSnafu)?;
@@ -234,7 +234,7 @@ impl TableManager {
         }
     }
 
-    pub(crate) fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
+    pub fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
         self.table_definition
             .indexes
             .iter()
@@ -244,7 +244,7 @@ impl TableManager {
 
     /// Creates the table for this `TableManager`. Does not create indexes - use `TableManager::create_indexes` to apply indexes.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_table(
+    pub fn create_table(
         &self,
         pool: Arc<DuckDbConnectionPool>,
         tx: &Transaction<'_>,
@@ -275,7 +275,7 @@ impl TableManager {
 
     /// Drops indexes from the table, then drops the table itself.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop indexes first
         self.drop_indexes(tx)?;
         self.drop_table(tx)?;
@@ -354,7 +354,7 @@ impl TableManager {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn create_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // create indexes on this table
         for index in self.indexes_vec() {
             self.create_index(tx, index)?;
@@ -437,7 +437,7 @@ impl TableManager {
     /// List all internal tables related to this table manager's table definition.
     /// Excludes itself from the list of tables, if created.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn list_other_internal_tables(
+    pub fn list_other_internal_tables(
         &self,
         tx: &Transaction<'_>,
     ) -> super::Result<Vec<(Self, u64)>> {
@@ -463,7 +463,7 @@ impl TableManager {
 
     /// If this table is an internal table, creates a view with the table definition name targeting this table.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
         if self.internal_name.is_none() {
             return Ok(());
         }
@@ -514,7 +514,7 @@ impl TableManager {
 
     /// Returns the current indexes in database for this table.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
+    pub fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
         let sql = format!(
             "SELECT index_name FROM duckdb_indexes WHERE table_name = '{table_name}'",
             table_name = &self.table_name().to_string()
@@ -539,7 +539,7 @@ impl TableManager {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_table_name(
+    pub fn from_table_name(
         table_definition: Arc<TableDefinition>,
         table_name: RelationName,
     ) -> Self {
@@ -550,7 +550,7 @@ impl TableManager {
     }
 
     /// Verifies that the primary keys match between this table creator and another table creator.
-    pub(crate) fn verify_primary_keys_match(
+    pub fn verify_primary_keys_match(
         &self,
         other_table: &TableManager,
         tx: &Transaction<'_>,
@@ -599,7 +599,7 @@ impl TableManager {
     }
 
     /// Verifies that the indexes match between this table creator and another table creator.
-    pub(crate) fn verify_indexes_match(
+    pub fn verify_indexes_match(
         &self,
         other_table: &TableManager,
         tx: &Transaction<'_>,
@@ -655,7 +655,7 @@ impl TableManager {
     }
 
     /// Returns the current schema in database for this table.
-    pub(crate) fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
+    pub fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
         let sql = format!(
             "SELECT * FROM {table_name} LIMIT 0",
             table_name = quote_identifier(&self.table_name().to_string())
@@ -667,7 +667,7 @@ impl TableManager {
         Ok(result.get_schema())
     }
 
-    pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
+    pub fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
         let sql = format!(
             "SELECT COUNT(1) FROM {table_name}",
             table_name = quote_identifier(&self.table_name().to_string())
@@ -687,17 +687,17 @@ fn create_empty_record_batch_reader(schema: SchemaRef) -> impl RecordBatchReader
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ViewCreator {
+pub struct ViewCreator {
     name: RelationName,
 }
 
 impl ViewCreator {
     #[must_use]
-    pub(crate) fn from_name(name: RelationName) -> Self {
+    pub fn from_name(name: RelationName) -> Self {
         Self { name }
     }
 
-    pub(crate) fn insert_into(
+    pub fn insert_into(
         &self,
         table: &TableManager,
         tx: &Transaction<'_>,
@@ -724,7 +724,7 @@ impl ViewCreator {
         Ok(rows as u64)
     }
 
-    pub(crate) fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop this view
         tx.execute(
             &format!(

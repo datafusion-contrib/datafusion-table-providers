@@ -22,7 +22,6 @@ use crate::{
 };
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use creator::TableManager;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
@@ -52,7 +51,7 @@ mod creator;
 mod settings;
 mod sql_table;
 pub mod write;
-pub use creator::{RelationName, TableDefinition};
+pub use creator::{RelationName, TableDefinition, TableManager, ViewCreator};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
