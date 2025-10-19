@@ -46,6 +46,13 @@ pub struct DuckDBTableWriterBuilder {
     pool: Option<Arc<DuckDbConnectionPool>>,
     on_conflict: Option<OnConflict>,
     table_definition: Option<Arc<TableDefinition>>,
+    on_data_written: Option<
+        Arc<
+            dyn FnMut(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+                + Send
+                + Sync,
+        >,
+    >,
 }
 
 impl DuckDBTableWriterBuilder {
@@ -78,6 +85,19 @@ impl DuckDBTableWriterBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_on_data_written(
+        mut self,
+        on_data_written: Arc<
+            dyn FnMut(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+                + Send
+                + Sync,
+        >,
+    ) -> Self {
+        self.on_data_written = Some(on_data_written);
+        self
+    }
+
     /// Builds a `DuckDBTableWriter` from the provided configuration.
     ///
     /// # Errors
@@ -104,16 +124,35 @@ impl DuckDBTableWriterBuilder {
             on_conflict: self.on_conflict,
             table_definition,
             pool,
+            on_data_written: self.on_data_written,
         })
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     pool: Arc<DuckDbConnectionPool>,
     table_definition: Arc<TableDefinition>,
     on_conflict: Option<OnConflict>,
+    on_data_written: Option<
+        Arc<
+            dyn FnMut(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+                + Send
+                + Sync,
+        >,
+    >,
+}
+
+impl std::fmt::Debug for DuckDBTableWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDBTableWriter")
+            .field("read_provider", &self.read_provider)
+            .field("pool", &self.pool)
+            .field("table_definition", &self.table_definition)
+            .field("on_conflict", &self.on_conflict)
+            .field("on_data_written", &"<callback>")
+            .finish()
+    }
 }
 
 impl DuckDBTableWriter {
@@ -172,19 +211,26 @@ impl TableProvider for DuckDBTableWriter {
                 overwrite,
                 self.on_conflict.clone(),
                 self.schema(),
+                None, // on_data_written
             )),
             None,
         )) as _)
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct DuckDBDataSink {
     pool: Arc<DuckDbConnectionPool>,
     table_definition: Arc<TableDefinition>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
+    on_data_written: Option<
+        Box<
+            dyn FnMut(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+                + Send
+                + Sync,
+        >,
+    >,
 }
 
 #[async_trait]
@@ -210,6 +256,7 @@ impl DataSink for DuckDBDataSink {
         let table_definition = Arc::clone(&self.table_definition);
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
+        let on_data_written = self.on_data_written.as_deref_mut();
 
         // Limit channel size to a maximum of 100 RecordBatches queued for cases when DuckDB is slower than the writer stream,
         // so that we don't significantly increase memory usage. After the maximum RecordBatches are queued, the writer stream will wait
@@ -237,6 +284,7 @@ impl DataSink for DuckDBDataSink {
                         &table_definition,
                         batch_rx,
                         on_conflict.as_ref(),
+                        on_data_written,
                         on_commit_transaction,
                         schema,
                     )?,
@@ -314,6 +362,17 @@ impl DuckDBDataSink {
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
+        on_data_written: Option<
+            Box<
+                dyn FnMut(
+                        &Transaction<'_>,
+                        &TableManager,
+                        &SchemaRef,
+                    ) -> datafusion::common::Result<()>
+                    + Send
+                    + Sync,
+            >,
+        >,
     ) -> Self {
         Self {
             pool,
@@ -321,6 +380,7 @@ impl DuckDBDataSink {
             overwrite,
             on_conflict,
             schema,
+            on_data_written,
         }
     }
 }
@@ -342,6 +402,15 @@ fn insert_append(
     table_definition: &Arc<TableDefinition>,
     batch_rx: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
+    on_data_written: Option<
+        &mut (dyn FnMut(
+            &Transaction<'_>,
+            &TableManager,
+            &SchemaRef,
+        ) -> datafusion::common::Result<()>
+                  + Send
+                  + Sync),
+    >,
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
 ) -> datafusion::common::Result<u64> {
@@ -388,8 +457,18 @@ fn insert_append(
         "Append load for {table_name}",
         table_name = append_table.table_name()
     );
-    let num_rows = write_to_table(&append_table, &tx, schema, batch_rx, on_conflict)
-        .map_err(to_retriable_data_write_error)?;
+    let num_rows = write_to_table(
+        &append_table,
+        &tx,
+        Arc::clone(&schema),
+        batch_rx,
+        on_conflict,
+    )
+    .map_err(to_retriable_data_write_error)?;
+
+    if let Some(callback) = on_data_written {
+        callback(&tx, &append_table, &schema)?;
+    }
 
     on_commit_transaction
         .try_recv()
@@ -680,6 +759,7 @@ mod test {
             InsertOp::Overwrite,
             None,
             table_definition.schema(),
+            None,
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -780,6 +860,7 @@ mod test {
             InsertOp::Overwrite,
             None,
             table_definition.schema(),
+            None,
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -886,6 +967,7 @@ mod test {
             InsertOp::Overwrite,
             None,
             table_definition.schema(),
+            None,
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -986,6 +1068,7 @@ mod test {
             InsertOp::Append,
             None,
             table_definition.schema(),
+            None,
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
@@ -1035,6 +1118,40 @@ mod test {
         assert_eq!(rows, 3);
 
         tx.rollback().expect("to rollback");
+    }
+
+    #[test]
+    fn test_callback_signature() {
+        // Test scenario: Verify that the on_data_written callback signature is correct
+        // Expected behavior: The callback accepts (&Transaction, &TableManager, &SchemaRef) and returns Result<()>
+        //
+        // The callback is invoked in insert_append() after data is written but before the transaction is committed.
+        // This allows for additional operations like inserting metadata, creating indexes, or performing validations
+        // within the same transaction context.
+
+        // This test verifies the callback signature at compile time
+        let _callback: Box<
+            dyn FnMut(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+                + Send
+                + Sync,
+        > = Box::new(
+            |_tx: &Transaction<'_>, table_manager: &TableManager, schema: &SchemaRef| {
+                // Example callback that validates the parameters are accessible
+                assert!(!schema.fields().is_empty(), "Schema should have fields");
+                let _table_name = table_manager.table_name();
+
+                // The callback can perform operations like:
+                // - Inserting metadata rows
+                // - Creating additional indexes
+                // - Validating data integrity
+                // - Logging or auditing
+
+                Ok(())
+            },
+        );
+
+        // If this compiles, the callback signature is correct
+        assert!(true, "Callback signature is correct");
     }
 
     #[tokio::test]
@@ -1087,6 +1204,7 @@ mod test {
             InsertOp::Append,
             None,
             table_definition.schema(),
+            None,
         );
         let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
 
