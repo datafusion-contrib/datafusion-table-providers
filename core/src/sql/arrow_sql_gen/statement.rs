@@ -108,16 +108,7 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
-            #[cfg(feature = "sqlite")]
-            {
-                crate::sql::arrow_sql_gen::sqlite::map_data_type_to_column_type_sqlite(
-                    f.data_type(),
-                )
-            }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                map_data_type_to_column_type(f.data_type())
-            }
+            map_data_type_to_column_type(f.data_type())
         })
     }
 
