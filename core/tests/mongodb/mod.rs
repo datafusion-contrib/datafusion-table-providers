@@ -782,7 +782,8 @@ fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<Recor
         .map(|&i| schema.field(i).clone())
         .collect::<Vec<_>>();
     let projected_schema = Arc::new(arrow::datatypes::Schema::new(fields));
-    RecordBatch::try_new(projected_schema, arrays).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    RecordBatch::try_new(projected_schema, arrays)
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 async fn start_mongodb_container(port: usize) -> RunningContainer {

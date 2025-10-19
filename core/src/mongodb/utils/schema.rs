@@ -413,7 +413,6 @@ mod tests {
 
         let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
 
-
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(field_names, vec!["apple", "banana", "monkey", "zebra"]);
     }
@@ -430,7 +429,7 @@ mod tests {
 
             // Add optional fields for some documents
             if i % 2 == 0 {
-                doc.insert("age", ((20 + i % 50)));
+                doc.insert("age", (20 + i % 50));
             }
             if i % 3 == 0 {
                 doc.insert("city", "NYC");
