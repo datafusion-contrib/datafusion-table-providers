@@ -107,6 +107,7 @@ impl TableProvider for SqliteTableWriter {
                 op,
                 self.on_conflict.clone(),
                 self.schema(),
+                self.sqlite.batch_insert_use_prepared_statements,
             )),
             None,
         )) as _)
@@ -119,6 +120,7 @@ struct SqliteDataSink {
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
+    use_prepared_statements: bool,
 }
 
 #[async_trait]
@@ -192,6 +194,8 @@ impl DataSink for SqliteDataSink {
         let overwrite = self.overwrite;
         let sqlite = Arc::clone(&self.sqlite);
         let on_conflict = self.on_conflict.clone();
+        let use_prepared_statements = self.use_prepared_statements;
+
         sqlite_conn
             .conn
             .call(move |conn| {
@@ -203,7 +207,16 @@ impl DataSink for SqliteDataSink {
 
                 while let Some(data_batch) = batch_rx.blocking_recv() {
                     if data_batch.num_rows() > 0 {
-                        sqlite.insert_batch(&transaction, data_batch, on_conflict.as_ref())?;
+                        if use_prepared_statements {
+                            sqlite.insert_batch_prepared(
+                                &transaction,
+                                data_batch,
+                                on_conflict.as_ref(),
+                            )?;
+                        } else {
+                            #[allow(deprecated)]
+                            sqlite.insert_batch(&transaction, data_batch, on_conflict.as_ref())?;
+                        }
                     }
                 }
 
@@ -249,12 +262,14 @@ impl SqliteDataSink {
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
+        use_prepared_statements: bool,
     ) -> Self {
         Self {
             sqlite,
             overwrite,
             on_conflict,
             schema,
+            use_prepared_statements,
         }
     }
 }
@@ -338,6 +353,403 @@ mod tests {
         collect(insertion, ctx.task_ctx())
             .await
             .expect("insert successful");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::unreadable_literal)]
+    async fn test_all_arrow_types_to_sqlite() {
+        use arrow::{
+            array::*,
+            datatypes::{DataType, Field, TimeUnit},
+        };
+
+        let num_rows = 10;
+        // Create a comprehensive schema with all supported Arrow types
+        let schema = Arc::new(Schema::new(vec![
+            // Integer types
+            Field::new("col_int8", DataType::Int8, true),
+            Field::new("col_int16", DataType::Int16, true),
+            Field::new("col_int32", DataType::Int32, true),
+            Field::new("col_int64", DataType::Int64, true),
+            Field::new("col_uint8", DataType::UInt8, true),
+            Field::new("col_uint16", DataType::UInt16, true),
+            Field::new("col_uint32", DataType::UInt32, true),
+            Field::new("col_uint64", DataType::UInt64, true),
+            // Float types (Float16 requires half crate - skip for now)
+            Field::new("col_float32", DataType::Float32, true),
+            Field::new("col_float64", DataType::Float64, true),
+            // String types
+            Field::new("col_utf8", DataType::Utf8, true),
+            Field::new("col_large_utf8", DataType::LargeUtf8, true),
+            Field::new("col_utf8_view", DataType::Utf8View, true),
+            // Boolean
+            Field::new("col_bool", DataType::Boolean, true),
+            // Binary types
+            Field::new("col_binary", DataType::Binary, true),
+            Field::new("col_large_binary", DataType::LargeBinary, true),
+            Field::new("col_binary_view", DataType::BinaryView, true),
+            Field::new("col_fixed_binary", DataType::FixedSizeBinary(4), true),
+            // Date types
+            Field::new("col_date32", DataType::Date32, true),
+            Field::new("col_date64", DataType::Date64, true),
+            // Timestamp types
+            Field::new(
+                "col_ts_second",
+                DataType::Timestamp(TimeUnit::Second, None),
+                true,
+            ),
+            Field::new(
+                "col_ts_milli",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+            Field::new(
+                "col_ts_micro",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            Field::new(
+                "col_ts_nano",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            // Time types
+            Field::new(
+                "col_time32_second",
+                DataType::Time32(TimeUnit::Second),
+                true,
+            ),
+            Field::new(
+                "col_time32_milli",
+                DataType::Time32(TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new(
+                "col_time64_micro",
+                DataType::Time64(TimeUnit::Microsecond),
+                true,
+            ),
+            Field::new(
+                "col_time64_nano",
+                DataType::Time64(TimeUnit::Nanosecond),
+                true,
+            ),
+            // Duration types
+            Field::new("col_dur_second", DataType::Duration(TimeUnit::Second), true),
+            Field::new(
+                "col_dur_milli",
+                DataType::Duration(TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new(
+                "col_dur_micro",
+                DataType::Duration(TimeUnit::Microsecond),
+                true,
+            ),
+            Field::new(
+                "col_dur_nano",
+                DataType::Duration(TimeUnit::Nanosecond),
+                true,
+            ),
+        ]));
+
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare(format!("test_all_types_{}", num_rows)),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+        };
+
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        // Generate test data dynamically based on num_rows
+        let mut int8_values = Vec::with_capacity(num_rows);
+        let mut int16_values = Vec::with_capacity(num_rows);
+        let mut int32_values = Vec::with_capacity(num_rows);
+        let mut int64_values = Vec::with_capacity(num_rows);
+        let mut uint8_values = Vec::with_capacity(num_rows);
+        let mut uint16_values = Vec::with_capacity(num_rows);
+        let mut uint32_values = Vec::with_capacity(num_rows);
+        let mut uint64_values = Vec::with_capacity(num_rows);
+        let mut float32_values = Vec::with_capacity(num_rows);
+        let mut float64_values = Vec::with_capacity(num_rows);
+        let mut string_values = Vec::with_capacity(num_rows);
+        let mut large_string_values = Vec::with_capacity(num_rows);
+        let mut string_view_values = Vec::with_capacity(num_rows);
+        let mut bool_values = Vec::with_capacity(num_rows);
+        let mut binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
+        let mut large_binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
+        let mut binary_view_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
+        let mut fixed_binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
+        let mut date32_values = Vec::with_capacity(num_rows);
+        let mut date64_values = Vec::with_capacity(num_rows);
+        let mut ts_sec_values = Vec::with_capacity(num_rows);
+        let mut ts_milli_values = Vec::with_capacity(num_rows);
+        let mut ts_micro_values = Vec::with_capacity(num_rows);
+        let mut ts_nano_values = Vec::with_capacity(num_rows);
+        let mut time32_sec_values = Vec::with_capacity(num_rows);
+        let mut time32_milli_values = Vec::with_capacity(num_rows);
+        let mut time64_micro_values = Vec::with_capacity(num_rows);
+        let mut time64_nano_values = Vec::with_capacity(num_rows);
+        let mut dur_sec_values = Vec::with_capacity(num_rows);
+        let mut dur_milli_values = Vec::with_capacity(num_rows);
+        let mut dur_micro_values = Vec::with_capacity(num_rows);
+        let mut dur_nano_values = Vec::with_capacity(num_rows);
+
+        for i in 0..num_rows {
+            // Add some null values at regular intervals
+            let is_null = i % 3 == 1;
+
+            int8_values.push(if is_null { None } else { Some((i % 100) as i8) });
+            int16_values.push(if is_null {
+                None
+            } else {
+                Some((i * 100) as i16)
+            });
+            int32_values.push(if is_null {
+                None
+            } else {
+                Some((i * 1000) as i32)
+            });
+            int64_values.push(if is_null {
+                None
+            } else {
+                Some((i * 10000) as i64)
+            });
+            uint8_values.push(if is_null { None } else { Some((i % 200) as u8) });
+            uint16_values.push(if is_null {
+                None
+            } else {
+                Some((i * 100) as u16)
+            });
+            uint32_values.push(if is_null {
+                None
+            } else {
+                Some((i * 1000) as u32)
+            });
+            uint64_values.push(if is_null {
+                None
+            } else {
+                Some((i * 10000) as u64)
+            });
+            float32_values.push(if is_null {
+                None
+            } else {
+                Some((i as f32) * 1.5)
+            });
+            float64_values.push(if is_null {
+                None
+            } else {
+                Some((i as f64) * 2.5)
+            });
+            string_values.push(if is_null {
+                None
+            } else {
+                Some(format!("str_{}", i))
+            });
+            large_string_values.push(if is_null {
+                None
+            } else {
+                Some(format!("large_{}", i))
+            });
+            string_view_values.push(if is_null {
+                None
+            } else {
+                Some(format!("view_{}", i))
+            });
+            bool_values.push(if is_null { None } else { Some(i % 2 == 0) });
+            binary_values.push(if is_null {
+                None
+            } else {
+                Some(format!("bin_{}", i).into_bytes())
+            });
+            large_binary_values.push(if is_null {
+                None
+            } else {
+                Some(format!("lbin_{}", i).into_bytes())
+            });
+            binary_view_values.push(if is_null {
+                None
+            } else {
+                Some(format!("bv_{}", i).into_bytes())
+            });
+            fixed_binary_values.push(if is_null {
+                None
+            } else {
+                Some(vec![i as u8, (i + 1) as u8, (i + 2) as u8, (i + 3) as u8])
+            });
+            date32_values.push(if is_null {
+                None
+            } else {
+                Some(18000 + i as i32)
+            });
+            date64_values.push(if is_null {
+                None
+            } else {
+                Some(1609459200000 + (i as i64 * 86400000))
+            });
+            ts_sec_values.push(if is_null {
+                None
+            } else {
+                Some(1609459200 + i as i64)
+            });
+            ts_milli_values.push(if is_null {
+                None
+            } else {
+                Some(1609459200000 + i as i64)
+            });
+            ts_micro_values.push(if is_null {
+                None
+            } else {
+                Some(1609459200000000 + i as i64)
+            });
+            ts_nano_values.push(if is_null {
+                None
+            } else {
+                Some(1609459200000000000 + i as i64)
+            });
+            time32_sec_values.push(if is_null {
+                None
+            } else {
+                Some(3600 + (i * 10) as i32)
+            });
+            time32_milli_values.push(if is_null {
+                None
+            } else {
+                Some(3600000 + (i * 1000) as i32)
+            });
+            time64_micro_values.push(if is_null {
+                None
+            } else {
+                Some(3600000000 + (i * 1000000) as i64)
+            });
+            time64_nano_values.push(if is_null {
+                None
+            } else {
+                Some(3600000000000 + (i * 1000000000) as i64)
+            });
+            dur_sec_values.push(if is_null {
+                None
+            } else {
+                Some(86400 + i as i64)
+            });
+            dur_milli_values.push(if is_null {
+                None
+            } else {
+                Some(86400000 + i as i64)
+            });
+            dur_micro_values.push(if is_null {
+                None
+            } else {
+                Some(86400000000 + i as i64)
+            });
+            dur_nano_values.push(if is_null {
+                None
+            } else {
+                Some(86400000000000 + i as i64)
+            });
+        }
+
+        let data = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                // Integer types
+                Arc::new(Int8Array::from(int8_values)),
+                Arc::new(Int16Array::from(int16_values)),
+                Arc::new(Int32Array::from(int32_values)),
+                Arc::new(Int64Array::from(int64_values)),
+                Arc::new(UInt8Array::from(uint8_values)),
+                Arc::new(UInt16Array::from(uint16_values)),
+                Arc::new(UInt32Array::from(uint32_values)),
+                Arc::new(UInt64Array::from(uint64_values)),
+                // Float types
+                Arc::new(Float32Array::from(float32_values)),
+                Arc::new(Float64Array::from(float64_values)),
+                // String types
+                Arc::new(StringArray::from(string_values)),
+                Arc::new(LargeStringArray::from(large_string_values)),
+                Arc::new(StringViewArray::from(string_view_values)),
+                // Boolean
+                Arc::new(BooleanArray::from(bool_values)),
+                // Binary types
+                Arc::new(BinaryArray::from(
+                    binary_values
+                        .iter()
+                        .map(|v| v.as_ref().map(|b| b.as_slice()))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(LargeBinaryArray::from(
+                    large_binary_values
+                        .iter()
+                        .map(|v| v.as_ref().map(|b| b.as_slice()))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(BinaryViewArray::from_iter(
+                    binary_view_values
+                        .iter()
+                        .map(|v| v.as_ref().map(|b| b.as_slice())),
+                )),
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                        fixed_binary_values
+                            .iter()
+                            .map(|v| v.as_ref().map(|b| b.as_slice())),
+                        4,
+                    )
+                    .unwrap(),
+                ),
+                // Date types
+                Arc::new(Date32Array::from(date32_values)),
+                Arc::new(Date64Array::from(date64_values)),
+                // Timestamp types
+                Arc::new(TimestampSecondArray::from(ts_sec_values)),
+                Arc::new(TimestampMillisecondArray::from(ts_milli_values)),
+                Arc::new(TimestampMicrosecondArray::from(ts_micro_values)),
+                Arc::new(TimestampNanosecondArray::from(ts_nano_values)),
+                // Time types
+                Arc::new(Time32SecondArray::from(time32_sec_values)),
+                Arc::new(Time32MillisecondArray::from(time32_milli_values)),
+                Arc::new(Time64MicrosecondArray::from(time64_micro_values)),
+                Arc::new(Time64NanosecondArray::from(time64_nano_values)),
+                // Duration types
+                Arc::new(DurationSecondArray::from(dur_sec_values)),
+                Arc::new(DurationMillisecondArray::from(dur_milli_values)),
+                Arc::new(DurationMicrosecondArray::from(dur_micro_values)),
+                Arc::new(DurationNanosecondArray::from(dur_nano_values)),
+            ],
+        )
+        .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+            .await
+            .expect("insertion should be successful");
+
+        collect(insertion, ctx.task_ctx())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "insert successful for {} rows - all Arrow types should be converted to SQLite",
+                    num_rows
+                )
+            });
     }
 
     #[tokio::test]
@@ -426,6 +838,7 @@ mod tests {
             .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
             .await
             .expect("insertion should be successful");
+
         collect(insertion, ctx.task_ctx())
             .await
             .expect("insert successful");
