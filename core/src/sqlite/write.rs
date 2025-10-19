@@ -164,10 +164,13 @@ impl DataSink for SqliteDataSink {
                     DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
                 })?;
 
-                constraints::validate_batch_with_constraints(&[data_batch.clone()], &constraints)
-                    .await
-                    .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?;
+                constraints::validate_batch_with_constraints(
+                    std::slice::from_ref(&data_batch),
+                    &constraints,
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
 
                 batch_tx.send(data_batch).await.map_err(|err| {
                     DataFusionError::Execution(format!("Error sending data batch: {err}"))

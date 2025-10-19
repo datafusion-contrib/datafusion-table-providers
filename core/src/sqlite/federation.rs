@@ -56,7 +56,7 @@ fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusion
             // iterate over the query and find any INTERVAL statements
             // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
             let mut interval_visitor = SQLiteIntervalVisitor::default();
-            new_query.visit(&mut interval_visitor);
+            let _ = new_query.visit(&mut interval_visitor);
 
             Ok(ast::Statement::Query(new_query))
         }
