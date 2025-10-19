@@ -50,7 +50,8 @@ async fn main() {
     let methods_to_test = match test_mode.as_str() {
         "inline" => vec![InsertMethod::Inline],
         "prepared" => vec![InsertMethod::Prepared],
-        "both" | _ => vec![InsertMethod::Inline, InsertMethod::Prepared],
+        "both" => vec![InsertMethod::Inline, InsertMethod::Prepared],
+        _ => vec![InsertMethod::Inline, InsertMethod::Prepared],
     };
 
     // Test configurations: (num_batches, rows_per_batch)
@@ -68,7 +69,8 @@ async fn main() {
     ];
 
     // Store results for comparison
-    let mut results: Vec<(InsertMethod, Vec<(usize, f64, f64)>)> = Vec::new();
+    type BenchmarkResults = Vec<(InsertMethod, Vec<(usize, f64, f64)>)>;
+    let mut results: BenchmarkResults = Vec::new();
 
     for method in &methods_to_test {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
