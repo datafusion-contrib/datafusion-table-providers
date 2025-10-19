@@ -204,7 +204,7 @@ impl DataSink for PostgresDataSink {
             num_rows += batch_num_rows as u64;
 
             constraints::validate_batch_with_constraints(
-                &[batch.clone()],
+                std::slice::from_ref(&batch),
                 self.postgres.constraints(),
             )
             .await
