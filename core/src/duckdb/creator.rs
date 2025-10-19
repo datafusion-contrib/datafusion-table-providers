@@ -68,29 +68,37 @@ impl TableDefinition {
     }
 
     #[must_use]
-    pub(crate) fn with_constraints(mut self, constraints: Constraints) -> Self {
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
         self
     }
 
     #[must_use]
-    pub(crate) fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
         self.indexes = indexes;
         self
     }
 
     #[must_use]
+    pub fn with_name(self, name: RelationName) -> Self {
+        Self {
+            name,
+            schema: self.schema,
+            constraints: self.constraints,
+            indexes: self.indexes,
+        }
+    }
+
     pub fn name(&self) -> &RelationName {
         &self.name
     }
 
-    #[cfg(test)]
-    pub(crate) fn schema(&self) -> SchemaRef {
+    pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
-    pub(crate) fn generate_internal_name(&self) -> super::Result<RelationName> {
+    pub fn generate_internal_name(&self) -> super::Result<RelationName> {
         let unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .context(super::UnableToGetSystemTimeSnafu)?
@@ -101,8 +109,12 @@ impl TableDefinition {
         )))
     }
 
-    pub(crate) fn constraints(&self) -> Option<&Constraints> {
+    pub fn constraints(&self) -> Option<&Constraints> {
         self.constraints.as_ref()
+    }
+
+    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
+        &self.indexes
     }
 
     /// Returns true if this table definition has a base table matching the exact `RelationName` of the definition
