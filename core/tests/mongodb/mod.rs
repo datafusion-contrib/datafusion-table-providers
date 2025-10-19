@@ -99,6 +99,7 @@ async fn test_mongodb_datetime_types(port: usize) {
     .await;
 }
 
+#[allow(clippy::approx_constant)]
 async fn test_mongodb_numeric_types(port: usize) {
     let decimal = Decimal128::from_str("123.456").unwrap();
 
@@ -271,6 +272,7 @@ async fn test_mongodb_object_id_types(port: usize) {
     .await;
 }
 
+#[allow(clippy::approx_constant)]
 async fn test_mongodb_array_types(port: usize) {
     let test_docs = vec![
         doc! {

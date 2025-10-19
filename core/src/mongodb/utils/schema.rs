@@ -329,6 +329,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_type_unification_to_float() {
         let docs = vec![
             doc! { "value": 10_i32 },   // Int32
@@ -424,12 +425,12 @@ mod tests {
         // Generate 100 documents with varying schemas
         for i in 0..100 {
             let mut doc = Document::new();
-            doc.insert("id", i as i32);
+            doc.insert("id", i);
             doc.insert("name", format!("user_{}", i));
 
             // Add optional fields for some documents
             if i % 2 == 0 {
-                doc.insert("age", (20 + i % 50) as i32);
+                doc.insert("age", ((20 + i % 50)));
             }
             if i % 3 == 0 {
                 doc.insert("city", "NYC");

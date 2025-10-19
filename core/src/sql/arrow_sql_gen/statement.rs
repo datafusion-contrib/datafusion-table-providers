@@ -17,7 +17,9 @@ use sea_query::{
     QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef,
 };
 use snafu::Snafu;
-use std::{any::Any, str::FromStr, sync::Arc};
+#[cfg(feature = "sqlite")]
+use std::any::Any;
+use std::{str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Snafu)]
@@ -178,15 +180,15 @@ pub struct InsertBuilder {
 }
 
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
-    data_type: &DataType,
-    query_builder: &T,
+    _data_type: &DataType,
+    #[allow(unused_variables)] query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
     if (query_builder as &dyn Any)
         .downcast_ref::<SqliteQueryBuilder>()
         .is_some()
     {
-        return data_type.is_nested();
+        return _data_type.is_nested();
     }
     false
 }
