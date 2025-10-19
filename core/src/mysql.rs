@@ -355,11 +355,11 @@ impl MySQL {
 
     async fn table_exists(&self, mysql_connection: &MySQLConnection) -> bool {
         let sql = format!(
-            r#"SELECT EXISTS (
+            "SELECT EXISTS (
           SELECT 1
           FROM information_schema.tables
           WHERE table_name = '{name}'
-        )"#,
+        )",
             name = self.table_name
         );
         tracing::trace!("{sql}");

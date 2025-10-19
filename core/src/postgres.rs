@@ -394,12 +394,12 @@ impl Postgres {
     async fn table_exists(&self, postgres_conn: &PostgresConnection) -> bool {
         let sql = match self.table.schema() {
             Some(schema) => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')"#,
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')",
                 name = self.table.table(),
                 schema = schema
             ),
             None => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')"#,
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')",
                 name = self.table.table()
             ),
         };
@@ -439,7 +439,7 @@ impl Postgres {
     async fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> Result<()> {
         transaction
             .execute(
-                format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+                format!("DELETE FROM {}", self.table.to_quoted_string()).as_str(),
                 &[],
             )
             .await
