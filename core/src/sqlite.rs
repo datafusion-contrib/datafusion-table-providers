@@ -995,51 +995,11 @@ impl Sqlite {
                     DataType::Null => {
                         params.push(Box::new(rusqlite::types::Null));
                     }
-                    DataType::Decimal128(_, _) => {
-                        // Handle Decimal128 by converting to string
-                        use arrow::util::display::{ArrayFormatter, FormatOptions};
-                        let formatter =
-                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
-                                .map_err(|e| {
-                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-                                })?;
-                        let value_str = formatter.value(row_idx).to_string();
-                        params.push(Box::new(value_str));
-                    }
-                    DataType::Decimal256(_, _) => {
-                        // Handle Decimal256 by converting to string
-                        use arrow::util::display::{ArrayFormatter, FormatOptions};
-                        let formatter =
-                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
-                                .map_err(|e| {
-                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-                                })?;
-                        let value_str = formatter.value(row_idx).to_string();
-                        params.push(Box::new(value_str));
-                    }
-                    DataType::Decimal32(_, _) => {
-                        // Handle Decimal32 by converting to string
-                        use arrow::util::display::{ArrayFormatter, FormatOptions};
-                        let formatter =
-                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
-                                .map_err(|e| {
-                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-                                })?;
-                        let value_str = formatter.value(row_idx).to_string();
-                        params.push(Box::new(value_str));
-                    }
-                    DataType::Decimal64(_, _) => {
-                        // Handle Decimal64 by converting to string
-                        use arrow::util::display::{ArrayFormatter, FormatOptions};
-                        let formatter =
-                            ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
-                                .map_err(|e| {
-                                    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
-                                })?;
-                        let value_str = formatter.value(row_idx).to_string();
-                        params.push(Box::new(value_str));
-                    }
-                    DataType::List(_)
+                    DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
+                    | DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::List(_)
                     | DataType::LargeList(_)
                     | DataType::ListView(_)
                     | DataType::LargeListView(_)

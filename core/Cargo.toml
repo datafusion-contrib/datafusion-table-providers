@@ -182,3 +182,8 @@ required-features = ["sqlite"]
 name = "clickhouse"
 path = "examples/clickhouse.rs"
 required-features = ["clickhouse"]
+
+[[bin]]
+name = "sqlite_insert_benchmark"
+path = "../benches/sqlite_insert_benchmark.rs"
+required-features = ["sqlite"]

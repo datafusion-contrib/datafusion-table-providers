@@ -358,7 +358,7 @@ mod tests {
     async fn test_all_arrow_types_to_sqlite() {
         use arrow::{
             array::*,
-            datatypes::{i256, DataType, Field, TimeUnit},
+            datatypes::{DataType, Field, TimeUnit},
         };
 
         let num_rows = 10;
@@ -449,9 +449,6 @@ mod tests {
                 DataType::Duration(TimeUnit::Nanosecond),
                 true,
             ),
-            // Decimal types
-            Field::new("col_decimal128", DataType::Decimal128(38, 10), true),
-            Field::new("col_decimal256", DataType::Decimal256(76, 20), true),
         ]));
 
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
@@ -510,8 +507,6 @@ mod tests {
         let mut dur_milli_values = Vec::with_capacity(num_rows);
         let mut dur_micro_values = Vec::with_capacity(num_rows);
         let mut dur_nano_values = Vec::with_capacity(num_rows);
-        let mut decimal128_values = Vec::with_capacity(num_rows);
-        let mut decimal256_values = Vec::with_capacity(num_rows);
 
         for i in 0..num_rows {
             // Add some null values at regular intervals
@@ -665,16 +660,6 @@ mod tests {
             } else {
                 Some(86400000000000 + i as i64)
             });
-            decimal128_values.push(if is_null {
-                None
-            } else {
-                Some(123456789012345 + i as i128)
-            });
-            decimal256_values.push(if is_null {
-                None
-            } else {
-                Some(i256::from_i128(123456789012345 + i as i128))
-            });
         }
 
         let data = RecordBatch::try_new(
@@ -743,17 +728,6 @@ mod tests {
                 Arc::new(DurationMillisecondArray::from(dur_milli_values)),
                 Arc::new(DurationMicrosecondArray::from(dur_micro_values)),
                 Arc::new(DurationNanosecondArray::from(dur_nano_values)),
-                // Decimal types
-                Arc::new(
-                    Decimal128Array::from(decimal128_values)
-                        .with_precision_and_scale(38, 10)
-                        .unwrap(),
-                ),
-                Arc::new(
-                    Decimal256Array::from(decimal256_values)
-                        .with_precision_and_scale(76, 20)
-                        .unwrap(),
-                ),
             ],
         )
         .expect("data should be created");
