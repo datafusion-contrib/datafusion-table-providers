@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -25,36 +25,32 @@ jobs:
       - run: cargo clippy --all-features -- -D warnings
 
   build:
-    name: Build
+    name: Build (${{ matrix.features }})
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        features:
+          - 'no-default-features'
+          - 'clickhouse'
+          - 'duckdb'
+          - 'postgres'
+          - 'sqlite'
+          - 'mysql'
+          - 'flight'
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Putting this into a GitHub Actions matrix will run a separate job per matrix item, whereas in theory
-      # this can re-use the existing build cache to go faster.
-      - name: Build without default features
-        run: cargo check --no-default-features
-
-      - name: Build with only clickhouse
-        run: cargo check --no-default-features --features clickhouse
-
-      - name: Build with only duckdb
-        run: cargo check --no-default-features --features duckdb
-
-      - name: Build with only postgres
-        run: cargo check --no-default-features --features postgres
-
-      - name: Build with only sqlite
-        run: cargo check --no-default-features --features sqlite
-
-      - name: Build with only mysql
-        run: cargo check --no-default-features --features mysql
-
-      - name: Build with only flight
-        run: cargo check --no-default-features --features flight
+      - name: Build with ${{ matrix.features }}
+        run: |
+          if [ "${{ matrix.features }}" = "no-default-features" ]; then
+            cargo check --no-default-features
+          else
+            cargo check --no-default-features --features ${{ matrix.features }}
+          fi
 
   integration-test:
     name: Tests
@@ -65,7 +61,7 @@ jobs:
       MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -116,13 +112,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: astral-sh/setup-uv@v5
         with:
-            enable-cache: true
+          enable-cache: true
 
       - name: Install ODBC, Sqlite and Roapi
         run: |
@@ -136,7 +132,6 @@ jobs:
           uv sync --dev --no-install-package datafusion
           uv run --no-project maturin develop --uv
 
-  
       - name: Run Python tests
         run: |
           cd python/python/tests
