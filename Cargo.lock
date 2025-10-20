@@ -1981,9 +1981,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "50.0.0"
+version = "50.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521cd45740788e751bf59b25d2879d162b157a45fb9b5fa2ec03034923f3658a"
+checksum = "9ca714dff69fe3de2901ec64ec3dba8d0623ae583f6fae3c6fa57355d7882017"
 dependencies = [
  "arrow",
  "chrono",
@@ -5323,7 +5323,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -6386,7 +6386,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
