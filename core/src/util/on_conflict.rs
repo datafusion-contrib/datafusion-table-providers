@@ -1,10 +1,8 @@
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use itertools::Itertools;
 use sea_query::{self, Alias};
 use snafu::prelude::*;
 use std::fmt::Display;
-
-use crate::util::constraints::{self, UpsertOptions};
 
 use super::column_reference::{self, ColumnReference};
 
@@ -18,16 +16,13 @@ pub enum Error {
 
     #[snafu(display("Expected semicolon in: {token}"))]
     ExpectedSemicolon { token: String },
-
-    #[snafu(display("Invalid upsert options: {source}"))]
-    InvalidUpsertOptions { source: constraints::Error },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OnConflict {
     DoNothingAll,
     DoNothing(ColumnReference),
-    Upsert(ColumnReference, UpsertOptions),
+    Upsert(ColumnReference),
 }
 
 impl OnConflict {
@@ -41,7 +36,7 @@ impl OnConflict {
                     column.iter().join(r#"", ""#)
                 )
             }
-            OnConflict::Upsert(column, _) => {
+            OnConflict::Upsert(column) => {
                 let non_constraint_columns = schema
                     .fields()
                     .iter()
@@ -85,7 +80,7 @@ impl OnConflict {
                 on_conflict.do_nothing();
                 on_conflict
             }
-            OnConflict::Upsert(column, _) => {
+            OnConflict::Upsert(column) => {
                 let mut on_conflict = sea_query::OnConflict::columns::<Vec<Alias>, Alias>(
                     column.iter().map(Alias::new).collect(),
                 );
@@ -103,13 +98,6 @@ impl OnConflict {
             }
         }
     }
-
-    pub fn get_upsert_options(&self) -> UpsertOptions {
-        match self {
-            OnConflict::Upsert(_, options) => options.clone(),
-            _ => UpsertOptions::default(),
-        }
-    }
 }
 
 impl Display for OnConflict {
@@ -117,7 +105,7 @@ impl Display for OnConflict {
         match self {
             OnConflict::DoNothingAll => write!(f, "do_nothing_all"),
             OnConflict::DoNothing(column) => write!(f, "do_nothing:{column}"),
-            OnConflict::Upsert(column, options) => write!(f, "upsert:{column}#{options}"),
+            OnConflict::Upsert(column) => write!(f, "upsert:{column}"),
         }
     }
 }
@@ -138,25 +126,13 @@ impl TryFrom<&str> for OnConflict {
             .fail();
         }
 
-        let upsert_parts: Vec<&str> = parts[1].split('#').collect();
-
         let column_ref =
-            ColumnReference::try_from(upsert_parts[0]).context(InvalidColumnReferenceSnafu)?;
-
-        let upsert_options = if parts[0] == "upsert" {
-            if upsert_parts.len() == 2 {
-                UpsertOptions::try_from(upsert_parts[1]).context(InvalidUpsertOptionsSnafu)?
-            } else {
-                UpsertOptions::default()
-            }
-        } else {
-            UpsertOptions::default()
-        };
+            ColumnReference::try_from(parts[1]).context(InvalidColumnReferenceSnafu)?;
 
         let on_conflict_behavior = parts[0];
         match on_conflict_behavior {
             "do_nothing" => Ok(OnConflict::DoNothing(column_ref)),
-            "upsert" => Ok(OnConflict::Upsert(column_ref, upsert_options)),
+            "upsert" => Ok(OnConflict::Upsert(column_ref)),
             _ => UnexpectedTokenSnafu {
                 token: parts[0].to_string(),
             }
@@ -169,11 +145,9 @@ impl TryFrom<&str> for OnConflict {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
-    use crate::util::{
-        column_reference::ColumnReference, constraints::UpsertOptions, on_conflict::OnConflict,
-    };
+    use crate::util::{column_reference::ColumnReference, on_conflict::OnConflict};
 
     #[test]
     fn test_on_conflict_from_str() {
@@ -189,10 +163,7 @@ mod tests {
         let on_conflict = OnConflict::try_from("upsert:col2").expect("valid on conflict");
         assert_eq!(
             on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col2".to_string()]),
-                UpsertOptions::default()
-            )
+            OnConflict::Upsert(ColumnReference::new(vec!["col2".to_string()]))
         );
 
         let err = OnConflict::try_from("do_nothing").expect_err("invalid on conflict");
@@ -217,174 +188,12 @@ mod tests {
             OnConflict::DoNothing(ColumnReference::new(vec!["col1".to_string()]))
         );
 
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col2".to_string()]),
-            UpsertOptions::default(),
-        )
-        .to_string();
+        let on_conflict =
+            OnConflict::Upsert(ColumnReference::new(vec!["col2".to_string()])).to_string();
         assert_eq!(
             OnConflict::try_from(on_conflict.as_str()).expect("valid on conflict"),
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col2".to_string()]),
-                UpsertOptions::default()
-            )
+            OnConflict::Upsert(ColumnReference::new(vec!["col2".to_string()]))
         );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_default_options() {
-        let on_conflict = OnConflict::try_from("upsert:col1").expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::default()
-            )
-        );
-
-        // Test explicit empty options string
-        let on_conflict = OnConflict::try_from("upsert:col1#").expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::default()
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_remove_duplicates() {
-        let on_conflict =
-            OnConflict::try_from("upsert:col1#remove_duplicates").expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::new().with_remove_duplicates(true)
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_last_write_wins() {
-        let on_conflict =
-            OnConflict::try_from("upsert:col1#last_write_wins").expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::new().with_last_write_wins(true)
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_both_options() {
-        let on_conflict = OnConflict::try_from("upsert:col1#remove_duplicates,last_write_wins")
-            .expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::new()
-                    .with_remove_duplicates(true)
-                    .with_last_write_wins(true)
-            )
-        );
-
-        // Test reverse order
-        let on_conflict = OnConflict::try_from("upsert:col1#last_write_wins,remove_duplicates")
-            .expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::new()
-                    .with_remove_duplicates(true)
-                    .with_last_write_wins(true)
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_spaces_in_options() {
-        let on_conflict = OnConflict::try_from("upsert:col1# remove_duplicates , last_write_wins ")
-            .expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string()]),
-                UpsertOptions::new()
-                    .with_remove_duplicates(true)
-                    .with_last_write_wins(true)
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_invalid_options() {
-        let err =
-            OnConflict::try_from("upsert:col1#invalid_option").expect_err("invalid upsert option");
-        assert!(err.to_string().contains("Invalid upsert options"));
-
-        let err = OnConflict::try_from("upsert:col1#remove_duplicates,invalid_option")
-            .expect_err("invalid upsert option");
-        assert!(err.to_string().contains("Invalid upsert options"));
-    }
-
-    #[test]
-    fn test_upsert_parsing_with_composite_columns() {
-        let on_conflict = OnConflict::try_from("upsert:(col1,col2)#remove_duplicates")
-            .expect("valid on conflict");
-        assert_eq!(
-            on_conflict,
-            OnConflict::Upsert(
-                ColumnReference::new(vec!["col1".to_string(), "col2".to_string()]),
-                UpsertOptions::new().with_remove_duplicates(true)
-            )
-        );
-    }
-
-    #[test]
-    fn test_upsert_roundtrip_with_options() {
-        // Test default options
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col1".to_string()]),
-            UpsertOptions::default(),
-        );
-        let roundtrip =
-            OnConflict::try_from(on_conflict.to_string().as_str()).expect("valid roundtrip");
-        assert_eq!(roundtrip, on_conflict);
-
-        // Test with remove_duplicates
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col1".to_string()]),
-            UpsertOptions::new().with_remove_duplicates(true),
-        );
-        let roundtrip =
-            OnConflict::try_from(on_conflict.to_string().as_str()).expect("valid roundtrip");
-        assert_eq!(roundtrip, on_conflict);
-
-        // Test with last_write_wins
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col1".to_string()]),
-            UpsertOptions::new().with_last_write_wins(true),
-        );
-        let roundtrip =
-            OnConflict::try_from(on_conflict.to_string().as_str()).expect("valid roundtrip");
-        assert_eq!(roundtrip, on_conflict);
-
-        // Test with both options
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col1".to_string()]),
-            UpsertOptions::new()
-                .with_remove_duplicates(true)
-                .with_last_write_wins(true),
-        );
-        let roundtrip =
-            OnConflict::try_from(on_conflict.to_string().as_str()).expect("valid roundtrip");
-        assert_eq!(roundtrip, on_conflict);
     }
 
     #[test]
@@ -405,25 +214,9 @@ mod tests {
             r#"ON CONFLICT ("col1") DO NOTHING"#.to_string()
         );
 
-        let on_conflict = OnConflict::Upsert(
-            ColumnReference::new(vec!["col2".to_string()]),
-            UpsertOptions::default(),
-        );
+        let on_conflict = OnConflict::Upsert(ColumnReference::new(vec!["col2".to_string()]));
         assert_eq!(
             on_conflict.build_on_conflict_statement(&schema),
-            r#"ON CONFLICT ("col2") DO UPDATE SET "col1" = EXCLUDED."col1""#.to_string()
-        );
-
-        // Test that upsert options don't affect SQL statement generation
-        // (the options are used during batch validation, not SQL generation)
-        let on_conflict_with_options = OnConflict::Upsert(
-            ColumnReference::new(vec!["col2".to_string()]),
-            UpsertOptions::new()
-                .with_remove_duplicates(true)
-                .with_last_write_wins(true),
-        );
-        assert_eq!(
-            on_conflict_with_options.build_on_conflict_statement(&schema),
             r#"ON CONFLICT ("col2") DO UPDATE SET "col1" = EXCLUDED."col1""#.to_string()
         );
     }

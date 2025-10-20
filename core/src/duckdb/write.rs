@@ -3,7 +3,6 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
-use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
@@ -45,7 +44,7 @@ pub struct DuckDBTableWriterBuilder {
     read_provider: Option<Arc<dyn TableProvider>>,
     pool: Option<Arc<DuckDbConnectionPool>>,
     on_conflict: Option<OnConflict>,
-    table_definition: Option<Arc<TableDefinition>>,
+    table_definition: Option<TableDefinition>,
 }
 
 impl DuckDBTableWriterBuilder {
@@ -73,7 +72,7 @@ impl DuckDBTableWriterBuilder {
     }
 
     #[must_use]
-    pub fn with_table_definition(mut self, table_definition: Arc<TableDefinition>) -> Self {
+    pub fn with_table_definition(mut self, table_definition: TableDefinition) -> Self {
         self.table_definition = Some(table_definition);
         self
     }
@@ -102,18 +101,24 @@ impl DuckDBTableWriterBuilder {
         Ok(DuckDBTableWriter {
             read_provider,
             on_conflict: self.on_conflict,
-            table_definition,
+            table_definition: Arc::new(table_definition),
             pool,
         })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
     pool: Arc<DuckDbConnectionPool>,
     table_definition: Arc<TableDefinition>,
     on_conflict: Option<OnConflict>,
+}
+
+impl std::fmt::Debug for DuckDBTableWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DuckDBTableWriter")
+    }
 }
 
 impl DuckDBTableWriter {
@@ -162,14 +167,14 @@ impl TableProvider for DuckDBTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: InsertOp,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(DuckDBDataSink::new(
                 Arc::clone(&self.pool),
                 Arc::clone(&self.table_definition),
-                overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),
@@ -245,47 +250,35 @@ impl DataSink for DuckDBDataSink {
                 Ok(num_rows)
             });
 
-        let upsert_options = self
-            .on_conflict
-            .as_ref()
-            .map_or_else(UpsertOptions::default, |conflict| {
-                conflict.get_upsert_options()
-            });
-
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            let batches = if let Some(constraints) = self.table_definition.constraints() {
+            if let Some(constraints) = self.table_definition.constraints() {
                 constraints::validate_batch_with_constraints(
-                    vec![batch],
+                    std::slice::from_ref(&batch),
                     constraints,
-                    &upsert_options,
                 )
                 .await
                 .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?
-            } else {
-                vec![batch]
-            };
+                .map_err(to_datafusion_error)?;
+            }
 
-            for batch in batches {
-                if let Err(send_error) = batch_tx.send(batch).await {
-                    match duckdb_write_handle.await {
-                        Err(join_error) => {
-                            return Err(DataFusionError::Execution(format!(
-                                "Error writing to DuckDB: {join_error}"
-                            )));
-                        }
-                        Ok(Err(datafusion_error)) => {
-                            return Err(datafusion_error);
-                        }
-                        _ => {
-                            return Err(DataFusionError::Execution(format!(
-                                "Unable to send RecordBatch to DuckDB writer: {send_error}"
-                            )))
-                        }
-                    };
-                }
+            if let Err(send_error) = batch_tx.send(batch).await {
+                match duckdb_write_handle.await {
+                    Err(join_error) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Error writing to DuckDB: {join_error}"
+                        )));
+                    }
+                    Ok(Err(datafusion_error)) => {
+                        return Err(datafusion_error);
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to send RecordBatch to DuckDB writer: {send_error}"
+                        )))
+                    }
+                };
             }
         }
 
@@ -655,8 +648,7 @@ impl RecordBatchReader for RecordBatchReaderFromStream {
 #[cfg(test)]
 mod test {
     use arrow::array::{Int64Array, StringArray};
-    use datafusion::datasource::sink::DataSink;
-    use datafusion_physical_plan::memory::MemoryStream;
+    use datafusion::physical_plan::memory::MemoryStream;
 
     use super::*;
     use crate::{

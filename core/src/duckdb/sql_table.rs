@@ -1,8 +1,6 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -30,6 +28,9 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
 
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
+
+    /// Constraints on the table.
+    pub(crate) constraints: Option<datafusion::common::Constraints>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -47,21 +48,15 @@ impl<T, P> DuckDBTable<T, P> {
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
-        constraints: Option<Constraints>,
+        constraints: Option<datafusion::common::Constraints>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(
-            "duckdb",
-            pool,
-            schema,
-            table_reference,
-            Some(Engine::DuckDB),
-        )
-        .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())))
-        .with_constraints_opt(constraints);
+        let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
+            .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
 
         Self {
             base_table,
             table_functions,
+            constraints,
         }
     }
 
@@ -72,14 +67,12 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
         Ok(Arc::new(DuckSqlExec::new(
             projections,
             schema,
-            &self.base_table.table_reference,
             self.base_table.clone_pool(),
-            filters,
-            limit,
-            self.table_functions.clone(),
+            sql,
         )?))
     }
 }
@@ -94,10 +87,6 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         self.base_table.schema()
     }
 
-    fn constraints(&self) -> Option<&Constraints> {
-        self.base_table.constraints()
-    }
-
     fn table_type(&self) -> TableType {
         self.base_table.table_type()
     }
@@ -107,6 +96,10 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
         self.base_table.supports_filters_pushdown(filters)
+    }
+
+    fn constraints(&self) -> Option<&datafusion::common::Constraints> {
+        self.constraints.as_ref()
     }
 
     async fn scan(
@@ -136,25 +129,14 @@ impl<T, P> DuckSqlExec<T, P> {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        filters: &[Expr],
-        limit: Option<usize>,
-        table_functions: Option<HashMap<String, String>>,
+        sql: String,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(
-            projections,
-            schema,
-            table_reference,
-            pool,
-            filters,
-            limit,
-            Some(Engine::DuckDB),
-        )?;
+        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
 
         Ok(Self {
             base_exec,
-            table_functions,
+            table_functions: None,
         })
     }
 
