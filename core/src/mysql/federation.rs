@@ -54,7 +54,7 @@ fn mysql_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionE
             let mut new_query = query.clone();
 
             let mut window_visitor = MySQLWindowVisitor::default();
-            new_query.visit(&mut window_visitor);
+            let _ = new_query.visit(&mut window_visitor);
 
             Ok(ast::Statement::Query(new_query))
         }
