@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
-    AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -77,7 +77,8 @@ impl SQLExecutor for MySQLTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(Box::new(mysql_ast_analyzer))
+        let rule = Box::new(mysql_ast_analyzer);
+        Some(AstAnalyzer::new(vec![rule]))
     }
 
     fn execute(

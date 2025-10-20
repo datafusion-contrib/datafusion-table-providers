@@ -24,6 +24,10 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use arrow_odbc::arrow_schema_from;
+use arrow_odbc::odbc_api::{
+    self, handles::SqlResult, handles::Statement, handles::StatementImpl,
+    parameter::InputParameter, Connection, Cursor, CursorImpl,
+};
 use arrow_odbc::OdbcReader;
 use arrow_odbc::OdbcReaderBuilder;
 use async_stream::stream;
@@ -37,18 +41,11 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::TableReference;
 use dyn_clone::DynClone;
 use futures::lock::Mutex;
-use odbc_api::handles::SqlResult;
-use odbc_api::handles::Statement;
-use odbc_api::handles::StatementImpl;
-use odbc_api::parameter::InputParameter;
-use odbc_api::Cursor;
-use odbc_api::CursorImpl;
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::prelude::*;
 use snafu::Snafu;
 use tokio::runtime::Handle;
 
-use odbc_api::Connection;
 use tokio::sync::mpsc::Sender;
 
 type Result<T, E = GenericError> = std::result::Result<T, E>;

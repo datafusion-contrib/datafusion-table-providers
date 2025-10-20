@@ -548,7 +548,10 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
                     match v {
                         Some(v) => {
-                            builder.append_value(v.and_utc().timestamp_micros());
+                            let micros: i64 = (v.assume_utc().unix_timestamp_nanos() / 1000)
+                                .try_into()
+                                .unwrap();
+                            builder.append_value(micros);
                         }
                         None => builder.append_null(),
                     }

@@ -995,11 +995,31 @@ impl Sqlite {
                     DataType::Null => {
                         params.push(Box::new(rusqlite::types::Null));
                     }
-                    DataType::Decimal128(_, _)
-                    | DataType::Decimal256(_, _)
-                    | DataType::Decimal32(_, _)
-                    | DataType::Decimal64(_, _)
-                    | DataType::List(_)
+                    DataType::Decimal128(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::BigDecimal;
+                            let value =
+                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
+                            params.push(Box::new(value.to_string()));
+                        }
+                    }
+                    DataType::Decimal256(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal256Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::{num_bigint::BigInt, BigDecimal};
+                            let value = array.value(row_idx);
+                            let bytes = value.to_be_bytes();
+                            let big_int = BigInt::from_signed_bytes_be(&bytes);
+                            let decimal = BigDecimal::new(big_int, i64::from(*scale));
+                            params.push(Box::new(decimal.to_string()));
+                        }
+                    }
+                    DataType::List(_)
                     | DataType::LargeList(_)
                     | DataType::ListView(_)
                     | DataType::LargeListView(_)

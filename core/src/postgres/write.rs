@@ -18,7 +18,7 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use crate::util::{
-    constraints::{self, UpsertOptions},
+    constraints::{self},
     on_conflict::OnConflict,
     retriable_error::check_and_mark_retriable_error,
 };
@@ -167,13 +167,6 @@ impl DataSink for PostgresDataSink {
 
         let postgres_schema = Arc::new(Schema::new(postgres_fields));
 
-        let upsert_options = self
-            .on_conflict
-            .as_ref()
-            .map_or_else(UpsertOptions::default, |conflict| {
-                conflict.get_upsert_options()
-            });
-
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
@@ -212,21 +205,18 @@ impl DataSink for PostgresDataSink {
 
             num_rows += batch_num_rows as u64;
 
-            let batches = constraints::validate_batch_with_constraints(
-                vec![batch],
+            constraints::validate_batch_with_constraints(
+                &[batch.clone()],
                 self.postgres.constraints(),
-                &upsert_options,
             )
             .await
             .context(super::ConstraintViolationSnafu)
             .map_err(to_datafusion_error)?;
 
-            for batch in batches {
-                self.postgres
-                    .insert_batch(&tx, batch, self.on_conflict.clone())
-                    .await
-                    .map_err(to_datafusion_error)?;
-            }
+            self.postgres
+                .insert_batch(&tx, batch, self.on_conflict.clone())
+                .await
+                .map_err(to_datafusion_error)?;
         }
 
         tx.commit()

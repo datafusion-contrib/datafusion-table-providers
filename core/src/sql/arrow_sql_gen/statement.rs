@@ -995,8 +995,6 @@ impl InsertBuilder {
                                     | DataType::Dictionary(_, _)
                                     | DataType::Map(_, _)
                                     | DataType::RunEndEncoded(_, _)
-                                    | DataType::Decimal32(_, _)
-                                    | DataType::Decimal64(_, _)
                                     | DataType::Decimal128(_, _)
                                     | DataType::Decimal256(_, _) => {
                                         unimplemented!(
