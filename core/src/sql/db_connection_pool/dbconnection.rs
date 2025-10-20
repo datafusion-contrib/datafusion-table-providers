@@ -237,6 +237,6 @@ pub async fn query_arrow<T, P>(
             .await
             .context(UnableToQueryArrowSnafu {})
     } else {
-        return Err(Error::UnableToDowncastConnection {});
+        Err(Error::UnableToDowncastConnection {})
     }
 }

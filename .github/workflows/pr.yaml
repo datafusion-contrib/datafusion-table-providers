@@ -13,9 +13,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -25,36 +28,35 @@ jobs:
       - run: cargo clippy --all-features -- -D warnings
 
   build:
-    name: Build
+    name: Build (${{ matrix.features }})
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        features:
+          - 'no-default-features'
+          - 'clickhouse'
+          - 'duckdb'
+          - 'postgres'
+          - 'sqlite'
+          - 'mysql'
+          - 'flight'
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Putting this into a GitHub Actions matrix will run a separate job per matrix item, whereas in theory
-      # this can re-use the existing build cache to go faster.
-      - name: Build without default features
-        run: cargo check --no-default-features
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
-      - name: Build with only clickhouse
-        run: cargo check --no-default-features --features clickhouse
-
-      - name: Build with only duckdb
-        run: cargo check --no-default-features --features duckdb
-
-      - name: Build with only postgres
-        run: cargo check --no-default-features --features postgres
-
-      - name: Build with only sqlite
-        run: cargo check --no-default-features --features sqlite
-
-      - name: Build with only mysql
-        run: cargo check --no-default-features --features mysql
-
-      - name: Build with only flight
-        run: cargo check --no-default-features --features flight
+      - name: Build with ${{ matrix.features }}
+        run: |
+          if [ "${{ matrix.features }}" = "no-default-features" ]; then
+            cargo check --no-default-features
+          else
+            cargo check --no-default-features --features ${{ matrix.features }}
+          fi
 
   integration-test:
     name: Tests
@@ -65,9 +67,12 @@ jobs:
       MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Pull the Postgres/MySQL images
         run: |
@@ -116,13 +121,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            python
+
       - uses: astral-sh/setup-uv@v5
         with:
-            enable-cache: true
+          enable-cache: true
+          cache-dependency-glob: 'python/pyproject.toml'
 
       - name: Install ODBC, Sqlite and Roapi
         run: |
@@ -130,14 +143,10 @@ jobs:
           sudo apt-get install -y libsqlite3-dev
           cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
 
-      - name: Build Python package
+      - name: Build Python package and run tests
         run: |
           cd python
           uv sync --dev --no-install-package datafusion
-          uv run --no-project maturin develop --uv
-
-  
-      - name: Run Python tests
-        run: |
-          cd python/python/tests
+          uv run --no-project maturin develop --uv --release
+          cd python/tests
           uv run --no-project pytest -v .

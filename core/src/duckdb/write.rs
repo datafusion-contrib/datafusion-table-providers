@@ -254,10 +254,13 @@ impl DataSink for DuckDBDataSink {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
             if let Some(constraints) = self.table_definition.constraints() {
-                constraints::validate_batch_with_constraints(&[batch.clone()], constraints)
-                    .await
-                    .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?;
+                constraints::validate_batch_with_constraints(
+                    std::slice::from_ref(&batch),
+                    constraints,
+                )
+                .await
+                .context(super::ConstraintViolationSnafu)
+                .map_err(to_datafusion_error)?;
             }
 
             if let Err(send_error) = batch_tx.send(batch).await {
