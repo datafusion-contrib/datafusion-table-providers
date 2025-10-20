@@ -165,6 +165,11 @@ impl DuckDBTableWriter {
     pub fn table_definition(&self) -> Arc<TableDefinition> {
         Arc::clone(&self.table_definition)
     }
+
+    #[must_use]
+    pub fn on_conflict(&self) -> Option<&OnConflict> {
+        self.on_conflict.as_ref()
+    }
 }
 
 #[async_trait]
