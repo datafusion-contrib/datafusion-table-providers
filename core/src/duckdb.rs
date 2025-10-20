@@ -453,6 +453,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             TableReference::bare(name.clone()),
             None,
             Some(self.dialect.clone()),
+            Some(cmd.constraints.clone()),
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -591,6 +592,7 @@ impl DuckDBTableFactory {
             tbl_ref,
             cte,
             Some(self.dialect.clone()),
+            None,
         ));
 
         #[cfg(feature = "duckdb-federation")]

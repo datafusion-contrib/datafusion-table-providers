@@ -747,8 +747,8 @@ pub(crate) mod tests {
             dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
         },
     };
-    use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
+        arrow::array::RecordBatch,
         common::SchemaExt,
         datasource::sink::DataSink,
         execution::{SendableRecordBatchStream, TaskContext},

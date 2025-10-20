@@ -28,6 +28,9 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
 
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
+
+    /// Constraints on the table.
+    pub(crate) constraints: Option<datafusion::common::Constraints>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -45,6 +48,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+        constraints: Option<datafusion::common::Constraints>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
             .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
@@ -52,21 +56,23 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
+            constraints,
         }
     }
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
         Ok(Arc::new(DuckSqlExec::new(
-            projection,
+            projections,
             schema,
             self.base_table.clone_pool(),
             sql,
-            self.table_functions.clone(),
         )?))
     }
 }
@@ -92,6 +98,10 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         self.base_table.supports_filters_pushdown(filters)
     }
 
+    fn constraints(&self) -> Option<&datafusion::common::Constraints> {
+        self.constraints.as_ref()
+    }
+
     async fn scan(
         &self,
         _state: &dyn Session,
@@ -99,8 +109,7 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
-        return self.create_physical_plan(projection, &self.schema(), sql);
+        return self.create_physical_plan(projection, &self.schema(), filters, limit);
     }
 }
 
@@ -118,17 +127,16 @@ struct DuckSqlExec<T, P> {
 
 impl<T, P> DuckSqlExec<T, P> {
     fn new(
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
-        table_functions: Option<HashMap<String, String>>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
+        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
 
         Ok(Self {
             base_exec,
-            table_functions,
+            table_functions: None,
         })
     }
 
