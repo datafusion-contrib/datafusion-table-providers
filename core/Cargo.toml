@@ -91,7 +91,7 @@ tokio-postgres = { version = "0.7", features = [
   "with-geo-types-0_7",
 ], optional = true }
 tokio-rusqlite = { version = "0.6.0", optional = true }
-tonic = { version = "0.13", optional = true, features = [
+tonic = { version = "0.14", optional = true, features = [
   "tls-native-roots",
   "tls-webpki-roots",
 ] }
