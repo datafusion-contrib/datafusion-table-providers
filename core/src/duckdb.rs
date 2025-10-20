@@ -22,7 +22,6 @@ use crate::{
 };
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use creator::TableManager;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
@@ -52,7 +51,7 @@ mod creator;
 mod settings;
 mod sql_table;
 pub mod write;
-pub use creator::{RelationName, TableDefinition};
+pub use creator::{RelationName, TableDefinition, TableManager, ViewCreator};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -548,6 +547,7 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
+    schema: Option<SchemaRef>,
 }
 
 impl DuckDBTableFactory {
@@ -556,12 +556,19 @@ impl DuckDBTableFactory {
         Self {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
+            schema: None,
         }
     }
 
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
         self
     }
 
@@ -573,7 +580,10 @@ impl DuckDBTableFactory {
         let conn = Arc::clone(&pool).connect().await?;
         let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
 
-        let schema = get_schema(conn, &table_reference).await?;
+        let schema = match self.schema.as_ref() {
+            Some(schema) => Arc::clone(schema),
+            None => get_schema(conn, &table_reference).await?,
+        };
         let (tbl_ref, cte) = if is_table_function(&table_reference) {
             let tbl_ref_view = create_table_function_view_name(&table_reference);
             (
