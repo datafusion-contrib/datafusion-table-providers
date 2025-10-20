@@ -309,7 +309,7 @@ VALUES
         Arc::clone(&schema),
         vec![
             Arc::new(Time64NanosecondArray::from(vec![
-                (12 * 3600 + 30 * 60 + 0) * 1_000_000_000,
+                (12 * 3600 + 30 * 60) * 1_000_000_000,
             ])),
             Arc::new(Time64NanosecondArray::from(vec![
                 (12 * 3600 + 30 * 60) * 1_000_000_000 + 100_000_000,

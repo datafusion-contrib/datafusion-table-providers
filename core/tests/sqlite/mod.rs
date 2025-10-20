@@ -209,7 +209,9 @@ fn create_comprehensive_test_data() -> (RecordBatch, SchemaRef) {
         None,
         Some(500000u64),
     ]);
+    #[allow(clippy::approx_constant)]
     let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.14), Some(2.71)]);
+    #[allow(clippy::approx_constant)]
     let col_float64 =
         Float64Array::from(vec![None, Some(2.718281828), Some(-1.414), Some(3.14159)]);
     let col_utf8 = StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);
