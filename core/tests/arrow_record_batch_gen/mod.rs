@@ -557,10 +557,10 @@ pub(crate) fn get_arrow_list_of_lists_record_batch() -> (RecordBatch, Arc<Schema
     // Append first list of items
     {
         let list_item_builder = list_builder.values();
-        list_item_builder.append_value(vec![Some(1), Some(2)].into_iter());
+        list_item_builder.append_value(vec![Some(1), Some(2)]);
         // Append NULL list item
         list_item_builder.append_null();
-        list_item_builder.append_value(vec![Some(3), None, Some(5)].into_iter());
+        list_item_builder.append_value(vec![Some(3), None, Some(5)]);
         list_builder.append(true);
     }
     // Append NULL list

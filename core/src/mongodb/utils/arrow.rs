@@ -959,6 +959,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_type_mismatch_fallback() {
         let docs = vec![doc! {
             "wrong_type_string": 42_i32,  // Int32 in string field
@@ -1447,6 +1448,7 @@ mod decimal_tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_decimal_wrong_type_fallback() {
         let docs = vec![doc! {
             "not_decimal": "not a decimal",
