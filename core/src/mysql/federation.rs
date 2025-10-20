@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
-    ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -26,12 +26,12 @@ impl MySQLTable {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.clone();
+        let table_reference = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::from(table_name),
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
@@ -54,7 +54,7 @@ fn mysql_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionE
             let mut new_query = query.clone();
 
             let mut window_visitor = MySQLWindowVisitor::default();
-            new_query.visit(&mut window_visitor);
+            let _ = new_query.visit(&mut window_visitor);
 
             Ok(ast::Statement::Query(new_query))
         }
@@ -77,7 +77,7 @@ impl SQLExecutor for MySQLTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![Box::new(mysql_ast_analyzer)]))
+        Some(Box::new(mysql_ast_analyzer))
     }
 
     fn execute(

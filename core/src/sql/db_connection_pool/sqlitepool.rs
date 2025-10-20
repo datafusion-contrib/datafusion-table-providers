@@ -269,11 +269,11 @@ mod tests {
     use std::time::Duration;
 
     fn random_db_name() -> String {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut name = String::new();
 
         for _ in 0..10 {
-            name.push(rng.gen_range(b'a'..=b'z') as char);
+            name.push(rng.random_range(b'a'..=b'z') as char);
         }
 
         format!("./{name}.sqlite")
@@ -291,7 +291,7 @@ mod tests {
         assert!(pool.mode == Mode::File);
         assert_eq!(pool.path, db_name.clone().into());
 
-        drop(pool);
+        pool.conn.close().await.unwrap();
 
         // cleanup
         std::fs::remove_file(&db_name).unwrap();
@@ -324,7 +324,7 @@ mod tests {
         assert!(pool.mode == Mode::File);
         assert_eq!(pool.path, db_names[0].clone().into());
 
-        drop(pool);
+        pool.conn.close().await.unwrap();
 
         // cleanup
         for db in &db_names {
@@ -345,7 +345,7 @@ mod tests {
         assert!(pool.mode == Mode::File);
         assert_eq!(pool.path, db_name.clone().into());
 
-        drop(pool);
+        pool.conn.close().await.unwrap();
 
         // cleanup
         std::fs::remove_file(&db_name).unwrap();
@@ -365,7 +365,7 @@ mod tests {
         assert!(pool.mode == Mode::Memory);
         assert_eq!(pool.path, "./test.sqlite".into());
 
-        drop(pool);
+        pool.conn.close().await.unwrap();
 
         // in memory mode, attachments are not created and nothing happens
         assert!(std::fs::metadata("./test.sqlite").is_err());

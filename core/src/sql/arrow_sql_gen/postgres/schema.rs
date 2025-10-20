@@ -50,15 +50,16 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "smallint" => Ok(DataType::Int16),
         "integer" | "int" | "int4" => Ok(DataType::Int32),
         "bigint" | "int8" | "money" => Ok(DataType::Int64),
+        "oid" | "xid" | "regproc" => Ok(DataType::UInt32),
         "numeric" | "decimal" => {
             let (precision, scale) = parse_numeric_type(pg_type)?;
             Ok(DataType::Decimal128(precision, scale))
         }
         "real" | "float4" => Ok(DataType::Float32),
         "double precision" | "float8" => Ok(DataType::Float64),
-        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid" => {
-            Ok(DataType::Utf8)
-        }
+        "\"char\"" => Ok(DataType::Int8),
+        "character" | "char" | "character varying" | "varchar" | "text" | "bpchar" | "uuid"
+        | "name" => Ok(DataType::Utf8),
         "bytea" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
         "time" | "time without time zone" => Ok(DataType::Time64(TimeUnit::Nanosecond)),
@@ -79,10 +80,24 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
         )),
+        "line" | "lseg" | "box" | "path" | "polygon" | "circle" => Ok(DataType::Binary),
+        "inet" | "cidr" | "macaddr" => Ok(DataType::Utf8),
+        "bit" | "bit varying" => Ok(DataType::Binary),
+        "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
         "xml" | "json" => Ok(DataType::Utf8),
         // `Name` is a 64 bytes (varchar) / internal type for object names
        "\"Name\"" => Ok(DataType::Utf8),
+        "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
         "array" => parse_array_type(context),
+        "anyarray" => Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Binary,
+            true,
+        )))),
+        "int4range" => Ok(DataType::Struct(Fields::from(vec![
+            Field::new("lower", DataType::Int32, true),
+            Field::new("upper", DataType::Int32, true),
+        ]))),
         "composite" => parse_composite_type(context),
         "geometry" | "geography" => Ok(DataType::Binary),
 
@@ -250,6 +265,11 @@ mod tests {
             pg_data_type_to_arrow_type("boolean", &context).expect("Failed to convert boolean"),
             DataType::Boolean
         );
+        assert_eq!(
+            pg_data_type_to_arrow_type("\"char\"", &context)
+                .expect("Failed to convert single character"),
+            DataType::Int8
+        );
 
         // Test string types
         assert_eq!(
@@ -259,6 +279,10 @@ mod tests {
         assert_eq!(
             pg_data_type_to_arrow_type("character varying", &context)
                 .expect("Failed to convert character varying"),
+            DataType::Utf8
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("name", &context).expect("Failed to convert name"),
             DataType::Utf8
         );
         assert_eq!(
@@ -393,6 +417,15 @@ mod tests {
             DataType::Utf8
         );
         assert_eq!(
+            pg_data_type_to_arrow_type("bit(8)", &context).expect("Failed to convert bit(8)"),
+            DataType::Binary
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("bit varying(64)", &context)
+                .expect("Failed to convert bit varying(64)"),
+            DataType::Binary
+        );
+        assert_eq!(
             pg_data_type_to_arrow_type("numeric(10,2)", &context)
                 .expect("Failed to convert numeric(10,2)"),
             DataType::Decimal128(10, 2)
@@ -446,9 +479,46 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8))
         );
 
+        // Test geometric types
+        assert_eq!(
+            pg_data_type_to_arrow_type("point", &context).expect("Failed to convert point"),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 2)
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("line", &context).expect("Failed to convert line"),
+            DataType::Binary
+        );
+
+        // Test network address types
+        assert_eq!(
+            pg_data_type_to_arrow_type("inet", &context).expect("Failed to convert inet"),
+            DataType::Utf8
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("cidr", &context).expect("Failed to convert cidr"),
+            DataType::Utf8
+        );
+
+        // Test range types
+        assert_eq!(
+            pg_data_type_to_arrow_type("int4range", &context).expect("Failed to convert int4range"),
+            DataType::Struct(Fields::from(vec![
+                Field::new("lower", DataType::Int32, true),
+                Field::new("upper", DataType::Int32, true),
+            ]))
+        );
+
         // Test JSON types
         assert_eq!(
             pg_data_type_to_arrow_type("json", &context).expect("Failed to convert json"),
+            DataType::Utf8
+        );
+
+        let jsonb_context = context
+            .clone()
+            .with_unsupported_type_action(UnsupportedTypeAction::String);
+        assert_eq!(
+            pg_data_type_to_arrow_type("jsonb", &jsonb_context).expect("Failed to convert jsonb"),
             DataType::Utf8
         );
 
@@ -456,6 +526,16 @@ mod tests {
         assert_eq!(
             pg_data_type_to_arrow_type("uuid", &context).expect("Failed to convert uuid"),
             DataType::Utf8
+        );
+
+        // Test text search types
+        assert_eq!(
+            pg_data_type_to_arrow_type("tsvector", &context).expect("Failed to convert tsvector"),
+            DataType::LargeUtf8
+        );
+        assert_eq!(
+            pg_data_type_to_arrow_type("tsquery", &context).expect("Failed to convert tsquery"),
+            DataType::LargeUtf8
         );
 
         // Test bpchar type

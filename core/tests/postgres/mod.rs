@@ -1,31 +1,32 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
-    array::{Array, Decimal128Array, RecordBatch, StringArray},
+    array::{Decimal128Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
+use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 use datafusion::{
     common::{Constraints, ToDFSchema},
-    datasource::source::DataSourceExec,
+    datasource::memory::MemorySourceConfig,
 };
-use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
+#[cfg(feature = "postgres-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
+
 use datafusion_table_providers::{
     postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
     sql::sql_provider_datafusion::SqlTable,
     UnsupportedTypeAction,
 };
 use rstest::{fixture, rstest};
-use serde_json::{from_str, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 mod common;
 mod schema;
-mod schema_redshift;
 
 async fn arrow_postgres_round_trip(
     port: usize,
@@ -46,7 +47,7 @@ async fn arrow_postgres_round_trip(
         order_exprs: vec![],
         unbounded: false,
         options: common::get_pg_params(port),
-        constraints: Constraints::new_unverified(vec![]),
+        constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -56,12 +57,14 @@ async fn arrow_postgres_round_trip(
         .expect("table provider created");
 
     let ctx = SessionContext::new();
-    let mem_exec = DataSourceExec::new(Arc::new(
-        MemorySourceConfig::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-            .expect("memory source config created"),
-    ));
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
         .await
         .expect("insert plan created");
 
@@ -84,6 +87,7 @@ async fn arrow_postgres_round_trip(
         record_batch[0].columns()
     );
 
+    #[cfg(feature = "postgres-federation")]
     let casted_result =
         try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
@@ -91,6 +95,7 @@ async fn arrow_postgres_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+    #[cfg(feature = "postgres-federation")]
     assert_eq!(arrow_record, casted_result);
 }
 
@@ -128,10 +133,9 @@ fn container_manager() -> Mutex<ContainerManager> {
 }
 
 async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
-    let running_container =
-        common::start_postgres_docker_container("postgres:latest", manager.port, None)
-            .await
-            .expect("Postgres container to start");
+    let running_container = common::start_postgres_docker_container(manager.port)
+        .await
+        .expect("Postgres container to start");
 
     manager.running_container = Some(running_container);
 
@@ -209,7 +213,6 @@ async fn test_postgres_enum_type(port: usize) {
         extra_stmt,
         expected_record,
         UnsupportedTypeAction::default(),
-        true,
     )
     .await;
 }
@@ -267,7 +270,6 @@ async fn test_postgres_numeric_type(port: usize) {
         extra_stmt,
         expected_record,
         UnsupportedTypeAction::default(),
-        true,
     )
     .await;
 }
@@ -279,7 +281,7 @@ async fn test_postgres_jsonb_type(port: usize) {
     );";
 
     let insert_table_stmt = r#"
-    INSERT INTO jsonb_values (data) VALUES
+    INSERT INTO jsonb_values (data) VALUES 
     ('{"name": "John", "age": 30}'),
     ('{"name": "Jane", "age": 25}'),
     ('[1, 2, 3]'),
@@ -289,18 +291,22 @@ async fn test_postgres_jsonb_type(port: usize) {
 
     let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
 
+    // Parse and re-serialize the JSON to ensure consistent ordering
     let expected_values = vec![
-        r#"{"name": "John", "age": 30}"#,
-        r#"{"name": "Jane", "age": 25}"#,
-        "[1, 2, 3]",
-        "null",
-        r#"{"nested": {"key": "value"}}"#,
+        serde_json::from_str::<Value>(r#"{"name":"John","age":30}"#)
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>(r#"{"name":"Jane","age":25}"#)
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>("[1,2,3]")
+            .unwrap()
+            .to_string(),
+        serde_json::from_str::<Value>("null").unwrap().to_string(),
+        serde_json::from_str::<Value>(r#"{"nested":{"key":"value"}}"#)
+            .unwrap()
+            .to_string(),
     ];
-
-    let expected_json: Vec<Value> = expected_values
-        .iter()
-        .map(|s| from_str(s).unwrap())
-        .collect();
 
     let expected_record = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -308,30 +314,16 @@ async fn test_postgres_jsonb_type(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    let actual_record_batch = arrow_postgres_one_way(
+    arrow_postgres_one_way(
         port,
         "jsonb_values",
         create_table_stmt,
         insert_table_stmt,
         None,
-        expected_record.clone(),
+        expected_record,
         UnsupportedTypeAction::String,
-        false,
     )
     .await;
-
-    let actual_data_column = actual_record_batch[0]
-        .column_by_name("data")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-
-    let actual_json: Vec<Value> = (0..actual_data_column.len())
-        .map(|i| from_str(actual_data_column.value(i)).unwrap())
-        .collect();
-
-    assert_eq!(actual_json, expected_json);
 }
 
 async fn arrow_postgres_one_way(
@@ -342,8 +334,7 @@ async fn arrow_postgres_one_way(
     extra_stmt: Option<&str>,
     expected_record: RecordBatch,
     unsupported_type_action: UnsupportedTypeAction,
-    perform_check: bool,
-) -> Vec<RecordBatch> {
+) {
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
@@ -379,7 +370,7 @@ async fn arrow_postgres_one_way(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))
@@ -392,9 +383,5 @@ async fn arrow_postgres_one_way(
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    if perform_check {
-        assert_eq!(record_batch[0], expected_record);
-    }
-
-    record_batch
+    assert_eq!(record_batch[0], expected_record);
 }

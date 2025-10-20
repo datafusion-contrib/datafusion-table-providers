@@ -1,12 +1,10 @@
-use datafusion::error::Result as DataFusionResult;
-use datafusion::logical_expr::Expr;
-use datafusion::sql::unparser::dialect::DefaultDialect;
-use datafusion::sql::unparser::Unparser;
 use snafu::prelude::*;
 use std::hash::Hash;
-use std::{collections::HashMap, sync::Arc};
 
-use crate::{sql::sql_provider_datafusion::expr::Engine, UnsupportedTypeAction};
+use datafusion::common::DataFusionError;
+use std::collections::HashMap;
+
+use crate::UnsupportedTypeAction;
 
 pub mod column_reference;
 pub mod constraints;
@@ -14,6 +12,7 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
+pub mod table_arg_replace;
 
 #[cfg(any(feature = "sqlite", feature = "duckdb", feature = "postgres"))]
 pub mod schema;
@@ -26,22 +25,6 @@ pub enum Error {
     UnableToGenerateSQL {
         source: datafusion::error::DataFusionError,
     },
-}
-
-pub fn filters_to_sql(filters: &[Expr], engine: Option<Engine>) -> Result<String, Error> {
-    let dialect = engine
-        .map(|e| e.dialect())
-        .unwrap_or(Arc::new(DefaultDialect {}));
-    Ok(filters
-        .iter()
-        .map(|f| {
-            Unparser::new(dialect.as_ref())
-                .expr_to_sql(f)
-                .map(|e| e.to_string())
-        })
-        .collect::<DataFusionResult<Vec<String>>>()
-        .context(UnableToGenerateSQLSnafu)?
-        .join(" AND "))
 }
 
 #[must_use]
@@ -77,6 +60,14 @@ pub fn remove_prefix_from_hashmap_keys<V>(
             (new_key, value)
         })
         .collect()
+}
+
+#[must_use]
+pub fn to_datafusion_error<E>(error: E) -> DataFusionError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    DataFusionError::External(Box::new(error))
 }
 
 /// If the `UnsupportedTypeAction` is `Error` or `String`, the function will return an error.

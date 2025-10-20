@@ -747,7 +747,7 @@ pub(crate) mod tests {
             dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
         },
     };
-    use arrow::array::RecordBatch;
+    use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
         common::SchemaExt,
         datasource::sink::DataSink,
@@ -786,7 +786,7 @@ pub(crate) mod tests {
             .expect("to build parquet reader");
 
         parquet_reader
-            .collect::<Result<Vec<_>, arrow::error::ArrowError>>()
+            .collect::<Result<Vec<_>, datafusion::arrow::error::ArrowError>>()
             .expect("to get records")
     }
 

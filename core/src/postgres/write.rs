@@ -23,7 +23,9 @@ use crate::util::{
     retriable_error::check_and_mark_retriable_error,
 };
 
-use super::{to_datafusion_error, Postgres};
+use crate::postgres::Postgres;
+
+use super::to_datafusion_error;
 
 #[derive(Debug, Clone)]
 pub struct PostgresTableWriter {
@@ -84,13 +86,13 @@ impl TableProvider for PostgresTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: InsertOp,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(PostgresDataSink::new(
                 Arc::clone(&self.postgres),
-                overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
             )),

@@ -49,9 +49,6 @@ pub mod federation;
 #[cfg(feature = "sqlite-federation")]
 pub mod sqlite_interval;
 
-#[cfg(feature = "sqlite-federation")]
-pub mod between;
-
 pub mod sql_table;
 pub mod write;
 
@@ -122,7 +119,6 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
-    decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
 }
 
@@ -136,15 +132,8 @@ impl SqliteTableProviderFactory {
     pub fn new() -> Self {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
-            decimal_between: false,
-            batch_insert_use_prepared_statements: true, // Default to true for better performance
+            batch_insert_use_prepared_statements: false,
         }
-    }
-
-    #[must_use]
-    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
-        self.decimal_between = decimal_between;
-        self
     }
 
     /// Set whether to use prepared statements for batch inserts.
@@ -381,15 +370,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(
-                &dyn_pool,
-                Arc::clone(&schema),
-                name,
-                Some(cmd.constraints.clone()),
-            )
-            .with_decimal_between(self.decimal_between),
-        );
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
+            &dyn_pool,
+            Arc::clone(&schema),
+            name,
+        ));
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
@@ -409,7 +394,6 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
 pub struct SqliteTableFactory {
     pool: Arc<SqliteConnectionPool>,
-    decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
 }
 
@@ -418,15 +402,8 @@ impl SqliteTableFactory {
     pub fn new(pool: Arc<SqliteConnectionPool>) -> Self {
         Self {
             pool,
-            decimal_between: false,
             batch_insert_use_prepared_statements: false,
         }
-    }
-
-    #[must_use]
-    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
-        self.decimal_between = decimal_between;
-        self
     }
 
     /// Set whether to use prepared statements for batch inserts.
@@ -454,10 +431,11 @@ impl SqliteTableFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
-        let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference, None)
-                .with_decimal_between(self.decimal_between),
-        );
+        let read_provider = Arc::new(SQLiteTable::new_with_schema(
+            &dyn_pool,
+            Arc::clone(&schema),
+            table_reference,
+        ));
 
         Ok(read_provider)
     }
@@ -1005,29 +983,6 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
-                    DataType::Decimal128(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::BigDecimal;
-                            let value =
-                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
-                    DataType::Decimal256(_, scale) => {
-                        let array = column.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            use bigdecimal::{num_bigint::BigInt, BigDecimal};
-                            let bigint =
-                                BigInt::from_signed_bytes_le(&array.value(row_idx).to_le_bytes());
-                            let value = BigDecimal::new(bigint, i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
-                        }
-                    }
                     DataType::Float16 => {
                         let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
                         if array.is_null(row_idx) {
@@ -1040,7 +995,11 @@ impl Sqlite {
                     DataType::Null => {
                         params.push(Box::new(rusqlite::types::Null));
                     }
-                    DataType::List(_)
+                    DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
+                    | DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::List(_)
                     | DataType::LargeList(_)
                     | DataType::ListView(_)
                     | DataType::LargeListView(_)

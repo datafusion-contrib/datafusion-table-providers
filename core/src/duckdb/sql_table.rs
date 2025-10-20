@@ -1,8 +1,6 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -47,17 +45,9 @@ impl<T, P> DuckDBTable<T, P> {
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
-        constraints: Option<Constraints>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema(
-            "duckdb",
-            pool,
-            schema,
-            table_reference,
-            Some(Engine::DuckDB),
-        )
-        .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())))
-        .with_constraints_opt(constraints);
+        let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
+            .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
 
         Self {
             base_table,
@@ -67,18 +57,15 @@ impl<T, P> DuckDBTable<T, P> {
 
     fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DuckSqlExec::new(
-            projections,
+            projection,
             schema,
-            &self.base_table.table_reference,
             self.base_table.clone_pool(),
-            filters,
-            limit,
+            sql,
             self.table_functions.clone(),
         )?))
     }
@@ -92,10 +79,6 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
 
     fn schema(&self) -> SchemaRef {
         self.base_table.schema()
-    }
-
-    fn constraints(&self) -> Option<&Constraints> {
-        self.base_table.constraints()
     }
 
     fn table_type(&self) -> TableType {
@@ -116,7 +99,8 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, &self.schema(), filters, limit);
+        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
+        return self.create_physical_plan(projection, &self.schema(), sql);
     }
 }
 
@@ -134,23 +118,13 @@ struct DuckSqlExec<T, P> {
 
 impl<T, P> DuckSqlExec<T, P> {
     fn new(
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
         table_functions: Option<HashMap<String, String>>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(
-            projections,
-            schema,
-            table_reference,
-            pool,
-            filters,
-            limit,
-            Some(Engine::DuckDB),
-        )?;
+        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
 
         Ok(Self {
             base_exec,

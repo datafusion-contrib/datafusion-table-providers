@@ -2,8 +2,8 @@ use std::{any::Any, sync::Arc};
 
 use crate::sql::arrow_sql_gen::mysql::map_column_to_data_type;
 use crate::sql::arrow_sql_gen::{self, mysql::rows_to_arrow};
-use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_stream::stream;
+use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -91,6 +91,47 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         MySQLConnection {
             conn: Arc::new(Mutex::new(conn)),
         }
+    }
+
+    async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let mut conn = self.conn.lock().await;
+        let conn = &mut *conn;
+
+        let query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ?";
+        let tables: Vec<Row> = conn
+            .exec(query, (schema,))
+            .await
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+
+        let table_names = tables
+            .iter()
+            .filter_map(|row| row.get::<String, _>("TABLE_NAME"))
+            .collect();
+
+        Ok(table_names)
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let mut conn = self.conn.lock().await;
+        let conn = &mut *conn;
+
+        let query = "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA \
+                    WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', \
+                    'performance_schema', 'sys')";
+
+        let schemas: Vec<Row> = conn
+            .exec(query, ())
+            .await
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+
+        let schema_names = schemas
+            .iter()
+            .filter_map(|row| row.get::<String, _>("SCHEMA_NAME"))
+            .collect();
+
+        Ok(schema_names)
     }
 
     async fn get_schema(

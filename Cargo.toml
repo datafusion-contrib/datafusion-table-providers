@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-members = ["core"]
+members = ["core", "python"]
 resolver = "2"
 
 [workspace.package]
@@ -51,20 +51,8 @@ duckdb = { version = "=1.3.1", package = "spiceai_duckdb_fork" } # Forked to add
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "5ad2f52b9bafc6eaa50851f2e1fcf0585fb5184d" } # spiceai-49
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "a4b83432acfe1dfdd140e35d4603701ae76f6607" } # spiceai-1.3.2
-
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }               # spiceai-49
 datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }          # spiceai-49
 datafusion-physical-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" } # spiceai-49
 datafusion-physical-plan = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" } # spiceai-49
 datafusion-proto = { git = "https://github.com/spiceai/datafusion.git", rev = "912eebec159e037c7c233aae35c090071675d5a9" }         # spiceai-49
-
-arrow = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
-arrow-array = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
-arrow-buffer = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" } # spiceai-55.2
-arrow-cast = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
-arrow-flight = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" } # spiceai-55.2
-arrow-json = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }        # spiceai-55.2
-arrow-ipc = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }    # spiceai-55.2
-arrow-ord = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }    # spiceai-55.2
-arrow-schema = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" } # spiceai-55.2
-parquet = { git = "https://github.com/spiceai/arrow-rs.git", rev = "53162ed30fe6a2ed219b0af4dbbcd5d14745d7c2" }      # spiceai-55.2

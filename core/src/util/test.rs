@@ -1,6 +1,7 @@
 use std::{any::Any, sync::Arc};
 
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::{
     common::Statistics,
     error::{DataFusionError, Result},

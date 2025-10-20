@@ -1,6 +1,5 @@
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
-use crate::sql::sql_provider_datafusion::expr::Engine;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
@@ -51,7 +50,7 @@ impl MySQLTable {
                     + Send
                     + Sync,
             >;
-        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference, None)
+        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference)
             .await?
             .with_dialect(Arc::new(MySqlDialect {}))
             .with_constraints_opt(constraints);
@@ -69,13 +68,12 @@ impl MySQLTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
         Ok(Arc::new(MySQLSQLExec::new(
             projections,
             schema,
-            &self.base_table.table_reference,
             Arc::clone(&self.pool),
-            filters,
-            limit,
+            sql,
         )?))
     }
 }
@@ -130,20 +128,10 @@ impl MySQLSQLExec {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<MySQLConnectionPool>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(
-            projections,
-            schema,
-            table_reference,
-            pool,
-            filters,
-            limit,
-            Some(Engine::MySQL),
-        )?;
+        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
 
         Ok(Self { base_exec })
     }
