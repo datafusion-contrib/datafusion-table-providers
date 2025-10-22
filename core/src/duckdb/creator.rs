@@ -870,7 +870,6 @@ pub(crate) mod tests {
                 *overwrite,
                 None,
                 table_definition.schema(),
-                None,
             );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink
@@ -985,7 +984,6 @@ pub(crate) mod tests {
                 *overwrite,
                 None,
                 table_definition.schema(),
-                None,
             );
             let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
             let rows_written = data_sink

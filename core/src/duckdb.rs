@@ -181,21 +181,6 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
-    on_data_written: Arc<
-        Mutex<
-            Option<
-                Arc<
-                    dyn FnMut(
-                            &duckdb::Transaction<'_>,
-                            &TableManager,
-                            &SchemaRef,
-                        ) -> DataFusionResult<()>
-                        + Send
-                        + Sync,
-                >,
-            >,
-        >,
-    >,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -206,7 +191,6 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
             .field("settings_registry", &self.settings_registry)
-            .field("on_data_written", &"<callback>")
             .finish()
     }
 }
@@ -220,7 +204,6 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
-            on_data_written: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -253,19 +236,6 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn settings_registry_mut(&mut self) -> &mut DuckDBSettingsRegistry {
         &mut self.settings_registry
-    }
-
-    #[must_use]
-    pub fn with_on_data_written(
-        mut self,
-        on_data_written: Arc<
-            dyn FnMut(&duckdb::Transaction<'_>, &TableManager, &SchemaRef) -> DataFusionResult<()>
-                + Send
-                + Sync,
-        >,
-    ) -> Self {
-        self.on_data_written = Arc::new(Mutex::new(Some(on_data_written)));
-        self
     }
 
     #[must_use]
@@ -458,14 +428,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool = Arc::new(pool);
         make_initial_table(Arc::clone(&table_definition), &pool)?;
 
-        let mut table_writer_builder = DuckDBTableWriterBuilder::new()
+        let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(Arc::clone(&table_definition))
             .with_pool(pool)
             .set_on_conflict(on_conflict);
-
-        if let Some(on_data_written) = self.on_data_written.lock().await.take() {
-            table_writer_builder = table_writer_builder.with_on_data_written(on_data_written);
-        }
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
