@@ -42,7 +42,7 @@ use super::{to_datafusion_error, RelationName};
 /// - If the handler returns an error, both the handler's operations and the data write are rolled back
 /// - The handler has access to the newly written data for queries and validations
 pub type WriteCompletionHandler = Arc<
-    dyn Fn(&Transaction<'_>, &TableManager, &SchemaRef) -> datafusion::common::Result<()>
+    dyn Fn(&Transaction<'_>, &TableManager, &SchemaRef, u64) -> datafusion::common::Result<()>
         + Send
         + Sync
         + 'static,
@@ -463,7 +463,7 @@ fn insert_append(
     .map_err(to_retriable_data_write_error)?;
 
     if let Some(callback) = on_data_written {
-        callback(&tx, &append_table, &schema)?;
+        callback(&tx, &append_table, &schema, num_rows)?;
     }
 
     on_commit_transaction
@@ -637,7 +637,7 @@ fn insert_overwrite(
         .map_err(to_retriable_data_write_error)?;
 
     if let Some(callback) = on_data_written {
-        callback(&tx, &new_table, &schema)?;
+        callback(&tx, &new_table, &schema, num_rows)?;
     }
 
     tx.commit()
@@ -1229,9 +1229,13 @@ mod test {
 
         //Custom callback that removes records with id > 1
         let callback: WriteCompletionHandler = Arc::new(
-            |tx: &Transaction<'_>, table_manager: &TableManager, schema: &SchemaRef| {
+            |tx: &Transaction<'_>,
+             table_manager: &TableManager,
+             schema: &SchemaRef,
+             num_rows: u64| {
                 assert!(!schema.fields().is_empty(), "Schema should have fields");
                 assert_eq!(table_manager.table_name().to_string(), "test_table");
+                assert_eq!(num_rows, 2, "Should have written 2 rows");
                 let table_name = table_manager.table_name();
                 tx.execute(&format!("DELETE FROM {table_name} WHERE id > 1"), [])
                     .map_err(|e| {
