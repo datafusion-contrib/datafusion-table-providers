@@ -37,6 +37,7 @@ default = [
     "postgres",
     "odbc",
     "flight",
+    "adbc",
 ]
 clickhouse = ["datafusion-table-providers/clickhouse-federation"]
 duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]
@@ -45,3 +46,4 @@ mysql = ["datafusion-table-providers/mysql-federation"]
 postgres = ["datafusion-table-providers/postgres-federation"]
 odbc = ["datafusion-table-providers/odbc-federation"]
 flight = ["dep:arrow-flight", "datafusion-table-providers/flight"]
+adbc = ["datafusion-table-providers/adbc-federation"]
