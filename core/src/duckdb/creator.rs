@@ -223,6 +223,11 @@ impl TableManager {
             .unwrap_or_else(|| &self.table_definition.name)
     }
 
+    /// Returns the table definition for the table creator.
+    pub fn table_definition(&self) -> &Arc<TableDefinition> {
+        &self.table_definition
+    }
+
     /// Searches if a table by the name specified in the table definition exists in the database.
     /// Returns None if the table does not exist, or an instance of a `TableCreator` for the base table if it does.
     #[tracing::instrument(level = "debug", skip_all)]

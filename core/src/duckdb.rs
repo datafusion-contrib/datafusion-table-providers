@@ -190,6 +190,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
+            .field("settings_registry", &self.settings_registry)
             .finish()
     }
 }
