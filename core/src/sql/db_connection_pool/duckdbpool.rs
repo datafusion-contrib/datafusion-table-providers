@@ -131,6 +131,8 @@ impl DuckDbConnectionPoolBuilder {
 
         let mut pool_builder = r2d2::Pool::builder();
 
+        tracing::debug!("[DuckDBPoolBuilder] build file pool for path {} with max_size {:?} and min_idle {:?}", self.path, self.max_size, self.min_idle);
+
         if let Some(size) = self.max_size {
             pool_builder = pool_builder.max_size(size)
         }

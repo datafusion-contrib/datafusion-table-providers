@@ -276,17 +276,36 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
-        let pool_builder = DuckDbConnectionPoolBuilder::memory();
+    pub async fn get_or_init_memory_instance(&self, options: &HashMap<String, String>) -> Result<DuckDbConnectionPool> {
+        let mut pool_builder = DuckDbConnectionPoolBuilder::memory();
+
+        let pool_size = options
+            .get("pool_size")
+            .and_then(|size_str| size_str.parse::<u32>().ok());
+
+        if let Some(size) = pool_size {
+            pool_builder = pool_builder.with_max_size(Some(size));
+        }
+
+
         self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
+        options: &HashMap<String, String>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path: Arc<str> = db_path.into();
-        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+        let mut pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+
+         let pool_size = options
+            .get("pool_size")
+            .and_then(|size_str| size_str.parse::<u32>().ok());
+
+        if let Some(size) = pool_size {
+            pool_builder = pool_builder.with_max_size(Some(size));
+        }
 
         self.get_or_init_instance_with_builder(pool_builder).await
     }
@@ -391,12 +410,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance(db_path, &options)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance(&options)
                 .await
                 .map_err(to_datafusion_error)?,
         };
