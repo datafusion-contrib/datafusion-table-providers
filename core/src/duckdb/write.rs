@@ -466,6 +466,8 @@ fn insert_append(
         callback(&tx, &append_table, &schema, num_rows)?;
     }
 
+    execute_analyze_sql(&tx, &append_table.table_name().to_string());
+
     on_commit_transaction
         .try_recv()
         .map_err(to_retriable_data_write_error)?;
@@ -640,6 +642,8 @@ fn insert_overwrite(
         callback(&tx, &new_table, &schema, num_rows)?;
     }
 
+    execute_analyze_sql(&tx, &new_table.table_name().to_string());
+
     tx.commit()
         .context(super::UnableToCommitTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
@@ -705,6 +709,30 @@ fn write_to_table(
     view.drop(tx).map_err(to_datafusion_error)?;
 
     Ok(rows as u64)
+}
+
+/// Executes an ANALYZE statement to update query optimizer statistics.
+/// This helps DuckDB's query planner generate better execution plans, especially after large data changes.
+/// https://duckdb.org/docs/stable/sql/statements/analyze
+///
+/// Errors are logged but do not fail the operation since statistics updates are non-critical.
+fn execute_analyze_sql(tx: &Transaction, table_name: &str) {
+    // DuckDB doesn't support parameterized table names in the ANALYZE statement
+    let analyze_sql = format!(r#"ANALYZE "{}""#, table_name);
+    tracing::debug!("Executing analyze SQL: {analyze_sql}");
+    match tx.prepare(&analyze_sql) {
+        Ok(mut stmt) => match stmt.execute([]) {
+            Ok(_) => {
+                tracing::debug!("Analyze SQL executed for table '{table_name}'");
+            }
+            Err(e) => {
+                tracing::error!("Failed to execute analyze SQL for table '{table_name}': {e}");
+            }
+        },
+        Err(e) => {
+            tracing::error!("Failed to prepare analyze SQL for table '{table_name}': {e}");
+        }
+    }
 }
 
 struct RecordBatchReaderFromStream {
