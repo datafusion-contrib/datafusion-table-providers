@@ -148,6 +148,12 @@ pub enum Error {
     #[snafu(display("Failed to parse the system time: {source}"))]
     UnableToParseSystemTime { source: std::num::ParseIntError },
 
+    #[snafu(display("Failed to parse 'connection_pool_size' value '{value}': {source}. Provide a valid positive integer value, e.g. '10', '20' and try again."))]
+    UnableToParseConnectionPoolSize {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+
     #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
     MissingReadProvider,
 
@@ -276,17 +282,30 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
-        let pool_builder = DuckDbConnectionPoolBuilder::memory();
+    pub async fn get_or_init_memory_instance(
+        &self,
+        options: &HashMap<String, String>,
+    ) -> Result<DuckDbConnectionPool> {
+        let mut pool_builder = DuckDbConnectionPoolBuilder::memory();
+
+        if let Some(max_size) = extract_connection_pool_size(options)? {
+            pool_builder = pool_builder.with_max_size(Some(max_size));
+        }
+
         self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
+        options: &HashMap<String, String>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path: Arc<str> = db_path.into();
-        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+        let mut pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+
+        if let Some(max_size) = extract_connection_pool_size(options)? {
+            pool_builder = pool_builder.with_max_size(Some(max_size));
+        }
 
         self.get_or_init_instance_with_builder(pool_builder).await
     }
@@ -391,12 +410,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance(db_path, &options)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance(&options)
                 .await
                 .map_err(to_datafusion_error)?,
         };
@@ -543,6 +562,19 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
     options
         .remove(key)
         .or_else(|| options.remove(&format!("duckdb.{key}")))
+}
+
+fn extract_connection_pool_size(options: &HashMap<String, String>) -> Result<Option<u32>> {
+    if let Some(pool_size_str) = options.get("connection_pool_size") {
+        pool_size_str
+            .parse()
+            .context(UnableToParseConnectionPoolSizeSnafu {
+                value: pool_size_str.clone(),
+            })
+            .map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 pub struct DuckDBTableFactory {
