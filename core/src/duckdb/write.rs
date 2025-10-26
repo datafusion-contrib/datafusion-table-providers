@@ -716,7 +716,7 @@ fn write_to_table(
 /// https://duckdb.org/docs/stable/sql/statements/analyze
 ///
 /// Errors are logged but do not fail the operation since statistics updates are non-critical.
-fn execute_analyze_sql(tx: &Transaction, table_name: &str) {
+pub fn execute_analyze_sql(tx: &Transaction, table_name: &str) {
     // DuckDB doesn't support parameterized table names in the ANALYZE statement
     let analyze_sql = format!(r#"ANALYZE "{}""#, table_name);
     tracing::debug!("Executing analyze SQL: {analyze_sql}");
