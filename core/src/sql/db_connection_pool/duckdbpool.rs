@@ -96,6 +96,8 @@ impl DuckDbConnectionPoolBuilder {
         let manager =
             DuckdbConnectionManager::memory_with_flags(config).context(DuckDBConnectionSnafu)?;
 
+        tracing::debug!("Creating DuckDB connection pool for memory instance with max_size {:?} and min_idle {:?}", self.max_size, self.min_idle);
+
         let mut pool_builder = r2d2::Pool::builder();
 
         if let Some(size) = self.max_size {
@@ -130,6 +132,13 @@ impl DuckDbConnectionPoolBuilder {
             .context(DuckDBConnectionSnafu)?;
 
         let mut pool_builder = r2d2::Pool::builder();
+
+        tracing::debug!(
+            "Creating DuckDB connection pool for path {} with max_size {:?} and min_idle {:?}",
+            self.path,
+            self.max_size,
+            self.min_idle
+        );
 
         if let Some(size) = self.max_size {
             pool_builder = pool_builder.max_size(size)
