@@ -4,8 +4,9 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
+use datafusion_federation::sql::AstAnalyzer;
 use datafusion_federation::sql::{
-    ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -77,7 +78,7 @@ impl SQLExecutor for MySQLTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![Box::new(mysql_ast_analyzer)]))
+        Some(Box::new(mysql_ast_analyzer))
     }
 
     fn execute(
