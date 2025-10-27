@@ -1,10 +1,9 @@
 use crate::arrow_record_batch_gen::*;
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
@@ -33,7 +32,7 @@ async fn arrow_duckdb_round_trip(
         order_exprs: vec![],
         unbounded: false,
         options: HashMap::new(),
-        constraints: Constraints::new_unverified(vec![]),
+        constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -44,12 +43,14 @@ async fn arrow_duckdb_round_trip(
 
     let ctx = SessionContext::new();
 
-    let mem_exec = DataSourceExec::new(Arc::new(
-        MemorySourceConfig::try_new(&[vec![arrow_record.clone()]], arrow_record.schema(), None)
-            .expect("memory source config created"),
-    ));
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
     let insert_plan = table_provider
-        .insert_into(&ctx.state(), Arc::new(mem_exec), InsertOp::Append)
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
         .await
         .expect("insert plan created");
 

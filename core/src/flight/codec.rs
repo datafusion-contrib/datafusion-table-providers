@@ -20,9 +20,10 @@
 use std::sync::Arc;
 
 use crate::flight::exec::{FlightConfig, FlightExec};
+use crate::flight::to_df_err;
 use datafusion::common::DataFusionError;
-use datafusion_expr::registry::FunctionRegistry;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion::logical_expr::registry::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 /// Physical extension codec for FlightExec
@@ -37,8 +38,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         _registry: &dyn FunctionRegistry,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if inputs.is_empty() {
-            let config: FlightConfig =
-                serde_json::from_slice(buf).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let config: FlightConfig = serde_json::from_slice(buf).map_err(to_df_err)?;
             Ok(Arc::from(FlightExec::from(config)))
         } else {
             Err(DataFusionError::Internal(
@@ -53,8 +53,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         buf: &mut Vec<u8>,
     ) -> datafusion::common::Result<()> {
         if let Some(flight) = node.as_any().downcast_ref::<FlightExec>() {
-            let mut bytes = serde_json::to_vec(flight.config())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let mut bytes = serde_json::to_vec(flight.config()).map_err(to_df_err)?;
             buf.append(&mut bytes);
             Ok(())
         } else {

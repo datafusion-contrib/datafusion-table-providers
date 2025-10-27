@@ -17,10 +17,11 @@ use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
+use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 
@@ -73,7 +74,7 @@ impl DuckDBAttachments {
     /// Creates a new instance of a `DuckDBAttachments`, which instructs DuckDB connections to attach other DuckDB databases for queries.
     #[must_use]
     pub fn new(main_db: &str, attachments: &[Arc<str>]) -> Self {
-        let random_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 8);
+        let random_id = Alphanumeric.sample_string(&mut rand::rng(), 8);
         let attachments: HashSet<Arc<str>> = attachments.iter().cloned().collect();
         Self {
             attachments,
@@ -349,6 +350,54 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         }
     }
 
+    fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let sql = "SELECT table_name FROM information_schema.tables \
+                  WHERE table_schema = ? AND table_type = 'BASE TABLE'";
+
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+        let mut rows = stmt
+            .query([schema])
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+        let mut tables = vec![];
+
+        while let Some(row) = rows.next().boxed().context(super::UnableToGetTablesSnafu)? {
+            tables.push(row.get(0).boxed().context(super::UnableToGetTablesSnafu)?);
+        }
+
+        Ok(tables)
+    }
+
+    fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let sql = "SELECT DISTINCT schema_name FROM information_schema.schemata \
+                  WHERE schema_name NOT IN ('information_schema', 'pg_catalog')";
+
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+        let mut rows = stmt
+            .query([])
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?;
+        let mut schemas = vec![];
+
+        while let Some(row) = rows
+            .next()
+            .boxed()
+            .context(super::UnableToGetSchemasSnafu)?
+        {
+            schemas.push(row.get(0).boxed().context(super::UnableToGetSchemasSnafu)?);
+        }
+
+        Ok(schemas)
+    }
+
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
         let table_str = if is_table_function(table_reference) {
             table_reference.to_string()
@@ -401,45 +450,49 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let cloned_schema = schema.clone();
 
-        let join_handle = tokio::task::spawn_blocking(move || {
-            let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
-            let params: &[&dyn ToSql] = &params
-                .iter()
-                .map(|f| f.as_input_parameter())
-                .collect::<Vec<_>>();
-            let result: duckdb::ArrowStream<'_> = stmt
-                .stream_arrow(params, cloned_schema)
-                .context(DuckDBQuerySnafu)?;
-            for i in result {
-                blocking_channel_send(&batch_tx, i)?;
-            }
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-        });
+        let create_stream = || -> Result<SendableRecordBatchStream> {
+            let join_handle = tokio::task::spawn_blocking(move || {
+                let mut stmt = conn.prepare(&sql).context(DuckDBQuerySnafu)?;
+                let params: &[&dyn ToSql] = &params
+                    .iter()
+                    .map(|f| f.as_input_parameter())
+                    .collect::<Vec<_>>();
+                let result: duckdb::ArrowStream<'_> = stmt
+                    .stream_arrow(params, cloned_schema)
+                    .context(DuckDBQuerySnafu)?;
+                for i in result {
+                    blocking_channel_send(&batch_tx, i)?;
+                }
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            });
 
-        let output_stream = stream! {
-            while let Some(batch) = batch_rx.recv().await {
-                yield Ok(batch);
-            }
+            let output_stream = stream! {
+                while let Some(batch) = batch_rx.recv().await {
+                    yield Ok(batch);
+                }
 
-            match join_handle.await {
-                Ok(Err(task_error)) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {task_error}"
-                    )))
-                },
-                Err(join_error) => {
-                    yield Err(DataFusionError::Execution(format!(
-                        "Failed to execute DuckDB query: {join_error}"
-                    )))
-                },
-                _ => {}
-            }
+                match join_handle.await {
+                    Ok(Err(task_error)) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {task_error}"
+                        )))
+                    },
+                    Err(join_error) => {
+                        yield Err(DataFusionError::Execution(format!(
+                            "Failed to execute DuckDB query: {join_error}"
+                        )))
+                    },
+                    _ => {}
+                }
+            };
+
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                output_stream,
+            )))
         };
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            output_stream,
-        )))
+        run_sync_with_tokio(create_stream)
     }
 
     fn execute(&self, sql: &str, params: &[DuckDBParameter]) -> Result<u64> {

@@ -22,16 +22,27 @@ use datafusion::{
 };
 
 impl<T, P> SqlTable<T, P> {
+    // Return the current memory location of the object as a unique identifier
+    fn unique_id(&self) -> usize {
+        std::ptr::from_ref(self) as usize
+    }
+
+    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
+    }
+
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.table_reference.clone();
+        let table_reference = self.table_reference.clone();
         let schema = Arc::clone(&self.schema);
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
-
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::from(table_name),
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
@@ -50,7 +61,7 @@ impl<T, P> SqlTable<T, P> {
 #[async_trait]
 impl<T, P> SQLExecutor for SqlTable<T, P> {
     fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 
     fn compute_context(&self) -> Option<String> {
@@ -63,10 +74,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        let Some(ref dialect) = self.dialect else {
-            return Arc::new(DefaultDialect {});
-        };
-        Arc::clone(dialect) as Arc<_>
+        self.arc_dialect()
     }
 
     fn execute(

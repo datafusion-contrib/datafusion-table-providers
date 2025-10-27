@@ -20,26 +20,29 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::flight::exec::FlightExec;
 use arrow_flight::error::FlightError;
 use arrow_flight::FlightInfo;
-use arrow_schema::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Statistics};
 use datafusion::datasource::TableProvider;
+use datafusion::logical_expr::{CreateExternalTable, Expr, TableType};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use serde::{Deserialize, Serialize};
-use tonic::transport::Channel;
+use tonic::transport::{Channel, ClientTlsConfig};
 
 pub mod codec;
 mod exec;
 pub mod sql;
+
+pub use exec::enforce_schema;
 
 /// Generic Arrow Flight data source. Requires a [FlightDriver] that allows implementors
 /// to integrate any custom Flight RPC service by producing a [FlightMetadata] for some DDL.
@@ -80,7 +83,7 @@ pub mod sql;
 ///             CustomFlightDriver::default(),
 ///         ))),
 ///     );
-///     _ = ctx.sql(
+///     let _ = ctx.sql(
 ///         r#"
 ///         CREATE EXTERNAL TABLE custom_flight_table STORED AS CUSTOM_FLIGHT
 ///         LOCATION 'https://custom.flight.rpc'
@@ -107,40 +110,35 @@ impl FlightTableFactory {
         options: HashMap<String, String>,
     ) -> datafusion::common::Result<FlightTable> {
         let origin = entry_point.into();
-        let channel = Channel::from_shared(origin.clone())
-            .unwrap()
-            .connect()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let channel = flight_channel(&origin).await?;
         let metadata = self
             .driver
             .metadata(channel.clone(), &options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(to_df_err)?;
         let num_rows = precision(metadata.info.total_records);
         let total_byte_size = precision(metadata.info.total_bytes);
-        let logical_schema = metadata.schema;
+        let logical_schema = metadata.schema.clone();
         let stats = Statistics {
             num_rows,
             total_byte_size,
             column_statistics: vec![],
         };
+        let metadata_supplier = if metadata.props.reusable_flight_info {
+            MetadataSupplier::Reusable(Arc::new(metadata))
+        } else {
+            MetadataSupplier::Refresh {
+                driver: self.driver.clone(),
+                channel,
+                options,
+            }
+        };
         Ok(FlightTable {
-            driver: self.driver.clone(),
-            channel,
-            options,
+            metadata_supplier,
             origin,
             logical_schema,
             stats,
         })
-    }
-}
-
-fn precision(total: i64) -> Precision<usize> {
-    if total < 0 {
-        Precision::Absent
-    } else {
-        Precision::Exact(total as usize)
     }
 }
 
@@ -177,30 +175,26 @@ pub trait FlightDriver: Sync + Send + Debug {
 pub struct FlightMetadata {
     /// FlightInfo object produced by the driver
     info: FlightInfo,
-    /// Arrow schema. Can be enforced by the driver or inferred from the FlightInfo
-    schema: SchemaRef,
     /// Various knobs that control execution
     props: FlightProperties,
+    /// Arrow schema. Can be enforced by the driver or inferred from the FlightInfo
+    schema: SchemaRef,
 }
 
 impl FlightMetadata {
     /// Customize everything that is in the driver's control
-    pub fn new(info: FlightInfo, schema: SchemaRef, props: FlightProperties) -> Self {
+    pub fn new(info: FlightInfo, props: FlightProperties, schema: SchemaRef) -> Self {
         Self {
             info,
-            schema,
             props,
+            schema,
         }
     }
 
-    /// Customize gRPC headers
-    pub fn try_new(
-        info: FlightInfo,
-        grpc_headers: HashMap<String, String>,
-    ) -> arrow_flight::error::Result<Self> {
+    /// Customize flight properties and try to use the FlightInfo schema
+    pub fn try_new(info: FlightInfo, props: FlightProperties) -> arrow_flight::error::Result<Self> {
         let schema = Arc::new(info.clone().try_decode_schema()?);
-        let props = grpc_headers.into();
-        Ok(Self::new(info, schema, props))
+        Ok(Self::new(info, props, schema))
     }
 }
 
@@ -208,38 +202,105 @@ impl TryFrom<FlightInfo> for FlightMetadata {
     type Error = FlightError;
 
     fn try_from(info: FlightInfo) -> Result<Self, Self::Error> {
-        Self::try_new(info, HashMap::default())
+        Self::try_new(info, FlightProperties::default())
     }
 }
 
 /// Meant to gradually encapsulate all sorts of knobs required
 /// for controlling the protocol and query execution details.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlightProperties {
-    unbounded_stream: bool,
+    unbounded_streams: bool,
     grpc_headers: HashMap<String, String>,
+    size_limits: SizeLimits,
+    reusable_flight_info: bool,
 }
 
 impl FlightProperties {
-    pub fn new(unbounded_stream: bool, grpc_headers: HashMap<String, String>) -> Self {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Whether the service will produce infinite streams
+    pub fn with_unbounded_streams(mut self, unbounded_streams: bool) -> Self {
+        self.unbounded_streams = unbounded_streams;
+        self
+    }
+
+    /// gRPC headers to use on subsequent calls.
+    pub fn with_grpc_headers(mut self, grpc_headers: HashMap<String, String>) -> Self {
+        self.grpc_headers = grpc_headers;
+        self
+    }
+
+    /// Max sizes in bytes for encoded/decoded gRPC messages.
+    pub fn with_size_limits(mut self, size_limits: SizeLimits) -> Self {
+        self.size_limits = size_limits;
+        self
+    }
+
+    /// Whether the FlightInfo objects produced by the service can be used multiple times
+    /// or need to be refreshed before every table scan.
+    pub fn with_reusable_flight_info(mut self, reusable_flight_info: bool) -> Self {
+        self.reusable_flight_info = reusable_flight_info;
+        self
+    }
+}
+
+/// Message size limits to be passed to the underlying gRPC library.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SizeLimits {
+    encoding: usize,
+    decoding: usize,
+}
+
+impl SizeLimits {
+    pub fn new(encoding: usize, decoding: usize) -> Self {
+        Self { encoding, decoding }
+    }
+}
+
+impl Default for SizeLimits {
+    fn default() -> Self {
         Self {
-            unbounded_stream,
-            grpc_headers,
+            // no limits
+            encoding: usize::MAX,
+            decoding: usize::MAX,
         }
     }
 }
 
-impl From<HashMap<String, String>> for FlightProperties {
-    fn from(grpc_headers: HashMap<String, String>) -> Self {
-        Self::new(false, grpc_headers)
+#[derive(Clone, Debug)]
+enum MetadataSupplier {
+    Reusable(Arc<FlightMetadata>),
+    Refresh {
+        driver: Arc<dyn FlightDriver>,
+        channel: Channel,
+        options: HashMap<String, String>,
+    },
+}
+
+impl MetadataSupplier {
+    async fn flight_metadata(&self) -> datafusion::common::Result<Arc<FlightMetadata>> {
+        match self {
+            Self::Reusable(metadata) => Ok(metadata.clone()),
+            Self::Refresh {
+                driver,
+                channel,
+                options,
+            } => Ok(Arc::new(
+                driver
+                    .metadata(channel.clone(), options)
+                    .await
+                    .map_err(to_df_err)?,
+            )),
+        }
     }
 }
 
 /// Table provider that wraps a specific flight from an Arrow Flight service
 pub struct FlightTable {
-    driver: Arc<dyn FlightDriver>,
-    channel: Channel,
-    options: HashMap<String, String>,
+    metadata_supplier: MetadataSupplier,
     origin: String,
     logical_schema: SchemaRef,
     stats: Statistics,
@@ -250,7 +311,6 @@ impl std::fmt::Debug for FlightTable {
         f.debug_struct("FlightTable")
             .field("origin", &self.origin)
             .field("logical_schema", &self.logical_schema)
-            .field("options", &self.options)
             .field("stats", &self.stats)
             .finish()
     }
@@ -277,13 +337,9 @@ impl TableProvider for FlightTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        let metadata = self
-            .driver
-            .metadata(self.channel.clone(), &self.options)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = self.metadata_supplier.flight_metadata().await?;
         Ok(Arc::new(FlightExec::try_new(
-            metadata,
+            metadata.as_ref(),
             projection,
             &self.origin,
         )?))
@@ -291,5 +347,28 @@ impl TableProvider for FlightTable {
 
     fn statistics(&self) -> Option<Statistics> {
         Some(self.stats.clone())
+    }
+}
+
+fn to_df_err<E: Error + Send + Sync + 'static>(err: E) -> DataFusionError {
+    DataFusionError::External(Box::new(err))
+}
+
+async fn flight_channel(source: impl Into<String>) -> datafusion::common::Result<Channel> {
+    let tls_config = ClientTlsConfig::new().with_enabled_roots();
+    Channel::from_shared(source.into())
+        .map_err(to_df_err)?
+        .tls_config(tls_config)
+        .map_err(to_df_err)?
+        .connect()
+        .await
+        .map_err(to_df_err)
+}
+
+fn precision(total: i64) -> Precision<usize> {
+    if total < 0 {
+        Precision::Absent
+    } else {
+        Precision::Exact(total as usize)
     }
 }

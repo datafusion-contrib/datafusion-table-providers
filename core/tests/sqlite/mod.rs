@@ -12,6 +12,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{dml::InsertOp, CreateExternalTable};
 use datafusion::physical_plan::collect;
 use datafusion::sql::TableReference;
+#[cfg(feature = "sqlite-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
@@ -83,12 +84,10 @@ async fn arrow_sqlite_round_trip(
         }
 
         let table = match projected_schema {
-            None => SqlTable::new("sqlite", &sqltable_pool, table_name, None)
+            None => SqlTable::new("sqlite", &sqltable_pool, table_name)
                 .await
                 .expect("Table should be created"),
-            Some(schema) => {
-                SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None)
-            }
+            Some(schema) => SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name),
         };
 
         ctx.register_table(table_name, Arc::new(table))
@@ -102,6 +101,7 @@ async fn arrow_sqlite_round_trip(
 
         let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
+        #[cfg(feature = "sqlite-federation")]
         let casted_record =
             try_cast_to(record_batch[0].clone(), Arc::clone(&source_schema)).unwrap();
 
@@ -115,6 +115,7 @@ async fn arrow_sqlite_round_trip(
         assert_eq!(record_batch.len(), 1);
         assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
         assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+        #[cfg(feature = "sqlite-federation")]
         assert_eq!(casted_record, arrow_record);
     }
 }
@@ -128,6 +129,7 @@ async fn arrow_sqlite_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
+#[ignore] // Requires a custom sqlite extension for decimal types
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
@@ -209,9 +211,7 @@ fn create_comprehensive_test_data() -> (RecordBatch, SchemaRef) {
         None,
         Some(500000u64),
     ]);
-    #[allow(clippy::approx_constant)]
     let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.14), Some(2.71)]);
-    #[allow(clippy::approx_constant)]
     let col_float64 =
         Float64Array::from(vec![None, Some(2.718281828), Some(-1.414), Some(3.14159)]);
     let col_utf8 = StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);

@@ -17,38 +17,24 @@ limitations under the License.
 use std::sync::Arc;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
-use arrow::array::ArrayBuilder;
-use arrow::array::ArrayRef;
-use arrow::array::BinaryBuilder;
-use arrow::array::BooleanBuilder;
-use arrow::array::Float32Builder;
-use arrow::array::Float64Builder;
-use arrow::array::Int16Builder;
-use arrow::array::Int32Builder;
-use arrow::array::Int64Builder;
-use arrow::array::Int8Builder;
-use arrow::array::LargeStringBuilder;
-use arrow::array::NullBuilder;
-use arrow::array::RecordBatch;
-use arrow::array::RecordBatchOptions;
-use arrow::array::StringBuilder;
-use arrow::array::UInt16Builder;
-use arrow::array::UInt32Builder;
-use arrow::array::UInt64Builder;
-use arrow::array::UInt8Builder;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use rusqlite::types::Type;
-use rusqlite::Row;
-use rusqlite::Rows;
+use arrow::{
+    array::{
+        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
+        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
+        RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder, UInt32Builder,
+        UInt64Builder, UInt8Builder,
+    },
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
+use rusqlite::{types::Type, Row, Rows};
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },
@@ -83,7 +69,7 @@ pub fn rows_to_arrow(
 
     if let Ok(Some(row)) = rows.next() {
         for i in 0..num_cols {
-            let column_type = row
+            let mut column_type = row
                 .get_ref(i)
                 .context(FailedToExtractRowValueSnafu)?
                 .data_type();
@@ -92,6 +78,32 @@ pub fn rows_to_arrow(
                 .column_name(i)
                 .context(FailedToExtractColumnNameSnafu)?
                 .to_string();
+
+            // SQLite can store floating point values without a fractional component as integers.
+            // Therefore, we need to verify if the column is actually a floating point type
+            // by examining the projected schema.
+            // Note: The same column may contain both integer and floating point values.
+            // Reading values as Float is safe even if the value is stored as an integer.
+            // Refer to the rusqlite type handling documentation for more details:
+            // https://github.com/rusqlite/rusqlite/blob/95680270eca6f405fb51f5fbe6a214aac5fdce58/src/types/mod.rs#L21C1-L22C75
+            //
+            // `REAL` to integer: always returns an [`Error::InvalidColumnType`](crate::Error::InvalidColumnType) error.
+            // `INTEGER` to float: casts using `as` operator. Never fails.
+            // `REAL` to float: casts using `as` operator. Never fails.
+
+            if column_type == Type::Integer {
+                if let Some(projected_schema) = projected_schema.as_ref() {
+                    match projected_schema.fields[i].data_type() {
+                        DataType::Decimal128(..)
+                        | DataType::Float16
+                        | DataType::Float32
+                        | DataType::Float64 => {
+                            column_type = Type::Real;
+                        }
+                        _ => {}
+                    }
+                }
+            }
 
             let data_type = match &projected_schema {
                 Some(schema) => {

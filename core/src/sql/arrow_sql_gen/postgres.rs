@@ -36,7 +36,9 @@ pub mod schema;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },
@@ -257,17 +259,47 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 Type::INT8 => {
                     handle_primitive_type!(builder, Type::INT8, Int64Builder, i64, row, i);
                 }
+                Type::OID => {
+                    handle_primitive_type!(builder, Type::OID, UInt32Builder, u32, row, i);
+                }
+                Type::XID => {
+                    let Some(builder) = builder else {
+                        return NoBuilderForIndexSnafu { index: i }.fail();
+                    };
+                    let Some(builder) = builder.as_any_mut().downcast_mut::<UInt32Builder>() else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+                    let v = row
+                        .try_get::<usize, Option<XidFromSql>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu { pg_type: Type::XID })?;
+
+                    match v {
+                        Some(v) => {
+                            builder.append_value(v.xid);
+                        }
+                        None => builder.append_null(),
+                    }
+                }
                 Type::FLOAT4 => {
                     handle_primitive_type!(builder, Type::FLOAT4, Float32Builder, f32, row, i);
                 }
                 Type::FLOAT8 => {
                     handle_primitive_type!(builder, Type::FLOAT8, Float64Builder, f64, row, i);
                 }
+                Type::CHAR => {
+                    handle_primitive_type!(builder, Type::CHAR, Int8Builder, i8, row, i);
+                }
                 Type::TEXT => {
                     handle_primitive_type!(builder, Type::TEXT, StringBuilder, &str, row, i);
                 }
                 Type::VARCHAR => {
                     handle_primitive_type!(builder, Type::VARCHAR, StringBuilder, &str, row, i);
+                }
+                Type::NAME => {
+                    handle_primitive_type!(builder, Type::NAME, StringBuilder, &str, row, i);
                 }
                 Type::BYTEA => {
                     handle_primitive_type!(builder, Type::BYTEA, BinaryBuilder, Vec<u8>, row, i);
@@ -629,6 +661,14 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     ListBuilder<Int64Builder>,
                     i64
                 ),
+                Type::OID_ARRAY => handle_primitive_array_type!(
+                    Type::OID_ARRAY,
+                    builder,
+                    row,
+                    i,
+                    ListBuilder<UInt32Builder>,
+                    u32
+                ),
                 Type::FLOAT4_ARRAY => handle_primitive_array_type!(
                     Type::FLOAT4_ARRAY,
                     builder,
@@ -830,9 +870,13 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
         Type::INT2 => Ok(Some(DataType::Int16)),
         Type::INT4 => Ok(Some(DataType::Int32)),
         Type::INT8 | Type::MONEY => Ok(Some(DataType::Int64)),
+        Type::OID | Type::XID => Ok(Some(DataType::UInt32)),
         Type::FLOAT4 => Ok(Some(DataType::Float32)),
         Type::FLOAT8 => Ok(Some(DataType::Float64)),
-        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID => Ok(Some(DataType::Utf8)),
+        Type::CHAR => Ok(Some(DataType::Int8)),
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::UUID | Type::NAME => {
+            Ok(Some(DataType::Utf8))
+        }
         Type::BYTEA => Ok(Some(DataType::Binary)),
         Type::BOOL => Ok(Some(DataType::Boolean)),
         // Schema validation will only allow JSONB columns when `UnsupportedTypeAction` is set to `String`, so it is safe to handle JSONB here as strings.
@@ -852,6 +896,7 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
             Arc::new(Field::new("item", DataType::Float64, true)),
             2,
         ))),
+        Type::PG_NODE_TREE => Ok(Some(DataType::Utf8)),
         Type::INT2_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int16,
@@ -865,6 +910,11 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
         Type::INT8_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Int64,
+            true,
+        ))))),
+        Type::OID_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::UInt32,
             true,
         ))))),
         Type::FLOAT4_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
@@ -1031,6 +1081,25 @@ impl<'a> FromSql<'a> for GeometryFromSql<'a> {
     }
 }
 
+struct XidFromSql {
+    xid: u32,
+}
+
+impl<'a> FromSql<'a> for XidFromSql {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let mut cursor = std::io::Cursor::new(raw);
+        let xid = cursor.read_u32::<BigEndian>()?;
+        Ok(XidFromSql { xid })
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::XID)
+    }
+}
+
 fn get_decimal_column_precision_and_scale(
     column_name: &str,
     projected_schema: &SchemaRef,
@@ -1045,8 +1114,8 @@ fn get_decimal_column_precision_and_scale(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use chrono::NaiveTime;
+    use datafusion::arrow::array::{Time64NanosecondArray, Time64NanosecondBuilder};
     use geo_types::{point, polygon, Geometry};
     use geozero::{CoordDimensions, ToWkb};
     use std::str::FromStr;

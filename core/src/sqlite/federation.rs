@@ -1,10 +1,9 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
 use datafusion_federation::sql::{
     ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -13,7 +12,6 @@ use futures::TryStreamExt;
 use snafu::ResultExt;
 use std::sync::Arc;
 
-use super::between::SQLiteBetweenVisitor;
 use super::sql_table::SQLiteTable;
 use super::sqlite_interval::SQLiteIntervalVisitor;
 use datafusion::{
@@ -28,12 +26,12 @@ impl<T, P> SQLiteTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.clone();
+        let table_reference = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::from(table_name),
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
@@ -47,6 +45,7 @@ impl<T, P> SQLiteTable<T, P> {
             self,
         ))
     }
+}
 
     fn sqlite_ast_analyzer(&self) -> AstAnalyzerRule {
         let decimal_between = self.decimal_between;
@@ -65,11 +64,9 @@ impl<T, P> SQLiteTable<T, P> {
                         let _ = new_query.visit(&mut between_visitor);
                     }
 
-                    Ok(ast::Statement::Query(new_query))
-                }
-                _ => Ok(ast),
-            }
-        })
+            Ok(ast::Statement::Query(new_query))
+        }
+        _ => Ok(ast),
     }
 }
 
@@ -88,7 +85,8 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
+        let rule = Box::new(sqlite_ast_analyzer);
+        Some(AstAnalyzer::new(vec![rule]))
     }
 
     fn execute(

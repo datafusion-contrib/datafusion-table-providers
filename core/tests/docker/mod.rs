@@ -1,8 +1,12 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bollard::{
-    container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions},
+    container::{
+        Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,
+        StartContainerOptions, StopContainerOptions,
+    },
     image::CreateImageOptions,
+    query_parameters::{ListContainersOptions, ListImagesOptions},
     secret::{
         ContainerState, ContainerStateStatusEnum, Health, HealthConfig, HealthStatusEnum,
         HostConfig, PortBinding,
@@ -39,7 +43,9 @@ pub async fn remove(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
 }
 
 pub async fn stop(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
-    Ok(docker.stop_container(name, None).await?)
+    Ok(docker
+        .stop_container(name, Option::<StopContainerOptions>::None)
+        .await?)
 }
 
 pub struct ContainerRunnerBuilder<'a> {
@@ -105,7 +111,7 @@ pub struct ContainerRunner<'a> {
     healthcheck: Option<HealthConfig>,
 }
 
-impl<'a> ContainerRunner<'a> {
+impl ContainerRunner<'_> {
     pub async fn run(self) -> Result<RunningContainer, anyhow::Error> {
         if self.is_container_running().await? {
             remove(&self.docker, &self.name).await?;
@@ -124,7 +130,7 @@ impl<'a> ContainerRunner<'a> {
                 format!("{container_port}/tcp"),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(format!("{host_port}")),
+                    host_port: Some(format!("{host_port}/tcp")),
                 }]),
             );
         }
@@ -164,7 +170,10 @@ impl<'a> ContainerRunner<'a> {
 
         let start_time = std::time::Instant::now();
         loop {
-            let inspect_container = self.docker.inspect_container(&self.name, None).await?;
+            let inspect_container = self
+                .docker
+                .inspect_container(&self.name, Option::<InspectContainerOptions>::None)
+                .await?;
             tracing::trace!("Container status: {:?}", inspect_container.state);
 
             if let Some(ContainerState {
@@ -196,7 +205,10 @@ impl<'a> ContainerRunner<'a> {
 
     async fn pull_image(&self) -> Result<(), anyhow::Error> {
         // Check if image is already pulled
-        let images = self.docker.list_images::<&str>(None).await?;
+        let images = self
+            .docker
+            .list_images(Option::<ListImagesOptions>::None)
+            .await?;
         for image in images {
             if image.repo_tags.iter().any(|t| t == &self.image) {
                 tracing::debug!("Docker image {} already pulled", self.image);
@@ -218,7 +230,10 @@ impl<'a> ContainerRunner<'a> {
     }
 
     async fn is_container_running(&self) -> Result<bool, anyhow::Error> {
-        let containers = self.docker.list_containers::<&str>(None).await?;
+        let containers = self
+            .docker
+            .list_containers(Option::<ListContainersOptions>::None)
+            .await?;
         for container in containers {
             let Some(names) = container.names else {
                 continue;

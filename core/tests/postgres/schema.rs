@@ -14,7 +14,7 @@ use datafusion_table_providers::postgres::PostgresTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::util::secrets::to_secret_map;
 
-const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table_pg.sql");
+const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table.sql");
 
 fn get_schema() -> SchemaRef {
     let fields = vec![
@@ -43,7 +43,7 @@ fn get_schema() -> SchemaRef {
 #[tokio::test]
 async fn test_postgres_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container(port)
         .await
         .expect("Postgres container to start");
 
@@ -63,7 +63,7 @@ async fn test_postgres_schema_inference() {
         order_exprs: vec![],
         unbounded: false,
         options: common::get_pg_params(port),
-        constraints: Constraints::new_unverified(vec![]),
+        constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -95,7 +95,7 @@ async fn test_postgres_schema_inference() {
 #[tokio::test]
 async fn test_postgres_schema_inference_complex_types() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container(port)
         .await
         .expect("Postgres container to start");
 
@@ -138,7 +138,7 @@ async fn test_postgres_schema_inference_complex_types() {
 #[tokio::test]
 async fn test_postgres_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container(port)
         .await
         .expect("Postgres container to start");
 
@@ -160,7 +160,7 @@ async fn test_postgres_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool.clone());
@@ -182,7 +182,7 @@ async fn test_postgres_view_schema_inference() {
 #[tokio::test]
 async fn test_postgres_materialized_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+    let container = common::start_postgres_docker_container(port)
         .await
         .expect("Postgres container to start");
 
@@ -204,7 +204,7 @@ async fn test_postgres_materialized_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool);

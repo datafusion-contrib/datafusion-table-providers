@@ -489,3 +489,17 @@ mod tests {
         Ok(())
     }
 }
+
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+
+pub(super) fn expr_contains_subquery(expr: &Expr) -> datafusion::error::Result<bool> {
+    let mut contains_subquery = false;
+    expr.apply(|expr| match expr {
+        Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_) => {
+            contains_subquery = true;
+            Ok(TreeNodeRecursion::Stop)
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    })?;
+    Ok(contains_subquery)
+}
