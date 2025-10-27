@@ -496,7 +496,7 @@ fn insert_append(
         callback(&tx, &append_table, &schema, num_rows)?;
     }
 
-    if write_settings.recompute_statistics_on_refresh {
+    if write_settings.recompute_statistics_on_write {
         execute_analyze_sql(&tx, &append_table.table_name().to_string());
     }
 
@@ -676,7 +676,7 @@ fn insert_overwrite(
         callback(&tx, &new_table, &schema, num_rows)?;
     }
 
-    if write_settings.recompute_statistics_on_refresh {
+    if write_settings.recompute_statistics_on_write {
         execute_analyze_sql(&tx, &new_table.table_name().to_string());
     }
 
