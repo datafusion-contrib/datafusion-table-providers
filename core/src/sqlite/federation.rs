@@ -4,9 +4,8 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
 use datafusion_federation::sql::{
-    ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
+    AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::TryStreamExt;
@@ -48,7 +47,7 @@ impl<T, P> SQLiteTable<T, P> {
         ))
     }
 
-    fn sqlite_ast_analyzer(&self) -> AstAnalyzerRule {
+    fn sqlite_ast_analyzer(&self) -> AstAnalyzer {
         let decimal_between = self.decimal_between;
         Box::new(move |ast| {
             match ast {
@@ -88,7 +87,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
+        Some(self.sqlite_ast_analyzer())
     }
 
     fn execute(
