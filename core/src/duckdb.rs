@@ -1,3 +1,4 @@
+use crate::duckdb::write_settings::DuckDBWriteSettings;
 use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
@@ -51,6 +52,7 @@ mod creator;
 mod settings;
 mod sql_table;
 pub mod write;
+pub mod write_settings;
 pub use creator::{RelationName, TableDefinition, TableManager, ViewCreator};
 
 #[derive(Debug, Snafu)]
@@ -447,10 +449,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool = Arc::new(pool);
         make_initial_table(Arc::clone(&table_definition), &pool)?;
 
+        let write_settings = DuckDBWriteSettings::from_params(&options);
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(Arc::clone(&table_definition))
             .with_pool(pool)
-            .set_on_conflict(on_conflict);
+            .set_on_conflict(on_conflict)
+            .with_write_settings(write_settings);
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
