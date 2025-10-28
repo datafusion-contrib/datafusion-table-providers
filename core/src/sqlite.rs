@@ -1005,6 +1005,28 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
+                    DataType::Decimal32(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal32Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::BigDecimal;
+                            let value =
+                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
+                            params.push(Box::new(value.to_string()));
+                        }
+                    }
+                    DataType::Decimal64(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal64Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::BigDecimal;
+                            let value =
+                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
+                            params.push(Box::new(value.to_string()));
+                        }
+                    }
                     DataType::Decimal128(_, scale) => {
                         let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
                         if array.is_null(row_idx) {

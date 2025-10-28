@@ -285,6 +285,8 @@ async fn apply_last_write_wins(
                 order_by: vec![col(BATCH_ROW_NUMBER_COLUMN_NAME).sort(false, true)], // Order by row_num DESC
                 window_frame: WindowFrame::new(Some(false)),
                 null_treatment: None,
+                distinct: false,
+                filter: None,
             },
         }));
 
