@@ -17,10 +17,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use std::any::Any;
 use std::cell::RefCell;
 
-use std::sync::{Arc,};
-use tokio::sync::mpsc::Sender;
 use adbc_core::options::ObjectDepth;
-use arrow::array::{AsArray, RecordBatch, RecordBatchIterator, RecordBatchReader};
+use arrow::array::{AsArray, RecordBatch, RecordBatchIterator};
 use arrow_schema::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
@@ -29,6 +27,8 @@ use r2d2_adbc::AdbcConnectionManager;
 use snafu::{prelude::*, ResultExt};
 use std::marker::Send;
 use std::marker::Sync;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::Sender;
 
 use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
 
@@ -52,7 +52,7 @@ where
     D: Database + Send + 'static,
     D::ConnectionType: Send + Sync,
 {
-    pub conn: RefCell<r2d2::PooledConnection<AdbcConnectionManager<D>>>,
+    pub conn: Arc<Mutex<RefCell<r2d2::PooledConnection<AdbcConnectionManager<D>>>>>,
 }
 
 impl<D> DbConnection<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>
@@ -95,12 +95,13 @@ where
 {
     fn new(conn: r2d2::PooledConnection<AdbcConnectionManager<D>>) -> Self {
         AdbcDbConnection {
-            conn: RefCell::new(conn),
+            conn: Arc::new(Mutex::new(RefCell::new(conn))),
         }
     }
 
     fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
-        let conn = self.conn.borrow();
+        let conn_mx = self.conn.lock().unwrap();
+        let conn = conn_mx.borrow();
         let mut result = conn
             .get_objects(ObjectDepth::Tables, None, Some(schema), None, None, None)
             .boxed()
@@ -154,7 +155,8 @@ where
     }
 
     fn schemas(&self) -> Result<Vec<String>, super::Error> {
-        let conn = self.conn.borrow();
+        let conn_mx = self.conn.lock().unwrap();
+        let conn = conn_mx.borrow();
 
         let mut result = conn
             .get_objects(ObjectDepth::Schemas, None, None, None, None, None)
@@ -191,7 +193,8 @@ where
     }
 
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
-        let conn = self.conn.borrow();
+        let conn_mx = self.conn.lock().unwrap();
+        let conn = conn_mx.borrow();
 
         let schema = conn
             .get_table_schema(
@@ -216,7 +219,8 @@ where
         let create_stream = || -> Result<SendableRecordBatchStream> {
             let schema;
             {
-                let mut conn = self.conn.borrow_mut();
+                let conn_mx = self.conn.lock().unwrap();
+                let mut conn = conn_mx.borrow_mut();
                 let mut stmt = conn
                     .new_statement()
                     .boxed()
@@ -229,15 +233,14 @@ where
                     .context(super::UnableToQueryArrowSnafu)?;
             }
 
-            let mut conn = self.conn.replace(
-                // This is a temporary placeholder that will be immediately replaced
-                unsafe { std::mem::zeroed() }
-            );
-            
+            let cloned_conn = Arc::clone(&self.conn);
+
             let sql_owned = sql.to_string();
             let params_owned = params.to_vec();
-            
-            let join_handle = tokio::task::spawn_blocking(move || {                
+
+            let join_handle = tokio::task::spawn_blocking(move || {
+                let conn_mx = cloned_conn.lock().unwrap();
+                let mut conn = conn_mx.borrow_mut();
                 let mut stmt = conn
                     .new_statement()
                     .boxed()
@@ -266,7 +269,7 @@ where
                     let b = batch.boxed().context(super::UnableToQueryArrowSnafu)?;
                     blocking_channel_send(&batch_tx, b)?;
                 }
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(conn)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
 
             let output_stream = stream! {
@@ -275,11 +278,7 @@ where
                 }
 
                 match join_handle.await {
-                    Ok(Ok(returned_conn)) => {
-                        // Return the connection to the RefCell
-                        // This is safe because we have exclusive access via self
-                        self.conn.replace(returned_conn);
-                    },
+                    Ok(Ok(())) => {},
                     Ok(Err(task_error)) => {
                         yield Err(DataFusionError::Execution(format!(
                             "Failed to execute ADBC query: {task_error}"
@@ -303,6 +302,26 @@ where
     }
 
     fn execute(&self, sql: &str, params: &[RecordBatch]) -> Result<u64> {
-        Ok(0)
+        let conn_mx = self.conn.lock().unwrap();
+        let mut conn = conn_mx.borrow_mut();
+        let mut stmt = conn.new_statement().context(AdbcSnafu)?;
+        stmt.set_sql_query(sql)?;
+
+        let params_owned = params.to_vec();
+        match params.len() {
+            0 => {}
+            1 => stmt.bind(params_owned[0].clone())?,
+            _ => {
+                let param_schema = params_owned[0].schema();
+                let reader =
+                    RecordBatchIterator::new(params_owned.into_iter().map(Ok), param_schema);
+
+                stmt.bind_stream(Box::new(reader))?;
+            }
+        }
+
+        let count: Option<i64> = stmt.execute_update().context(AdbcSnafu)?;
+
+        Ok(count.unwrap_or(-1) as u64)
     }
 }
