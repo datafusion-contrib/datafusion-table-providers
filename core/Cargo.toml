@@ -100,6 +100,9 @@ trust-dns-resolver = "0.23.2"
 url = "2.5.4"
 uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
+adbc_driver_manager = { workspace = true, version = "0.20.0", optional = true }
+adbc_core = { workspace = true, version = "0.20.0", optional = true }
+r2d2_adbc = { git = "https://github.com/adbc-drivers/r2d2-adbc.git", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -155,6 +158,15 @@ postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
+adbc = [
+  "dep:adbc_driver_manager", 
+  "dep:adbc_core", 
+  "dep:r2d2_adbc", 
+  "dep:async-stream", 
+  "dep:arrow-schema",
+  "dep:r2d2",
+]
+adbc-federation = ["adbc", "federation"]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
@@ -187,3 +199,8 @@ required-features = ["clickhouse"]
 name = "sqlite_insert_benchmark"
 path = "../benches/sqlite_insert_benchmark.rs"
 required-features = ["sqlite"]
+
+[[example]]
+name = "adbc"
+path = "examples/adbc_duckdb.rs"
+required-features = ["adbc"]
