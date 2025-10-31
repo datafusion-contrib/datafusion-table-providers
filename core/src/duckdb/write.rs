@@ -1,19 +1,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
 
-use crate::duckdb::DuckDB;
-use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
-use arrow::array::RecordBatchReader;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use arrow_array::RecordBatchIterator;
-use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::{Constraints, SchemaExt};
@@ -898,31 +894,6 @@ pub fn execute_analyze_sql(tx: &Transaction, table_name: &str) {
     }
 }
 
-struct RecordBatchReaderFromStream {
-    stream: Receiver<RecordBatch>,
-    schema: SchemaRef,
-}
-
-impl RecordBatchReaderFromStream {
-    fn new(stream: Receiver<RecordBatch>, schema: SchemaRef) -> Self {
-        Self { stream, schema }
-    }
-}
-
-impl Iterator for RecordBatchReaderFromStream {
-    type Item = Result<RecordBatch, ArrowError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.stream.blocking_recv().map(Ok)
-    }
-}
-
-impl RecordBatchReader for RecordBatchReaderFromStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use arrow::array::{Int64Array, StringArray};
@@ -932,7 +903,7 @@ mod test {
     use super::*;
     use crate::duckdb::creator::tests::get_mem_duckdb_connection;
     use crate::{
-        duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
+        duckdb::creator::tests::{get_basic_table_definition, init_tracing},
         util::{column_reference::ColumnReference, indexes::IndexType},
     };
 
