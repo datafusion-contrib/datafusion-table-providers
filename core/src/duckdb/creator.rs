@@ -10,13 +10,12 @@ use arrow::{
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::sql::TableReference;
-use duckdb::Transaction;
+use duckdb::{Connection, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
-
 use super::DuckDB;
 use crate::util::{
     column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
@@ -263,12 +262,9 @@ impl TableManager {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn create_table(
         &self,
-        pool: Arc<DuckDbConnectionPool>,
+        duckdb_conn: &mut Connection,
         tx: &Transaction<'_>,
     ) -> super::Result<()> {
-        let mut db_conn = pool.connect_sync().context(super::DbConnectionPoolSnafu)?;
-        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
-
         // create the table with the supplied table name, or a generated internal name
         let mut create_stmt = self.get_table_create_statement(duckdb_conn)?;
         tracing::debug!("{create_stmt}");
@@ -407,10 +403,9 @@ impl TableManager {
     #[tracing::instrument(level = "debug", skip_all)]
     fn get_table_create_statement(
         &self,
-        duckdb_conn: &mut DuckDbConnection,
+        duckdb_conn: &mut Connection,
     ) -> super::Result<String> {
         let tx = duckdb_conn
-            .conn
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();

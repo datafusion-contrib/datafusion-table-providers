@@ -159,8 +159,8 @@ pub enum Error {
     #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
     MissingReadProvider,
 
-    #[snafu(display("A pool is required to create a DuckDBTableWriter"))]
-    MissingPool,
+    #[snafu(display("A connection is required to create a DuckDBTableWriter"))]
+    MissingConnection,
 
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
@@ -451,9 +451,18 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
         let write_settings = DuckDBWriteSettings::from_params(&options);
 
+        let mut write_cxn = pool.connect()
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        let write_cxn = DuckDB::duckdb_conn(
+            &mut write_cxn
+        ).map_err(to_datafusion_error)?.conn.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
+
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(Arc::clone(&table_definition))
-            .with_pool(pool)
+            .with_connection(write_cxn)
             .set_on_conflict(on_conflict)
             .with_write_settings(write_settings);
 
@@ -660,9 +669,18 @@ impl DuckDBTableFactory {
 
         let table_name = RelationName::from(table_reference);
         let table_definition = TableDefinition::new(table_name, Arc::clone(&schema));
+
+        let mut write_cxn = self.pool.connect()
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        let write_cxn = DuckDB::duckdb_conn(
+            &mut write_cxn
+        ).map_err(to_datafusion_error)?.conn.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_read_provider(read_provider)
-            .with_pool(Arc::clone(&self.pool))
+            .with_connection(write_cxn)
             .with_table_definition(Arc::new(table_definition));
 
         Ok(Arc::new(table_writer_builder.build()?))
@@ -704,6 +722,7 @@ pub(crate) fn make_initial_table(
         .map_err(to_datafusion_error)?;
 
     let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_datafusion_error)?;
+    let mut create_table_connection = duckdb_conn.conn.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
 
     let tx = duckdb_conn
         .conn
@@ -722,10 +741,11 @@ pub(crate) fn make_initial_table(
         return Ok(());
     }
 
+
     let table_manager = TableManager::new(table_definition);
 
     table_manager
-        .create_table(cloned_pool, &tx)
+        .create_table(&mut create_table_connection, &tx)
         .map_err(to_datafusion_error)?;
 
     tx.commit()

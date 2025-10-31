@@ -12,6 +12,7 @@ use crate::util::{
 use arrow::array::RecordBatchReader;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow_array::RecordBatchIterator;
 use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -25,11 +26,13 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
-use duckdb::Transaction;
+use duckdb::{Connection, DropBehavior, Transaction};
 use futures::StreamExt;
 use snafu::prelude::*;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::JoinHandle;
+use tokio::task;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::creator::{TableDefinition, TableManager, ViewCreator};
 use super::{to_datafusion_error, RelationName};
@@ -58,7 +61,7 @@ const SCHEMA_EQUIVALENCE_ENABLED: bool = false;
 #[derive(Default)]
 pub struct DuckDBTableWriterBuilder {
     read_provider: Option<Arc<dyn TableProvider>>,
-    pool: Option<Arc<DuckDbConnectionPool>>,
+    connection: Option<Connection>,
     on_conflict: Option<OnConflict>,
     table_definition: Option<Arc<TableDefinition>>,
     on_data_written: Option<WriteCompletionHandler>,
@@ -78,8 +81,8 @@ impl DuckDBTableWriterBuilder {
     }
 
     #[must_use]
-    pub fn with_pool(mut self, pool: Arc<DuckDbConnectionPool>) -> Self {
-        self.pool = Some(pool);
+    pub fn with_connection(mut self, connection: Connection) -> Self {
+        self.connection = Some(connection);
         self
     }
 
@@ -120,8 +123,8 @@ impl DuckDBTableWriterBuilder {
             return Err(super::Error::MissingReadProvider);
         };
 
-        let Some(pool) = self.pool else {
-            return Err(super::Error::MissingPool);
+        let Some(connection) = self.connection else {
+            return Err(super::Error::MissingConnection);
         };
 
         let Some(table_definition) = self.table_definition else {
@@ -132,28 +135,40 @@ impl DuckDBTableWriterBuilder {
             read_provider,
             on_conflict: self.on_conflict,
             table_definition,
-            pool,
+            connection,
             on_data_written: self.on_data_written,
             write_settings: self.write_settings.unwrap_or_default(),
         })
     }
 }
 
-#[derive(Clone)]
 pub struct DuckDBTableWriter {
     pub read_provider: Arc<dyn TableProvider>,
-    pool: Arc<DuckDbConnectionPool>,
+    connection: Connection,
     table_definition: Arc<TableDefinition>,
     on_conflict: Option<OnConflict>,
     on_data_written: Option<WriteCompletionHandler>,
     write_settings: DuckDBWriteSettings,
 }
 
+impl Clone for DuckDBTableWriter {
+    fn clone(&self) -> Self {
+        Self {
+            read_provider: Arc::clone(&self.read_provider),
+            connection: self.connection().expect("Must clone connection"),
+            table_definition: Arc::clone(&self.table_definition),
+            on_conflict: self.on_conflict.clone(),
+            on_data_written: self.on_data_written.clone(),
+            write_settings: self.write_settings.clone(),
+        }
+    }
+}
+
 impl std::fmt::Debug for DuckDBTableWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DuckDBTableWriter")
             .field("read_provider", &self.read_provider)
-            .field("pool", &self.pool)
+            .field("connection", &self.connection)
             .field("table_definition", &self.table_definition)
             .field("on_conflict", &self.on_conflict)
             .field(
@@ -170,8 +185,8 @@ impl std::fmt::Debug for DuckDBTableWriter {
 
 impl DuckDBTableWriter {
     #[must_use]
-    pub fn pool(&self) -> Arc<DuckDbConnectionPool> {
-        Arc::clone(&self.pool)
+    pub fn connection(&self) -> datafusion::common::Result<Connection> {
+        self.connection.try_clone().map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     #[must_use]
@@ -233,7 +248,7 @@ impl TableProvider for DuckDBTableWriter {
         overwrite: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let mut sink = DuckDBDataSink::new(
-            Arc::clone(&self.pool),
+            self.connection()?,
             Arc::clone(&self.table_definition),
             overwrite,
             self.on_conflict.clone(),
@@ -250,7 +265,7 @@ impl TableProvider for DuckDBTableWriter {
 }
 
 pub(crate) struct DuckDBDataSink {
-    pool: Arc<DuckDbConnectionPool>,
+    connection: Connection,
     table_definition: Arc<TableDefinition>,
     overwrite: InsertOp,
     on_conflict: Option<OnConflict>,
@@ -278,7 +293,6 @@ impl DataSink for DuckDBDataSink {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let pool = Arc::clone(&self.pool);
         let table_definition = Arc::clone(&self.table_definition);
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
@@ -294,12 +308,13 @@ impl DataSink for DuckDBDataSink {
         let (notify_commit_transaction, on_commit_transaction) = tokio::sync::oneshot::channel();
 
         let schema = data.schema();
+        let task_connection = self.connection.try_clone().map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let duckdb_write_handle: JoinHandle<datafusion::common::Result<u64>> =
             tokio::task::spawn_blocking(move || {
                 let num_rows = match overwrite {
                     InsertOp::Overwrite => insert_overwrite(
-                        pool,
+                        task_connection,
                         &table_definition,
                         batch_rx,
                         on_conflict.as_ref(),
@@ -309,7 +324,7 @@ impl DataSink for DuckDBDataSink {
                         &write_settings,
                     )?,
                     InsertOp::Append | InsertOp::Replace => insert_append(
-                        pool,
+                        task_connection,
                         &table_definition,
                         batch_rx,
                         on_conflict.as_ref(),
@@ -387,14 +402,14 @@ impl DataSink for DuckDBDataSink {
 
 impl DuckDBDataSink {
     pub(crate) fn new(
-        pool: Arc<DuckDbConnectionPool>,
+        connection: Connection,
         table_definition: Arc<TableDefinition>,
         overwrite: InsertOp,
         on_conflict: Option<OnConflict>,
         schema: SchemaRef,
     ) -> Self {
         Self {
-            pool,
+            connection,
             table_definition,
             overwrite,
             on_conflict,
@@ -431,7 +446,7 @@ impl DisplayAs for DuckDBDataSink {
 
 #[allow(clippy::too_many_arguments)]
 fn insert_append(
-    pool: Arc<DuckDbConnectionPool>,
+    connection: Connection,
     table_definition: &Arc<TableDefinition>,
     batch_rx: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
@@ -440,15 +455,9 @@ fn insert_append(
     schema: SchemaRef,
     write_settings: &DuckDBWriteSettings,
 ) -> datafusion::common::Result<u64> {
-    let mut db_conn = pool
-        .connect_sync()
-        .context(super::DbConnectionPoolSnafu)
-        .map_err(to_retriable_data_write_error)?;
-
-    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
+    let mut duckdb_conn = connection.try_clone().map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let tx = duckdb_conn
-        .conn
         .transaction()
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
@@ -483,14 +492,14 @@ fn insert_append(
         "Append load for {table_name}",
         table_name = append_table.table_name()
     );
-    let num_rows = write_to_table(
+
+    let num_rows = write_to_table_via_appender(
+        connection,
         &append_table,
-        &tx,
         Arc::clone(&schema),
         batch_rx,
         on_conflict,
-    )
-    .map_err(to_retriable_data_write_error)?;
+    ).map_err(to_retriable_data_write_error)?;
 
     if let Some(callback) = on_data_written {
         callback(&tx, &append_table, &schema, num_rows)?;
@@ -503,16 +512,6 @@ fn insert_append(
     on_commit_transaction
         .try_recv()
         .map_err(to_retriable_data_write_error)?;
-
-    tx.commit()
-        .context(super::UnableToCommitTransactionSnafu)
-        .map_err(to_retriable_data_write_error)?;
-
-    let tx = duckdb_conn
-        .conn
-        .transaction()
-        .context(super::UnableToBeginTransactionSnafu)
-        .map_err(to_datafusion_error)?;
 
     // apply indexes if new table
     if should_apply_indexes {
@@ -555,7 +554,7 @@ fn insert_append(
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn insert_overwrite(
-    pool: Arc<DuckDbConnectionPool>,
+    mut connection: Connection,
     table_definition: &Arc<TableDefinition>,
     batch_rx: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
@@ -564,16 +563,9 @@ fn insert_overwrite(
     schema: SchemaRef,
     write_settings: &DuckDBWriteSettings,
 ) -> datafusion::common::Result<u64> {
-    let cloned_pool = Arc::clone(&pool);
-    let mut db_conn = pool
-        .connect_sync()
-        .context(super::DbConnectionPoolSnafu)
-        .map_err(to_retriable_data_write_error)?;
-
-    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
+    let mut duckdb_conn = connection.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
 
     let tx = duckdb_conn
-        .conn
         .transaction()
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
@@ -583,7 +575,7 @@ fn insert_overwrite(
         .map_err(to_retriable_data_write_error)?;
 
     new_table
-        .create_table(cloned_pool, &tx)
+        .create_table(&mut connection, &tx)
         .map_err(to_retriable_data_write_error)?;
 
     let existing_tables = new_table
@@ -654,12 +646,37 @@ fn insert_overwrite(
         }
     }
 
+    // Make the table, so appender has something to write to
+    match tx.commit() {
+        Ok(_) => {},
+        Err(e) => {
+            let tx = duckdb_conn
+                .transaction()
+                .map_err(|e| DataFusionError::External(e.into()))?;
+
+            new_table.delete_table(&tx).map_err(|e| DataFusionError::External(e.into()))?;
+
+            return Err(to_retriable_data_write_error(e));
+        }
+    };
+
     tracing::debug!("Initial load for {}", new_table.table_name());
-    let num_rows = write_to_table(&new_table, &tx, Arc::clone(&schema), batch_rx, on_conflict)
+    let num_rows = write_to_table_via_appender(
+        connection.try_clone().map_err(|e| DataFusionError::External(e.into()))?,
+        &new_table,
+        Arc::clone(&schema),
+        batch_rx,
+        on_conflict
+    )
         .map_err(to_retriable_data_write_error)?;
 
     on_commit_transaction
         .try_recv()
+        .map_err(to_retriable_data_write_error)?;
+
+    let tx = duckdb_conn
+        .transaction()
+        .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
 
     if let Some(base_table) = base_table {
@@ -690,7 +707,6 @@ fn insert_overwrite(
     );
 
     let tx = duckdb_conn
-        .conn
         .transaction()
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_datafusion_error)?;
@@ -715,17 +731,19 @@ fn insert_overwrite(
 
 #[allow(clippy::doc_markdown)]
 /// Writes a stream of ``RecordBatch``es to a DuckDB table.
-fn write_to_table(
+fn write_to_table_via_view(
     table: &TableManager,
     tx: &Transaction<'_>,
     schema: SchemaRef,
-    data_batches: Receiver<RecordBatch>,
+    batch: RecordBatch,
     on_conflict: Option<&OnConflict>,
 ) -> datafusion::common::Result<u64> {
-    let stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchReaderFromStream::new(
-        data_batches,
-        schema,
-    )));
+    let iterator = RecordBatchIterator::new(
+        vec![Ok(batch)].into_iter(),
+        schema
+    );
+
+    let stream = FFI_ArrowArrayStream::new(Box::new(iterator));
 
     let current_ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -745,6 +763,83 @@ fn write_to_table(
     view.drop(tx).map_err(to_datafusion_error)?;
 
     Ok(rows as u64)
+}
+
+fn append_batch_to_table(
+    mut connection: Connection,
+    table: &TableManager,
+    record_batch: RecordBatch,
+) -> datafusion::common::Result<u64> {
+    let mut tx = connection.transaction().map_err(|e| DataFusionError::External(e.into()))?;
+    tx.set_drop_behavior(DropBehavior::Rollback);
+
+    let rows = record_batch.num_rows();
+
+    // Add some lexical scope to drop our borrow...
+    {
+        let mut appender = tx
+            .appender(table.table_name().to_string().as_str())
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        appender.append_record_batch(record_batch).map_err(|e| DataFusionError::External(e.into()))?;
+        appender.flush().map_err(|e| DataFusionError::External(e.into()))?;
+    }
+
+    // ...so we can commit our transaction
+    tx.commit().map_err(|e| DataFusionError::External(e.into()))?;
+
+    Ok(rows as u64)
+}
+
+fn append_batch_with_view_fallback(
+    connection: Connection,
+    table: TableManager,
+    schema: SchemaRef,
+    batch: RecordBatch,
+    on_conflict: Option<OnConflict>,
+) -> datafusion::common::Result<u64> {
+    let mut fallback_connection = connection.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
+
+    match append_batch_to_table(connection, &table, batch.clone()) {
+        Ok(inserted) => Ok(inserted),
+        Err(_) if on_conflict.is_some() => {
+            let tx = fallback_connection.transaction().map_err(|e| DataFusionError::External(e.into()))?;
+            let rows = write_to_table_via_view(&table, &tx, schema, batch, on_conflict.as_ref())?;
+            tx.commit().map_err(|e| DataFusionError::External(e.into()))?;
+            Ok(rows)
+        }
+        err => err,
+    }
+}
+
+#[allow(clippy::doc_markdown)]
+/// Writes a stream of ``RecordBatch``es to a DuckDB table.
+fn write_to_table_via_appender(
+    connection: Connection,
+    table: &TableManager,
+    schema: SchemaRef,
+    mut data_batches: Receiver<RecordBatch>,
+    on_conflict: Option<&OnConflict>,
+) -> datafusion::common::Result<u64> {
+    let mut join_set = JoinSet::new();
+
+    while let Some(batch) = data_batches.blocking_recv() {
+        let task_connection = connection.try_clone().map_err(|e| DataFusionError::External(e.into()))?;
+        let task_table = table.clone();
+        let task_schema = Arc::clone(&schema);
+        let task_on_conflict = on_conflict.cloned();
+
+        join_set.spawn(async move {
+            append_batch_with_view_fallback(task_connection, task_table, task_schema, batch, task_on_conflict)
+        });
+    }
+
+    let row_counts = task::block_in_place(|| Handle::current().block_on(join_set.join_all()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .iter().sum::<u64>();
+
+    Ok(row_counts)
 }
 
 /// Executes an ANALYZE statement to update query optimizer statistics.
