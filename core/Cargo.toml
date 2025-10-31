@@ -102,7 +102,7 @@ uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
 adbc_driver_manager = { workspace = true, version = "0.20.0", optional = true }
 adbc_core = { workspace = true, version = "0.20.0", optional = true }
-r2d2_adbc = { path = "../../r2d2_adbc", optional = true }
+r2d2_adbc = { git = "https://github.com/adbc-drivers/r2d2-adbc.git", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"

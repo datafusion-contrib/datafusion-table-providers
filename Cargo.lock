@@ -4555,6 +4555,7 @@ dependencies = [
 [[package]]
 name = "r2d2_adbc"
 version = "0.1.0"
+source = "git+https://github.com/adbc-drivers/r2d2-adbc.git#853d6430f0cabbacdae51b4b7377219d961d9f27"
 dependencies = [
  "adbc_core",
  "r2d2",

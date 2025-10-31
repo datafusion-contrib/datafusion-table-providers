@@ -64,11 +64,7 @@ pub enum Error {
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
-type DynAdbcConnectionPool<D>
-where
-    D: Database + Send + 'static,
-    D::ConnectionType: Connection + Send + Sync,
-= dyn DbConnectionPool<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>
+type DynAdbcConnectionPool<D> = dyn DbConnectionPool<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>
     + Send
     + Sync;
 
