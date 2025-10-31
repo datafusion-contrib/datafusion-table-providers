@@ -100,8 +100,8 @@ trust-dns-resolver = "0.23.2"
 url = "2.5.4"
 uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
-adbc_driver_manager = { version = "0.20.0", optional = true }
-adbc_core = { version = "0.20.0", optional = true }
+adbc_driver_manager = { workspace = true, version = "0.20.0", optional = true }
+adbc_core = { workspace = true, version = "0.20.0", optional = true }
 r2d2_adbc = { path = "../../r2d2_adbc", optional = true }
 
 [dev-dependencies]
@@ -158,7 +158,14 @@ postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
-adbc = ["dep:adbc_driver_manager", "dep:adbc_core", "dep:r2d2_adbc", "dep:async-stream", "dep:arrow-schema"]
+adbc = [
+  "dep:adbc_driver_manager", 
+  "dep:adbc_core", 
+  "dep:r2d2_adbc", 
+  "dep:async-stream", 
+  "dep:arrow-schema",
+  "dep:r2d2",
+]
 adbc-federation = ["adbc", "federation"]
 
 # docs.rs-specific configuration
@@ -195,5 +202,5 @@ required-features = ["sqlite"]
 
 [[example]]
 name = "adbc"
-path = "examples/adbc.rs"
+path = "examples/adbc_duckdb.rs"
 required-features = ["adbc"]

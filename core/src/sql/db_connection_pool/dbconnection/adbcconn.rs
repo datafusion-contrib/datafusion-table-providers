@@ -18,7 +18,7 @@ use std::any::Any;
 use std::cell::RefCell;
 
 use adbc_core::options::ObjectDepth;
-use arrow::array::{AsArray, RecordBatch, RecordBatchIterator};
+use arrow::array::{AsArray, RecordBatch, RecordBatchReader, RecordBatchIterator};
 use arrow_schema::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
@@ -139,7 +139,7 @@ where
                                 tables.extend(
                                     table_struct
                                         .as_struct()
-                                        .column(1)
+                                        .column(0)
                                         .as_string::<i32>()
                                         .iter()
                                         .filter_map(|name| name)
@@ -195,7 +195,7 @@ where
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
-
+        
         let schema = conn
             .get_table_schema(
                 table_reference.catalog(),
@@ -217,7 +217,7 @@ where
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
         let create_stream = || -> Result<SendableRecordBatchStream> {
-            let schema;
+            let schema: SchemaRef;
             {
                 let conn_mx = self.conn.lock().unwrap();
                 let mut conn = conn_mx.borrow_mut();
@@ -226,11 +226,22 @@ where
                     .boxed()
                     .context(super::UnableToQueryArrowSnafu)?;
                 stmt.set_sql_query(sql)?;
-
-                schema = stmt
-                    .execute_schema()
-                    .boxed()
-                    .context(super::UnableToQueryArrowSnafu)?;
+                
+                match stmt.execute_schema() {
+                    Ok(s) => schema = s.into(),
+                    // not all drivers implement execute_schema, so fall back to executing
+                    // with LIMIT 0 to get the schema.
+                    Err(_) => {
+                        stmt.set_sql_query(format!(
+                            "WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0"
+                        ))?;
+                        let result = stmt
+                            .execute()
+                            .boxed()
+                            .context(super::UnableToQueryArrowSnafu)?;
+                        schema = result.schema();
+                    }
+                }
             }
 
             let cloned_conn = Arc::clone(&self.conn);
