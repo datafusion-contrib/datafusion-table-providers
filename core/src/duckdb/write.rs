@@ -1,6 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{any::Any, fmt, sync::Arc};
-
 use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
@@ -22,14 +19,18 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
-use duckdb::{Connection, DropBehavior, Transaction};
+use duckdb::{Appender, Connection, DropBehavior, Transaction};
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use sea_query::IdenList;
 use snafu::prelude::*;
+use std::ops::Deref;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{any::Any, fmt, sync::Arc, thread};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::runtime::Handle;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::{broadcast, RwLock};
 use tokio::task;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -183,6 +184,10 @@ impl std::fmt::Debug for DuckDBTableWriter {
 }
 
 impl DuckDBTableWriter {
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
     #[must_use]
     pub fn table_definition(&self) -> Arc<TableDefinition> {
         Arc::clone(&self.table_definition)
@@ -486,7 +491,7 @@ fn insert_append(
     );
 
     let num_rows = write_to_table(
-        &connection,
+        &tx,
         &append_table,
         Arc::clone(&schema),
         batch_rx,
@@ -675,14 +680,8 @@ fn insert_overwrite(
         .map_err(to_datafusion_error)?;
 
     tracing::debug!("Initial load for {}", new_table.table_name());
-    let num_rows = write_to_table(
-        &connection,
-        &new_table,
-        Arc::clone(&schema),
-        batch_rx,
-        on_conflict,
-    )
-    .map_err(to_retriable_data_write_error)?;
+    let num_rows = write_to_table(&tx, &new_table, Arc::clone(&schema), batch_rx, on_conflict)
+        .map_err(to_retriable_data_write_error)?;
 
     on_commit_transaction
         .try_recv()
@@ -778,106 +777,73 @@ fn write_to_table_via_view(
     Ok(rows as u64)
 }
 
-fn append_batch_to_table(
+async fn append_batch_with_view_fallback(
     tx: &Transaction<'_>,
-    table: &TableManager,
-    record_batch: RecordBatch,
-) -> datafusion::common::Result<u64> {
-    let rows = record_batch.num_rows();
-
-    // Drop the appender when we're done with it
-    {
-        let mut appender = tx
-            .appender(table.table_name().to_string().as_str())
-            .map_err(|e| DataFusionError::External(e.into()))?;
-
-        appender
-            .append_record_batch(record_batch)
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        appender
-            .flush()
-            .map_err(|e| DataFusionError::External(e.into()))?;
-    }
-
-    Ok(rows as u64)
-}
-
-fn append_batch_with_view_fallback(
-    tx: &Transaction<'_>,
+    appender: Arc<RwLock<Appender<'static>>>,
     table: TableManager,
     schema: SchemaRef,
     batch: RecordBatch,
     on_conflict: Option<OnConflict>,
 ) -> datafusion::common::Result<u64> {
-    match append_batch_to_table(tx, &table, batch.clone()) {
-        Ok(inserted) => Ok(inserted),
+    let rows = batch.num_rows();
+
+    let append_ok = appender
+        .read()
+        .await
+        .append_record_batch(batch.clone())
+        .map_err(|e| DataFusionError::External(e.into()));
+
+    match append_ok {
+        Ok(_) => {
+            appender
+                .write()
+                .await
+                .flush()
+                .map_err(|e| DataFusionError::External(e.into()))?;
+            Ok(rows as u64)
+        }
         Err(_) if on_conflict.is_some() => {
             write_to_table_via_view(&table, tx, schema, batch, on_conflict.as_ref())
         }
-        other => other,
+        Err(e) => Err(e),
     }
 }
 
 #[allow(clippy::doc_markdown)]
 /// Writes a stream of ``RecordBatch``es to a DuckDB table.
 fn write_to_table(
-    connection: &Connection,
+    tx: &Transaction<'_>,
     table: &TableManager,
     schema: SchemaRef,
     mut data_batches: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
 ) -> datafusion::common::Result<u64> {
-    let mut join_set = JoinSet::new();
-    let (append_tx, mut append_rx) = mpsc::channel::<Option<u64>>(100);
-    let (tx_tx, _) = broadcast::channel::<bool>(1);
 
-    while let Some(batch) = data_batches.blocking_recv() {
-        let task_table = table.clone();
-        let task_schema = Arc::clone(&schema);
-        let task_on_conflict = on_conflict.cloned();
-        let task_connection = connection.to_owned();
-        let task_tx = append_tx.clone();
-        let mut task_rx = tx_tx.subscribe();
+    let mut appender = tx.appender(table.table_name().to_string().as_str())
+        .map_err(|e| DataFusionError::External(e.into()))?;
 
-        join_set.spawn(async move {
-            let txn = task_connection
-                .unchecked_transaction()
-                .expect("Must open tx");
+    let mut rows: u64 = 0;
 
-            let append = append_batch_with_view_fallback(
-                &txn,
-                task_table,
-                task_schema,
-                batch,
-                task_on_conflict,
-            );
+    while !data_batches.is_closed() {
+        match data_batches.try_recv() {
+            Ok(batch) => {
+                rows += batch.num_rows() as u64;
 
-            match append {
-                Ok(rows) => task_tx.send(Some(rows)).await.expect("Must notify"),
-                _ => task_tx.send(None).await.expect("Must notify"),
+                match appender.append_record_batch(batch.clone()) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        write_to_table_via_view(table, tx, schema.clone(), batch, on_conflict)?;
+                    }
+                }
             }
-
-            if task_rx.recv().await.expect("Must notify") {
-                txn.commit().expect("Must commit");
-            } else {
-                txn.rollback().expect("Must rollback");
+            Err(TryRecvError::Empty) => {
+                appender.flush().map_err(|e| DataFusionError::External(e.into()))?;
             }
-        });
+            Err(e) => return Err(DataFusionError::External(e.into())),
+        }
     }
 
-    let mut status = vec![];
-
-    let ops = task::block_in_place(|| Handle::current().block_on(append_rx.recv_many(&mut status, join_set.len())));
-
-    if status.iter().any(|maybe_count| maybe_count.is_none()) {
-        tx_tx.send(false).expect("Must notify");
-    } else {
-        tx_tx.send(true).expect("Must notify");
-    }
-
-    task::block_in_place(|| Handle::current().block_on(join_set.join_all()));
-
-    Ok(status.iter().flatten().sum::<u64>())
+    Ok(rows)
 }
 
 /// Executes an ANALYZE statement to update query optimizer statistics.
