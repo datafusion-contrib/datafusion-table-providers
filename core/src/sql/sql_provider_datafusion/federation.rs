@@ -1,5 +1,9 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
+use datafusion::common::tree_node::TreeNode;
+use datafusion::logical_expr::expr::{AggregateFunction, Alias, ScalarFunction};
+use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection};
+use datafusion::prelude::Expr;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };

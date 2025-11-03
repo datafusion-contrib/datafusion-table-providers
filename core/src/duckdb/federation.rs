@@ -1,6 +1,8 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
+use crate::util::supported_functions::unsupported_scalar_functions;
 use arrow::datatypes::SchemaRef;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
@@ -58,6 +60,16 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
 
     fn dialect(&self) -> Arc<dyn Dialect> {
         self.base_table.dialect()
+    }
+
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        // Default to not federate if [`Self::scalar_udf_support`] provided, otherwise true.
+        self.scalar_udf_support
+            .as_ref()
+            .map(|supported_scalar_udfs| {
+                unsupported_scalar_functions(plan, supported_scalar_udfs).unwrap_or(false)
+            })
+            .unwrap_or(true)
     }
 
     fn execute(

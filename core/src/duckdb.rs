@@ -1,5 +1,6 @@
 use crate::duckdb::write_settings::DuckDBWriteSettings;
 use crate::sql::sql_provider_datafusion;
+use crate::util::supported_functions::ScalarFunctionsSupport;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -586,6 +587,7 @@ pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
     schema: Option<SchemaRef>,
+    scalar_udf_support: Option<ScalarFunctionsSupport>,
 }
 
 impl DuckDBTableFactory {
@@ -595,7 +597,17 @@ impl DuckDBTableFactory {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
             schema: None,
+            scalar_udf_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_supported_scalar_udfs(
+        mut self,
+        scalar_udf_support: ScalarFunctionsSupport,
+    ) -> Self {
+        self.scalar_udf_support = Some(scalar_udf_support);
+        self
     }
 
     #[must_use]
@@ -642,6 +654,7 @@ impl DuckDBTableFactory {
             cte,
             Some(self.dialect.clone()),
             None,
+            self.scalar_udf_support,
         ));
 
         #[cfg(feature = "duckdb-federation")]
