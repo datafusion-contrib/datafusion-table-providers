@@ -751,9 +751,6 @@ impl ViewCreator {
 pub(crate) mod tests {
     use crate::{
         duckdb::make_initial_table,
-        sql::db_connection_pool::{
-            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
-        },
     };
     use arrow::array::RecordBatch;
     use datafusion::{
@@ -774,14 +771,8 @@ pub(crate) mod tests {
 
     use super::*;
 
-    pub(crate) fn get_mem_duckdb_connection() -> Connection {
+    pub(crate) fn get_mem_duckdb() -> Connection {
         Connection::open_in_memory().expect("Must open duckdb://:memory")
-    }
-
-    pub(crate) fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
-        Arc::new(
-            DuckDbConnectionPool::new_memory().expect("to get a memory duckdb connection pool"),
-        )
     }
 
     async fn get_logs_batches() -> Vec<RecordBatch> {
@@ -859,7 +850,7 @@ pub(crate) mod tests {
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
-            let mut connection = get_mem_duckdb_connection();
+            let connection = get_mem_duckdb();
 
             make_initial_table(Arc::clone(&table_definition), &connection)
                 .expect("to make initial table");
@@ -888,7 +879,7 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let tx = connection.transaction().expect("should begin transaction");
+            let tx = connection.unchecked_transaction().expect("should begin transaction");
             let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
                 let internal_tables: Vec<(RelationName, u64)> = table_definition
                     .list_internal_tables(&tx)
@@ -964,7 +955,7 @@ pub(crate) mod tests {
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
-            let mut connection = get_mem_duckdb_connection();
+            let connection = get_mem_duckdb();
 
             make_initial_table(Arc::clone(&table_definition), &connection)
                 .expect("to make initial table");
@@ -993,7 +984,7 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let tx = connection.transaction().expect("should begin transaction");
+            let tx = connection.unchecked_transaction().expect("should begin transaction");
 
             let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
                 let internal_tables: Vec<(RelationName, u64)> = table_definition
@@ -1064,7 +1055,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_related_tables_from_definition() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1109,7 +1100,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_related_tables_from_creator() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1169,7 +1160,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_create_view() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1206,7 +1197,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_insert_into_tables() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1266,7 +1257,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_lists_base_table_from_definition() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1315,7 +1306,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_primary_keys_match() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
@@ -1392,7 +1383,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_indexes_match() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
@@ -1492,7 +1483,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_current_schema() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1535,7 +1526,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_internal_tables_exclude_subsets_of_other_tables() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
         let other_definition = Arc::new(TableDefinition::new(
@@ -1584,7 +1575,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_index_and_view() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -1668,7 +1659,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_multiple_indexes_and_view() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -1798,7 +1789,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_primary_key_and_index_and_view() {
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),

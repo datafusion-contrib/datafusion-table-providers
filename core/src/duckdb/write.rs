@@ -20,9 +20,7 @@ use datafusion::{
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use duckdb::{Connection, Transaction};
-use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
-use sea_query::IdenList;
 use snafu::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::Any, fmt, sync::Arc};
@@ -812,7 +810,7 @@ mod test {
     use datafusion_physical_plan::memory::MemoryStream;
 
     use super::*;
-    use crate::duckdb::creator::tests::get_mem_duckdb_connection;
+    use crate::duckdb::creator::tests::get_mem_duckdb;
     use crate::{
         duckdb::creator::tests::{get_basic_table_definition, init_tracing},
         util::{column_reference::ColumnReference, indexes::IndexType},
@@ -824,7 +822,7 @@ mod test {
         // Expected behavior: Data sink creates a new internal table, writes data to it, and creates a view with the table definition name
 
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let mut connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -897,7 +895,7 @@ mod test {
         // Before creating the view, the base table needs to get dropped as we need to create a view with the same name.
 
         let _guard = init_tracing(None);
-        let connection = get_mem_duckdb_connection();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1002,7 +1000,7 @@ mod test {
         // Before creating the view, the base table needs to get dropped as we need to create a view with the same name.
 
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let mut connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
@@ -1099,7 +1097,7 @@ mod test {
         // The existing table is re-used.
 
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let mut connection = get_mem_duckdb();
 
         let tx = connection
             .unchecked_transaction()
@@ -1191,7 +1189,7 @@ mod test {
         // The existing table is re-used.
 
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let mut connection = get_mem_duckdb();
 
         let tx = connection
             .unchecked_transaction()
@@ -1314,7 +1312,7 @@ mod test {
         );
 
         let _guard = init_tracing(None);
-        let mut connection = get_mem_duckdb_connection();
+        let mut connection = get_mem_duckdb();
 
         let tx = connection
             .unchecked_transaction()
