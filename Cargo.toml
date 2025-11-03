@@ -51,7 +51,7 @@ duckdb = { version = "=1.4.1"}
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "d6e7ebd853463acafaf8132dced23c98c45f7947" } # spiceai-50
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "64e8264e01d00347eef1b9f147de7f39658db32b" }                            # spiceai-1.4.1 (capi-append)
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "0a856c314671a8cae46536c4dca398842817e12d" }                            # spiceai-1.4.1 (capi-append)
 
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "41d08054e37e9cdca9b760c16fc2b97a21893af2" }               # spiceai-50
 datafusion-expr = { git = "https://github.com/spiceai/datafusion.git", rev = "41d08054e37e9cdca9b760c16fc2b97a21893af2" }          # spiceai-50

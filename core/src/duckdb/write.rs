@@ -19,20 +19,16 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
-use duckdb::{Appender, Connection, DropBehavior, Transaction};
+use duckdb::{Connection, Transaction};
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use sea_query::IdenList;
 use snafu::prelude::*;
-use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{any::Any, fmt, sync::Arc, thread};
+use std::{any::Any, fmt, sync::Arc};
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::{broadcast, RwLock};
-use tokio::task;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 
 use super::creator::{TableDefinition, TableManager, ViewCreator};
 use super::write_settings::DuckDBWriteSettings;
@@ -499,15 +495,6 @@ fn insert_append(
     )
     .map_err(to_retriable_data_write_error)?;
 
-    tx.commit()
-        .context(super::UnableToCommitTransactionSnafu)
-        .map_err(to_retriable_data_write_error)?;
-
-    let tx = connection
-        .unchecked_transaction()
-        .context(super::UnableToBeginTransactionSnafu)
-        .map_err(to_datafusion_error)?;
-
     if let Some(callback) = on_data_written {
         callback(&tx, &append_table, &schema, num_rows)?;
     }
@@ -660,38 +647,12 @@ fn insert_overwrite(
         }
     }
 
-    // Make the table, so appender has something to write to
-    match tx.commit() {
-        Ok(_) => {}
-        Err(e) => {
-            let tx = connection
-                .unchecked_transaction()
-                .context(super::UnableToBeginTransactionSnafu)
-                .map_err(to_datafusion_error)?;
-
-            new_table.delete_table(&tx).map_err(to_datafusion_error)?;
-            return Err(to_retriable_data_write_error(e));
-        }
-    };
-
-    let tx = connection
-        .unchecked_transaction()
-        .context(super::UnableToBeginTransactionSnafu)
-        .map_err(to_datafusion_error)?;
-
     tracing::debug!("Initial load for {}", new_table.table_name());
     let num_rows = write_to_table(&tx, &new_table, Arc::clone(&schema), batch_rx, on_conflict)
         .map_err(to_retriable_data_write_error)?;
 
     on_commit_transaction
         .try_recv()
-        .map_err(to_retriable_data_write_error)?;
-
-    tx.commit().map_err(to_retriable_data_write_error)?;
-
-    let tx = connection
-        .unchecked_transaction()
-        .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
 
     if let Some(base_table) = base_table {
@@ -777,38 +738,6 @@ fn write_to_table_via_view(
     Ok(rows as u64)
 }
 
-async fn append_batch_with_view_fallback(
-    tx: &Transaction<'_>,
-    appender: Arc<RwLock<Appender<'static>>>,
-    table: TableManager,
-    schema: SchemaRef,
-    batch: RecordBatch,
-    on_conflict: Option<OnConflict>,
-) -> datafusion::common::Result<u64> {
-    let rows = batch.num_rows();
-
-    let append_ok = appender
-        .read()
-        .await
-        .append_record_batch(batch.clone())
-        .map_err(|e| DataFusionError::External(e.into()));
-
-    match append_ok {
-        Ok(_) => {
-            appender
-                .write()
-                .await
-                .flush()
-                .map_err(|e| DataFusionError::External(e.into()))?;
-            Ok(rows as u64)
-        }
-        Err(_) if on_conflict.is_some() => {
-            write_to_table_via_view(&table, tx, schema, batch, on_conflict.as_ref())
-        }
-        Err(e) => Err(e),
-    }
-}
-
 #[allow(clippy::doc_markdown)]
 /// Writes a stream of ``RecordBatch``es to a DuckDB table.
 fn write_to_table(
@@ -818,13 +747,13 @@ fn write_to_table(
     mut data_batches: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
 ) -> datafusion::common::Result<u64> {
-
-    let mut appender = tx.appender(table.table_name().to_string().as_str())
+    let mut appender = tx
+        .appender(table.table_name().to_string().as_str())
         .map_err(|e| DataFusionError::External(e.into()))?;
 
     let mut rows: u64 = 0;
 
-    while !data_batches.is_closed() {
+    while !data_batches.is_empty() || !data_batches.is_closed() {
         match data_batches.try_recv() {
             Ok(batch) => {
                 rows += batch.num_rows() as u64;
@@ -837,11 +766,17 @@ fn write_to_table(
                 }
             }
             Err(TryRecvError::Empty) => {
-                appender.flush().map_err(|e| DataFusionError::External(e.into()))?;
+                appender
+                    .flush()
+                    .map_err(|e| DataFusionError::External(e.into()))?;
             }
             Err(e) => return Err(DataFusionError::External(e.into())),
         }
     }
+
+    appender
+        .flush()
+        .map_err(|e| DataFusionError::External(e.into()))?;
 
     Ok(rows)
 }
