@@ -220,7 +220,7 @@ mod test {
         .unwrap();
 
         driver
-            .new_database_with_opts([(OptionDatabase::Other("path"), ":memory:".into())])
+            .new_database_with_opts([(OptionDatabase::Other("path".to_string()), ":memory:".into())])
             .unwrap()
     }
 
