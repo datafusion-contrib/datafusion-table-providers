@@ -123,7 +123,7 @@ where
         let database = self.database;
         let manager: AdbcConnectionManager<D>;
         if let Some(opts) = self.connection_options {
-            manager = AdbcConnectionManager::with_options(database, opts.into_iter());
+            manager = AdbcConnectionManager::with_options(database, opts);
         } else {
             manager = AdbcConnectionManager::new(database);
         }
@@ -220,7 +220,7 @@ mod test {
         .unwrap();
 
         driver
-            .new_database_with_opts([(OptionDatabase::Uri, ":memory:".into())].into_iter())
+            .new_database_with_opts([(OptionDatabase::Uri, ":memory:".into())])
             .unwrap()
     }
 

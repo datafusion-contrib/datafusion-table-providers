@@ -43,8 +43,7 @@ fn get_db(driver_name: &str) -> ManagedDatabase {
             [(
                 OptionDatabase::Uri,
                 OptionValue::String(":memory:".to_string()),
-            )]
-            .into_iter(),
+            )],
         )
         .unwrap()
 }
@@ -78,7 +77,7 @@ async fn arrow_adbc_round_trip(
     let table_provider = table_factory
         .table_provider(table_name.into(), None)
         .await
-        .expect(format!("Failed to register table provider {table_name}").as_str());
+        .expect("Failed to register table provider");
     ctx.register_table(table_name, Arc::clone(&table_provider))
         .expect("Failed to register table");
 

@@ -22,7 +22,6 @@ use crate::{
 
 use adbc_core::{Database, Connection};
 use arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion::{
     catalog::Session,
@@ -147,8 +146,7 @@ where
     D::ConnectionType: Connection + Send + Sync,
 {
     table_name: String,
-    pool: Arc<DynAdbcConnectionPool<D>>,
-    schema: SchemaRef,
+    pool: Arc<DynAdbcConnectionPool<D>>,    
 }
 
 impl<D> ADBC<D>
@@ -159,6 +157,10 @@ where
     #[must_use]
     pub fn table_name(&self) -> &str {
         &self.table_name
+    }
+
+    pub fn pool(&self) -> Arc<DynAdbcConnectionPool<D>> {
+        Arc::clone(&self.pool)
     }
 
     pub fn adbc_conn(

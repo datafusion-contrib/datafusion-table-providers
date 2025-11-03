@@ -102,13 +102,13 @@ where
     fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
-        let mut result = conn
+        let result = conn
             .get_objects(ObjectDepth::Tables, None, Some(schema), None, None, None)
             .boxed()
             .context(super::UnableToGetTablesSnafu)?;
 
         let mut tables = vec![];
-        while let Some(batch) = result.next() {
+        for batch in result {
             // Process each batch to extract table names
             //
             // Schema is as follows:
@@ -142,7 +142,7 @@ where
                                         .column(0)
                                         .as_string::<i32>()
                                         .iter()
-                                        .filter_map(|name| name)
+                                        .flatten()
                                         .map(|name| name.to_string()),
                                 );
                             }
@@ -158,13 +158,13 @@ where
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
 
-        let mut result = conn
+        let result = conn
             .get_objects(ObjectDepth::Schemas, None, None, None, None, None)
             .boxed()
             .context(super::UnableToGetSchemaSnafu)?;
 
         let mut schemas = vec![];
-        while let Some(batch) = result.next() {
+        for batch in result {
             // Process each batch to extract schema names
             //
             // Schema is as follows:
@@ -184,7 +184,7 @@ where
                         .column(0)
                         .as_string::<i32>()
                         .iter()
-                        .filter_map(|name| name)
+                        .flatten()
                         .for_each(|name| schemas.push(name.to_string()));
                 }
             });
@@ -304,7 +304,7 @@ where
             };
 
             Ok(Box::pin(RecordBatchStreamAdapter::new(
-                schema.into(),
+                schema,
                 output_stream,
             )))
         };
