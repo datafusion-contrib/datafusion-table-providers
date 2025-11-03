@@ -116,8 +116,9 @@ jobs:
 
       - name: Install ADBC drivers
         run: |
-          docker run columnar/dbc:latest install sqlite
-          docker run columnar/dbc:latest install duckdb
+          curl -LsSf https://dbc.columnar.tech/install.sh | sh
+          dbc install sqlite
+          dbc install duckdb
 
       - name: Run tests
         run: make test
