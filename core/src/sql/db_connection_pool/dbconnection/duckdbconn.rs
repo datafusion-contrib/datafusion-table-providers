@@ -373,7 +373,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         &self,
         sql: &str,
         params: &[DuckDBParameter],
-        _projected_schema: Option<SchemaRef>,
+        projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
@@ -381,19 +381,23 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Self::attach(&conn, &self.attachments)?;
         self.apply_connection_setup_queries(&conn)?;
 
-        let fetch_schema_sql =
-            format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
-        let mut stmt = conn
-            .prepare(&fetch_schema_sql)
-            .boxed()
-            .context(super::UnableToGetSchemaSnafu)?;
+        let schema = if let Some(schema) = projected_schema {
+            schema
+        } else {
+            let fetch_schema_sql =
+                format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
+            let mut stmt = conn
+                .prepare(&fetch_schema_sql)
+                .boxed()
+                .context(super::UnableToGetSchemaSnafu)?;
 
-        let result: duckdb::Arrow<'_> = stmt
-            .query_arrow([])
-            .boxed()
-            .context(super::UnableToGetSchemaSnafu)?;
+            let result: duckdb::Arrow<'_> = stmt
+                .query_arrow([])
+                .boxed()
+                .context(super::UnableToGetSchemaSnafu)?;
 
-        let schema = result.get_schema();
+            result.get_schema()
+        };
 
         let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
 
