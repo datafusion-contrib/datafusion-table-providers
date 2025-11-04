@@ -64,10 +64,10 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
 
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
         // Default to not federate if [`Self::scalar_udf_support`] provided, otherwise true.
-        self.scalar_udf_support
+        self.function_support
             .as_ref()
             .map(|supported_scalar_udfs| {
-                unsupported_scalar_functions(plan, supported_scalar_udfs).unwrap_or(false)
+                !unsupported_scalar_functions(plan, supported_scalar_udfs).unwrap_or(false)
             })
             .unwrap_or(true)
     }

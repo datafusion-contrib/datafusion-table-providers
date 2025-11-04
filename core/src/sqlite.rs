@@ -248,7 +248,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
     #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {

@@ -1,6 +1,6 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
-use crate::util::supported_functions::ScalarFunctionsSupport;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
@@ -32,7 +32,7 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
 
-    pub(crate) scalar_udf_support: Option<ScalarFunctionsSupport>,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -51,7 +51,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         constraints: Option<Constraints>,
-        scalar_udf_support: Option<ScalarFunctionsSupport>,
+        function_support: Option<FunctionSupport>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
             "duckdb",
@@ -66,7 +66,7 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
-            scalar_udf_support,
+            function_support,
         }
     }
 

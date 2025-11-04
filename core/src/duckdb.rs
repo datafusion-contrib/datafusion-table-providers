@@ -1,6 +1,6 @@
 use crate::duckdb::write_settings::DuckDBWriteSettings;
 use crate::sql::sql_provider_datafusion;
-use crate::util::supported_functions::ScalarFunctionsSupport;
+use crate::util::supported_functions::FunctionSupport;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -190,6 +190,7 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
+    function_support: Option<FunctionSupport>,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -213,7 +214,14 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
+            function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     #[must_use]
@@ -359,7 +367,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
     #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {
@@ -473,6 +481,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         self.settings_registry
             .apply_settings(conn, &options, DuckDBSettingScope::Global)?;
 
+        let function_support =
+            if let Some("false") = cmd.options.get("federate-udfs").map(|s| s.as_str()) {
+                Some(FunctionSupport::deny_all_from(state))
+            } else {
+                None
+            };
+
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
@@ -480,6 +495,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
             Some(self.dialect.clone()),
             Some(cmd.constraints.clone()),
+            function_support,
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -587,7 +603,7 @@ pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
     schema: Option<SchemaRef>,
-    scalar_udf_support: Option<ScalarFunctionsSupport>,
+    function_support: Option<FunctionSupport>,
 }
 
 impl DuckDBTableFactory {
@@ -597,16 +613,13 @@ impl DuckDBTableFactory {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
             schema: None,
-            scalar_udf_support: None,
+            function_support: None,
         }
     }
 
     #[must_use]
-    pub fn with_supported_scalar_udfs(
-        mut self,
-        scalar_udf_support: ScalarFunctionsSupport,
-    ) -> Self {
-        self.scalar_udf_support = Some(scalar_udf_support);
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
         self
     }
 
@@ -654,7 +667,7 @@ impl DuckDBTableFactory {
             cte,
             Some(self.dialect.clone()),
             None,
-            self.scalar_udf_support,
+            self.function_support.clone(),
         ));
 
         #[cfg(feature = "duckdb-federation")]

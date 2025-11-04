@@ -41,7 +41,7 @@ arrow-json = "56"
 arrow-odbc = { version = "20.0.0" }
 datafusion = { version = "50", default-features = false }
 datafusion-expr = { version = "50" }
-datafusion-federation = { version = "0.4.2" }
+datafusion-federation = { version = "0.4.2", features = ["sql"] }
 datafusion-ffi = { version = "50" }
 datafusion-proto = { version = "50" }
 datafusion-physical-expr = { version = "50" }
@@ -50,7 +50,7 @@ datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.3.2", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "d6e7ebd853463acafaf8132dced23c98c45f7947" } # spiceai-50
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "a99494a6f3bad72faa7daecd4477ef42f4e9c046" } # jeadie/25-10-31/temp
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "dd02045c3aa77895723e873222cbe30f5c8f77a9" }                            # spiceai-1.3.2
 
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "41d08054e37e9cdca9b760c16fc2b97a21893af2" }               # spiceai-50
