@@ -12,7 +12,6 @@ use datafusion::{
         expr::{AggregateFunction, ScalarFunction},
         AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowFunctionDefinition, WindowUDF,
     },
-    prelude::SessionContext,
 };
 
 /// Returns whether any [`ScalarFunction`], [`AggregateFunction`] or [`WindowFunction`]s in the [`LogicalPlan`] are unsupported.
@@ -109,13 +108,13 @@ impl FunctionSupport {
 
     pub fn supports(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::ScalarFunction(ScalarFunction { func, .. }) => self.supports_scalar(&func),
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => self.supports_scalar(func),
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                self.supports_aggregate(&func)
+                self.supports_aggregate(func)
             }
             Expr::WindowFunction(wind) => match &wind.fun {
-                WindowFunctionDefinition::AggregateUDF(func) => self.supports_aggregate(&func),
-                WindowFunctionDefinition::WindowUDF(func) => self.supports_window(&func),
+                WindowFunctionDefinition::AggregateUDF(func) => self.supports_aggregate(func),
+                WindowFunctionDefinition::WindowUDF(func) => self.supports_window(func),
             },
             _ => true,
         }
@@ -149,8 +148,8 @@ pub enum FunctionRestriction {
 impl FunctionRestriction {
     fn supports(&self, name: &String) -> bool {
         match self {
-            Self::Allow(allowed) => allowed.contains(&name),
-            Self::Deny(denied) => !denied.contains(&name),
+            Self::Allow(allowed) => allowed.contains(name),
+            Self::Deny(denied) => !denied.contains(name),
         }
     }
 }
