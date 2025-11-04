@@ -367,7 +367,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
     #[allow(clippy::too_many_lines)]
     async fn create(
         &self,
-        state: &dyn Session,
+        _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {
@@ -481,13 +481,6 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         self.settings_registry
             .apply_settings(conn, &options, DuckDBSettingScope::Global)?;
 
-        let function_support =
-            if let Some("false") = cmd.options.get("federate-udfs").map(|s| s.as_str()) {
-                Some(FunctionSupport::deny_all_from(state))
-            } else {
-                None
-            };
-
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
             Arc::clone(&schema),
@@ -495,7 +488,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
             Some(self.dialect.clone()),
             Some(cmd.constraints.clone()),
-            function_support,
+            self.function_support.clone(),
         ));
 
         #[cfg(feature = "duckdb-federation")]
