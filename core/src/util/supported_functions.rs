@@ -24,7 +24,7 @@ use datafusion::{
 /// * `Ok(true)` if there are unsupported scalar functions in the plan
 /// * `Ok(false)` if all scalar functions are supported
 /// * `Err(DataFusionError)` if an error occurs during traversal
-pub fn unsupported_scalar_functions(
+pub fn contains_unsupported_functions(
     plan: &LogicalPlan,
     sup: &FunctionSupport,
 ) -> Result<bool, DataFusionError> {
