@@ -1,7 +1,7 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use crate::util::supported_functions::unsupported_scalar_functions;
 use async_trait::async_trait;
-use datafusion_expr::LogicalPlan;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
