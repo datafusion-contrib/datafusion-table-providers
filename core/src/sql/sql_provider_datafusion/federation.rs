@@ -1,5 +1,7 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
+use crate::util::supported_functions::unsupported_scalar_functions;
 use async_trait::async_trait;
+use datafusion_expr::LogicalPlan;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -51,6 +53,16 @@ impl<T, P> SqlTable<T, P> {
 impl<T, P> SQLExecutor for SqlTable<T, P> {
     fn name(&self) -> &str {
         self.name
+    }
+
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        // Default to not federate if [`Self::scalar_udf_support`] provided, otherwise true.
+        self.function_support
+            .as_ref()
+            .map(|supported_scalar_udfs| {
+                !unsupported_scalar_functions(plan, supported_scalar_udfs).unwrap_or(false)
+            })
+            .unwrap_or(true)
     }
 
     fn compute_context(&self) -> Option<String> {

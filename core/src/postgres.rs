@@ -12,6 +12,7 @@ use crate::sql::sql_provider_datafusion::{
     SqlTable,
 };
 use crate::util::schema::SchemaValidator;
+use crate::util::supported_functions::FunctionSupport;
 use crate::UnsupportedTypeAction;
 use arrow::{
     array::RecordBatch,
@@ -192,12 +193,21 @@ impl PostgresTableFactory {
 }
 
 #[derive(Debug)]
-pub struct PostgresTableProviderFactory {}
+pub struct PostgresTableProviderFactory {
+    function_support: Option<FunctionSupport>,
+}
 
 impl PostgresTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            function_support: None,
+        }
+    }
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 }
 
@@ -321,7 +331,8 @@ impl TableProviderFactory for PostgresTableProviderFactory {
                 Some(Engine::Postgres),
             )
             .with_dialect(Arc::new(PostgreSqlDialect {}))
-            .with_constraints(cmd.constraints.clone()),
+            .with_constraints(cmd.constraints.clone())
+            .with_function_support(self.function_support.clone()),
         );
 
         #[cfg(feature = "postgres-federation")]

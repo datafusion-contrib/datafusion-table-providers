@@ -1,5 +1,6 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
@@ -27,6 +28,7 @@ use datafusion::{
 pub struct SQLiteTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
     pub(crate) decimal_between: bool,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl<T, P> std::fmt::Debug for SQLiteTable<T, P> {
@@ -58,6 +60,7 @@ impl<T, P> SQLiteTable<T, P> {
         Self {
             base_table,
             decimal_between: false,
+            function_support: None,
         }
     }
 

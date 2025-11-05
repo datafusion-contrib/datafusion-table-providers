@@ -1,9 +1,11 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
+use crate::util::supported_functions::unsupported_scalar_functions;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
+use datafusion_expr::LogicalPlan;
 use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
 use datafusion_federation::sql::{
     ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
@@ -89,6 +91,16 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
         Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
+    }
+
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        // Default to not federate if [`Self::scalar_udf_support`] provided, otherwise true.
+        self.function_support
+            .as_ref()
+            .map(|supported_scalar_udfs| {
+                !unsupported_scalar_functions(plan, supported_scalar_udfs).unwrap_or(false)
+            })
+            .unwrap_or(true)
     }
 
     fn execute(
