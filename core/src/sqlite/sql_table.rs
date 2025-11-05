@@ -70,6 +70,12 @@ impl<T, P> SQLiteTable<T, P> {
         self
     }
 
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: Option<FunctionSupport>) -> Self {
+        self.function_support = function_support;
+        self
+    }
+
     fn create_physical_plan(
         &self,
         projections: Option<&Vec<usize>>,

@@ -397,6 +397,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 name,
                 Some(cmd.constraints.clone()),
             )
+            .with_function_support(self.function_support.clone())
             .with_decimal_between(self.decimal_between),
         );
 
