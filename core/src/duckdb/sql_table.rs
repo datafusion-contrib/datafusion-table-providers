@@ -171,6 +171,10 @@ impl<T, P> DuckSqlExec<T, P> {
     }
 
     fn sql(&self) -> SqlResult<String> {
+        if let Some(sql) = &self.optimized_sql {
+            return Ok(sql.clone());
+        }
+
         let sql = self.base_exec.sql()?;
 
         Ok(format!(
