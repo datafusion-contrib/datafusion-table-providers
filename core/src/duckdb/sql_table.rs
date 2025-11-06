@@ -138,6 +138,7 @@ pub struct DuckSqlExec<T, P> {
     pub base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
     pub indexes: Vec<(ColumnReference, IndexType)>,
+    optimized_sql: Option<String>,
 }
 
 impl<T, P> DuckSqlExec<T, P> {
@@ -165,6 +166,7 @@ impl<T, P> DuckSqlExec<T, P> {
             base_exec,
             table_functions,
             indexes,
+            optimized_sql: None,
         })
     }
 
@@ -175,6 +177,11 @@ impl<T, P> DuckSqlExec<T, P> {
             "{cte_expr} {sql}",
             cte_expr = get_cte(&self.table_functions)
         ))
+    }
+
+    pub fn with_optimized_sql(mut self, sql: impl Into<String>) -> Self {
+        self.optimized_sql = Some(sql.into());
+        self
     }
 }
 
