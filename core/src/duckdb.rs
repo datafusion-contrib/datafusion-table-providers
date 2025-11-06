@@ -479,6 +479,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
             Some(self.dialect.clone()),
             Some(cmd.constraints.clone()),
+            indexes
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -642,6 +643,7 @@ impl DuckDBTableFactory {
             cte,
             Some(self.dialect.clone()),
             None,
+            vec![]
         ));
 
         #[cfg(feature = "duckdb-federation")]

@@ -24,12 +24,16 @@ use datafusion::{
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
+use crate::util::column_reference::ColumnReference;
+use crate::util::indexes::IndexType;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
 
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
+
+    pub(crate) indexes: Vec<(ColumnReference, IndexType)>
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -48,6 +52,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         constraints: Option<Constraints>,
+        indexes: Vec<(ColumnReference, IndexType)>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
             "duckdb",
@@ -62,6 +67,7 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
+            indexes
         }
     }
 
@@ -80,6 +86,7 @@ impl<T, P> DuckDBTable<T, P> {
             filters,
             limit,
             self.table_functions.clone(),
+            self.indexes.clone()
         )?))
     }
 }
@@ -130,6 +137,7 @@ impl<T, P> Display for DuckDBTable<T, P> {
 pub struct DuckSqlExec<T, P> {
     pub base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
+    pub indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl<T, P> DuckSqlExec<T, P> {
@@ -141,6 +149,7 @@ impl<T, P> DuckSqlExec<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
         table_functions: Option<HashMap<String, String>>,
+        indexes: Vec<(ColumnReference, IndexType)>,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(
             projections,
@@ -155,6 +164,7 @@ impl<T, P> DuckSqlExec<T, P> {
         Ok(Self {
             base_exec,
             table_functions,
+            indexes,
         })
     }
 
