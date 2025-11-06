@@ -123,6 +123,7 @@ postgres = [
 ]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 duckdb = [
+  "dep:arrow-array",
   "dep:duckdb",
   "dep:r2d2",
   "dep:uuid",

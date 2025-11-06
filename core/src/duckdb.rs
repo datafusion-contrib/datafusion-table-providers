@@ -32,7 +32,7 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use duckdb::{AccessMode, DuckdbConnectionManager};
+use duckdb::{AccessMode, Connection, DuckdbConnectionManager};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
@@ -69,6 +69,9 @@ pub enum Error {
     DuckDBDataFusion {
         source: sql_provider_datafusion::Error,
     },
+
+    #[snafu(display("Unable to clone DuckDB connection handle: {source}"))]
+    UnableToCloneConnection { source: duckdb::Error },
 
     #[snafu(display("Unable to downcast DbConnection to DuckDbConnection"))]
     UnableToDowncastDbConnection {},
@@ -159,8 +162,8 @@ pub enum Error {
     #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
     MissingReadProvider,
 
-    #[snafu(display("A pool is required to create a DuckDBTableWriter"))]
-    MissingPool,
+    #[snafu(display("A connection is required to create a DuckDBTableWriter"))]
+    MissingConnection,
 
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
@@ -447,13 +450,24 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         );
 
         let pool = Arc::new(pool);
-        make_initial_table(Arc::clone(&table_definition), &pool)?;
+        let mut write_cxn = pool
+            .connect()
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        let write_cxn = DuckDB::duckdb_conn(&mut write_cxn)
+            .map_err(to_datafusion_error)?
+            .conn
+            .try_clone()
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        make_initial_table(Arc::clone(&table_definition), &write_cxn)?;
 
         let write_settings = DuckDBWriteSettings::from_params(&options);
 
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(Arc::clone(&table_definition))
-            .with_pool(pool)
+            .with_connection(write_cxn)
             .set_on_conflict(on_conflict)
             .with_write_settings(write_settings);
 
@@ -660,9 +674,22 @@ impl DuckDBTableFactory {
 
         let table_name = RelationName::from(table_reference);
         let table_definition = TableDefinition::new(table_name, Arc::clone(&schema));
+
+        let mut write_cxn = self
+            .pool
+            .connect()
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
+        let write_cxn = DuckDB::duckdb_conn(&mut write_cxn)
+            .map_err(to_datafusion_error)?
+            .conn
+            .try_clone()
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_read_provider(read_provider)
-            .with_pool(Arc::clone(&self.pool))
+            .with_connection(write_cxn)
             .with_table_definition(Arc::new(table_definition));
 
         Ok(Arc::new(table_writer_builder.build()?))
@@ -695,19 +722,12 @@ fn create_table_function_view_name(table_reference: &TableReference) -> TableRef
 
 pub(crate) fn make_initial_table(
     table_definition: Arc<TableDefinition>,
-    pool: &Arc<DuckDbConnectionPool>,
+    connection: &Connection,
 ) -> DataFusionResult<()> {
-    let cloned_pool = Arc::clone(pool);
-    let mut db_conn = Arc::clone(&cloned_pool)
-        .connect_sync()
-        .context(DbConnectionPoolSnafu)
-        .map_err(to_datafusion_error)?;
+    let create_connection = connection.to_owned();
 
-    let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn).map_err(to_datafusion_error)?;
-
-    let tx = duckdb_conn
-        .conn
-        .transaction()
+    let tx = create_connection
+        .unchecked_transaction()
         .context(UnableToBeginTransactionSnafu)
         .map_err(to_datafusion_error)?;
 
@@ -725,7 +745,7 @@ pub(crate) fn make_initial_table(
     let table_manager = TableManager::new(table_definition);
 
     table_manager
-        .create_table(cloned_pool, &tx)
+        .create_table(&create_connection, &tx)
         .map_err(to_datafusion_error)?;
 
     tx.commit()
@@ -785,11 +805,9 @@ pub(crate) mod tests {
             .downcast_ref::<DuckDBTableWriter>()
             .expect("cast to DuckDBTableWriter");
 
-        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
-        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+        let conn = writer.connection();
 
         let mut stmt = conn
-            .conn
             .prepare("SELECT value FROM duckdb_settings() WHERE name = 'memory_limit'")
             .expect("to prepare statement");
 
@@ -846,11 +864,9 @@ pub(crate) mod tests {
             .downcast_ref::<DuckDBTableWriter>()
             .expect("cast to DuckDBTableWriter");
 
-        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
-        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+        let conn = writer.connection();
 
         let mut stmt = conn
-            .conn
             .prepare("SELECT value FROM duckdb_settings() WHERE name = 'temp_directory'")
             .expect("to prepare statement");
 
@@ -903,11 +919,9 @@ pub(crate) mod tests {
             .downcast_ref::<DuckDBTableWriter>()
             .expect("cast to DuckDBTableWriter");
 
-        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
-        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+        let conn = writer.connection();
 
         let mut stmt = conn
-            .conn
             .prepare("SELECT value FROM duckdb_settings() WHERE name = 'preserve_insertion_order'")
             .expect("to prepare statement");
 
@@ -958,11 +972,9 @@ pub(crate) mod tests {
             .downcast_ref::<DuckDBTableWriter>()
             .expect("cast to DuckDBTableWriter");
 
-        let mut conn_box = writer.pool().connect_sync().expect("to get connection");
-        let conn = DuckDB::duckdb_conn(&mut conn_box).expect("to get DuckDB connection");
+        let conn = writer.connection();
 
         let mut stmt = conn
-            .conn
             .prepare("SELECT value FROM duckdb_settings() WHERE name = 'preserve_insertion_order'")
             .expect("to prepare statement");
 

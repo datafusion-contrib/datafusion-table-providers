@@ -1,7 +1,9 @@
 use crate::sql::arrow_sql_gen::statement::IndexBuilder;
-use crate::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
-use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::util::on_conflict::OnConflict;
+use crate::util::{
+    column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
+    indexes::IndexType,
+};
 use arrow::{
     array::{RecordBatch, RecordBatchIterator, RecordBatchReader},
     datatypes::SchemaRef,
@@ -10,18 +12,12 @@ use arrow::{
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::sql::TableReference;
-use duckdb::Transaction;
+use duckdb::{Connection, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
-
-use super::DuckDB;
-use crate::util::{
-    column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
-    indexes::IndexType,
-};
 
 /// A newtype for a relation name, to better control the inputs for the `TableDefinition`, `TableCreator`, and `ViewCreator`.
 #[derive(Debug, Clone, PartialEq)]
@@ -263,14 +259,11 @@ impl TableManager {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn create_table(
         &self,
-        pool: Arc<DuckDbConnectionPool>,
-        tx: &Transaction<'_>,
+        connection: &Connection,
+        write_tx: &Transaction<'_>,
     ) -> super::Result<()> {
-        let mut db_conn = pool.connect_sync().context(super::DbConnectionPoolSnafu)?;
-        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
-
         // create the table with the supplied table name, or a generated internal name
-        let mut create_stmt = self.get_table_create_statement(duckdb_conn)?;
+        let mut create_stmt = self.get_table_create_statement(&connection)?;
         tracing::debug!("{create_stmt}");
 
         let primary_keys = if let Some(constraints) = &self.table_definition.constraints {
@@ -284,7 +277,8 @@ impl TableManager {
             create_stmt = create_stmt.replace(");", &primary_key_clause);
         }
 
-        tx.execute(&create_stmt, [])
+        write_tx
+            .execute(&create_stmt, [])
             .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         Ok(())
@@ -405,12 +399,9 @@ impl TableManager {
     /// DuckDB CREATE TABLE statements aren't supported by sea-query - so we create a temporary table
     /// from an Arrow schema and ask DuckDB for the CREATE TABLE statement.
     #[tracing::instrument(level = "debug", skip_all)]
-    fn get_table_create_statement(
-        &self,
-        duckdb_conn: &mut DuckDbConnection,
-    ) -> super::Result<String> {
-        let tx = duckdb_conn
-            .conn
+    fn get_table_create_statement(&self, connection: &Connection) -> super::Result<String> {
+        let mut owned_connection = connection.to_owned();
+        let tx = owned_connection
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
@@ -760,9 +751,6 @@ impl ViewCreator {
 pub(crate) mod tests {
     use crate::{
         duckdb::make_initial_table,
-        sql::db_connection_pool::{
-            dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
-        },
     };
     use arrow::array::RecordBatch;
     use datafusion::{
@@ -783,10 +771,8 @@ pub(crate) mod tests {
 
     use super::*;
 
-    pub(crate) fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
-        Arc::new(
-            DuckDbConnectionPool::new_memory().expect("to get a memory duckdb connection pool"),
-        )
+    pub(crate) fn get_mem_duckdb() -> Connection {
+        Connection::open_in_memory().expect("Must open duckdb://:memory")
     }
 
     async fn get_logs_batches() -> Vec<RecordBatch> {
@@ -864,13 +850,13 @@ pub(crate) mod tests {
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
-            let pool = get_mem_duckdb();
+            let connection = get_mem_duckdb();
 
-            make_initial_table(Arc::clone(&table_definition), &pool)
+            make_initial_table(Arc::clone(&table_definition), &connection)
                 .expect("to make initial table");
 
             let duckdb_sink = DuckDBDataSink::new(
-                Arc::clone(&pool),
+                &connection,
                 Arc::clone(&table_definition),
                 *overwrite,
                 None,
@@ -885,13 +871,7 @@ pub(crate) mod tests {
                 .await
                 .expect("to write all");
 
-            let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-            let conn = pool_conn
-                .as_any_mut()
-                .downcast_mut::<DuckDbConnection>()
-                .expect("to downcast to duckdb connection");
-            let num_rows = conn
-                .get_underlying_conn_mut()
+            let num_rows = connection
                 .query_row(r#"SELECT COUNT(1) FROM "eth.logs""#, [], |r| {
                     r.get::<usize, u64>(0)
                 })
@@ -899,10 +879,7 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let tx = conn
-                .get_underlying_conn_mut()
-                .transaction()
-                .expect("should begin transaction");
+            let tx = connection.unchecked_transaction().expect("should begin transaction");
             let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
                 let internal_tables: Vec<(RelationName, u64)> = table_definition
                     .list_internal_tables(&tx)
@@ -978,13 +955,13 @@ pub(crate) mod tests {
         );
 
         for overwrite in &[InsertOp::Append, InsertOp::Overwrite] {
-            let pool = get_mem_duckdb();
+            let connection = get_mem_duckdb();
 
-            make_initial_table(Arc::clone(&table_definition), &pool)
+            make_initial_table(Arc::clone(&table_definition), &connection)
                 .expect("to make initial table");
 
             let duckdb_sink = DuckDBDataSink::new(
-                Arc::clone(&pool),
+                &connection,
                 Arc::clone(&table_definition),
                 *overwrite,
                 None,
@@ -999,13 +976,7 @@ pub(crate) mod tests {
                 .await
                 .expect("to write all");
 
-            let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-            let conn = pool_conn
-                .as_any_mut()
-                .downcast_mut::<DuckDbConnection>()
-                .expect("to downcast to duckdb connection");
-            let num_rows = conn
-                .get_underlying_conn_mut()
+            let num_rows = connection
                 .query_row(r#"SELECT COUNT(1) FROM "eth.logs""#, [], |r| {
                     r.get::<usize, u64>(0)
                 })
@@ -1013,10 +984,7 @@ pub(crate) mod tests {
 
             assert_eq!(num_rows, rows_written);
 
-            let tx = conn
-                .get_underlying_conn_mut()
-                .transaction()
-                .expect("should begin transaction");
+            let tx = connection.unchecked_transaction().expect("should begin transaction");
 
             let table_creator = if matches!(overwrite, InsertOp::Overwrite) {
                 let internal_tables: Vec<(RelationName, u64)> = table_definition
@@ -1087,18 +1055,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_related_tables_from_definition() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make 3 internal tables
@@ -1106,7 +1068,7 @@ pub(crate) mod tests {
             TableManager::new(Arc::clone(&table_definition))
                 .with_internal(true)
                 .expect("to create table creator")
-                .create_table(Arc::clone(&pool), &tx)
+                .create_table(&connection, &tx)
                 .expect("to create table");
         }
 
@@ -1138,18 +1100,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_list_related_tables_from_creator() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make 3 internal tables
@@ -1157,7 +1113,7 @@ pub(crate) mod tests {
             TableManager::new(Arc::clone(&table_definition))
                 .with_internal(true)
                 .expect("to create table creator")
-                .create_table(Arc::clone(&pool), &tx)
+                .create_table(&connection, &tx)
                 .expect("to create table");
         }
 
@@ -1167,7 +1123,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let internal_tables = table_creator
@@ -1204,18 +1160,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_create_view() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make a table
@@ -1224,7 +1174,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         // create a view from the internal table
@@ -1247,18 +1197,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_insert_into_tables() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make a base table
@@ -1267,7 +1211,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         base_table
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         // make an internal table
@@ -1276,7 +1220,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         internal_table
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         // insert some rows directly into the base table
@@ -1313,18 +1257,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_lists_base_table_from_definition() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make a base table
@@ -1333,7 +1271,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         // list the base table from another base table
@@ -1368,7 +1306,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_primary_keys_match() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
@@ -1380,14 +1318,8 @@ pub(crate) mod tests {
                 .with_constraints(get_pk_constraints(&["id"], Arc::clone(&schema))),
         );
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make 2 internal tables which should have the same indexes
@@ -1396,7 +1328,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let table_creator2 = TableManager::new(Arc::clone(&table_definition))
@@ -1404,7 +1336,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator2
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let primary_keys_match = table_creator
@@ -1421,7 +1353,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator3
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let primary_keys_match = table_creator
@@ -1436,7 +1368,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator4
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let primary_keys_match = table_creator3
@@ -1451,7 +1383,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_indexes_match() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
@@ -1470,14 +1402,8 @@ pub(crate) mod tests {
                 ),
         );
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make 2 internal tables which should have the same indexes
@@ -1486,7 +1412,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_creator
@@ -1498,7 +1424,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator2
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_creator2
@@ -1519,7 +1445,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator3
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_creator3
@@ -1538,7 +1464,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator4
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_creator4
@@ -1557,18 +1483,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_current_schema() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         let table_creator = TableManager::new(Arc::clone(&table_definition))
@@ -1576,7 +1496,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let schema = table_creator
@@ -1591,7 +1511,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator2
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let schema2 = table_creator2
@@ -1606,7 +1526,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_internal_tables_exclude_subsets_of_other_tables() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let table_definition = get_basic_table_definition();
         let other_definition = Arc::new(TableDefinition::new(
@@ -1614,15 +1534,8 @@ pub(crate) mod tests {
             Arc::clone(&table_definition.schema),
         ));
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         // make an internal table for each definition
@@ -1631,7 +1544,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         let other_table_creator = TableManager::new(Arc::clone(&other_definition))
@@ -1639,7 +1552,7 @@ pub(crate) mod tests {
             .expect("to create table creator");
 
         other_table_creator
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         // each table should not list the other as an internal table
@@ -1662,7 +1575,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_index_and_view() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -1679,14 +1592,8 @@ pub(crate) mod tests {
                 )]),
         );
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         let table_manager = TableManager::new(Arc::clone(&table_definition))
@@ -1694,7 +1601,7 @@ pub(crate) mod tests {
             .expect("to create table manager");
 
         table_manager
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_manager
@@ -1752,7 +1659,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_multiple_indexes_and_view() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -1779,14 +1686,8 @@ pub(crate) mod tests {
                 ]),
         );
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         let table_manager = TableManager::new(Arc::clone(&table_definition))
@@ -1794,7 +1695,7 @@ pub(crate) mod tests {
             .expect("to create table manager");
 
         table_manager
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_manager
@@ -1803,9 +1704,9 @@ pub(crate) mod tests {
 
         tx.execute(
             &format!(
-                r#"INSERT INTO "{table_name}" VALUES 
-                ('Alice', 1, 30, 'active'), 
-                ('Bob', 2, 25, 'inactive'), 
+                r#"INSERT INTO "{table_name}" VALUES
+                ('Alice', 1, 30, 'active'),
+                ('Bob', 2, 25, 'inactive'),
                 ('Charlie', 3, 35, 'active'),
                 ('David', 4, 30, 'pending'),
                 ('Eve', 5, 40, 'active')"#,
@@ -1888,7 +1789,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_explain_analyze_with_primary_key_and_index_and_view() {
         let _guard = init_tracing(None);
-        let pool = get_mem_duckdb();
+        let connection = get_mem_duckdb();
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
@@ -1906,14 +1807,8 @@ pub(crate) mod tests {
                 .with_constraints(get_pk_constraints(&["name"], Arc::clone(&schema))),
         );
 
-        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
-        let conn = pool_conn
-            .as_any_mut()
-            .downcast_mut::<DuckDbConnection>()
-            .expect("to downcast to duckdb connection");
-        let tx = conn
-            .get_underlying_conn_mut()
-            .transaction()
+        let tx = connection
+            .unchecked_transaction()
             .expect("should begin transaction");
 
         let table_manager = TableManager::new(Arc::clone(&table_definition))
@@ -1921,7 +1816,7 @@ pub(crate) mod tests {
             .expect("to create table manager");
 
         table_manager
-            .create_table(Arc::clone(&pool), &tx)
+            .create_table(&connection, &tx)
             .expect("to create table");
 
         table_manager
@@ -1930,9 +1825,9 @@ pub(crate) mod tests {
 
         tx.execute(
             &format!(
-                r#"INSERT INTO "{table_name}" VALUES 
-                ('Alice', 1, 30, 'active'), 
-                ('Bob', 2, 25, 'inactive'), 
+                r#"INSERT INTO "{table_name}" VALUES
+                ('Alice', 1, 30, 'active'),
+                ('Bob', 2, 25, 'inactive'),
                 ('Charlie', 3, 35, 'active'),
                 ('David', 4, 30, 'pending'),
                 ('Eve', 5, 40, 'active')"#,
