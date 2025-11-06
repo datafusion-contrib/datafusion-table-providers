@@ -127,7 +127,7 @@ impl<T, P> Display for DuckDBTable<T, P> {
 }
 
 #[derive(Clone)]
-struct DuckSqlExec<T, P> {
+pub struct DuckSqlExec<T, P> {
     base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
 }
