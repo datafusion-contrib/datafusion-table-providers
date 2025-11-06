@@ -751,24 +751,14 @@ fn write_to_table(
 
     let mut rows: u64 = 0;
 
-    while !data_batches.is_empty() || !data_batches.is_closed() {
-        match data_batches.try_recv() {
-            Ok(batch) => {
-                rows += batch.num_rows() as u64;
+    while let Some(batch) = data_batches.blocking_recv() {
+        rows += batch.num_rows() as u64;
 
-                match appender.append_record_batch(batch.clone()) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        write_to_table_via_view(table, tx, schema.clone(), batch, on_conflict)?;
-                    }
-                }
+        match appender.append_record_batch(batch.clone()) {
+            Ok(_) => {}
+            Err(_) => {
+                write_to_table_via_view(table, tx, schema.clone(), batch, on_conflict)?;
             }
-            Err(TryRecvError::Empty) => {
-                appender
-                    .flush()
-                    .map_err(|e| DataFusionError::External(e.into()))?;
-            }
-            Err(e) => return Err(DataFusionError::External(e.into())),
         }
     }
 
