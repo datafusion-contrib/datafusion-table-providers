@@ -77,7 +77,7 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DuckSqlExec::new(
+        let mut exec = DuckSqlExec::new(
             projections,
             schema,
             &self.base_table.table_reference,
@@ -85,7 +85,14 @@ impl<T, P> DuckDBTable<T, P> {
             filters,
             limit,
             self.table_functions.clone(),
-        )?))
+        )?;
+
+        // Don't use `Self::dialect()` as it will used `DefaultDialect` by default.
+        if let Some(ref dialect) = self.base_table.dialect {
+            exec = exec.with_dialect(Arc::clone(dialect));
+        };
+
+        Ok(Arc::new(exec))
     }
 }
 
@@ -161,6 +168,11 @@ impl<T, P> DuckSqlExec<T, P> {
             base_exec,
             table_functions,
         })
+    }
+
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.base_exec = self.base_exec.with_dialect(dialect);
+        self
     }
 
     fn sql(&self) -> SqlResult<String> {

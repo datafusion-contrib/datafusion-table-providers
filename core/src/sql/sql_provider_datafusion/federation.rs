@@ -72,8 +72,10 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         }
     }
 
+    /// Return the provided [`Dialect`], defaulting to [`DefaultDialect`].
     fn dialect(&self) -> Arc<dyn Dialect> {
         let Some(ref dialect) = self.dialect else {
+            // TODO: Derive default from [`SQLExecutor::engine`].
             return Arc::new(DefaultDialect {});
         };
         Arc::clone(dialect) as Arc<_>

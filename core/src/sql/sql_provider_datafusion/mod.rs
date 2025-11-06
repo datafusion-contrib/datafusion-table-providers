@@ -71,7 +71,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     schema: SchemaRef,
     pub table_reference: TableReference,
     engine: Option<Engine>,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    pub(crate) dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     constraints: Option<Constraints>,
     pub(crate) function_support: Option<FunctionSupport>,
 }
