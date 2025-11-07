@@ -235,7 +235,6 @@ impl<T, P> Display for SqlTable<T, P> {
     }
 }
 
-#[derive(Clone)]
 pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
     table_reference: TableReference,
@@ -245,6 +244,21 @@ pub struct SqlExec<T, P> {
     properties: PlanProperties,
     engine: Option<Engine>,
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+}
+
+impl<T, P> Clone for SqlExec<T, P> {
+    fn clone(&self) -> Self {
+        SqlExec {
+            projected_schema: Arc::clone(&self.projected_schema),
+            table_reference: self.table_reference.clone(),
+            pool: Arc::clone(&self.pool),
+            filters: self.filters.clone(),
+            limit: self.limit,
+            properties: self.properties.clone(),
+            engine: self.engine,
+            dialect: self.dialect.clone(),
+        }
+    }
 }
 
 pub fn project_schema_safe(

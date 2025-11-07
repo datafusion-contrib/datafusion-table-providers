@@ -32,8 +32,8 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use super::creator::{TableDefinition, TableManager, ViewCreator};
-use super::{to_datafusion_error, RelationName};
 use super::write_settings::DuckDBWriteSettings;
+use super::{to_datafusion_error, RelationName};
 
 /// A callback handler that is invoked after data has been successfully written to a DuckDB table
 /// but before the transaction is committed.
