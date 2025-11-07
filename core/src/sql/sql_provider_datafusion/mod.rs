@@ -246,7 +246,7 @@ pub struct SqlExec<T, P> {
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
 }
 
-impl <T, P> Clone for SqlExec<T, P> {
+impl<T, P> Clone for SqlExec<T, P> {
     fn clone(&self) -> Self {
         SqlExec {
             projected_schema: Arc::clone(&self.projected_schema),

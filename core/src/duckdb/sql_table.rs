@@ -12,6 +12,8 @@ use std::{any::Any, fmt, sync::Arc};
 use crate::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
+use crate::util::column_reference::ColumnReference;
+use crate::util::indexes::IndexType;
 use datafusion::{
     arrow::datatypes::SchemaRef,
     datasource::TableProvider,
@@ -24,8 +26,6 @@ use datafusion::{
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
-use crate::util::column_reference::ColumnReference;
-use crate::util::indexes::IndexType;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -33,7 +33,8 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
 
-    pub(crate) indexes: Vec<(ColumnReference, IndexType)>
+    /// A list of indexes as expressed by columns reference in their index expressions.
+    pub(crate) indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -67,7 +68,7 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
-            indexes
+            indexes,
         }
     }
 
@@ -86,7 +87,7 @@ impl<T, P> DuckDBTable<T, P> {
             filters,
             limit,
             self.table_functions.clone(),
-            self.indexes.clone()
+            self.indexes.clone(),
         )?))
     }
 }
@@ -180,7 +181,9 @@ impl<T, P> DuckSqlExec<T, P> {
         })
     }
 
-    fn sql(&self) -> SqlResult<String> {
+    /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`
+    /// if rewritten by an optimization step.
+    pub fn sql(&self) -> SqlResult<String> {
         if let Some(sql) = &self.optimized_sql {
             return Ok(sql.clone());
         }
@@ -193,14 +196,17 @@ impl<T, P> DuckSqlExec<T, P> {
         ))
     }
 
+    /// Indexes that may be bound for the SQL expression in this execution node
     pub fn indexes(&self) -> &Vec<(ColumnReference, IndexType)> {
         self.indexes.as_ref()
     }
 
+    /// The unoptimized SQL expression for this execution node
     pub fn base_sql(&self) -> SqlResult<String> {
         self.base_exec.sql()
     }
 
+    /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`
     pub fn with_optimized_sql(mut self, sql: impl Into<String>) -> Self {
         self.optimized_sql = Some(sql.into());
         self
