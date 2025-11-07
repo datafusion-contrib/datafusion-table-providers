@@ -133,12 +133,22 @@ impl<T, P> Display for DuckDBTable<T, P> {
     }
 }
 
-#[derive(Clone)]
 pub struct DuckSqlExec<T, P> {
-    pub base_exec: SqlExec<T, P>,
+    base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
-    pub indexes: Vec<(ColumnReference, IndexType)>,
+    indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
+}
+
+impl<T, P> Clone for DuckSqlExec<T, P> {
+    fn clone(&self) -> Self {
+        DuckSqlExec {
+            base_exec: self.base_exec.clone(),
+            table_functions: self.table_functions.clone(),
+            indexes: self.indexes.clone(),
+            optimized_sql: self.optimized_sql.clone(),
+        }
+    }
 }
 
 impl<T, P> DuckSqlExec<T, P> {
@@ -181,6 +191,14 @@ impl<T, P> DuckSqlExec<T, P> {
             "{cte_expr} {sql}",
             cte_expr = get_cte(&self.table_functions)
         ))
+    }
+
+    pub fn indexes(&self) -> &Vec<(ColumnReference, IndexType)> {
+        self.indexes.as_ref()
+    }
+
+    pub fn base_sql(&self) -> SqlResult<String> {
+        self.base_exec.sql()
     }
 
     pub fn with_optimized_sql(mut self, sql: impl Into<String>) -> Self {
