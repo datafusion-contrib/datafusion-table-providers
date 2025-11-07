@@ -253,9 +253,9 @@ impl<T, P> Clone for SqlExec<T, P> {
             table_reference: self.table_reference.clone(),
             pool: Arc::clone(&self.pool),
             filters: self.filters.clone(),
-            limit: self.limit.clone(),
+            limit: self.limit,
             properties: self.properties.clone(),
-            engine: self.engine.clone(),
+            engine: self.engine,
             dialect: self.dialect.clone(),
         }
     }
