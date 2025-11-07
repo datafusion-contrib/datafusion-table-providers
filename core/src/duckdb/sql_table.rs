@@ -153,6 +153,7 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
 }
 
 impl<T, P> DuckSqlExec<T, P> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
