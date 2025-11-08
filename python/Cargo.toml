@@ -36,7 +36,7 @@ default = [
     "mysql",
     "postgres",
     "odbc",
-    "flight",
+    "flight",    
 ]
 clickhouse = ["datafusion-table-providers/clickhouse-federation"]
 duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]

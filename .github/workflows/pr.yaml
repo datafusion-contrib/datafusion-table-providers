@@ -41,6 +41,7 @@ jobs:
           - 'sqlite'
           - 'mysql'
           - 'flight'
+          - 'adbc'
 
     steps:
       - uses: actions/checkout@v5
@@ -112,6 +113,12 @@ jobs:
         run: |
           sudo apt-get install -y unixodbc-dev
           sudo apt-get install -y libsqlite3-dev
+
+      - name: Install ADBC drivers
+        run: |
+          curl -LsSf https://dbc.columnar.tech/install.sh | sh
+          dbc install sqlite
+          dbc install duckdb
 
       - name: Run tests
         run: make test
