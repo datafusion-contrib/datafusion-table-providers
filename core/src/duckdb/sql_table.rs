@@ -49,6 +49,7 @@ impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
 }
 
 impl<T, P> DuckDBTable<T, P> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
