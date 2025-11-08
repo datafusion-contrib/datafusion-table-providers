@@ -4555,7 +4555,8 @@ dependencies = [
 [[package]]
 name = "r2d2_adbc"
 version = "0.1.0"
-source = "git+https://github.com/adbc-drivers/r2d2-adbc.git#853d6430f0cabbacdae51b4b7377219d961d9f27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "530f1d047af6b0ac597f6609d907d3f43c1fac4dffb683901f62f73103128b5f"
 dependencies = [
  "adbc_core",
  "r2d2",
