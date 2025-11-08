@@ -51,7 +51,7 @@ mod federation;
 
 mod creator;
 mod settings;
-mod sql_table;
+pub mod sql_table;
 pub mod write;
 pub mod write_settings;
 pub use creator::{RelationName, TableDefinition, TableManager, ViewCreator};
@@ -489,6 +489,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Some(self.dialect.clone()),
             Some(cmd.constraints.clone()),
             self.function_support.clone(),
+            indexes,
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -661,6 +662,7 @@ impl DuckDBTableFactory {
             Some(self.dialect.clone()),
             None,
             self.function_support.clone(),
+            vec![],
         ));
 
         #[cfg(feature = "duckdb-federation")]
