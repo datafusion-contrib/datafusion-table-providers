@@ -4,10 +4,13 @@
 //!
 //! This is used as a fallback if the `datafusion-federation` optimizer is not enabled.
 
-use crate::sql::db_connection_pool::{
-    self,
-    dbconnection::{get_schema, query_arrow},
-    DbConnectionPool,
+use crate::{
+    sql::db_connection_pool::{
+        self,
+        dbconnection::{get_schema, query_arrow},
+        DbConnectionPool,
+    },
+    util::supported_functions::FunctionSupport,
 };
 use async_trait::async_trait;
 use datafusion::{
@@ -68,8 +71,9 @@ pub struct SqlTable<T: 'static, P: 'static> {
     schema: SchemaRef,
     pub table_reference: TableReference,
     engine: Option<Engine>,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    pub(crate) dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     constraints: Option<Constraints>,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl<T, P> std::fmt::Debug for SqlTable<T, P> {
@@ -108,6 +112,7 @@ impl<T, P> SqlTable<T, P> {
             engine,
             dialect: None,
             constraints: None,
+            function_support: None,
         })
     }
 
@@ -126,7 +131,14 @@ impl<T, P> SqlTable<T, P> {
             engine,
             dialect: None,
             constraints: None,
+            function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: Option<FunctionSupport>) -> Self {
+        self.function_support = function_support;
+        self
     }
 
     pub fn with_constraints_opt(mut self, constraints: Option<Constraints>) -> Self {

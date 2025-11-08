@@ -1,5 +1,6 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
@@ -33,6 +34,8 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
 
+    pub(crate) function_support: Option<FunctionSupport>,
+
     /// A list of indexes as expressed by columns reference in their index expressions.
     pub(crate) indexes: Vec<(ColumnReference, IndexType)>,
 }
@@ -46,6 +49,7 @@ impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
 }
 
 impl<T, P> DuckDBTable<T, P> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
@@ -53,6 +57,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         constraints: Option<Constraints>,
+        function_support: Option<FunctionSupport>,
         indexes: Vec<(ColumnReference, IndexType)>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
@@ -68,6 +73,7 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
+            function_support,
             indexes,
         }
     }
@@ -79,7 +85,7 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DuckSqlExec::new(
+        let mut exec = DuckSqlExec::new(
             projections,
             schema,
             &self.base_table.table_reference,
@@ -88,7 +94,14 @@ impl<T, P> DuckDBTable<T, P> {
             limit,
             self.table_functions.clone(),
             self.indexes.clone(),
-        )?))
+        )?;
+
+        // Don't use `Self::dialect()` as it will used `DefaultDialect` by default.
+        if let Some(ref dialect) = self.base_table.dialect {
+            exec = exec.with_dialect(Arc::clone(dialect));
+        };
+
+        Ok(Arc::new(exec))
     }
 }
 
@@ -180,6 +193,11 @@ impl<T, P> DuckSqlExec<T, P> {
             indexes,
             optimized_sql: None,
         })
+    }
+
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.base_exec = self.base_exec.with_dialect(dialect);
+        self
     }
 
     /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`

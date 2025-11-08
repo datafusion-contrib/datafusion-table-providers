@@ -1,6 +1,7 @@
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
@@ -29,6 +30,7 @@ use datafusion::{
 pub struct MySQLTable {
     pool: Arc<MySQLConnectionPool>,
     pub(crate) base_table: SqlTable<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl std::fmt::Debug for MySQLTable {
@@ -44,6 +46,7 @@ impl MySQLTable {
         pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
         constraints: Option<Constraints>,
+        function_support: Option<FunctionSupport>,
     ) -> Result<Self, sql_provider_datafusion::Error> {
         let dyn_pool = Arc::clone(pool)
             as Arc<
@@ -59,6 +62,7 @@ impl MySQLTable {
         Ok(Self {
             pool: Arc::clone(pool),
             base_table,
+            function_support,
         })
     }
 

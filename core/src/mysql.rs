@@ -16,6 +16,7 @@ limitations under the License.
 
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::sql_provider_datafusion::{self};
+use crate::util::supported_functions::FunctionSupport;
 use datafusion::{datasource::TableProvider, sql::TableReference};
 use mysql_async::Metrics;
 use snafu::prelude::*;
@@ -38,12 +39,22 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct MySQLTableFactory {
     pool: Arc<MySQLConnectionPool>,
+    function_support: Option<FunctionSupport>,
 }
 
 impl MySQLTableFactory {
     #[must_use]
     pub fn new(pool: Arc<MySQLConnectionPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            function_support: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     pub async fn table_provider(
@@ -52,7 +63,7 @@ impl MySQLTableFactory {
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let table_provider = Arc::new(
-            MySQLTable::new(&pool, table_reference, None)
+            MySQLTable::new(&pool, table_reference, None, self.function_support.clone())
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );

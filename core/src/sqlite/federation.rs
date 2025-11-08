@@ -1,7 +1,9 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
+use crate::util::supported_functions::contains_unsupported_functions;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
@@ -89,6 +91,14 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
         Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
+    }
+
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        // Default to not federate if [`Self::function_support`] provided, otherwise true.
+        self.function_support
+            .as_ref()
+            .map(|func_supp| !contains_unsupported_functions(plan, func_supp).unwrap_or(false))
+            .unwrap_or(true)
     }
 
     fn execute(

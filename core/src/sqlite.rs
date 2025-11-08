@@ -10,6 +10,7 @@ use crate::sql::db_connection_pool::{
 };
 use crate::sql::sql_provider_datafusion;
 use crate::util::schema::SchemaValidator;
+use crate::util::supported_functions::FunctionSupport;
 use crate::UnsupportedTypeAction;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
@@ -124,6 +125,7 @@ pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
     decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
+    function_support: Option<FunctionSupport>,
 }
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
@@ -138,7 +140,14 @@ impl SqliteTableProviderFactory {
             instances: Arc::new(Mutex::new(HashMap::new())),
             decimal_between: false,
             batch_insert_use_prepared_statements: true, // Default to true for better performance
+            function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     #[must_use]
@@ -388,6 +397,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
                 name,
                 Some(cmd.constraints.clone()),
             )
+            .with_function_support(self.function_support.clone())
             .with_decimal_between(self.decimal_between),
         );
 

@@ -1,5 +1,7 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
+use crate::util::supported_functions::contains_unsupported_functions;
 use async_trait::async_trait;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -53,6 +55,14 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         self.name
     }
 
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        // Default to not federate if [`Self::function_support`] provided, otherwise true.
+        self.function_support
+            .as_ref()
+            .map(|func_supp| !contains_unsupported_functions(plan, func_supp).unwrap_or(false))
+            .unwrap_or(true)
+    }
+
     fn compute_context(&self) -> Option<String> {
         match self.pool.join_push_down() {
             JoinPushDown::AllowedFor(context) => Some(context),
@@ -62,8 +72,10 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         }
     }
 
+    /// Return the provided [`Dialect`], defaulting to [`DefaultDialect`].
     fn dialect(&self) -> Arc<dyn Dialect> {
         let Some(ref dialect) = self.dialect else {
+            // TODO: Derive default from [`SQLExecutor::engine`].
             return Arc::new(DefaultDialect {});
         };
         Arc::clone(dialect) as Arc<_>
