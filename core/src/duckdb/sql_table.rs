@@ -170,7 +170,7 @@ impl<T, P> DuckDBExplainExec<T, P> {
 
         let explain_sql = format!("EXPLAIN {}", sql);
         
-        // DuckDB EXPLAIN returns a single column named 'explain_value' with VARCHAR type
+        // DuckDB EXPLAIN returns columns with explain output
         let schema = Arc::new(Schema::new(vec![
             Field::new("explain_key", DataType::Utf8, false),
             Field::new("explain_value", DataType::Utf8, false),
@@ -194,13 +194,13 @@ impl<T, P> DuckDBExplainExec<T, P> {
 
 impl<T, P> std::fmt::Debug for DuckDBExplainExec<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "DuckDBExplainExec")
+        write!(f, "DuckDB Explain Output")
     }
 }
 
 impl<T, P> DisplayAs for DuckDBExplainExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
-        write!(f, "DuckDBExplain")
+        write!(f, "DuckDB Explain Output (run to see plan)")
     }
 }
 
@@ -254,7 +254,7 @@ pub struct DuckSqlExec<T, P> {
     table_functions: Option<HashMap<String, String>>,
     indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
-    explain_child: Option<Arc<dyn ExecutionPlan>>,
+    duckdb_explain: Option<Arc<dyn ExecutionPlan>>,
 }
 
 impl<T, P> Clone for DuckSqlExec<T, P> {
@@ -264,7 +264,7 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
             table_functions: self.table_functions.clone(),
             indexes: self.indexes.clone(),
             optimized_sql: self.optimized_sql.clone(),
-            explain_child: self.explain_child.clone(),
+            duckdb_explain: self.duckdb_explain.clone(),
         }
     }
 }
@@ -292,7 +292,7 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
         )?;
 
         // Create the explain child node - ignore errors if explain child creation fails
-        let explain_child: Option<Arc<dyn ExecutionPlan>> = base_exec.sql()
+        let duckdb_explain: Option<Arc<dyn ExecutionPlan>> = base_exec.sql()
             .ok()
             .and_then(|base_sql| {
                 let full_sql = format!(
@@ -308,7 +308,7 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
             table_functions,
             indexes,
             optimized_sql: None,
-            explain_child,
+            duckdb_explain,
         })
     }
 
@@ -381,8 +381,9 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        if let Some(ref explain_child) = self.explain_child {
-            vec![explain_child]
+        // Return the DuckDB explain as a child node so it appears in the plan tree
+        if let Some(ref explain) = self.duckdb_explain {
+            vec![explain]
         } else {
             vec![]
         }
