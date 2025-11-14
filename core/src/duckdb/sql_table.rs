@@ -149,11 +149,112 @@ impl<T, P> Display for DuckDBTable<T, P> {
     }
 }
 
+/// ExecutionPlan node that represents DuckDB's EXPLAIN output
+#[derive(Clone)]
+struct DuckDBExplainExec<T, P> {
+    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    explain_sql: String,
+    schema: SchemaRef,
+    properties: PlanProperties,
+}
+
+impl<T, P> DuckDBExplainExec<T, P> {
+    fn new(
+        pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        sql: String,
+    ) -> DataFusionResult<Self> {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_expr::EquivalenceProperties;
+        use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+        use datafusion::physical_plan::Partitioning;
+
+        let explain_sql = format!("EXPLAIN {}", sql);
+        
+        // DuckDB EXPLAIN returns a single column named 'explain_value' with VARCHAR type
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("explain_key", DataType::Utf8, false),
+            Field::new("explain_value", DataType::Utf8, false),
+        ]));
+
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        );
+
+        Ok(Self {
+            pool,
+            explain_sql,
+            schema,
+            properties,
+        })
+    }
+}
+
+impl<T, P> std::fmt::Debug for DuckDBExplainExec<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DuckDBExplainExec")
+    }
+}
+
+impl<T, P> DisplayAs for DuckDBExplainExec<T, P> {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DuckDBExplain")
+    }
+}
+
+impl<T: 'static, P: 'static> ExecutionPlan for DuckDBExplainExec<T, P> {
+    fn name(&self) -> &'static str {
+        "DuckDBExplainExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> DataFusionResult<SendableRecordBatchStream> {
+        let sql = self.explain_sql.clone();
+        let schema = self.schema.clone();
+        let pool = self.pool.clone();
+
+        tracing::debug!("DuckDBExplainExec executing: {sql}");
+
+        let fut = get_stream(pool, sql, schema.clone());
+        let stream = futures::stream::once(fut).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+}
+
 pub struct DuckSqlExec<T, P> {
     base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
     indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
+    explain_child: Option<Arc<dyn ExecutionPlan>>,
 }
 
 impl<T, P> Clone for DuckSqlExec<T, P> {
@@ -163,11 +264,12 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
             table_functions: self.table_functions.clone(),
             indexes: self.indexes.clone(),
             optimized_sql: self.optimized_sql.clone(),
+            explain_child: self.explain_child.clone(),
         }
     }
 }
 
-impl<T, P> DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         projections: Option<&Vec<usize>>,
@@ -183,17 +285,30 @@ impl<T, P> DuckSqlExec<T, P> {
             projections,
             schema,
             table_reference,
-            pool,
+            pool.clone(),
             filters,
             limit,
             Some(Engine::DuckDB),
         )?;
+
+        // Create the explain child node - ignore errors if explain child creation fails
+        let explain_child: Option<Arc<dyn ExecutionPlan>> = base_exec.sql()
+            .ok()
+            .and_then(|base_sql| {
+                let full_sql = format!(
+                    "{cte_expr} {base_sql}",
+                    cte_expr = get_cte(&table_functions)
+                );
+                DuckDBExplainExec::new(pool.clone(), full_sql).ok()
+            })
+            .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>);
 
         Ok(Self {
             base_exec,
             table_functions,
             indexes,
             optimized_sql: None,
+            explain_child,
         })
     }
 
@@ -234,14 +349,14 @@ impl<T, P> DuckSqlExec<T, P> {
     }
 }
 
-impl<T, P> std::fmt::Debug for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> std::fmt::Debug for DuckSqlExec<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> DisplayAs for DuckSqlExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
@@ -266,7 +381,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.base_exec.children()
+        if let Some(ref explain_child) = self.explain_child {
+            vec![explain_child]
+        } else {
+            vec![]
+        }
     }
 
     fn with_new_children(
