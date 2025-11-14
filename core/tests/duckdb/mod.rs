@@ -122,9 +122,6 @@ async fn test_arrow_duckdb_roundtrip(
 
 #[test_log::test(tokio::test)]
 async fn test_duckdb_explain() {
-    use datafusion_table_providers::duckdb::DuckDBTableFactory;
-    use datafusion_table_providers::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
-    
     // Create in-memory DuckDB using the factory approach
     let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
     let ctx = SessionContext::new();
@@ -198,5 +195,10 @@ async fn test_duckdb_explain() {
     
     // Verify that the explain output contains DuckDB explain information
     assert!(explain_output.contains("DuckSqlExec"), "Should contain DuckSqlExec in explain output");
-    assert!(explain_output.contains("DuckDBExplain"), "Should contain DuckDBExplain child node in explain output");
+    assert!(explain_output.contains("DuckDB Explain Output"), "Should contain DuckDB Explain Output child node in explain output");
+    
+    // Now execute the actual query to verify DuckDB explain gets run
+    let results = df.collect().await.expect("collect failed");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].num_rows(), 1);
 }
