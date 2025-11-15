@@ -23,6 +23,8 @@ pub mod odbc;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "adbc")]
+pub mod adbc;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
