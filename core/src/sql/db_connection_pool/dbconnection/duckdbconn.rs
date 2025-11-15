@@ -381,8 +381,8 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Self::attach(&conn, &self.attachments)?;
         self.apply_connection_setup_queries(&conn)?;
 
-        let schema = if let Some(schema) = projected_schema {
-            schema
+        let schema = if projected_schema.is_some() && statement_requires_projected_schema(sql) {
+            projected_schema.expect("checked is_some")
         } else {
             let fetch_schema_sql =
                 format!("WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0");
@@ -465,6 +465,10 @@ fn blocking_channel_send<T>(channel: &Sender<T>, item: T) -> Result<()> {
         }
         .into()),
     }
+}
+
+fn statement_requires_projected_schema(sql: &str) -> bool {
+    sql.trim_start().to_ascii_uppercase().starts_with("EXPLAIN")
 }
 
 #[must_use]
