@@ -58,8 +58,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         constraints: Option<Constraints>,
-        #[allow(dead_code)]
-        function_support: Option<FunctionSupport>,
+        #[allow(dead_code)] function_support: Option<FunctionSupport>,
         indexes: Vec<(ColumnReference, IndexType)>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema(
@@ -169,7 +168,7 @@ impl<T, P> DuckDBExplainExec<T, P> {
         use datafusion::physical_plan::Partitioning;
 
         let explain_sql = format!("EXPLAIN {}", sql);
-        
+
         // DuckDB EXPLAIN returns columns with explain output
         let schema = Arc::new(Schema::new(vec![
             Field::new("explain_key", DataType::Utf8, false),
@@ -292,7 +291,8 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
         )?;
 
         // Create the explain child node - ignore errors if explain child creation fails
-        let duckdb_explain: Option<Arc<dyn ExecutionPlan>> = base_exec.sql()
+        let duckdb_explain: Option<Arc<dyn ExecutionPlan>> = base_exec
+            .sql()
             .ok()
             .and_then(|base_sql| {
                 let full_sql = format!(
