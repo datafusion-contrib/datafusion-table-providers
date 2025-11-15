@@ -15,6 +15,26 @@ use rstest::rstest;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn explain_batches_to_string(batches: &[RecordBatch]) -> String {
+    let mut explain_output = String::new();
+    for batch in batches {
+        for row_idx in 0..batch.num_rows() {
+            for col_idx in 0..batch.num_columns() {
+                let column = batch.column(col_idx);
+                if let Some(str_array) = column
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::StringArray>()
+                {
+                    explain_output.push_str(str_array.value(row_idx));
+                    explain_output.push(' ');
+                }
+            }
+            explain_output.push('\n');
+        }
+    }
+    explain_output
+}
+
 async fn arrow_duckdb_round_trip(
     arrow_record: RecordBatch,
     source_schema: SchemaRef,
@@ -125,15 +145,21 @@ async fn test_duckdb_explain() {
     // Create in-memory DuckDB using the factory approach
     let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
     let ctx = SessionContext::new();
-    
+
     // Create a simple test table using datafusion commands
-    let schema = Arc::new(
-        datafusion::arrow::datatypes::Schema::new(vec![
-            datafusion::arrow::datatypes::Field::new("id", datafusion::arrow::datatypes::DataType::Int32, false),
-            datafusion::arrow::datatypes::Field::new("name", datafusion::arrow::datatypes::DataType::Utf8, false),
-        ])
-    );
-    
+    let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(vec![
+        datafusion::arrow::datatypes::Field::new(
+            "id",
+            datafusion::arrow::datatypes::DataType::Int32,
+            false,
+        ),
+        datafusion::arrow::datatypes::Field::new(
+            "name",
+            datafusion::arrow::datatypes::DataType::Utf8,
+            false,
+        ),
+    ]));
+
     let cmd = CreateExternalTable {
         schema: Arc::new(schema.to_dfschema().expect("to df schema")),
         name: "test_table".into(),
@@ -149,12 +175,12 @@ async fn test_duckdb_explain() {
         column_defaults: HashMap::new(),
         temporary: false,
     };
-    
+
     let table_provider = factory
         .create(&ctx.state(), &cmd)
         .await
         .expect("table provider created");
-    
+
     // Register the table
     ctx.register_table("test_table", table_provider)
         .expect("failed to register table");
@@ -172,31 +198,43 @@ async fn test_duckdb_explain() {
         .sql("SELECT * FROM test_table WHERE id = 1")
         .await
         .expect("select failed");
-    
+
     // Get the explain output
     let explain_df = df.clone().explain(false, false).expect("explain failed");
     let explain_results = explain_df.collect().await.expect("collect failed");
-    
-    // Convert explain results to string for inspection
-    let mut explain_output = String::new();
-    for batch in &explain_results {
-        for row_idx in 0..batch.num_rows() {
-            for col_idx in 0..batch.num_columns() {
-                let column = batch.column(col_idx);
-                if let Some(str_array) = column.as_any().downcast_ref::<datafusion::arrow::array::StringArray>() {
-                    explain_output.push_str(&format!("{} ", str_array.value(row_idx)));
-                }
-            }
-            explain_output.push('\n');
-        }
-    }
-    
+    let explain_output = explain_batches_to_string(&explain_results);
     tracing::info!("Explain output:\n{}", explain_output);
-    
+
     // Verify that the explain output contains DuckDB explain information
-    assert!(explain_output.contains("DuckSqlExec"), "Should contain DuckSqlExec in explain output");
-    assert!(explain_output.contains("DuckDB Explain Output"), "Should contain DuckDB Explain Output child node in explain output");
-    
+    assert!(
+        explain_output.contains("DuckSqlExec"),
+        "Should contain DuckSqlExec in explain output"
+    );
+    assert!(
+        explain_output.contains("DuckDB Explain Output"),
+        "Should contain DuckDB Explain Output child node in explain output"
+    );
+
+    // Run EXPLAIN ANALYZE to ensure the DuckDB explain child executes correctly
+    let explain_analyze_df = df
+        .clone()
+        .explain(false, true)
+        .expect("explain analyze failed");
+    let explain_analyze_results = explain_analyze_df
+        .collect()
+        .await
+        .expect("explain analyze collect failed");
+    let explain_analyze_output = explain_batches_to_string(&explain_analyze_results);
+    tracing::info!("Explain analyze output:\n{}", explain_analyze_output);
+    assert!(
+        explain_analyze_output.contains("DuckSqlExec"),
+        "EXPLAIN ANALYZE should include DuckSqlExec"
+    );
+    assert!(
+        explain_analyze_output.contains("DuckDB Explain Output"),
+        "EXPLAIN ANALYZE should include DuckDB explain child"
+    );
+
     // Now execute the actual query to verify DuckDB explain gets run
     let results = df.collect().await.expect("collect failed");
     assert_eq!(results.len(), 1);
