@@ -152,7 +152,7 @@ impl<T, P> Display for DuckDBTable<T, P> {
 #[derive(Clone)]
 struct DuckDBExplainExec<T, P> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-    explain_sql: String,
+    sql: String,
     schema: SchemaRef,
     properties: PlanProperties,
 }
@@ -167,12 +167,11 @@ impl<T, P> DuckDBExplainExec<T, P> {
         use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
         use datafusion::physical_plan::Partitioning;
 
-        let explain_sql = format!("EXPLAIN {}", sql);
-
-        // DuckDB EXPLAIN returns columns with explain output
+        // DuckDB EXPLAIN returns columns: plan_type and plan
+        // See: https://duckdb.org/docs/stable/guides/meta/explain
         let schema = Arc::new(Schema::new(vec![
-            Field::new("explain_key", DataType::Utf8, false),
-            Field::new("explain_value", DataType::Utf8, false),
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
         ]));
 
         let properties = PlanProperties::new(
@@ -184,7 +183,7 @@ impl<T, P> DuckDBExplainExec<T, P> {
 
         Ok(Self {
             pool,
-            explain_sql,
+            sql,
             schema,
             properties,
         })
@@ -198,8 +197,14 @@ impl<T, P> std::fmt::Debug for DuckDBExplainExec<T, P> {
 }
 
 impl<T, P> DisplayAs for DuckDBExplainExec<T, P> {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
-        write!(f, "DuckDB Explain Output (run to see plan)")
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        use datafusion::physical_plan::DisplayFormatType;
+        
+        if matches!(t, DisplayFormatType::Verbose) {
+            write!(f, "DuckDB Explain: {}", self.sql)
+        } else {
+            write!(f, "DuckDB Explain")
+        }
     }
 }
 
@@ -236,13 +241,18 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckDBExplainExec<T, P> {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let sql = self.explain_sql.clone();
+        // When DataFusion runs regular EXPLAIN, it just shows the plan tree without executing.
+        // When DataFusion runs EXPLAIN ANALYZE, it actually executes the plans to collect metrics.
+        // Therefore, if this execute() method is being called, we're in EXPLAIN ANALYZE mode.
+        // So we always use EXPLAIN ANALYZE here - for regular EXPLAIN, this won't be executed.
+        let explain_sql = format!("EXPLAIN ANALYZE {}", self.sql);
+        
         let schema = self.schema.clone();
         let pool = self.pool.clone();
 
-        tracing::debug!("DuckDBExplainExec executing: {sql}");
+        tracing::debug!("DuckDBExplainExec executing: {explain_sql}");
 
-        let fut = get_stream(pool, sql, schema.clone());
+        let fut = get_stream(pool, explain_sql, schema.clone());
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -291,8 +301,7 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
         )?;
 
         // Create the explain child node - ignore errors if explain child creation fails
-        let duckdb_explain: Option<Arc<dyn ExecutionPlan>> = base_exec
-            .sql()
+        let duckdb_explain = base_exec.sql()
             .ok()
             .and_then(|base_sql| {
                 let full_sql = format!(
@@ -300,8 +309,8 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
                     cte_expr = get_cte(&table_functions)
                 );
                 DuckDBExplainExec::new(pool.clone(), full_sql).ok()
-            })
-            .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>);
+                    .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)
+            });
 
         Ok(Self {
             base_exec,
@@ -381,7 +390,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // Return the DuckDB explain as a child node so it appears in the plan tree
+        // Return the DuckDB explain node as a child so it appears in the plan tree
         if let Some(ref explain) = self.duckdb_explain {
             vec![explain]
         } else {
