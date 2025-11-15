@@ -49,6 +49,9 @@ pub mod federation;
 #[cfg(feature = "sqlite-federation")]
 pub mod sqlite_interval;
 
+#[cfg(feature = "sqlite-federation")]
+pub mod between;
+
 pub mod sql_table;
 pub mod write;
 

@@ -88,7 +88,7 @@ impl DuckDBTableWriterBuilder {
 
     #[must_use]
     pub fn with_table_definition(mut self, table_definition: TableDefinition) -> Self {
-        self.table_definition = Some(table_definition);
+        self.table_definition = Some(Arc::new(table_definition));
         self
     }
 
@@ -122,7 +122,7 @@ impl DuckDBTableWriterBuilder {
         Ok(DuckDBTableWriter {
             read_provider,
             on_conflict: self.on_conflict,
-            table_definition: Arc::new(table_definition),
+            table_definition,
             pool,
             on_data_written: self.on_data_written,
         })
@@ -153,12 +153,6 @@ impl std::fmt::Debug for DuckDBTableWriter {
                     .map_or("None", |_| "Some(callback)"),
             )
             .finish()
-    }
-}
-
-impl std::fmt::Debug for DuckDBTableWriter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DuckDBTableWriter")
     }
 }
 
@@ -224,7 +218,7 @@ impl TableProvider for DuckDBTableWriter {
         let mut sink = DuckDBDataSink::new(
             Arc::clone(&self.pool),
             Arc::clone(&self.table_definition),
-            overwrite,
+            op,
             self.on_conflict.clone(),
             self.schema(),
         );
