@@ -726,6 +726,7 @@ async fn test_mysql_nullability_constraints(port: usize) {
         create_table_stmt,
         insert_table_stmt,
         expected_record,
+        None,
     )
     .await;
 }
