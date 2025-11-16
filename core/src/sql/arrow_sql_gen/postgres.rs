@@ -201,16 +201,19 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name();
             let column_type = column.type_();
 
+            let projected_field = projected_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(column_name).ok());
+
             let mut numeric_scale: Option<u32> = None;
 
             let data_type = if *column_type == Type::NUMERIC {
-                if let Some(schema) = projected_schema.as_ref() {
-                    match get_decimal_column_precision_and_scale(column_name, schema) {
-                        Some((precision, scale)) => {
-                            numeric_scale = Some(u32::try_from(scale).unwrap_or_default());
-                            Some(DataType::Decimal128(precision, scale))
-                        }
-                        None => None,
+                if let Some(field) = projected_field.as_ref() {
+                    if let DataType::Decimal128(precision, scale) = field.data_type() {
+                        numeric_scale = Some(u32::try_from(*scale).unwrap_or_default());
+                        Some(DataType::Decimal128(*precision, *scale))
+                    } else {
+                        None
                     }
                 } else {
                     None
@@ -219,9 +222,13 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 map_column_type_to_data_type(column_type, column_name)?
             };
 
+            let nullable = projected_field
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+
             match &data_type {
                 Some(data_type) => {
-                    arrow_fields.push(Some(Field::new(column_name, data_type.clone(), true)));
+                    arrow_fields.push(Some(Field::new(column_name, data_type.clone(), nullable)));
                 }
                 None => arrow_fields.push(None),
             }
