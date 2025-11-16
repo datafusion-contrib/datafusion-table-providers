@@ -409,6 +409,7 @@ async fn test_postgres_nullability_constraints(port: usize) {
         None,
         expected_record,
         UnsupportedTypeAction::default(),
+        false,
     )
     .await;
 }
