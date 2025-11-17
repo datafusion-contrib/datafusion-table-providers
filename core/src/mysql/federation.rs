@@ -3,9 +3,9 @@ use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use crate::util::supported_functions::contains_unsupported_functions;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_expr::LogicalPlan;
 use datafusion_federation::sql::{
     ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };

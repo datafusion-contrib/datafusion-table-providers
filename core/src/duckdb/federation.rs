@@ -2,8 +2,8 @@ use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError}
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use crate::util::supported_functions::contains_unsupported_functions;
 use arrow::datatypes::SchemaRef;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_expr::LogicalPlan;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
