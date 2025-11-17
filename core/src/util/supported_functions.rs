@@ -108,7 +108,7 @@ impl FunctionSupport {
 
     pub fn supports(&self, expr: &Expr) -> bool {
         let mut supports = true;
-        let _ = expr.apply_children(|e| {
+        let _ = expr.apply(|e| {
             let support_child = match e {
                 Expr::ScalarFunction(ScalarFunction { func, .. }) => self.supports_scalar(func),
                 Expr::AggregateFunction(AggregateFunction { func, .. }) => {
