@@ -598,6 +598,7 @@ pub struct DuckDBTableFactory {
     dialect: Arc<dyn Dialect>,
     schema: Option<SchemaRef>,
     function_support: Option<FunctionSupport>,
+    indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl DuckDBTableFactory {
@@ -608,6 +609,7 @@ impl DuckDBTableFactory {
             dialect: Arc::new(DuckDBDialect::new()),
             schema: None,
             function_support: None,
+            indexes: vec![],
         }
     }
 
@@ -626,6 +628,12 @@ impl DuckDBTableFactory {
     #[must_use]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
         self
     }
 
@@ -662,7 +670,7 @@ impl DuckDBTableFactory {
             Some(self.dialect.clone()),
             None,
             self.function_support.clone(),
-            vec![],
+            self.indexes.clone(),
         ));
 
         #[cfg(feature = "duckdb-federation")]

@@ -34,6 +34,7 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
 
+    #[allow(dead_code)]
     pub(crate) function_support: Option<FunctionSupport>,
 
     /// A list of indexes as expressed by columns reference in their index expressions.
@@ -57,6 +58,7 @@ impl<T, P> DuckDBTable<T, P> {
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
         constraints: Option<Constraints>,
+        #[allow(dead_code)]
         function_support: Option<FunctionSupport>,
         indexes: Vec<(ColumnReference, IndexType)>,
     ) -> Self {
