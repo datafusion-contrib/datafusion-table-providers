@@ -186,6 +186,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
     test_postgres_jsonb_type(container_manager.port).await;
+    test_postgres_nullability_constraints(container_manager.port).await;
 }
 
 async fn test_postgres_enum_type(port: usize) {
@@ -199,7 +200,21 @@ async fn test_postgres_enum_type(port: usize) {
     INSERT INTO person_mood (mood_status) VALUES ('happy'), ('sad'), ('neutral');
     ";
 
-    let (expected_record, _) = get_arrow_dictionary_array_record_batch();
+    // Create expected record with nullable=false to match NOT NULL constraint
+    let mut builder = arrow::array::StringDictionaryBuilder::<arrow::datatypes::Int8Type>::new();
+    builder.append_value("happy");
+    builder.append_value("sad");
+    builder.append_value("neutral");
+    let array: arrow::array::DictionaryArray<arrow::datatypes::Int8Type> = builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "mood_status",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+        false, // NOT NULL
+    )]));
+
+    let expected_record = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
+        .expect("Failed to create arrow dictionary array record batch");
 
     arrow_postgres_one_way(
         port,
@@ -332,6 +347,71 @@ async fn test_postgres_jsonb_type(port: usize) {
         .collect();
 
     assert_eq!(actual_json, expected_json);
+}
+
+async fn test_postgres_nullability_constraints(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE nullability_table (
+            id INTEGER NOT NULL,
+            name VARCHAR(50) NOT NULL,
+            age INTEGER,
+            email VARCHAR(100),
+            score NUMERIC(5, 2) NOT NULL
+        );
+    ";
+    let insert_table_stmt = "
+        INSERT INTO nullability_table (id, name, age, email, score)
+        VALUES
+        (1, 'Alice', 30, 'alice@example.com', 95.50),
+        (2, 'Bob', NULL, NULL, 87.25),
+        (3, 'Charlie', 25, 'charlie@example.com', 92.00);
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int32, true),
+        Field::new("email", DataType::Utf8, true),
+        Field::new("score", DataType::Decimal128(5, 2), false),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec![
+                "Alice", "Bob", "Charlie",
+            ])),
+            Arc::new(arrow::array::Int32Array::from(vec![
+                Some(30),
+                None,
+                Some(25),
+            ])),
+            Arc::new(arrow::array::StringArray::from(vec![
+                Some("alice@example.com"),
+                None,
+                Some("charlie@example.com"),
+            ])),
+            Arc::new(
+                Decimal128Array::from(vec![i128::from(9550), i128::from(8725), i128::from(9200)])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+        ],
+    )
+    .expect("Failed to create expected arrow record batch");
+
+    arrow_postgres_one_way(
+        port,
+        "nullability_table",
+        create_table_stmt,
+        insert_table_stmt,
+        None,
+        expected_record,
+        UnsupportedTypeAction::default(),
+        false,
+    )
+    .await;
 }
 
 async fn arrow_postgres_one_way(

@@ -218,6 +218,11 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             field: "Type".to_string(),
         })?;
 
+        let nullable_str: String = row.get("Null").ok_or(Error::MissingField {
+            field: "Null".to_string(),
+        })?;
+
+        let nullable = nullable_str == "YES";
         let column_type = map_str_type_to_column_type(&column_name, &data_type)?;
         let column_is_binary = map_str_type_to_is_binary(&data_type);
         let column_is_enum = map_str_type_to_is_enum(&data_type);
@@ -245,7 +250,7 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             data_type,
         })?;
 
-        fields.push(Field::new(&column_name, arrow_data_type, true));
+        fields.push(Field::new(&column_name, arrow_data_type, nullable));
     }
     Ok(Arc::new(Schema::new(fields)))
 }
