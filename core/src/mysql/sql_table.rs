@@ -30,7 +30,6 @@ use datafusion::{
 pub struct MySQLTable {
     pool: Arc<MySQLConnectionPool>,
     pub(crate) base_table: SqlTable<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
-    #[allow(dead_code)]
     pub(crate) function_support: Option<FunctionSupport>,
 }
 
