@@ -161,7 +161,9 @@ impl DuckDBAttachments {
             );
             for db in &self.attachments {
                 if !existing_attachments.contains_key(db.as_ref()) {
-                    tracing::warn!("{db} not found among existing attachments");
+                    // In some circumstances, for example right after pool creation, only partial attachments may be available.
+                    // Using debug level as this is expected and not an error.
+                    tracing::debug!("{db} not found among existing attachments");
                 }
             }
             // The connection can have attachments but not the search_path, so we must set it based on the existing attachment names
