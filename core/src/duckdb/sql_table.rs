@@ -6,7 +6,6 @@ use crate::sql::sql_provider_datafusion::{
 use crate::util::column_reference::ColumnReference;
 use crate::util::indexes::IndexType;
 use crate::util::supported_functions::FunctionSupport;
-use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
