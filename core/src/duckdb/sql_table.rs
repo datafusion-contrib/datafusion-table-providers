@@ -1,20 +1,15 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr::Engine;
-use crate::util::supported_functions::FunctionSupport;
-use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::common::Constraints;
-use datafusion::sql::unparser::dialect::Dialect;
-use futures::TryStreamExt;
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::{any::Any, fmt, sync::Arc};
-
 use crate::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 use crate::util::column_reference::ColumnReference;
 use crate::util::indexes::IndexType;
+use crate::util::supported_functions::FunctionSupport;
+use async_trait::async_trait;
+use datafusion::catalog::Session;
+use datafusion::common::Constraints;
+use datafusion::sql::unparser::dialect::Dialect;
 use datafusion::{
     arrow::datatypes::SchemaRef,
     datasource::TableProvider,
@@ -27,6 +22,10 @@ use datafusion::{
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
+use futures::TryStreamExt;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::{any::Any, fmt, sync::Arc};
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -152,6 +151,7 @@ pub struct DuckSqlExec<T, P> {
     table_functions: Option<HashMap<String, String>>,
     indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
+    optimized_sql_schema: Option<SchemaRef>,
 }
 
 impl<T, P> Clone for DuckSqlExec<T, P> {
@@ -161,6 +161,7 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
             table_functions: self.table_functions.clone(),
             indexes: self.indexes.clone(),
             optimized_sql: self.optimized_sql.clone(),
+            optimized_sql_schema: self.optimized_sql_schema.clone(),
         }
     }
 }
@@ -192,6 +193,7 @@ impl<T, P> DuckSqlExec<T, P> {
             table_functions,
             indexes,
             optimized_sql: None,
+            optimized_sql_schema: None,
         })
     }
 
@@ -225,9 +227,15 @@ impl<T, P> DuckSqlExec<T, P> {
         self.base_exec.sql()
     }
 
-    /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`
-    pub fn with_optimized_sql(mut self, sql: impl Into<String>) -> Self {
+    /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`. Provide
+    /// a `new_schema` if changing the output schema of this node.
+    pub fn with_optimized_sql(
+        mut self,
+        sql: impl Into<String>,
+        new_schema: Option<SchemaRef>,
+    ) -> Self {
         self.optimized_sql = Some(sql.into());
+        self.optimized_sql_schema = new_schema;
         self
     }
 }
@@ -256,7 +264,10 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.base_exec.schema()
+        self.optimized_sql_schema
+            .as_ref()
+            .map(Arc::clone)
+            .unwrap_or(self.base_exec.schema())
     }
 
     fn properties(&self) -> &PlanProperties {
