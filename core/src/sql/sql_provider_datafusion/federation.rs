@@ -30,23 +30,26 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
-    fn create_federated_table_source(
-        self: Arc<Self>,
-    ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
+    fn create_federated_table_source(self: Arc<Self>) -> Arc<dyn FederatedTableSource> {
         let table_reference = self.table_reference.clone();
         let schema = Arc::clone(&self.schema);
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
-        Ok(Arc::new(SQLTableSource::new_with_schema(
+        Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
             RemoteTableRef::from(table_reference),
             schema,
-        )))
+        ))
     }
 
+    /// Creates a federated table provider.
+    ///
+    /// # Errors
+    ///
+    /// This function currently never returns an error, but the Result type is kept for API compatibility.
     pub fn create_federated_table_provider(
         self: Arc<Self>,
     ) -> DataFusionResult<FederatedTableProviderAdaptor> {
-        let table_source = Self::create_federated_table_source(Arc::clone(&self))?;
+        let table_source = Self::create_federated_table_source(Arc::clone(&self));
         Ok(FederatedTableProviderAdaptor::new_with_provider(
             table_source,
             self,

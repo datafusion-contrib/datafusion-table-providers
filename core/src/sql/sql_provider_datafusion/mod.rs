@@ -1,6 +1,6 @@
-//! # SQL DataFusion TableProvider
+//! # SQL DataFusion `TableProvider`
 //!
-//! This module implements a SQL TableProvider for DataFusion.
+//! This module implements a SQL `TableProvider` for DataFusion.
 //!
 //! This is used as a fallback if the `datafusion-federation` optimizer is not enabled.
 
@@ -44,6 +44,7 @@ use datafusion::{
 };
 
 pub mod expr;
+#[cfg(feature = "federation")]
 pub mod federation;
 
 #[derive(Debug, Snafu)]
@@ -83,11 +84,19 @@ impl<T, P> std::fmt::Debug for SqlTable<T, P> {
             .field("table_reference", &self.table_reference)
             .field("schema", &self.schema)
             .field("engine", &self.engine)
-            .finish()
+            .field("dialect", &self.dialect.is_some())
+            .field("constraints", &self.constraints)
+            .field("function_support", &self.function_support)
+            .finish_non_exhaustive()
     }
 }
 
 impl<T, P> SqlTable<T, P> {
+    /// Creates a new SQL table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema cannot be retrieved from the database.
     pub async fn new(
         name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
@@ -141,11 +150,13 @@ impl<T, P> SqlTable<T, P> {
         self
     }
 
+    #[must_use]
     pub fn with_constraints_opt(mut self, constraints: Option<Constraints>) -> Self {
         self.constraints = constraints;
         self
     }
 
+    #[must_use]
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
         self
@@ -179,11 +190,6 @@ impl<T, P> SqlTable<T, P> {
             exec = exec.with_dialect(Arc::clone(dialect));
         }
         Ok(Arc::new(exec))
-    }
-
-    // Return the current memory location of the object as a unique identifier
-    fn unique_id(&self) -> usize {
-        std::ptr::from_ref(self) as usize
     }
 
     #[must_use]
@@ -273,6 +279,11 @@ impl<T, P> Clone for SqlExec<T, P> {
     }
 }
 
+/// Projects a schema to include only the specified columns.
+///
+/// # Errors
+///
+/// Returns an error if the projection fails.
 pub fn project_schema_safe(
     schema: &SchemaRef,
     projection: Option<&Vec<usize>>,
@@ -291,6 +302,11 @@ pub fn project_schema_safe(
 }
 
 impl<T, P> SqlExec<T, P> {
+    /// Creates a new SQL execution plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema projection fails.
     pub fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
@@ -332,6 +348,11 @@ impl<T, P> SqlExec<T, P> {
         Arc::clone(&self.pool)
     }
 
+    /// Generates the SQL query string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQL generation fails.
     pub fn sql(&self) -> Result<String> {
         let columns = self
             .projected_schema
@@ -444,6 +465,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
     }
 }
 
+/// Executes a SQL query and returns a stream of record batches.
+///
+/// # Errors
+///
+/// Returns an error if the connection fails or the query execution fails.
 pub async fn get_stream<T: 'static, P: 'static>(
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
@@ -516,6 +542,7 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
+            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()
@@ -551,6 +578,7 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
+            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()

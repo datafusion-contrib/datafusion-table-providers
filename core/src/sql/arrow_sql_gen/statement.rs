@@ -195,9 +195,10 @@ pub struct InsertBuilder {
     record_batches: Vec<RecordBatch>,
 }
 
+#[allow(unused_variables)]
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
     data_type: &DataType,
-    #[allow(unused_variables)] query_builder: &T,
+    query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
     {
