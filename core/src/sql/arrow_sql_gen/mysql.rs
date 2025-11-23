@@ -136,10 +136,17 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 decimal_scale,
             );
 
+            // Determine nullability from projected_schema if available, otherwise default to true
+            let nullable = projected_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(&column_name).ok())
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+
             arrow_fields.push(
                 data_type
                     .clone()
-                    .map(|data_type| Field::new(column_name.clone(), data_type.clone(), true)),
+                    .map(|data_type| Field::new(column_name.clone(), data_type.clone(), nullable)),
             );
             arrow_columns_builders
                 .push(map_data_type_to_array_builder_optional(data_type.as_ref()));
@@ -607,7 +614,7 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_JSON => Some(DataType::LargeUtf8),
         // MYSQL_TYPE_BLOB includes TINYBLOB, BLOB, MEDIUMBLOB, LONGBLOB, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT https://dev.mysql.com/doc/c-api/8.0/en/c-api-data-structures.html
         // MySQL String Type Storage requirement: https://dev.mysql.com/doc/refman/8.4/en/storage-requirements.html
-        // Binary / Utf8 stores up to 2^31 - 1 length binary / non-binary string        
+        // Binary / Utf8 stores up to 2^31 - 1 length binary / non-binary string
         ColumnType::MYSQL_TYPE_BLOB => {
             match (column_use_large_str_or_blob, column_is_binary) {
                 (true, true) => Some(DataType::LargeBinary),

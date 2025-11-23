@@ -107,18 +107,28 @@ impl FunctionSupport {
     }
 
     pub fn supports(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::ScalarFunction(ScalarFunction { func, .. }) => self.supports_scalar(func),
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                self.supports_aggregate(func)
+        let mut supports = true;
+        let _ = expr.apply(|e| {
+            let support_child = match e {
+                Expr::ScalarFunction(ScalarFunction { func, .. }) => self.supports_scalar(func),
+                Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+                    self.supports_aggregate(func)
+                }
+                Expr::WindowFunction(wind) => match &wind.fun {
+                    WindowFunctionDefinition::AggregateUDF(func) => self.supports_aggregate(func),
+                    WindowFunctionDefinition::WindowUDF(func) => self.supports_window(func),
+                },
+                _ => true,
+            };
+            if !support_child {
+                supports = false;
+                return Ok(TreeNodeRecursion::Stop);
             }
-            Expr::WindowFunction(wind) => match &wind.fun {
-                WindowFunctionDefinition::AggregateUDF(func) => self.supports_aggregate(func),
-                WindowFunctionDefinition::WindowUDF(func) => self.supports_window(func),
-            },
-            _ => true,
-        }
+            Ok(TreeNodeRecursion::Continue)
+        });
+        supports
     }
+
     pub fn supports_window(&self, fnc: &Arc<WindowUDF>) -> bool {
         self.window
             .as_ref()

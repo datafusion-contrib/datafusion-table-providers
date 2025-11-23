@@ -98,9 +98,9 @@ tonic = { version = "0.13", optional = true, features = [
   "tls-webpki-roots",
 ] }
 tracing = "0.1.40"
-trust-dns-resolver = "0.23.2"
-url = "2.5.4"
-uuid = { version = "1.18", optional = true }
+uuid = { version = "1.9.1", optional = true }
+hickory-resolver = "0.25.2"
+url = "2.5.1"
 adbc_driver_manager = { workspace = true, optional = true }
 adbc_core = { workspace = true, optional = true }
 

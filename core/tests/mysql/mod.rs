@@ -686,6 +686,63 @@ async fn test_mysql_decimal_types_to_decimal128(port: usize) {
     .await;
 }
 
+async fn test_mysql_nullability_constraints(port: usize) {
+    let create_table_stmt = "
+        CREATE TABLE nullability_table (
+            id INT NOT NULL,
+            name VARCHAR(50) NOT NULL,
+            age INT,
+            email VARCHAR(100),
+            score DECIMAL(5, 2) NOT NULL
+        );
+    ";
+    let insert_table_stmt = "
+        INSERT INTO nullability_table (id, name, age, email, score)
+        VALUES
+        (1, 'Alice', 30, 'alice@example.com', 95.50),
+        (2, 'Bob', NULL, NULL, 87.25),
+        (3, 'Charlie', 25, 'charlie@example.com', 92.00);
+    ";
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int32, true),
+        Field::new("email", DataType::Utf8, true),
+        Field::new("score", DataType::Decimal128(5, 2), false),
+    ]));
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])),
+            Arc::new(Int32Array::from(vec![Some(30), None, Some(25)])),
+            Arc::new(StringArray::from(vec![
+                Some("alice@example.com"),
+                None,
+                Some("charlie@example.com"),
+            ])),
+            Arc::new(
+                Decimal128Array::from(vec![i128::from(9550), i128::from(8725), i128::from(9200)])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+        ],
+    )
+    .expect("Failed to create expected arrow record batch");
+
+    arrow_mysql_one_way(
+        port,
+        "nullability_table",
+        create_table_stmt,
+        insert_table_stmt,
+        expected_record,
+        None,
+    )
+    .await;
+}
+
 async fn arrow_mysql_one_way(
     port: usize,
     table_name: &str,
@@ -926,6 +983,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;
     test_mysql_zero_date_type(port).await;
+    test_mysql_nullability_constraints(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
