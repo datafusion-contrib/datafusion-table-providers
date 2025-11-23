@@ -837,6 +837,7 @@ pub(crate) mod tests {
         ))
     }
 
+    #[ignore = "External parquet data source is currently unavailable (403 Forbidden)"]
     #[tokio::test]
     async fn test_table_creator() {
         let _guard = init_tracing(None);
@@ -954,6 +955,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[ignore = "External parquet data source is currently unavailable (403 Forbidden)"]
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_table_creator_primary_key() {

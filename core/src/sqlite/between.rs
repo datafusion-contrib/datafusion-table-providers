@@ -223,8 +223,8 @@ mod test {
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
-                                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false).into()
+                                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Identifier(
+                                    Ident::new("age")
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
@@ -235,7 +235,7 @@ mod test {
                                             duplicate_treatment: None,
                                             args: vec![FunctionArg::Unnamed(
                                                 FunctionArgExpr::Expr(Expr::Value(
-                                                    ast::Value::SingleQuotedString("2".to_string())
+                                                    ast::Value::SingleQuotedString("1".to_string())
                                                         .into()
                                                 ),),
                                             )],
@@ -273,8 +273,8 @@ mod test {
                         args: ast::FunctionArguments::List(FunctionArgumentList {
                             duplicate_treatment: None,
                             args: vec![
-                                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                                    ast::Value::Number("1".to_string(), false).into()
+                                FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Identifier(
+                                    Ident::new("age")
                                 ))),
                                 FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(
                                     ast::Function {
