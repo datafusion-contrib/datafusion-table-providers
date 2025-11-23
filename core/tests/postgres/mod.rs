@@ -133,9 +133,10 @@ fn container_manager() -> Mutex<ContainerManager> {
 }
 
 async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
-    let running_container = common::start_postgres_docker_container("postgres:latest", manager.port, None)
-        .await
-        .expect("Postgres container to start");
+    let running_container =
+        common::start_postgres_docker_container("postgres:latest", manager.port, None)
+            .await
+            .expect("Postgres container to start");
 
     manager.running_container = Some(running_container);
 

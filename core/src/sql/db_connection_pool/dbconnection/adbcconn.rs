@@ -18,7 +18,7 @@ use std::any::Any;
 use std::cell::RefCell;
 
 use adbc_core::options::ObjectDepth;
-use arrow::array::{AsArray, RecordBatch, RecordBatchReader, RecordBatchIterator};
+use arrow::array::{AsArray, RecordBatch, RecordBatchIterator, RecordBatchReader};
 use arrow_schema::SchemaRef;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
@@ -195,7 +195,7 @@ where
     fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, super::Error> {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
-        
+
         let schema = conn
             .get_table_schema(
                 table_reference.catalog(),
@@ -226,7 +226,7 @@ where
                     .boxed()
                     .context(super::UnableToQueryArrowSnafu)?;
                 stmt.set_sql_query(sql)?;
-                
+
                 match stmt.execute_schema() {
                     Ok(s) => schema = s.into(),
                     // not all drivers implement execute_schema, so fall back to executing

@@ -91,7 +91,7 @@ where
         connection_options: I,
     ) -> Self {
         if let Some(existing) = &mut self.connection_options {
-            existing.extend(connection_options);            
+            existing.extend(connection_options);
         } else {
             self.connection_options = Some(connection_options.into_iter().collect());
         }

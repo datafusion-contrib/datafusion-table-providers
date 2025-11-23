@@ -20,12 +20,12 @@ use crate::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::{self, mysqlpool, DbConnectionPool};
 use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
+use crate::util::supported_functions::FunctionSupport;
 use crate::util::{
     self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
     indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
 };
 use crate::util::{column_reference, constraints, on_conflict};
-use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};

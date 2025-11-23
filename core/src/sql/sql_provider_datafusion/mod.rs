@@ -192,6 +192,12 @@ impl<T, P> SqlTable<T, P> {
         Ok(Arc::new(exec))
     }
 
+    // Return the current memory location of the object as a unique identifier
+    #[cfg(feature = "federation")]
+    pub(crate) fn unique_id(&self) -> usize {
+        std::ptr::from_ref(self) as usize
+    }
+
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name

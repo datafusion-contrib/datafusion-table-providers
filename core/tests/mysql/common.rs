@@ -12,7 +12,10 @@ use crate::{
 const MYSQL_ROOT_PASSWORD: &str = "integration-test-pw";
 const MYSQL_DOCKER_CONTAINER: &str = "runtime-integration-test-mysql";
 
-pub(super) fn get_mysql_params(port: usize, time_zone: Option<&str>) -> HashMap<String, SecretString> {
+pub(super) fn get_mysql_params(
+    port: usize,
+    time_zone: Option<&str>,
+) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
     params.insert(
         "mysql_host".to_string(),

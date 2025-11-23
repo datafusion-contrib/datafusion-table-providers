@@ -50,23 +50,28 @@ impl<T, P> SQLiteTable<T, P> {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusionError> {
-    match ast {
-        ast::Statement::Query(query) => {
-            let mut new_query = query.clone();
+fn sqlite_ast_analyzer(
+    decimal_between: bool,
+) -> impl Fn(ast::Statement) -> Result<ast::Statement, DataFusionError> {
+    move |ast: ast::Statement| -> Result<ast::Statement, DataFusionError> {
+        match ast {
+            ast::Statement::Query(query) => {
+                let mut new_query = query.clone();
 
-            // normalize INTERVAL usage into SQLite-compatible datetime expressions
-            let mut interval_visitor = SQLiteIntervalVisitor::default();
-            let _ = new_query.visit(&mut interval_visitor);
+                // normalize INTERVAL usage into SQLite-compatible datetime expressions
+                let mut interval_visitor = SQLiteIntervalVisitor::default();
+                let _ = new_query.visit(&mut interval_visitor);
 
-            // rewrite BETWEEN clauses with numeric operands to decimal comparisons
-            let mut between_visitor = SQLiteBetweenVisitor::default();
-            let _ = new_query.visit(&mut between_visitor);
+                // rewrite BETWEEN clauses with numeric operands to decimal comparisons
+                if decimal_between {
+                    let mut between_visitor = SQLiteBetweenVisitor::default();
+                    let _ = new_query.visit(&mut between_visitor);
+                }
 
-            Ok(ast::Statement::Query(new_query))
+                Ok(ast::Statement::Query(new_query))
+            }
+            _ => Ok(ast),
         }
-        _ => Ok(ast),
     }
 }
 
@@ -85,7 +90,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        let rule = Box::new(sqlite_ast_analyzer);
+        let rule = Box::new(sqlite_ast_analyzer(self.decimal_between));
         Some(AstAnalyzer::new(vec![rule]))
     }
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {

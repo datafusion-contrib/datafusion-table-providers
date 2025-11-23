@@ -15,11 +15,11 @@ use crate::sql::db_connection_pool::DbConnectionPool;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
-use std::any::Any;
-use std::sync::Arc;
 use crate::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
+use std::any::Any;
+use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::{
@@ -34,7 +34,6 @@ use datafusion::{
     },
     sql::{unparser::dialect::Dialect, TableReference},
 };
-
 
 pub struct AdbcDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -117,7 +116,7 @@ impl<T, P> TableProvider for AdbcDBTable<T, P> {
             filters,
             limit,
         );
-    }    
+    }
 }
 
 #[derive(Clone)]

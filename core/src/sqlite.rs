@@ -419,6 +419,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
 pub struct SqliteTableFactory {
     pool: Arc<SqliteConnectionPool>,
+    decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
 }
 
@@ -427,8 +428,15 @@ impl SqliteTableFactory {
     pub fn new(pool: Arc<SqliteConnectionPool>) -> Self {
         Self {
             pool,
+            decimal_between: false,
             batch_insert_use_prepared_statements: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
+        self.decimal_between = decimal_between;
+        self
     }
 
     /// Set whether to use prepared statements for batch inserts.
@@ -456,12 +464,15 @@ impl SqliteTableFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
-        let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
-            Arc::clone(&schema),
-            table_reference,
-            None, // No constraints for this read provider
-        ));
+        let read_provider = Arc::new(
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                table_reference,
+                None, // No constraints for this read provider
+            )
+            .with_decimal_between(self.decimal_between),
+        );
 
         Ok(read_provider)
     }

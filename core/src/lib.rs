@@ -7,6 +7,8 @@ pub mod common;
 pub mod sql;
 pub mod util;
 
+#[cfg(feature = "adbc")]
+pub mod adbc;
 #[cfg(feature = "clickhouse")]
 pub mod clickhouse;
 #[cfg(feature = "duckdb")]
@@ -23,8 +25,6 @@ pub mod odbc;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
-#[cfg(feature = "adbc")]
-pub mod adbc;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
