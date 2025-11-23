@@ -802,7 +802,7 @@ async fn arrow_mysql_one_way(
             + Sync
             + 'static,
     > = Arc::new(pool);
-    let table = SqlTable::new("mysql", &sqltable_pool, table_name)
+    let table = SqlTable::new("mysql", &sqltable_pool, table_name, None)
         .await
         .expect("Table should be created");
 
@@ -847,7 +847,7 @@ async fn arrow_mysql_round_trip(
         definition: None,
         order_exprs: vec![],
         unbounded: false,
-        options: common::get_mysql_params(port)
+        options: common::get_mysql_params(port, None)
             .into_iter()
             .map(|(k, v)| (k, v.expose_secret().to_string()))
             .collect(),

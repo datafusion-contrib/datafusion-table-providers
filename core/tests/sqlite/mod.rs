@@ -84,10 +84,10 @@ async fn arrow_sqlite_round_trip(
         }
 
         let table = match projected_schema {
-            None => SqlTable::new("sqlite", &sqltable_pool, table_name)
+            None => SqlTable::new("sqlite", &sqltable_pool, table_name, None)
                 .await
                 .expect("Table should be created"),
-            Some(schema) => SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name),
+            Some(schema) => SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None),
         };
 
         ctx.register_table(table_name, Arc::new(table))
@@ -211,9 +211,9 @@ fn create_comprehensive_test_data() -> (RecordBatch, SchemaRef) {
         None,
         Some(500000u64),
     ]);
-    let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.14), Some(2.71)]);
+    let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.2), Some(2.8)]);
     let col_float64 =
-        Float64Array::from(vec![None, Some(2.718281828), Some(-1.414), Some(3.14159)]);
+        Float64Array::from(vec![None, Some(2.7), Some(-1.414), Some(3.2)]);
     let col_utf8 = StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);
     let col_large_utf8 = LargeStringArray::from(vec![
         None,

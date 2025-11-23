@@ -12,7 +12,7 @@ use crate::{
 const MYSQL_ROOT_PASSWORD: &str = "integration-test-pw";
 const MYSQL_DOCKER_CONTAINER: &str = "runtime-integration-test-mysql";
 
-pub(super) fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
+pub(super) fn get_mysql_params(port: usize, time_zone: Option<&str>) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
     params.insert(
         "mysql_host".to_string(),
@@ -38,6 +38,12 @@ pub(super) fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
         "mysql_sslmode".to_string(),
         SecretString::from("disabled".to_string()),
     );
+    if let Some(tz) = time_zone {
+        params.insert(
+            "mysql_connection_time_zone".to_string(),
+            SecretString::from(tz.to_string()),
+        );
+    }
     params.insert(
         "mysql_pool_min".to_string(),
         SecretString::from("1".to_string()),
@@ -87,8 +93,9 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
 #[instrument]
 pub(super) async fn get_mysql_connection_pool(
     port: usize,
+    time_zone: Option<&str>,
 ) -> Result<MySQLConnectionPool, anyhow::Error> {
-    let mysql_pool = MySQLConnectionPool::new(get_mysql_params(port))
+    let mysql_pool = MySQLConnectionPool::new(get_mysql_params(port, time_zone))
         .await
         .expect("Failed to create MySQL Connection Pool");
 

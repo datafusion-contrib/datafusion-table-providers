@@ -22,6 +22,7 @@ use datafusion::{
 };
 
 impl<T, P> SqlTable<T, P> {
+    #[allow(dead_code)]
     fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
         match &self.dialect {
             Some(dialect) => Arc::clone(dialect),
@@ -56,7 +57,7 @@ impl<T, P> SqlTable<T, P> {
 #[async_trait]
 impl<T, P> SQLExecutor for SqlTable<T, P> {
     fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     fn compute_context(&self) -> Option<String> {

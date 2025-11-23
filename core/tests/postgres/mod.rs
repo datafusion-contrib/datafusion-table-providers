@@ -133,7 +133,7 @@ fn container_manager() -> Mutex<ContainerManager> {
 }
 
 async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
-    let running_container = common::start_postgres_docker_container(manager.port)
+    let running_container = common::start_postgres_docker_container("postgres:latest", manager.port, None)
         .await
         .expect("Postgres container to start");
 
@@ -401,7 +401,6 @@ async fn test_postgres_nullability_constraints(port: usize) {
         None,
         expected_record,
         UnsupportedTypeAction::default(),
-        false,
     )
     .await;
 }
@@ -450,7 +449,7 @@ async fn arrow_postgres_one_way(
 
     // Register datafusion table, test row -> arrow conversion
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, table_name)
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name, None)
         .await
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))

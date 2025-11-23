@@ -57,6 +57,7 @@ pub struct MySQLConnectionPool {
     join_push_down: JoinPushDown,
 }
 
+#[allow(dead_code)]
 const SETUP_QUERIES: [&str; 4] = [
     "SET time_zone = '+00:00'",
     "SET character_set_results = 'utf8mb4'",

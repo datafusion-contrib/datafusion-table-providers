@@ -135,7 +135,7 @@ pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Er
     let client = Client::with_options(client_options).expect("Failed to create MongoDB client");
 
     let mut retries = 10;
-    let mut last_err = None;
+    let mut _last_err = None;
     while retries > 0 {
         match client
             .database("testdb")
@@ -147,7 +147,7 @@ pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Er
                 return Ok(client);
             }
             Err(e) => {
-                last_err = Some(e);
+                _last_err = Some(e);
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 retries -= 1;
                 println!("Ping failed");

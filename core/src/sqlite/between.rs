@@ -200,19 +200,17 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn test_rebuild_between_into_decimal_cmp() {
         let mut expr = Expr::Between {
-            expr: Box::new(Expr::Value(
-                ast::Value::Number("1".to_string(), false).into(),
-            )),
+            expr: Box::new(Expr::Identifier(Ident::new("age"))),
             negated: false,
             low: Box::new(Expr::Value(
-                ast::Value::Number("2".to_string(), false).into(),
+                ast::Value::Number("1".to_string(), false).into(),
             )),
             high: Box::new(Expr::Value(
                 ast::Value::Number("3".to_string(), false).into(),
             )),
         };
 
-        SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
+        let _ = SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
 
         assert_eq!(
             expr,
@@ -342,7 +340,7 @@ mod test {
             )),
         };
 
-        SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
+        let _ = SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
 
         assert_eq!(
             expr,
@@ -490,7 +488,7 @@ mod test {
             )),
         };
 
-        SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
+        let _ = SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
 
         assert_eq!(
             expr,
@@ -614,7 +612,7 @@ mod test {
         };
         let mut expr = original_expr.clone();
 
-        SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
+        let _ = SQLiteBetweenVisitor::default().pre_visit_expr(&mut expr);
 
         // Expect no change because 'low' is a string
         assert_eq!(expr, original_expr);

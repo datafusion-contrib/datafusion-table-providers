@@ -55,7 +55,7 @@ impl<T, P> AdbcDBTable<T, P> {
         table_reference: impl Into<TableReference>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     ) -> Self {
-        let mut base_table = SqlTable::new_with_schema("adbc", pool, schema, table_reference);
+        let mut base_table = SqlTable::new_with_schema("adbc", pool, schema, table_reference, None);
 
         if let Some(d) = dialect {
             base_table = base_table.with_dialect(d);
@@ -65,15 +65,19 @@ impl<T, P> AdbcDBTable<T, P> {
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        sql: String,
+        table_reference: &TableReference,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(AdbcSqlExec::new(
-            projection,
+            projections,
             schema,
+            table_reference,
             self.base_table.clone_pool(),
-            sql,
+            filters,
+            limit,
         )?))
     }
 }
@@ -106,8 +110,13 @@ impl<T, P> TableProvider for AdbcDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
-        return self.create_physical_plan(projection, &self.schema(), sql);
+        return self.create_physical_plan(
+            projection,
+            &self.schema(),
+            &self.base_table.table_reference,
+            filters,
+            limit,
+        );
     }    
 }
 
@@ -118,12 +127,22 @@ struct AdbcSqlExec<T, P> {
 
 impl<T, P> AdbcSqlExec<T, P> {
     fn new(
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
+        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
+        let base_exec = SqlExec::new(
+            projections,
+            schema,
+            table_reference,
+            pool,
+            filters,
+            limit,
+            None,
+        )?;
         Ok(Self { base_exec })
     }
 

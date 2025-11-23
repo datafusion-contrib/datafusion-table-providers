@@ -429,7 +429,7 @@ mod tests {
 
             // Add optional fields for some documents
             if i % 2 == 0 {
-                doc.insert("age", (20 + i % 50));
+                doc.insert("age", 20 + i % 50);
             }
             if i % 3 == 0 {
                 doc.insert("city", "NYC");
