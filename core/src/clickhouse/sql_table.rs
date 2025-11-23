@@ -15,7 +15,7 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
 };
 
-use crate::sql::sql_provider_datafusion::{default_filter_pushdown, SqlExec};
+use crate::sql::sql_provider_datafusion::{expr, SqlExec};
 use crate::util::table_arg_replace::TableArgReplace;
 
 use super::{into_table_args, ClickHouseTable};
@@ -41,13 +41,17 @@ impl ClickHouseTable {
     fn create_physical_plan(
         &self,
         projection: Option<&Vec<usize>>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SqlExec::new(
             projection,
             &self.schema(),
+            &self.table_reference,
             self.pool.clone(),
-            sql,
+            filters,
+            limit,
+            None, // engine - ClickHouse doesn't use specific engine
         )?))
     }
 }
@@ -70,7 +74,13 @@ impl TableProvider for ClickHouseTable {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let filter_push_down = default_filter_pushdown(filters, &*self.dialect);
+        let filter_push_down: Vec<TableProviderFilterPushDown> = filters
+            .iter()
+            .map(|f| match expr::to_sql_with_engine(f, None) {
+                Ok(_) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            })
+            .collect();
         Ok(filter_push_down)
     }
 
@@ -90,8 +100,7 @@ impl TableProvider for ClickHouseTable {
             let _ = sql.visit(&mut table_args);
         }
 
-        let sql = sql.to_string();
-        return self.create_physical_plan(projection, sql);
+        return self.create_physical_plan(projection, filters, limit);
     }
 }
 

@@ -10,6 +10,7 @@ use crate::sql::db_connection_pool::{
 };
 use crate::sql::sql_provider_datafusion;
 use crate::util::schema::SchemaValidator;
+use crate::util::supported_functions::FunctionSupport;
 use crate::UnsupportedTypeAction;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
@@ -123,6 +124,8 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
     batch_insert_use_prepared_statements: bool,
+    decimal_between: bool,
+    function_support: Option<FunctionSupport>,
 }
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
@@ -135,8 +138,22 @@ impl SqliteTableProviderFactory {
     pub fn new() -> Self {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
-            batch_insert_use_prepared_statements: false,
+            decimal_between: false,
+            batch_insert_use_prepared_statements: true, // Default to true for better performance
+            function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
+    }
+
+    #[must_use]
+    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
+        self.decimal_between = decimal_between;
+        self
     }
 
     /// Set whether to use prepared statements for batch inserts.
@@ -373,11 +390,16 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
         let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
 
-        let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
-            Arc::clone(&schema),
-            name,
-        ));
+        let read_provider = Arc::new(
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                name,
+                Some(cmd.constraints.clone()),
+            )
+            .with_function_support(self.function_support.clone())
+            .with_decimal_between(self.decimal_between),
+        );
 
         let sqlite = Arc::into_inner(sqlite)
             .context(DanglingReferenceToSqliteSnafu)
@@ -438,6 +460,7 @@ impl SqliteTableFactory {
             &dyn_pool,
             Arc::clone(&schema),
             table_reference,
+            None, // No constraints for this read provider
         ));
 
         Ok(read_provider)
@@ -997,6 +1020,28 @@ impl Sqlite {
                     }
                     DataType::Null => {
                         params.push(Box::new(rusqlite::types::Null));
+                    }
+                    DataType::Decimal32(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal32Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::BigDecimal;
+                            let value =
+                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
+                            params.push(Box::new(value.to_string()));
+                        }
+                    }
+                    DataType::Decimal64(_, scale) => {
+                        let array = column.as_any().downcast_ref::<Decimal64Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            use bigdecimal::BigDecimal;
+                            let value =
+                                BigDecimal::new(array.value(row_idx).into(), i64::from(*scale));
+                            params.push(Box::new(value.to_string()));
+                        }
                     }
                     DataType::Decimal128(_, scale) => {
                         let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();

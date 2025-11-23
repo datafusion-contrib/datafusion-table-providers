@@ -85,9 +85,10 @@ impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
     async fn table(&self, table: &str) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(table) {
             SqlTable::new(
-                &self.name,
+                "db", // Generic name for database schema provider
                 &self.pool,
                 TableReference::partial(self.name.clone(), table.to_string()),
+                None, // No specific engine for generic provider
             )
             .await
             .map(|v| Some(Arc::new(v) as Arc<dyn TableProvider>))

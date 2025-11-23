@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_expr_scalar_function_to_sql() -> Result<()> {
-        #[derive(Debug)]
+        #[derive(Debug, Hash, Eq, PartialEq)]
         struct TestScalarUDF {
             signature: Signature,
         }

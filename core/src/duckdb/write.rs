@@ -31,6 +31,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use super::creator::{TableDefinition, TableManager, ViewCreator};
+use super::write_settings::DuckDBWriteSettings;
 use super::{to_datafusion_error, RelationName};
 
 /// A callback handler that is invoked after data has been successfully written to a DuckDB table
@@ -60,6 +61,7 @@ pub struct DuckDBTableWriterBuilder {
     on_conflict: Option<OnConflict>,
     table_definition: Option<Arc<TableDefinition>>,
     on_data_written: Option<WriteCompletionHandler>,
+    write_settings: Option<DuckDBWriteSettings>,
 }
 
 impl DuckDBTableWriterBuilder {
@@ -98,6 +100,12 @@ impl DuckDBTableWriterBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_write_settings(mut self, write_settings: DuckDBWriteSettings) -> Self {
+        self.write_settings = Some(write_settings);
+        self
+    }
+
     /// Builds a `DuckDBTableWriter` from the provided configuration.
     ///
     /// # Errors
@@ -125,6 +133,7 @@ impl DuckDBTableWriterBuilder {
             table_definition,
             pool,
             on_data_written: self.on_data_written,
+            write_settings: self.write_settings.unwrap_or_default(),
         })
     }
 }
@@ -136,6 +145,7 @@ pub struct DuckDBTableWriter {
     table_definition: Arc<TableDefinition>,
     on_conflict: Option<OnConflict>,
     on_data_written: Option<WriteCompletionHandler>,
+    write_settings: DuckDBWriteSettings,
 }
 
 impl std::fmt::Debug for DuckDBTableWriter {
@@ -152,6 +162,7 @@ impl std::fmt::Debug for DuckDBTableWriter {
                     .as_ref()
                     .map_or("None", |_| "Some(callback)"),
             )
+            .field("write_settings", &self.write_settings)
             .finish()
     }
 }
@@ -170,6 +181,11 @@ impl DuckDBTableWriter {
     #[must_use]
     pub fn on_conflict(&self) -> Option<&OnConflict> {
         self.on_conflict.as_ref()
+    }
+
+    #[must_use]
+    pub fn write_settings(&self) -> &DuckDBWriteSettings {
+        &self.write_settings
     }
 
     #[must_use]
@@ -221,7 +237,8 @@ impl TableProvider for DuckDBTableWriter {
             op,
             self.on_conflict.clone(),
             self.schema(),
-        );
+        )
+        .with_write_settings(self.write_settings.clone());
 
         if let Some(handler) = &self.on_data_written {
             sink = sink.with_on_data_written_handler(Arc::clone(handler));
@@ -238,6 +255,7 @@ pub(crate) struct DuckDBDataSink {
     on_conflict: Option<OnConflict>,
     schema: SchemaRef,
     on_data_written: Option<WriteCompletionHandler>,
+    write_settings: DuckDBWriteSettings,
 }
 
 #[async_trait]
@@ -264,6 +282,7 @@ impl DataSink for DuckDBDataSink {
         let overwrite = self.overwrite;
         let on_conflict = self.on_conflict.clone();
         let on_data_written = self.on_data_written.clone();
+        let write_settings = self.write_settings.clone();
 
         // Limit channel size to a maximum of 100 RecordBatches queued for cases when DuckDB is slower than the writer stream,
         // so that we don't significantly increase memory usage. After the maximum RecordBatches are queued, the writer stream will wait
@@ -286,6 +305,7 @@ impl DataSink for DuckDBDataSink {
                         on_data_written.as_ref(),
                         on_commit_transaction,
                         schema,
+                        &write_settings,
                     )?,
                     InsertOp::Append | InsertOp::Replace => insert_append(
                         pool,
@@ -295,6 +315,7 @@ impl DataSink for DuckDBDataSink {
                         on_data_written.as_ref(),
                         on_commit_transaction,
                         schema,
+                        &write_settings,
                     )?,
                 };
 
@@ -306,8 +327,9 @@ impl DataSink for DuckDBDataSink {
 
             if let Some(constraints) = self.table_definition.constraints() {
                 constraints::validate_batch_with_constraints(
-                    std::slice::from_ref(&batch),
+                    vec![batch.clone()],
                     constraints,
+                    &crate::util::constraints::UpsertOptions::default(),
                 )
                 .await
                 .context(super::ConstraintViolationSnafu)
@@ -366,12 +388,19 @@ impl DuckDBDataSink {
             on_conflict,
             schema,
             on_data_written: None,
+            write_settings: DuckDBWriteSettings::default(),
         }
     }
 
     #[must_use]
     pub fn with_on_data_written_handler(mut self, handler: WriteCompletionHandler) -> Self {
         self.on_data_written = Some(handler);
+        self
+    }
+
+    #[must_use]
+    pub fn with_write_settings(mut self, write_settings: DuckDBWriteSettings) -> Self {
+        self.write_settings = write_settings;
         self
     }
 }
@@ -388,6 +417,7 @@ impl DisplayAs for DuckDBDataSink {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_append(
     pool: Arc<DuckDbConnectionPool>,
     table_definition: &Arc<TableDefinition>,
@@ -396,6 +426,7 @@ fn insert_append(
     on_data_written: Option<&WriteCompletionHandler>,
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
+    write_settings: &DuckDBWriteSettings,
 ) -> datafusion::common::Result<u64> {
     let mut db_conn = pool
         .connect_sync()
@@ -453,7 +484,9 @@ fn insert_append(
         callback(&tx, &append_table, &schema, num_rows)?;
     }
 
-    execute_analyze_sql(&tx, &append_table.table_name().to_string());
+    if write_settings.recompute_statistics_on_write {
+        execute_analyze_sql(&tx, &append_table.table_name().to_string());
+    }
 
     on_commit_transaction
         .try_recv()
@@ -508,6 +541,7 @@ fn insert_append(
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn insert_overwrite(
     pool: Arc<DuckDbConnectionPool>,
     table_definition: &Arc<TableDefinition>,
@@ -516,6 +550,7 @@ fn insert_overwrite(
     on_data_written: Option<&WriteCompletionHandler>,
     mut on_commit_transaction: tokio::sync::oneshot::Receiver<()>,
     schema: SchemaRef,
+    write_settings: &DuckDBWriteSettings,
 ) -> datafusion::common::Result<u64> {
     let cloned_pool = Arc::clone(&pool);
     let mut db_conn = pool
@@ -629,7 +664,9 @@ fn insert_overwrite(
         callback(&tx, &new_table, &schema, num_rows)?;
     }
 
-    execute_analyze_sql(&tx, &new_table.table_name().to_string());
+    if write_settings.recompute_statistics_on_write {
+        execute_analyze_sql(&tx, &new_table.table_name().to_string());
+    }
 
     tx.commit()
         .context(super::UnableToCommitTransactionSnafu)
@@ -705,7 +742,7 @@ fn write_to_table(
 /// Errors are logged but do not fail the operation since statistics updates are non-critical.
 pub fn execute_analyze_sql(tx: &Transaction, table_name: &str) {
     // DuckDB doesn't support parameterized table names in the ANALYZE statement
-    let analyze_sql = format!(r#"ANALYZE "{}""#, table_name);
+    let analyze_sql = format!(r#"ANALYZE "{table_name}""#);
     tracing::debug!("Executing analyze SQL: {analyze_sql}");
     match tx.prepare(&analyze_sql) {
         Ok(mut stmt) => match stmt.execute([]) {

@@ -1,4 +1,6 @@
+use crate::duckdb::write_settings::DuckDBWriteSettings;
 use crate::sql::sql_provider_datafusion;
+use crate::util::supported_functions::FunctionSupport;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -49,8 +51,9 @@ mod federation;
 
 mod creator;
 mod settings;
-mod sql_table;
+pub mod sql_table;
 pub mod write;
+pub mod write_settings;
 pub use creator::{RelationName, TableDefinition, TableManager, ViewCreator};
 
 #[derive(Debug, Snafu)]
@@ -187,6 +190,7 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
+    function_support: Option<FunctionSupport>,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -210,7 +214,14 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
+            function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     #[must_use]
@@ -446,10 +457,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool = Arc::new(pool);
         make_initial_table(Arc::new(table_definition.clone()), &pool)?;
 
+        let write_settings = DuckDBWriteSettings::from_params(&options);
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(table_definition)
             .with_pool(pool)
-            .set_on_conflict(on_conflict);
+            .set_on_conflict(on_conflict)
+            .with_write_settings(write_settings);
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
@@ -473,6 +487,8 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             None,
             Some(self.dialect.clone()),
             Some(cmd.constraints.clone()),
+            self.function_support.clone(),
+            indexes,
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -580,6 +596,8 @@ pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
     schema: Option<SchemaRef>,
+    function_support: Option<FunctionSupport>,
+    indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl DuckDBTableFactory {
@@ -589,7 +607,15 @@ impl DuckDBTableFactory {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
             schema: None,
+            function_support: None,
+            indexes: vec![],
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     #[must_use]
@@ -601,6 +627,12 @@ impl DuckDBTableFactory {
     #[must_use]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
         self
     }
 
@@ -636,6 +668,8 @@ impl DuckDBTableFactory {
             cte,
             Some(self.dialect.clone()),
             None,
+            self.function_support.clone(),
+            self.indexes.clone(),
         ));
 
         #[cfg(feature = "duckdb-federation")]

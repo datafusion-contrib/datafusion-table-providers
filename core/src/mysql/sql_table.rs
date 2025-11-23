@@ -1,7 +1,10 @@
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::MySqlDialect;
 use futures::TryStreamExt;
 use mysql_async::prelude::ToValue;
@@ -27,6 +30,8 @@ use datafusion::{
 pub struct MySQLTable {
     pool: Arc<MySQLConnectionPool>,
     pub(crate) base_table: SqlTable<mysql_async::Conn, &'static (dyn ToValue + Sync)>,
+    #[allow(dead_code)]
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl std::fmt::Debug for MySQLTable {
@@ -41,6 +46,8 @@ impl MySQLTable {
     pub async fn new(
         pool: &Arc<MySQLConnectionPool>,
         table_reference: impl Into<TableReference>,
+        constraints: Option<Constraints>,
+        function_support: Option<FunctionSupport>,
     ) -> Result<Self, sql_provider_datafusion::Error> {
         let dyn_pool = Arc::clone(pool)
             as Arc<
@@ -48,13 +55,15 @@ impl MySQLTable {
                     + Send
                     + Sync,
             >;
-        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference)
+        let base_table = SqlTable::new("mysql", &dyn_pool, table_reference, None)
             .await?
-            .with_dialect(Arc::new(MySqlDialect {}));
+            .with_dialect(Arc::new(MySqlDialect {}))
+            .with_constraints_opt(constraints);
 
         Ok(Self {
             pool: Arc::clone(pool),
             base_table,
+            function_support,
         })
     }
 
@@ -65,12 +74,13 @@ impl MySQLTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
         Ok(Arc::new(MySQLSQLExec::new(
             projections,
             schema,
+            &self.base_table.table_reference,
             Arc::clone(&self.pool),
-            sql,
+            filters,
+            limit,
         )?))
     }
 }
@@ -83,6 +93,10 @@ impl TableProvider for MySQLTable {
 
     fn schema(&self) -> SchemaRef {
         self.base_table.schema()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.base_table.constraints()
     }
 
     fn table_type(&self) -> TableType {
@@ -121,10 +135,20 @@ impl MySQLSQLExec {
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
+        table_reference: &TableReference,
         pool: Arc<MySQLConnectionPool>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
+        let base_exec = SqlExec::new(
+            projections,
+            schema,
+            table_reference,
+            pool,
+            filters,
+            limit,
+            Some(Engine::MySQL),
+        )?;
 
         Ok(Self { base_exec })
     }

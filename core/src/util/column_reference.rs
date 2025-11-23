@@ -10,7 +10,7 @@ pub enum Error {
 
 #[derive(Debug, Clone, Eq)]
 pub struct ColumnReference {
-    columns: Vec<String>,
+    pub columns: Vec<String>,
 }
 
 impl ColumnReference {

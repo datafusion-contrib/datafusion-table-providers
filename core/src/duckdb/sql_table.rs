@@ -1,6 +1,11 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::column_reference::ColumnReference;
+use crate::util::indexes::IndexType;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -30,7 +35,13 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) table_functions: Option<HashMap<String, String>>,
 
     /// Constraints on the table.
-    pub(crate) constraints: Option<datafusion::common::Constraints>,
+    pub(crate) constraints: Option<Constraints>,
+
+    #[allow(dead_code)]
+    pub(crate) function_support: Option<FunctionSupport>,
+
+    /// A list of indexes as expressed by columns reference in their index expressions.
+    pub(crate) indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -42,21 +53,35 @@ impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
 }
 
 impl<T, P> DuckDBTable<T, P> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_schema(
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
         table_functions: Option<HashMap<String, String>>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
-        constraints: Option<datafusion::common::Constraints>,
+        constraints: Option<Constraints>,
+        #[allow(dead_code)]
+        function_support: Option<FunctionSupport>,
+        indexes: Vec<(ColumnReference, IndexType)>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema("duckdb", pool, schema, table_reference)
-            .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())));
+        let base_table = SqlTable::new_with_schema(
+            "duckdb",
+            pool,
+            schema,
+            table_reference,
+            Some(Engine::DuckDB),
+        )
+        .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())))
+        .with_constraints_opt(constraints.clone())
+        .with_function_support(function_support.clone());
 
         Self {
             base_table,
             table_functions,
             constraints,
+            function_support,
+            indexes,
         }
     }
 
@@ -67,12 +92,15 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
         Ok(Arc::new(DuckSqlExec::new(
             projections,
             schema,
+            &self.base_table.table_reference,
             self.base_table.clone_pool(),
-            sql,
+            filters,
+            limit,
+            self.table_functions.clone(),
+            self.indexes.clone(),
         )?))
     }
 }
@@ -98,7 +126,7 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         self.base_table.supports_filters_pushdown(filters)
     }
 
-    fn constraints(&self) -> Option<&datafusion::common::Constraints> {
+    fn constraints(&self) -> Option<&Constraints> {
         self.constraints.as_ref()
     }
 
@@ -119,34 +147,83 @@ impl<T, P> Display for DuckDBTable<T, P> {
     }
 }
 
-#[derive(Clone)]
-struct DuckSqlExec<T, P> {
+pub struct DuckSqlExec<T, P> {
     base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
+    indexes: Vec<(ColumnReference, IndexType)>,
+    optimized_sql: Option<String>,
+}
+
+impl<T, P> Clone for DuckSqlExec<T, P> {
+    fn clone(&self) -> Self {
+        DuckSqlExec {
+            base_exec: self.base_exec.clone(),
+            table_functions: self.table_functions.clone(),
+            indexes: self.indexes.clone(),
+            optimized_sql: self.optimized_sql.clone(),
+        }
+    }
 }
 
 impl<T, P> DuckSqlExec<T, P> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
+        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
+        table_functions: Option<HashMap<String, String>>,
+        indexes: Vec<(ColumnReference, IndexType)>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
+        let base_exec = SqlExec::new(
+            projections,
+            schema,
+            table_reference,
+            pool,
+            filters,
+            limit,
+            Some(Engine::DuckDB),
+        )?;
 
         Ok(Self {
             base_exec,
-            table_functions: None,
+            table_functions,
+            indexes,
+            optimized_sql: None,
         })
     }
 
-    fn sql(&self) -> SqlResult<String> {
+    /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`
+    /// if rewritten by an optimization step.
+    pub fn sql(&self) -> SqlResult<String> {
+        if let Some(sql) = &self.optimized_sql {
+            return Ok(sql.clone());
+        }
+
         let sql = self.base_exec.sql()?;
 
         Ok(format!(
             "{cte_expr} {sql}",
             cte_expr = get_cte(&self.table_functions)
         ))
+    }
+
+    /// Indexes that may be bound for the SQL expression in this execution node
+    pub fn indexes(&self) -> &Vec<(ColumnReference, IndexType)> {
+        self.indexes.as_ref()
+    }
+
+    /// The unoptimized SQL expression for this execution node
+    pub fn base_sql(&self) -> SqlResult<String> {
+        self.base_exec.sql()
+    }
+
+    /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`
+    pub fn with_optimized_sql(mut self, sql: impl Into<String>) -> Self {
+        self.optimized_sql = Some(sql.into());
+        self
     }
 }
 

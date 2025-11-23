@@ -167,8 +167,9 @@ impl DataSink for SqliteDataSink {
                 })?;
 
                 constraints::validate_batch_with_constraints(
-                    std::slice::from_ref(&data_batch),
+                    vec![data_batch.clone()],
                     &constraints,
+                    &crate::util::constraints::UpsertOptions::default(),
                 )
                 .await
                 .context(super::ConstraintViolationSnafu)

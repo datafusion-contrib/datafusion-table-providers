@@ -7,8 +7,9 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::SqlTable;
+use crate::sql::sql_provider_datafusion::{expr::Engine, SqlTable};
 use crate::util::schema::SchemaValidator;
+use crate::util::supported_functions::FunctionSupport;
 use crate::UnsupportedTypeAction;
 use arrow::{
     array::RecordBatch,
@@ -152,7 +153,7 @@ impl PostgresTableFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let table_provider = Arc::new(
-            SqlTable::new("postgres", &dyn_pool, table_reference)
+            SqlTable::new("postgres", &dyn_pool, table_reference, Some(Engine::Postgres))
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
                 .with_dialect(Arc::new(PostgreSqlDialect {})),
@@ -187,12 +188,21 @@ impl PostgresTableFactory {
 }
 
 #[derive(Debug)]
-pub struct PostgresTableProviderFactory;
+pub struct PostgresTableProviderFactory {
+    function_support: Option<FunctionSupport>,
+}
 
 impl PostgresTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            function_support: None,
+        }
+    }
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 }
 
@@ -308,8 +318,16 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         let dyn_pool: Arc<DynPostgresConnectionPool> = pool;
 
         let read_provider = Arc::new(
-            SqlTable::new_with_schema("postgres", &dyn_pool, Arc::clone(&schema), name)
-                .with_dialect(Arc::new(PostgreSqlDialect {})),
+            SqlTable::new_with_schema(
+                "postgres",
+                &dyn_pool,
+                Arc::clone(&schema),
+                name,
+                Some(Engine::Postgres),
+            )
+            .with_dialect(Arc::new(PostgreSqlDialect {}))
+            .with_constraints(cmd.constraints.clone())
+            .with_function_support(self.function_support.clone()),
         );
 
         #[cfg(feature = "postgres-federation")]

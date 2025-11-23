@@ -22,11 +22,6 @@ use datafusion::{
 };
 
 impl<T, P> SqlTable<T, P> {
-    // Return the current memory location of the object as a unique identifier
-    fn unique_id(&self) -> usize {
-        std::ptr::from_ref(self) as usize
-    }
-
     fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
         match &self.dialect {
             Some(dialect) => Arc::clone(dialect),
@@ -73,8 +68,13 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         }
     }
 
+    /// Return the provided [`Dialect`], defaulting to [`DefaultDialect`].
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.arc_dialect()
+        let Some(ref dialect) = self.dialect else {
+            // TODO: Derive default from [`SQLExecutor::engine`].
+            return Arc::new(DefaultDialect {});
+        };
+        Arc::clone(dialect) as Arc<_>
     }
 
     fn execute(
