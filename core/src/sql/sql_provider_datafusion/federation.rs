@@ -68,7 +68,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
             JoinPushDown::AllowedFor(context) => Some(context),
             // Don't return None here - it will cause incorrect federation with other providers of the same name that also have a compute_context of None.
             // Instead return a random string that will never match any other provider's context.
-            JoinPushDown::Disallow => Some(format!("{}", self.unique_id())),
+            JoinPushDown::Disallow => Some(format!("{}", std::ptr::from_ref(self) as usize)),
         }
     }
 
