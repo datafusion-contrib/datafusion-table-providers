@@ -1588,6 +1588,36 @@ mod tests {
     }
 
     #[test]
+    fn test_sqlite_high_precision_decimal_mapped_to_double() {
+        // Test that high-precision decimals (precision > 16) are mapped to double for SQLite.
+        // sea-query 0.32.x panics with 'assertion failed: precision <= 16' for SQLite DDL
+        // generation when decimal precision > 16. This test ensures our fix works.
+        let schema = Schema::new(vec![
+            Field::new("high_precision", DataType::Decimal128(38, 10), true),
+            Field::new("decimal256", DataType::Decimal256(76, 20), true),
+            Field::new("normal_decimal", DataType::Decimal128(10, 2), true),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "decimals").build_sqlite();
+
+        // All decimals should be mapped to "double" for SQLite (sea-query uses "double" not "double precision")
+        assert!(
+            sql.contains("double"),
+            "Decimals should be mapped to double for SQLite, got: {}",
+            sql
+        );
+        assert!(
+            !sql.to_lowercase().contains("decimal("),
+            "SQL should not contain decimal type for SQLite, got: {}",
+            sql
+        );
+        // Verify the expected output
+        assert_eq!(
+            sql,
+            "CREATE TABLE IF NOT EXISTS \"decimals\" ( \"high_precision\" double, \"decimal256\" double, \"normal_decimal\" double )"
+        );
+    }
+
+    #[test]
     fn test_table_insertion_with_list() {
         let schema1 = Schema::new(vec![Field::new(
             "list",
