@@ -67,7 +67,8 @@ impl<T, P> DuckDBTable<T, P> {
             Some(Engine::DuckDB),
         )
         .with_dialect(dialect.unwrap_or(Arc::new(DuckDBDialect::new())))
-        .with_constraints_opt(constraints);
+        .with_constraints_opt(constraints)
+        .with_function_support(function_support.clone());
 
         Self {
             base_table,
@@ -84,7 +85,7 @@ impl<T, P> DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let mut exec = DuckSqlExec::new(
+        Ok(Arc::new(DuckSqlExec::new(
             projections,
             schema,
             &self.base_table.table_reference,
@@ -93,14 +94,7 @@ impl<T, P> DuckDBTable<T, P> {
             limit,
             self.table_functions.clone(),
             self.indexes.clone(),
-        )?;
-
-        // Don't use `Self::dialect()` as it will used `DefaultDialect` by default.
-        if let Some(ref dialect) = self.base_table.dialect {
-            exec = exec.with_dialect(Arc::clone(dialect));
-        };
-
-        Ok(Arc::new(exec))
+        )?))
     }
 }
 
@@ -114,10 +108,6 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         self.base_table.schema()
     }
 
-    fn constraints(&self) -> Option<&Constraints> {
-        self.base_table.constraints()
-    }
-
     fn table_type(&self) -> TableType {
         self.base_table.table_type()
     }
@@ -127,6 +117,10 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
         self.base_table.supports_filters_pushdown(filters)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.base_table.constraints()
     }
 
     async fn scan(
@@ -195,11 +189,6 @@ impl<T, P> DuckSqlExec<T, P> {
             optimized_sql: None,
             optimized_sql_schema: None,
         })
-    }
-
-    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
-        self.base_exec = self.base_exec.with_dialect(dialect);
-        self
     }
 
     /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`

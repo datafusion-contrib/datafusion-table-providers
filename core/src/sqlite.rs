@@ -123,8 +123,8 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
-    decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
+    decimal_between: bool,
     function_support: Option<FunctionSupport>,
 }
 
@@ -465,8 +465,13 @@ impl SqliteTableFactory {
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
         let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference, None)
-                .with_decimal_between(self.decimal_between),
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                table_reference,
+                None, // No constraints for this read provider
+            )
+            .with_decimal_between(self.decimal_between),
         );
 
         Ok(read_provider)
@@ -1015,6 +1020,18 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
+                    DataType::Float16 => {
+                        let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            // Convert to f32 for storage
+                            params.push(Box::new(array.value(row_idx).to_f32()));
+                        }
+                    }
+                    DataType::Null => {
+                        params.push(Box::new(rusqlite::types::Null));
+                    }
                     DataType::Decimal32(_, scale) => {
                         let array = column.as_any().downcast_ref::<Decimal32Array>().unwrap();
                         if array.is_null(row_idx) {
@@ -1054,23 +1071,12 @@ impl Sqlite {
                             params.push(Box::new(rusqlite::types::Null));
                         } else {
                             use bigdecimal::{num_bigint::BigInt, BigDecimal};
-                            let bigint =
-                                BigInt::from_signed_bytes_le(&array.value(row_idx).to_le_bytes());
-                            let value = BigDecimal::new(bigint, i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
+                            let value = array.value(row_idx);
+                            let bytes = value.to_be_bytes();
+                            let big_int = BigInt::from_signed_bytes_be(&bytes);
+                            let decimal = BigDecimal::new(big_int, i64::from(*scale));
+                            params.push(Box::new(decimal.to_string()));
                         }
-                    }
-                    DataType::Float16 => {
-                        let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            // Convert to f32 for storage
-                            params.push(Box::new(array.value(row_idx).to_f32()));
-                        }
-                    }
-                    DataType::Null => {
-                        params.push(Box::new(rusqlite::types::Null));
                     }
                     DataType::List(_)
                     | DataType::LargeList(_)

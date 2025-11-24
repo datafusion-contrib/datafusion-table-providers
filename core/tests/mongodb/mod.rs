@@ -132,7 +132,7 @@ async fn test_mongodb_numeric_types(port: usize) {
     )
     .expect("Failed to create arrow record batch");
 
-    let array = expected_record
+    let _array = expected_record
         .column(3)
         .as_any()
         .downcast_ref::<Decimal128Array>()

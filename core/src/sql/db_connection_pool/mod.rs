@@ -3,12 +3,20 @@ use dbconnection::DbConnection;
 use std::sync::Arc;
 
 pub mod dbconnection;
+
+#[cfg(feature = "adbc")]
+pub mod adbcpool;
+#[cfg(feature = "clickhouse")]
+pub mod clickhousepool;
 #[cfg(feature = "duckdb")]
 pub mod duckdbpool;
 #[cfg(feature = "mysql")]
 pub mod mysqlpool;
+#[cfg(feature = "odbc")]
+pub mod odbcpool;
 #[cfg(feature = "postgres")]
 pub mod postgrespool;
+pub mod runtime;
 #[cfg(feature = "sqlite")]
 pub mod sqlitepool;
 

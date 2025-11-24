@@ -1,8 +1,12 @@
 use rand::Rng;
 
+#[cfg(feature = "adbc")]
+mod adbc;
 mod arrow_record_batch_gen;
+#[cfg(feature = "clickhouse")]
+mod clickhouse;
 mod docker;
-#[cfg(feature = "duckdb")]
+#[cfg(all(feature = "duckdb", feature = "federation"))]
 mod duckdb;
 #[cfg(feature = "flight")]
 mod flight;
@@ -21,5 +25,5 @@ fn container_registry() -> String {
 }
 
 fn get_random_port() -> usize {
-    rand::thread_rng().gen_range(15432..65535)
+    rand::rng().random_range(15432..65535)
 }
