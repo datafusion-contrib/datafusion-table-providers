@@ -30,7 +30,7 @@ byte-unit = { version = "5.1.4", optional = true }
 chrono = "0.4"
 clickhouse = { version = "0.13.3", optional = true }
 dashmap = "6.1.0"
-datafusion = { workspace = true, default-features = false }
+datafusion = { workspace = true, default-features = false, features = ["sql"]}
 datafusion-expr = { workspace = true, optional = true }
 datafusion-federation = { workspace = true, features = [
   "sql",
@@ -63,7 +63,7 @@ num-bigint = "0.4"
 odbc-api = { version = "19.0", optional = true }
 pem = { version = "3.0.4", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
-prost = { version = "0.14.1", optional = true }
+prost = { version = "=0.14.1", optional = true }
 rand = { version = "0.9" }
 regex = { version = "1" }
 r2d2 = { version = "0.8", optional = true }
@@ -91,7 +91,7 @@ tokio-postgres = { version = "0.7", features = [
   "with-geo-types-0_7",
 ], optional = true }
 tokio-rusqlite = { version = "0.7.0", optional = true }
-tonic = { version = "0.13", optional = true, features = [
+tonic = { version = "0.14", optional = true, features = [
   "tls-native-roots",
   "tls-webpki-roots",
 ] }
@@ -100,8 +100,8 @@ trust-dns-resolver = "0.23.2"
 url = "2.5.4"
 uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
-adbc_driver_manager = { workspace = true, version = "0.20.0", optional = true }
-adbc_core = { workspace = true, version = "0.20.0", optional = true }
+adbc_driver_manager = { workspace = true, optional = true }
+adbc_core = { workspace = true, optional = true }
 r2d2_adbc = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
@@ -109,7 +109,7 @@ anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
 insta = { version = "1.43.2", features = ["filters"] }
-prost = { version = "=0.13.5" }
+prost = { version = "=0.14.1" }
 rand = "0.9"
 reqwest = "0.12"
 rstest = "0.26.1"

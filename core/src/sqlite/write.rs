@@ -324,6 +324,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -466,6 +467,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
 
         let ctx = SessionContext::new();
@@ -772,6 +774,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -816,6 +819,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
 
         let ctx = SessionContext::new();
