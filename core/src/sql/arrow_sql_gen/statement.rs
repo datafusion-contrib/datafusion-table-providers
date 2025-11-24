@@ -108,6 +108,13 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
+            // SQLite does not natively support DECIMAL types - it stores them as REAL (float64).
+            // Additionally, sea-query panics if decimal precision > 16 for SQLite.
+            // Map decimals directly to Double to avoid the panic and match SQLite's actual behavior.
+            if matches!(f.data_type(), DataType::Decimal128(_, _) | DataType::Decimal256(_, _)) {
+                return ColumnType::Double;
+            }
+
             map_data_type_to_column_type(f.data_type())
         })
     }
