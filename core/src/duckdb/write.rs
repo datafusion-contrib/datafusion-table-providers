@@ -325,17 +325,21 @@ impl DataSink for DuckDBDataSink {
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            if let Some(constraints) = self.table_definition.constraints() {
-                constraints::validate_batch_with_constraints(
-                    vec![batch.clone()],
-                    constraints,
-                    &crate::util::constraints::UpsertOptions::default(),
-                )
-                .await
-                .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?;
+            // Skip constraint validation for Overwrite operations since we're replacing all data
+            // and uniqueness constraints don't apply to the incoming data in isolation.
+            // For Append/Replace operations, validate that batches don't violate constraints.
+            if self.overwrite != InsertOp::Overwrite {
+                if let Some(constraints) = self.table_definition.constraints() {
+                    constraints::validate_batch_with_constraints(
+                        vec![batch.clone()],
+                        constraints,
+                        &crate::util::constraints::UpsertOptions::default(),
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+                }
             }
-
             if let Err(send_error) = batch_tx.send(batch).await {
                 match duckdb_write_handle.await {
                     Err(join_error) => {
