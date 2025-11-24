@@ -213,8 +213,18 @@ fn create_comprehensive_test_data() -> (RecordBatch, SchemaRef) {
         None,
         Some(500000u64),
     ]);
-    let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.2), Some(2.8)]);
-    let col_float64 = Float64Array::from(vec![None, Some(2.7), Some(-1.414), Some(3.2)]);
+    let col_float32 = Float32Array::from(vec![
+        Some(1.5),
+        None,
+        Some(-std::f32::consts::PI),
+        Some(2.71),
+    ]);
+    let col_float64 = Float64Array::from(vec![
+        None,
+        Some(std::f64::consts::E),
+        Some(-1.414),
+        Some(std::f64::consts::PI),
+    ]);
     let col_utf8 = StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);
     let col_large_utf8 = LargeStringArray::from(vec![
         None,
