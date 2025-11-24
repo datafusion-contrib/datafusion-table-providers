@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use snafu::{prelude::*, ResultExt};
+use snafu::prelude::*;
 use tokio_rusqlite::{Connection, ToSql};
 
 use super::{DbConnectionPool, Result};
@@ -13,7 +13,7 @@ use crate::sql::db_connection_pool::{
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("ConnectionPoolError: {source}"))]
-    ConnectionPoolError { source: tokio_rusqlite::Error },
+    ConnectionPoolError { source: rusqlite::Error },
 
     #[snafu(display("No path provided for SQLite connection"))]
     NoPathError {},
@@ -127,11 +127,11 @@ impl SqliteConnectionPool {
         let conn = match mode {
             Mode::Memory => Connection::open_in_memory()
                 .await
-                .context(ConnectionPoolSnafu)?,
+                .map_err(|e| Error::ConnectionPoolError { source: e })?,
 
             Mode::File => Connection::open(path.to_string())
                 .await
-                .context(ConnectionPoolSnafu)?,
+                .map_err(|e| Error::ConnectionPoolError { source: e })?,
         };
 
         Ok(SqliteConnectionPool {
@@ -150,7 +150,7 @@ impl SqliteConnectionPool {
         if mode == Mode::File {
             Connection::open(path.to_string())
                 .await
-                .context(ConnectionPoolSnafu)?;
+                .map_err(|e| Error::ConnectionPoolError { source: e })?;
         }
 
         Ok(())
@@ -178,7 +178,12 @@ impl SqliteConnectionPool {
                 Ok(())
             })
             .await
-            .context(ConnectionPoolSnafu)?;
+            .map_err(|e| match e {
+                tokio_rusqlite::Error::Error(e) => Error::ConnectionPoolError { source: e },
+                tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                tokio_rusqlite::Error::Close((_, e)) => Error::ConnectionPoolError { source: e },
+                _ => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+            })?;
 
             // database attachments are only supported for file-mode databases
             #[cfg(feature = "sqlite-federation")]
@@ -199,7 +204,12 @@ impl SqliteConnectionPool {
                         Ok(())
                     })
                     .await
-                    .context(ConnectionPoolSnafu)?;
+                    .map_err(|e| match e {
+                        tokio_rusqlite::Error::Error(e) => Error::ConnectionPoolError { source: e },
+                        tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                        tokio_rusqlite::Error::Close((_, e)) => Error::ConnectionPoolError { source: e },
+                        _ => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                    })?;
                 }
 
                 Ok::<(), super::Error>(())
