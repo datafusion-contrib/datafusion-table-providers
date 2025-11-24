@@ -109,6 +109,7 @@ anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
 insta = { version = "1.43.2", features = ["filters"] }
+parquet = "56"
 prost = { version = "=0.13.5" }
 rand = "0.9"
 reqwest = "0.12"

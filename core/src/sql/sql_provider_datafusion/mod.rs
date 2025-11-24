@@ -262,6 +262,9 @@ pub struct SqlExec<T, P> {
     properties: PlanProperties,
     engine: Option<Engine>,
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    /// Custom table expression to use instead of quoted table_reference
+    /// Useful for database-specific syntax like ClickHouse parameterized views
+    custom_table_expr: Option<String>,
 }
 
 impl<T, P> Clone for SqlExec<T, P> {
@@ -275,6 +278,7 @@ impl<T, P> Clone for SqlExec<T, P> {
             properties: self.properties.clone(),
             engine: self.engine,
             dialect: self.dialect.clone(),
+            custom_table_expr: self.custom_table_expr.clone(),
         }
     }
 }
@@ -332,6 +336,7 @@ impl<T, P> SqlExec<T, P> {
             ),
             engine,
             dialect: None,
+            custom_table_expr: None,
         })
     }
 
@@ -339,6 +344,14 @@ impl<T, P> SqlExec<T, P> {
     pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         Self {
             dialect: Some(dialect),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_custom_table_expr(self, custom_table_expr: String) -> Self {
+        Self {
+            custom_table_expr: Some(custom_table_expr),
             ..self
         }
     }
@@ -399,9 +412,13 @@ impl<T, P> SqlExec<T, P> {
             format!("WHERE {}", filter_expr.join(" AND "))
         };
 
+        let table_expr = match &self.custom_table_expr {
+            Some(expr) => expr.clone(),
+            None => self.table_reference.to_quoted_string(),
+        };
+
         Ok(format!(
-            "SELECT {columns} FROM {table_reference} {where_expr} {limit_expr}",
-            table_reference = self.table_reference.to_quoted_string()
+            "SELECT {columns} FROM {table_expr} {where_expr} {limit_expr}"
         ))
     }
 }

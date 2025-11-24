@@ -2223,6 +2223,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "odbc-api",
+ "parquet",
  "pem",
  "postgres-native-tls",
  "prost 0.13.5",
