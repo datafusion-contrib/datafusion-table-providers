@@ -173,6 +173,7 @@ postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
+sqlite-bundled-decimal = ["sqlite", "rusqlite/bundled-decimal"]
 adbc = [
   "dep:adbc_driver_manager",
   "dep:adbc_core",
