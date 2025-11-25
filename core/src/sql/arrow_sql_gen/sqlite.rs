@@ -144,6 +144,24 @@ fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType
         // desired Arrow type during additional type casting step.
         return DataType::Utf8;
     }
+    
+    // When the first row has NULL, we can't determine the actual storage type.
+    // For decimal types which are stored as TEXT in SQLite, we should decode as Utf8.
+    if *sqlite_type == Type::Null {
+        match data_type {
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => {
+                // Decimals are stored as TEXT in SQLite
+                return DataType::Utf8;
+            }
+            _ => {
+                // For other types, NULL is fine - the builder will handle it
+            }
+        }
+    }
+    
     // Other SQLite types are Integer, Real, Blob, Null are safe to decode based on target Arrow type
     match data_type {
         DataType::Null => DataType::Null,
@@ -162,7 +180,11 @@ fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType
         DataType::Utf8 => DataType::Utf8,
         DataType::LargeUtf8 => DataType::LargeUtf8,
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => DataType::Binary,
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => DataType::Float64,
+        // Decimals stored as TEXT - decode as Utf8 for casting later
+        DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => DataType::Utf8,
         DataType::Duration(_) => DataType::Int64,
 
         // Timestamp, Date32, Date64, Time32, Time64, List, Struct, Union, Dictionary, Map
