@@ -3,7 +3,6 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
-use crate::util::constraints::UpsertOptions;
 use crate::util::{
     constraints,
     on_conflict::OnConflict,
@@ -90,8 +89,8 @@ impl DuckDBTableWriterBuilder {
     }
 
     #[must_use]
-    pub fn with_table_definition(mut self, table_definition: Arc<TableDefinition>) -> Self {
-        self.table_definition = Some(table_definition);
+    pub fn with_table_definition(mut self, table_definition: TableDefinition) -> Self {
+        self.table_definition = Some(Arc::new(table_definition));
         self
     }
 
@@ -230,12 +229,12 @@ impl TableProvider for DuckDBTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: InsertOp,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let mut sink = DuckDBDataSink::new(
             Arc::clone(&self.pool),
             Arc::clone(&self.table_definition),
-            overwrite,
+            op,
             self.on_conflict.clone(),
             self.schema(),
         )
@@ -323,13 +322,6 @@ impl DataSink for DuckDBDataSink {
                 Ok(num_rows)
             });
 
-        let upsert_options = self
-            .on_conflict
-            .as_ref()
-            .map_or_else(UpsertOptions::default, |conflict| {
-                conflict.get_upsert_options()
-            });
-
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
@@ -339,35 +331,31 @@ impl DataSink for DuckDBDataSink {
                 vec![batch]
             } else if let Some(constraints) = self.table_definition.constraints() {
                 constraints::validate_batch_with_constraints(
-                    vec![batch],
+                    vec![batch.clone()],
                     constraints,
-                    &upsert_options,
+                    &crate::util::constraints::UpsertOptions::default(),
                 )
                 .await
                 .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?
-            } else {
-                vec![batch]
-            };
+                .map_err(to_datafusion_error)?;
+            }
 
-            for batch in batches {
-                if let Err(send_error) = batch_tx.send(batch).await {
-                    match duckdb_write_handle.await {
-                        Err(join_error) => {
-                            return Err(DataFusionError::Execution(format!(
-                                "Error writing to DuckDB: {join_error}"
-                            )));
-                        }
-                        Ok(Err(datafusion_error)) => {
-                            return Err(datafusion_error);
-                        }
-                        _ => {
-                            return Err(DataFusionError::Execution(format!(
-                                "Unable to send RecordBatch to DuckDB writer: {send_error}"
-                            )))
-                        }
-                    };
-                }
+            if let Err(send_error) = batch_tx.send(batch).await {
+                match duckdb_write_handle.await {
+                    Err(join_error) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Error writing to DuckDB: {join_error}"
+                        )));
+                    }
+                    Ok(Err(datafusion_error)) => {
+                        return Err(datafusion_error);
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to send RecordBatch to DuckDB writer: {send_error}"
+                        )))
+                    }
+                };
             }
         }
 
@@ -796,8 +784,7 @@ impl RecordBatchReader for RecordBatchReaderFromStream {
 #[cfg(test)]
 mod test {
     use arrow::array::{Int64Array, StringArray};
-    use datafusion::datasource::sink::DataSink;
-    use datafusion_physical_plan::memory::MemoryStream;
+    use datafusion::physical_plan::memory::MemoryStream;
 
     use super::*;
     use crate::{

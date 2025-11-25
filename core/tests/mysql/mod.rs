@@ -1,9 +1,9 @@
-use datafusion::execution::context::SessionContext;
+use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
 use datafusion_table_providers::sql::{
     db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
 };
 use mysql_async::prelude::ToValue;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use std::sync::Arc;
 
 use arrow::{
@@ -13,7 +13,19 @@ use arrow::{
 
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
+use crate::arrow_record_batch_gen::*;
 use crate::docker::RunningContainer;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::TableProviderFactory;
+use datafusion::common::{Constraints, ToDFSchema};
+use datafusion::logical_expr::dml::InsertOp;
+use datafusion::logical_expr::CreateExternalTable;
+use datafusion::physical_plan::collect;
+#[cfg(feature = "mysql-federation")]
+use datafusion_federation::schema_cast::record_convert::try_cast_to;
+use datafusion_table_providers::mysql::MySQLTableProviderFactory;
+use secrecy::ExposeSecret;
+use tokio::sync::Mutex;
 
 mod common;
 
@@ -815,6 +827,96 @@ async fn arrow_mysql_one_way(
     record_batch
 }
 
+#[allow(unused_variables)]
+async fn arrow_mysql_round_trip(
+    port: usize,
+    arrow_record: RecordBatch,
+    source_schema: SchemaRef,
+    table_name: &str,
+) {
+    let factory = MySQLTableProviderFactory::new();
+    let ctx = SessionContext::new();
+    let cmd = CreateExternalTable {
+        schema: Arc::new(arrow_record.schema().to_dfschema().expect("to df schema")),
+        name: table_name.into(),
+        location: "".to_string(),
+        file_type: "".to_string(),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        temporary: false,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: common::get_mysql_params(port, None)
+            .into_iter()
+            .map(|(k, v)| (k, v.expose_secret().to_string()))
+            .collect(),
+        constraints: Constraints::default(),
+        column_defaults: Default::default(),
+    };
+    let table_provider = factory
+        .create(&ctx.state(), &cmd)
+        .await
+        .expect("table provider created");
+
+    let ctx = SessionContext::new();
+    let mem_exec = MemorySourceConfig::try_new_exec(
+        &[vec![arrow_record.clone()]],
+        arrow_record.schema(),
+        None,
+    )
+    .expect("memory exec created");
+    let insert_plan = table_provider
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Overwrite)
+        .await
+        .expect("insert plan created");
+
+    let _ = collect(insert_plan, ctx.task_ctx())
+        .await
+        .expect("insert done");
+    ctx.register_table(table_name, table_provider)
+        .expect("Table should be registered");
+    let sql = format!("SELECT * FROM {table_name}");
+    let df = ctx
+        .sql(&sql)
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
+    tracing::debug!(
+        "MySQL returned Record Batch: {:?}",
+        record_batch[0].columns()
+    );
+
+    #[cfg(feature = "mysql-federation")]
+    let casted_result =
+        try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
+
+    // Check results
+    assert_eq!(record_batch.len(), 1);
+    assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
+    assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+
+    #[cfg(feature = "mysql-federation")]
+    assert_eq!(arrow_record, casted_result);
+}
+
+#[derive(Debug)]
+struct ContainerManager {
+    port: usize,
+    claimed: bool,
+}
+
+#[fixture]
+#[once]
+fn container_manager() -> Mutex<ContainerManager> {
+    Mutex::new(ContainerManager {
+        port: crate::get_random_port(),
+        claimed: false,
+    })
+}
+
 async fn start_mysql_container(port: usize) -> RunningContainer {
     let running_container = common::start_mysql_docker_container(port)
         .await
@@ -823,6 +925,46 @@ async fn start_mysql_container(port: usize) -> RunningContainer {
     tracing::debug!("Container started");
 
     running_container
+}
+
+#[rstest]
+#[case::binary(get_arrow_binary_record_batch(), "binary")]
+#[case::int(get_arrow_int_record_batch(), "int")]
+#[case::float(get_arrow_float_record_batch(), "float")]
+#[case::utf8(get_arrow_utf8_record_batch(), "utf8")]
+#[case::time(get_arrow_time_record_batch(), "time")]
+#[case::timestamp(get_arrow_timestamp_record_batch_without_timezone(), "timestamp")]
+#[case::date(get_arrow_date_record_batch(), "date")]
+#[case::struct_type(get_arrow_struct_record_batch(), "struct")]
+// MySQL only supports up to 65 precision for decimal through REAL type.
+#[case::decimal(get_mysql_arrow_decimal_record(), "decimal")]
+#[ignore] // TODO: interval types are broken in MySQL - Interval is not available in MySQL.
+#[case::interval(get_arrow_interval_record_batch(), "interval")]
+#[case::duration(get_arrow_duration_record_batch(), "duration")]
+#[ignore] // TODO: array types are broken in MySQL - array is not available in MySQL.
+#[case::list(get_arrow_list_record_batch(), "list")]
+#[case::null(get_arrow_null_record_batch(), "null")]
+#[ignore]
+#[case::bytea_array(get_arrow_bytea_array_record_batch(), "bytea_array")]
+#[test_log::test(tokio::test)]
+async fn test_arrow_mysql_roundtrip(
+    container_manager: &Mutex<ContainerManager>,
+    #[case] arrow_result: (RecordBatch, SchemaRef),
+    #[case] table_name: &str,
+) {
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_mysql_container(container_manager.port).await;
+    }
+
+    arrow_mysql_round_trip(
+        container_manager.port,
+        arrow_result.0,
+        arrow_result.1,
+        table_name,
+    )
+    .await;
 }
 
 #[rstest]

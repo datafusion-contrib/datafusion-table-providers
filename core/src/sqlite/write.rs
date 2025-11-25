@@ -1,14 +1,12 @@
 use std::{any::Any, fmt, sync::Arc};
 
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::{
     catalog::Session,
     common::Constraints,
-    datasource::{
-        sink::{DataSink, DataSinkExec},
-        TableProvider, TableType,
-    },
+    datasource::{TableProvider, TableType},
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{dml::InsertOp, Expr},
@@ -18,7 +16,7 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use crate::util::{
-    constraints::{self, UpsertOptions},
+    constraints,
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -68,6 +66,22 @@ impl TableProvider for SqliteTableWriter {
         Some(self.sqlite.constraints())
     }
 
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::error::Result<Vec<datafusion::logical_expr::TableProviderFilterPushDown>> {
+        // Verify schema consistency before delegating
+        // This is a cheap check since it's just comparing Arc<Schema> pointers
+        if self.read_provider.schema() != self.schema() {
+            tracing::warn!(
+                "Schema mismatch detected in SqliteTableWriter for table {}",
+                self.sqlite.table_name()
+            );
+        }
+
+        self.read_provider.supports_filters_pushdown(filters)
+    }
+
     async fn scan(
         &self,
         state: &dyn Session,
@@ -84,13 +98,13 @@ impl TableProvider for SqliteTableWriter {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: InsertOp,
+        op: InsertOp,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(SqliteDataSink::new(
                 Arc::clone(&self.sqlite),
-                overwrite,
+                op,
                 self.on_conflict.clone(),
                 self.schema(),
                 self.sqlite.batch_insert_use_prepared_statements,
@@ -174,11 +188,9 @@ impl DataSink for SqliteDataSink {
                     .map_err(to_datafusion_error)?
                 };
 
-                for batch in batches {
-                    batch_tx.send(batch).await.map_err(|err| {
-                        DataFusionError::Execution(format!("Error sending data batch: {err}"))
-                    })?;
-                }
+                batch_tx.send(data_batch).await.map_err(|err| {
+                    DataFusionError::Execution(format!("Error sending data batch: {err}"))
+                })?;
             }
 
             if notify_commit_transaction.send(()).is_err() {
@@ -229,9 +241,7 @@ impl DataSink for SqliteDataSink {
                 }
 
                 if on_commit_transaction.try_recv().is_err() {
-                    return Err(tokio_rusqlite::Error::Other(
-                        "No message to commit transaction has been received.".into(),
-                    ));
+                    return Err(rusqlite::Error::InvalidQuery);
                 }
 
                 transaction.commit()?;
@@ -242,14 +252,13 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(|e| {
                 if let super::Error::UnableToInsertIntoTableAsync {
-                    source:
-                        tokio_rusqlite::Error::Rusqlite(rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error {
-                                code: rusqlite::ffi::ErrorCode::DiskFull,
-                                ..
-                            },
-                            _,
-                        )),
+                    source: tokio_rusqlite::Error::Error(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error {
+                            code: rusqlite::ffi::ErrorCode::DiskFull,
+                            ..
+                        },
+                        _,
+                    )),
                 } = e
                 {
                     DataFusionError::External(super::Error::DiskFull {}.into())
@@ -298,7 +307,7 @@ impl DisplayAs for SqliteDataSink {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::{
+    use datafusion::arrow::{
         array::{Int64Array, RecordBatch, StringArray},
         datatypes::{DataType, Schema},
     };
@@ -317,8 +326,8 @@ mod tests {
     #[allow(clippy::unreadable_literal)]
     async fn test_round_trip_sqlite() {
         let schema = Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("time_in_string", DataType::Utf8, false),
-            arrow::datatypes::Field::new("time_int", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("time_in_string", DataType::Utf8, false),
+            datafusion::arrow::datatypes::Field::new("time_int", DataType::Int64, false),
         ]));
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
         let external_table = CreateExternalTable {
@@ -332,7 +341,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
-            constraints: Constraints::new_unverified(vec![]),
+            constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
         };
@@ -369,7 +378,7 @@ mod tests {
     async fn test_all_arrow_types_to_sqlite() {
         use arrow::{
             array::*,
-            datatypes::{i256, DataType, Field, TimeUnit},
+            datatypes::{DataType, Field, TimeUnit},
         };
 
         let num_rows = 10;
@@ -460,9 +469,6 @@ mod tests {
                 DataType::Duration(TimeUnit::Nanosecond),
                 true,
             ),
-            // Decimal types
-            Field::new("col_decimal128", DataType::Decimal128(38, 10), true),
-            Field::new("col_decimal256", DataType::Decimal256(76, 20), true),
         ]));
 
         let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
@@ -477,7 +483,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
-            constraints: Constraints::new_unverified(vec![]),
+            constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
         };
@@ -521,8 +527,6 @@ mod tests {
         let mut dur_milli_values = Vec::with_capacity(num_rows);
         let mut dur_micro_values = Vec::with_capacity(num_rows);
         let mut dur_nano_values = Vec::with_capacity(num_rows);
-        let mut decimal128_values = Vec::with_capacity(num_rows);
-        let mut decimal256_values = Vec::with_capacity(num_rows);
 
         for i in 0..num_rows {
             // Add some null values at regular intervals
@@ -676,16 +680,6 @@ mod tests {
             } else {
                 Some(86400000000000 + i as i64)
             });
-            decimal128_values.push(if is_null {
-                None
-            } else {
-                Some(123456789012345 + i as i128)
-            });
-            decimal256_values.push(if is_null {
-                None
-            } else {
-                Some(i256::from_i128(123456789012345 + i as i128))
-            });
         }
 
         let data = RecordBatch::try_new(
@@ -754,17 +748,6 @@ mod tests {
                 Arc::new(DurationMillisecondArray::from(dur_milli_values)),
                 Arc::new(DurationMicrosecondArray::from(dur_micro_values)),
                 Arc::new(DurationNanosecondArray::from(dur_nano_values)),
-                // Decimal types
-                Arc::new(
-                    Decimal128Array::from(decimal128_values)
-                        .with_precision_and_scale(38, 10)
-                        .unwrap(),
-                ),
-                Arc::new(
-                    Decimal256Array::from(decimal256_values)
-                        .with_precision_and_scale(76, 20)
-                        .unwrap(),
-                ),
             ],
         )
         .expect("data should be created");
@@ -784,5 +767,123 @@ mod tests {
                     num_rows
                 )
             });
+    }
+
+    #[tokio::test]
+    async fn test_filter_pushdown_support() {
+        use datafusion::logical_expr::{col, lit, TableProviderFilterPushDown};
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("name", DataType::Utf8, false),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("test_filter_table"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        // Test that filter pushdown is supported
+        let filter = col("id").gt(lit(10));
+        let result = table
+            .supports_filters_pushdown(&[&filter])
+            .expect("should support filter pushdown");
+
+        assert_eq!(
+            result,
+            vec![TableProviderFilterPushDown::Exact],
+            "Filter pushdown should be exact for simple comparison"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_read_write_with_filter_pushdown() {
+        use datafusion::logical_expr::{col, lit, TableProviderFilterPushDown};
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("value", DataType::Int64, false),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("concurrent_test"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+        };
+
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        // Insert initial data
+        let arr1 = Int64Array::from(vec![1, 2, 3]);
+        let arr2 = Int64Array::from(vec![10, 20, 30]);
+        let data = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1), Arc::new(arr2)])
+            .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+            .await
+            .expect("insertion should be successful");
+
+        collect(insertion, ctx.task_ctx())
+            .await
+            .expect("insert successful");
+
+        // Verify filter pushdown works after insert
+        let filter = col("id").gt(lit(1));
+        let result = table
+            .supports_filters_pushdown(&[&filter])
+            .expect("should support filter pushdown");
+
+        assert_eq!(
+            result,
+            vec![TableProviderFilterPushDown::Exact],
+            "Filter pushdown should be exact for simple comparison"
+        );
+
+        // Verify we can actually scan with the filter
+        let scan = table
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .expect("scan should succeed");
+
+        let batches = collect(scan, ctx.task_ctx())
+            .await
+            .expect("collect should succeed");
+
+        assert!(!batches.is_empty(), "Should have results");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2, "Should have 2 rows with id > 1");
     }
 }

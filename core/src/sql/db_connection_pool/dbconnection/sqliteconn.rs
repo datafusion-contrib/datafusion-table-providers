@@ -20,7 +20,7 @@ use super::Result;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("ConnectionError {source}"))]
-    ConnectionError { source: tokio_rusqlite::Error },
+    ConnectionError { source: tokio_rusqlite::Error<rusqlite::Error> },
 
     #[snafu(display("Unable to query: {source}"))]
     QueryError { source: rusqlite::Error },
@@ -89,6 +89,28 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         SqliteConnection { conn }
     }
 
+    async fn tables(&self, _schema: &str) -> Result<Vec<String>, super::Error> {
+        let tables = self
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                )?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                let tables: Result<Vec<_>, rusqlite::Error> = rows.collect();
+                tables
+            })
+            .await
+            .boxed()
+            .context(super::UnableToGetTablesSnafu)?;
+
+        Ok(tables)
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        Ok(vec!["main".to_string()])
+    }
+
     async fn get_schema(
         &self,
         table_reference: &TableReference,
@@ -104,7 +126,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
                     .context(ConversionSnafu)
                     .map_err(to_tokio_rusqlite_error)?;
                 let schema = rec.schema();
-                Ok(schema)
+                Ok::<SchemaRef, rusqlite::Error>(schema)
             })
             .await
             .boxed()
@@ -169,6 +191,6 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
     }
 }
 
-fn to_tokio_rusqlite_error(e: impl Into<Error>) -> tokio_rusqlite::Error {
-    tokio_rusqlite::Error::Other(Box::new(e.into()))
+fn to_tokio_rusqlite_error(e: impl Into<Error>) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(e.into()))
 }

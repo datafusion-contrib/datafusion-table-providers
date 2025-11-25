@@ -7,10 +7,7 @@ use crate::sql::db_connection_pool::{
     postgrespool::{self, PostgresConnectionPool},
     DbConnectionPool,
 };
-use crate::sql::sql_provider_datafusion::{
-    expr::{self, Engine},
-    SqlTable,
-};
+use crate::sql::sql_provider_datafusion::{expr::Engine, SqlTable};
 use crate::util::schema::SchemaValidator;
 use crate::util::supported_functions::FunctionSupport;
 use crate::UnsupportedTypeAction;
@@ -24,13 +21,14 @@ use bb8_postgres::{
     PostgresConnectionManager,
 };
 use datafusion::catalog::Session;
+use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::{unparser::dialect::PostgreSqlDialect, TableReference},
+    sql::TableReference,
 };
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
@@ -43,6 +41,7 @@ use crate::util::{
     indexes::IndexType,
     on_conflict::{self, OnConflict},
     secrets::to_secret_map,
+    to_datafusion_error,
 };
 
 use self::write::PostgresTableWriter;
@@ -93,7 +92,7 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
-    UnableToGenerateSQL { source: expr::Error },
+    UnableToGenerateSQL { source: DataFusionError },
 
     #[snafu(display("Unable to delete all data from the Postgres table: {source}"))]
     UnableToDeleteAllTableData {
@@ -165,6 +164,7 @@ impl PostgresTableFactory {
             .with_dialect(Arc::new(PostgreSqlDialect {})),
         );
 
+        #[cfg(feature = "postgres-federation")]
         let table_provider = Arc::new(
             table_provider
                 .create_federated_table_provider()
@@ -185,7 +185,7 @@ impl PostgresTableFactory {
             table_reference,
             Arc::clone(&self.pool),
             schema,
-            Constraints::new_unverified(vec![]),
+            Constraints::default(),
         );
 
         Ok(PostgresTableWriter::create(read_provider, postgres, None))
@@ -346,10 +346,6 @@ impl TableProviderFactory for PostgresTableProviderFactory {
     }
 }
 
-fn to_datafusion_error(error: Error) -> DataFusionError {
-    DataFusionError::External(Box::new(error))
-}
-
 #[derive(Clone)]
 pub struct Postgres {
     table: TableReference,
@@ -421,12 +417,12 @@ impl Postgres {
     async fn table_exists(&self, postgres_conn: &PostgresConnection) -> bool {
         let sql = match self.table.schema() {
             Some(schema) => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')"#,
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}' AND table_schema = '{schema}')",
                 name = self.table.table(),
                 schema = schema
             ),
             None => format!(
-                r#"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')"#,
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{name}')",
                 name = self.table.table()
             ),
         };
@@ -466,7 +462,7 @@ impl Postgres {
     async fn delete_all_table_data(&self, transaction: &Transaction<'_>) -> Result<()> {
         transaction
             .execute(
-                format!(r#"DELETE FROM {}"#, self.table.to_quoted_string()).as_str(),
+                format!("DELETE FROM {}", self.table.to_quoted_string()).as_str(),
                 &[],
             )
             .await

@@ -228,6 +228,33 @@ Schema {
             metadata: {},
         },
         Field {
+            name: "int_range_col",
+            data_type: Struct(
+                [
+                    Field {
+                        name: "lower",
+                        data_type: Int32,
+                        nullable: true,
+                        dict_id: 0,
+                        dict_is_ordered: false,
+                        metadata: {},
+                    },
+                    Field {
+                        name: "upper",
+                        data_type: Int32,
+                        nullable: true,
+                        dict_id: 0,
+                        dict_is_ordered: false,
+                        metadata: {},
+                    },
+                ],
+            ),
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
             name: "composite_col",
             data_type: Struct(
                 [

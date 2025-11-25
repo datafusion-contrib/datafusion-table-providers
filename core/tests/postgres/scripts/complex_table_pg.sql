@@ -49,6 +49,9 @@ CREATE TABLE example_table (
     int_array_col INTEGER[],
     text_array_col TEXT[],
     
+    -- Range types
+    int_range_col INT4RANGE,
+    
     -- Custom composite type
     composite_col complex_type
 );

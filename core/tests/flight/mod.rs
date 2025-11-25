@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow_array::{Array, Float32Array, Int64Array, Int8Array, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
 use arrow_flight::sql::server::FlightSqlService;
@@ -12,8 +11,9 @@ use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, SqlInfo, TicketS
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
-use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, Float32Array, Int64Array, Int8Array, RecordBatch};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, TryStreamExt};
 use prost::Message;
@@ -28,7 +28,7 @@ use tonic::transport::Server;
 use tonic::{Extensions, Request, Response, Status, Streaming};
 
 use datafusion_table_providers::flight::sql::FlightSqlDriver;
-use datafusion_table_providers::flight::FlightTableFactory;
+use datafusion_table_providers::flight::{FlightProperties, FlightTableFactory};
 
 const AUTH_HEADER: &str = "authorization";
 const BEARER_TOKEN: &str = "Bearer flight-sql-token";
@@ -161,8 +161,7 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
             Arc::new(Float32Array::from(vec![0.0, 0.1, 0.2, 0.3])),
             Arc::new(Int8Array::from(vec![10, 20, 30, 40])),
         ],
-    )
-    .unwrap();
+    )?;
     let rows_per_partition = partition_data.num_rows();
 
     let query = "SELECT * FROM some_table";
@@ -174,9 +173,7 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
         endpoint_archetype,
     ];
     let num_partitions = endpoints.len();
-    let flight_info = FlightInfo::default()
-        .try_with_schema(partition_data.schema().as_ref())
-        .unwrap();
+    let flight_info = FlightInfo::default().try_with_schema(partition_data.schema().as_ref())?;
     let flight_info = endpoints
         .into_iter()
         .fold(flight_info, |fi, e| fi.with_endpoint(e));
@@ -194,11 +191,11 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
     };
     let port = service.run_in_background(rx).await.port();
     let ctx = SessionContext::new();
+    let props_template = FlightProperties::new().with_reusable_flight_info(true);
+    let driver = FlightSqlDriver::new().with_properties_template(props_template);
     ctx.state_ref().write().table_factories_mut().insert(
         "FLIGHT_SQL".into(),
-        Arc::new(FlightTableFactory::new(
-            Arc::new(FlightSqlDriver::default()),
-        )),
+        Arc::new(FlightTableFactory::new(Arc::new(driver))),
     );
     let _ = ctx
         .sql(&format!(

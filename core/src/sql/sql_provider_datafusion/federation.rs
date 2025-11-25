@@ -22,24 +22,34 @@ use datafusion::{
 };
 
 impl<T, P> SqlTable<T, P> {
-    fn create_federated_table_source(
-        self: Arc<Self>,
-    ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.table_reference.clone();
-        let schema = Arc::clone(&self.schema);
-        let fed_provider = Arc::new(SQLFederationProvider::new(self));
-
-        Ok(Arc::new(SQLTableSource::new_with_schema(
-            fed_provider,
-            RemoteTableRef::from(table_name),
-            schema,
-        )))
+    #[allow(dead_code)]
+    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
     }
 
+    fn create_federated_table_source(self: Arc<Self>) -> Arc<dyn FederatedTableSource> {
+        let table_reference = self.table_reference.clone();
+        let schema = Arc::clone(&self.schema);
+        let fed_provider = Arc::new(SQLFederationProvider::new(self));
+        Arc::new(SQLTableSource::new_with_schema(
+            fed_provider,
+            RemoteTableRef::from(table_reference),
+            schema,
+        ))
+    }
+
+    /// Creates a federated table provider.
+    ///
+    /// # Errors
+    ///
+    /// This function currently never returns an error, but the Result type is kept for API compatibility.
     pub fn create_federated_table_provider(
         self: Arc<Self>,
     ) -> DataFusionResult<FederatedTableProviderAdaptor> {
-        let table_source = Self::create_federated_table_source(Arc::clone(&self))?;
+        let table_source = Self::create_federated_table_source(Arc::clone(&self));
         Ok(FederatedTableProviderAdaptor::new_with_provider(
             table_source,
             self,
@@ -58,7 +68,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
             JoinPushDown::AllowedFor(context) => Some(context),
             // Don't return None here - it will cause incorrect federation with other providers of the same name that also have a compute_context of None.
             // Instead return a random string that will never match any other provider's context.
-            JoinPushDown::Disallow => Some(format!("{}", self.unique_id())),
+            JoinPushDown::Disallow => Some(format!("{}", std::ptr::from_ref(self) as usize)),
         }
     }
 

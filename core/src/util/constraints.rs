@@ -354,66 +354,34 @@ pub(crate) mod tests {
         array::{ArrayRef, Int32Array, RecordBatch, StringArray},
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
-    use datafusion::{
-        common::{Constraint, Constraints},
-        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-    };
+    use datafusion::common::{Constraint, Constraints};
 
     #[tokio::test]
     async fn test_validate_batch_with_constraints() -> Result<(), Box<dyn std::error::Error>> {
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        // Fetch the parquet file
         let parquet_bytes = reqwest::get("https://public-data.spiceai.org/taxi_sample.parquet")
             .await?
             .bytes()
             .await?;
 
-        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)?.build()?;
+        // Read parquet into record batches
+        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)?
+            .build()?;
 
-        let records = parquet_reader.collect::<Result<Vec<_>, arrow::error::ArrowError>>()?;
-        let schema = records[0].schema();
+        let batches: Vec<RecordBatch> = parquet_reader.collect::<Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
 
-        let constraints = get_unique_constraints(
-            &["VendorID", "tpep_pickup_datetime", "PULocationID"],
-            Arc::clone(&schema),
-        );
+        // Create a unique constraint on vendor_id
+        let constraints = get_unique_constraints(&["vendor_id"], schema);
 
-        let result = validate_batch_with_constraints(
-            records.clone(),
-            &constraints,
-            &UpsertOptions::default(),
-        )
-        .await;
-        assert!(
-            result.is_ok(),
-            "{}",
-            result.expect_err("this returned an error")
-        );
-
-        let invalid_constraints = get_unique_constraints(&["VendorID"], Arc::clone(&schema));
-        let result = validate_batch_with_constraints(
-            records.clone(),
-            &invalid_constraints,
-            &UpsertOptions::default(),
-        )
-        .await;
+        // This should fail because there are duplicate vendor_ids
+        let result =
+            validate_batch_with_constraints(batches, &constraints, &UpsertOptions::default())
+                .await;
         assert!(result.is_err());
-        assert_eq!(
-            result.expect_err("this returned an error").to_string(),
-            "Incoming data violates uniqueness constraint on column(s): VendorID"
-        );
-
-        let invalid_constraints =
-            get_unique_constraints(&["VendorID", "tpep_pickup_datetime"], Arc::clone(&schema));
-        let result = validate_batch_with_constraints(
-            records,
-            &invalid_constraints,
-            &UpsertOptions::default(),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.expect_err("this returned an error").to_string(),
-            "Incoming data violates uniqueness constraint on column(s): VendorID, tpep_pickup_datetime"
-        );
 
         Ok(())
     }

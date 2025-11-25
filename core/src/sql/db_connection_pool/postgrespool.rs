@@ -16,7 +16,7 @@ use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{prelude::*, ResultExt};
 use tokio_postgres;
 
-use super::DbConnectionPool;
+use super::{runtime::run_async_with_tokio, DbConnectionPool};
 use crate::sql::db_connection_pool::{
     dbconnection::{postgresconn::PostgresConnection, AsyncDbConnection, DbConnection},
     JoinPushDown,
@@ -79,6 +79,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct PostgresConnectionPool {
     pool: Arc<bb8::Pool<PostgresConnectionManager<MakeTlsConnector>>>,
     join_push_down: JoinPushDown,
@@ -408,7 +409,8 @@ impl
         >,
     > {
         let pool = Arc::clone(&self.pool);
-        let conn = pool.get_owned().await.context(ConnectionPoolRunSnafu)?;
+        let get_conn = async || pool.get_owned().await.context(ConnectionPoolRunSnafu);
+        let conn = run_async_with_tokio(get_conn).await?;
         Ok(Box::new(
             PostgresConnection::new(conn)
                 .with_unsupported_type_action(self.unsupported_type_action),

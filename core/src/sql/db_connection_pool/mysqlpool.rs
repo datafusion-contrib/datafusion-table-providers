@@ -57,6 +57,14 @@ pub struct MySQLConnectionPool {
     join_push_down: JoinPushDown,
 }
 
+#[allow(dead_code)]
+const SETUP_QUERIES: [&str; 4] = [
+    "SET time_zone = '+00:00'",
+    "SET character_set_results = 'utf8mb4'",
+    "SET character_set_client = 'utf8mb4'",
+    "SET character_set_connection = 'utf8mb4'",
+];
+
 /// Returns the setup queries for the MySQL connection, optionally overriding default time zone (UTC).
 fn get_setup_queries(time_zone: Option<&str>) -> Vec<String> {
     let tz = time_zone.unwrap_or("+00:00");
