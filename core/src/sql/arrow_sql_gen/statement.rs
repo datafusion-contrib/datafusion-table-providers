@@ -108,7 +108,18 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
-            map_data_type_to_column_type(f.data_type())
+            // SQLite stores decimals as TEXT strings (via BigDecimal::to_string()).
+            // Using TEXT column type avoids sea-query's precision limit of 16 for decimals.
+            // The decimal.c extension (enabled via bundled-decimal feature) provides
+            // exact arithmetic operations on these text-stored decimal values.
+            // https://sqlite.org/floatingpoint.html
+            match f.data_type() {
+                DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => ColumnType::Text,
+                _ => map_data_type_to_column_type(f.data_type()),
+            }
         })
     }
 

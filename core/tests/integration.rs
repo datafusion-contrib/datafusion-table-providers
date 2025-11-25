@@ -16,6 +16,8 @@ mod mongodb;
 mod mysql;
 #[cfg(feature = "postgres")]
 mod postgres;
+#[cfg(any(feature = "sqlite", all(feature = "duckdb", feature = "federation")))]
+mod roundtrip;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
