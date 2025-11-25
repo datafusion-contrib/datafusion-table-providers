@@ -150,6 +150,7 @@ impl DataSink for SqliteDataSink {
             .map_or_else(UpsertOptions::default, |conflict| {
                 conflict.get_upsert_options()
             });
+        let overwrite_for_task = self.overwrite;
         let task = tokio::spawn(async move {
             let mut num_rows: u64 = 0;
             while let Some(data_batch) = data.next().await {
@@ -158,14 +159,20 @@ impl DataSink for SqliteDataSink {
                     DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
                 })?;
 
-                let batches = constraints::validate_batch_with_constraints(
-                    vec![data_batch],
-                    &constraints,
-                    &upsert_options,
-                )
-                .await
-                .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?;
+                // Skip constraint validation for Overwrite operations since we're replacing all data
+                // and uniqueness constraints don't apply to the incoming data in isolation.
+                let batches = if overwrite_for_task == InsertOp::Overwrite {
+                    vec![data_batch]
+                } else {
+                    constraints::validate_batch_with_constraints(
+                        vec![data_batch],
+                        &constraints,
+                        &upsert_options,
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?
+                };
 
                 for batch in batches {
                     batch_tx.send(batch).await.map_err(|err| {
@@ -207,10 +214,16 @@ impl DataSink for SqliteDataSink {
                                 &transaction,
                                 data_batch,
                                 on_conflict.as_ref(),
+                                overwrite,
                             )?;
                         } else {
                             #[allow(deprecated)]
-                            sqlite.insert_batch(&transaction, data_batch, on_conflict.as_ref())?;
+                            sqlite.insert_batch(
+                                &transaction,
+                                data_batch,
+                                on_conflict.as_ref(),
+                                overwrite,
+                            )?;
                         }
                     }
                 }
