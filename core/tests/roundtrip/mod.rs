@@ -1206,11 +1206,13 @@ async fn test_compatible_decimal_roundtrip(#[case] provider: ProviderType) {
 #[case::sqlite_float(ProviderType::Sqlite, get_arrow_float_record_batch(), "float")]
 #[case::sqlite_utf8(ProviderType::Sqlite, get_arrow_utf8_record_batch(), "utf8")]
 #[case::sqlite_date(ProviderType::Sqlite, get_arrow_date_record_batch(), "date")]
+#[case::sqlite_timestamp(ProviderType::Sqlite, get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::sqlite_null(ProviderType::Sqlite, get_arrow_null_record_batch(), "null")]
 #[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_int(ProviderType::DuckDB, get_arrow_int_record_batch(), "int"))]
 #[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_float(ProviderType::DuckDB, get_arrow_float_record_batch(), "float"))]
 #[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_utf8(ProviderType::DuckDB, get_arrow_utf8_record_batch(), "utf8"))]
 #[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_date(ProviderType::DuckDB, get_arrow_date_record_batch(), "date"))]
+#[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_timestamp(ProviderType::DuckDB, get_arrow_timestamp_record_batch(), "timestamp"))]
 #[cfg_attr(all(feature = "duckdb", feature = "federation"), case::duckdb_null(ProviderType::DuckDB, get_arrow_null_record_batch(), "null"))]
 #[test_log::test(tokio::test)]
 async fn test_existing_batches(

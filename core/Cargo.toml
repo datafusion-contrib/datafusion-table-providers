@@ -141,6 +141,7 @@ mongodb = [
   "dep:async-stream",
   "dep:arrow-schema",
   "dep:num-traits",
+  "dep:rust_decimal",
 ]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 mysql-federation = ["mysql", "federation"]
