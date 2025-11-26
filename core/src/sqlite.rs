@@ -881,8 +881,8 @@ impl Sqlite {
                         }
                     }
                     DataType::Timestamp(unit, timezone) => {
-                        // Convert timestamps to ISO 8601 strings for SQLite compatibility.
-                        // SQLite's datetime functions expect TEXT in ISO 8601 format.
+                        // Convert timestamps to ISO-8601 strings for SQLite compatibility.
+                        // SQLite's datetime functions expect TEXT in ISO-8601 format.
                         // Storing as integers loses the datetime semantics and causes
                         // round-trip failures when reading back as timestamps.
                         if column.is_null(row_idx) {
@@ -919,7 +919,7 @@ impl Sqlite {
                                 }
                             };
 
-                            // Format as ISO 8601 string
+                            // Format as ISO-8601 string (RFC3339 is a profile of ISO-8601)
                             let datetime = chrono::DateTime::from_timestamp_nanos(nanos);
                             let iso_string = if let Some(tz) = timezone {
                                 // Handle timezone-aware timestamps with offset format like "+10:00"
