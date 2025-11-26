@@ -488,11 +488,11 @@ fn parse_timezone_offset_seconds(tz: &str) -> Option<i32> {
     if tz.is_empty() {
         return None;
     }
-    
-    let (sign, rest) = if tz.starts_with('+') {
-        (1, &tz[1..])
-    } else if tz.starts_with('-') {
-        (-1, &tz[1..])
+
+    let (sign, rest) = if let Some(stripped) = tz.strip_prefix('+') {
+        (1, stripped)
+    } else if let Some(stripped) = tz.strip_prefix('-') {
+        (-1, stripped)
     } else {
         return None;
     };
