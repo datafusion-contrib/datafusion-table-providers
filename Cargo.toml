@@ -50,6 +50,47 @@ datafusion-table-providers = { path = "core" }
 duckdb = "1.3.2" # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.20.0" }
 adbc_driver_manager = { version = "0.20.0" }
+parquet = "56"
+rusqlite = "0.37"
+tokio-rusqlite = "0.7.0"
+async-stream = "0.3.5"
+async-trait = "0.1.80"
+bigdecimal = "0.4.5"
+byteorder = "1.5.0"
+chrono = "0.4"
+futures = "0.3.30"
+itertools = "0.14.0"
+num-bigint = "0.4"
+secrecy = "0.10.3"
+serde = { version = "1.0.209", features = ["derive"] }
+serde_json = "1.0.124"
+snafu = "0.8.3"
+time = "0.3.36"
+tokio = { version = "1.46", features = ["macros", "fs"] }
+tracing = "0.1.40"
+url = "2.5.1"
+rand = "0.9"
+regex = "1"
+uuid = "1.9.1"
+prost = "0.14.1"
+tonic = { version = "0.13", features = ["tls-native-roots", "tls-webpki-roots"] }
+bytes = "1.7.1"
+base64 = "0.22.1"
+dashmap = "6.1.0"
+fallible-iterator = "0.3.0"
+fundu = "2.0.1"
+geo-types = "0.7.13"
+sha2 = "0.10"
+hickory-resolver = "0.25.2"
+sea-query = { version = "0.32", features = [
+    "backend-sqlite",
+    "backend-postgres",
+    "postgres-array",
+    "with-rust_decimal",
+    "with-bigdecimal",
+    "with-time",
+    "with-chrono",
+] }
 
 [patch.crates-io]
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "007c82d039220478f406d648417d28c0d40a7987" } # spiceai-50
@@ -71,3 +112,5 @@ arrow-ipc = { git = "https://github.com/spiceai/arrow-rs.git", rev = "9f9c372ff5
 arrow-ord = { git = "https://github.com/spiceai/arrow-rs.git", rev = "9f9c372ff5744488226462e3ea7d94ff47909833" }    # spiceai-56
 arrow-schema = { git = "https://github.com/spiceai/arrow-rs.git", rev = "9f9c372ff5744488226462e3ea7d94ff47909833" } # spiceai-56
 parquet = { git = "https://github.com/spiceai/arrow-rs.git", rev = "9f9c372ff5744488226462e3ea7d94ff47909833" }      # spiceai-56
+
+rusqlite = { git = "https://github.com/spiceai/rusqlite.git", rev = "3d1f5f6f6d6d062676210d095df45eafa6e19fd8" } # spiceai-v0.37.0
