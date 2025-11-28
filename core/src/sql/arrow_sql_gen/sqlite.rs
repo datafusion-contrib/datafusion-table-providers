@@ -392,18 +392,24 @@ mod tests {
 
     #[test]
     fn decode_decimal128_mixed_storage_classes() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        let conn = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory sqlite for decimal128 test");
+        conn.execute("CREATE TABLE decs (d TEXT)", [])
+            .expect("create test table");
         conn.execute("INSERT INTO decs (d) VALUES ('123.45')", [])
-            .unwrap(); // stored as TEXT
-        conn.execute("INSERT INTO decs (d) VALUES (7)", []).unwrap(); // stored as INTEGER
+            .expect("insert text decimal value"); // stored as TEXT
+        conn.execute("INSERT INTO decs (d) VALUES (7)", [])
+            .expect("insert integer decimal value"); // stored as INTEGER
         conn.execute("INSERT INTO decs (d) VALUES (8.9)", [])
-            .unwrap(); // stored as REAL
-        conn.execute("INSERT INTO decs (d) VALUES (NULL)", []).unwrap();
+            .expect("insert real decimal value"); // stored as REAL
+        conn.execute("INSERT INTO decs (d) VALUES (NULL)", [])
+            .expect("insert null decimal value");
 
-        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT d FROM decs")
+            .expect("prepare select for decimal128 test");
         let column_count = stmt.column_count();
-        let rows = stmt.query([]).unwrap();
+        let rows = stmt.query([]).expect("query rows for decimal128 test");
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
@@ -411,14 +417,15 @@ mod tests {
             true,
         )]));
 
-        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let batch =
+            rows_to_arrow(rows, column_count, Some(schema)).expect("decode decimal128 rows");
         assert_eq!(batch.num_rows(), 4);
 
         let arr = batch
             .column(0)
             .as_any()
             .downcast_ref::<Decimal128Array>()
-            .unwrap();
+            .expect("downcast to Decimal128Array");
         assert_eq!(arr.value(0), 12345); // 123.45 -> 12345 with scale 2
         assert_eq!(arr.value(1), 700); // 7 -> 7.00 -> 700
         assert_eq!(arr.value(2), 890); // 8.9 -> 8.90 -> 890
@@ -427,17 +434,21 @@ mod tests {
 
     #[test]
     fn decode_decimal256_large_value() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE big_dec (d TEXT)", []).unwrap();
+        let conn = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory sqlite for decimal256 test");
+        conn.execute("CREATE TABLE big_dec (d TEXT)", [])
+            .expect("create big_dec table");
         conn.execute(
             "INSERT INTO big_dec (d) VALUES ('123456789012345678901234567890.12')",
             [],
         )
-        .unwrap();
+        .expect("insert large decimal text");
 
-        let mut stmt = conn.prepare("SELECT d FROM big_dec").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT d FROM big_dec")
+            .expect("prepare select for decimal256 test");
         let column_count = stmt.column_count();
-        let rows = stmt.query([]).unwrap();
+        let rows = stmt.query([]).expect("query rows for decimal256 test");
 
         // Precision large enough to hold the inserted value
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -446,12 +457,13 @@ mod tests {
             true,
         )]));
 
-        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let batch =
+            rows_to_arrow(rows, column_count, Some(schema)).expect("decode decimal256 rows");
         let arr = batch
             .column(0)
             .as_any()
             .downcast_ref::<Decimal256Array>()
-            .unwrap();
+            .expect("downcast to Decimal256Array");
 
         // Raw mantissa (scale already applied)
         assert_eq!(
@@ -462,14 +474,18 @@ mod tests {
 
     #[test]
     fn decode_decimal128_allows_large_values_without_precision_check() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        let conn = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory sqlite for precision test");
+        conn.execute("CREATE TABLE decs (d TEXT)", [])
+            .expect("create decs table");
         conn.execute("INSERT INTO decs (d) VALUES ('123456')", [])
-            .unwrap(); // exceeds precision 5, scale 2
+            .expect("insert oversized decimal"); // exceeds precision 5, scale 2
 
-        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT d FROM decs")
+            .expect("prepare select for precision test");
         let column_count = stmt.column_count();
-        let rows = stmt.query([]).unwrap();
+        let rows = stmt.query([]).expect("query rows for precision test");
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
@@ -478,25 +494,30 @@ mod tests {
         )]));
 
         // Current behavior: value is accepted and scaled even if it exceeds declared precision.
-        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let batch =
+            rows_to_arrow(rows, column_count, Some(schema)).expect("decode oversized decimal");
         let arr = batch
             .column(0)
             .as_any()
             .downcast_ref::<Decimal128Array>()
-            .unwrap();
+            .expect("downcast to Decimal128Array");
         assert_eq!(arr.value(0), 12_345_600); // 123456 * 10^2
     }
 
     #[test]
     fn decode_decimal128_invalid_text_errors() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        let conn = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory sqlite for invalid text");
+        conn.execute("CREATE TABLE decs (d TEXT)", [])
+            .expect("create decs table");
         conn.execute("INSERT INTO decs (d) VALUES ('not-a-number')", [])
-            .unwrap();
+            .expect("insert invalid decimal text");
 
-        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT d FROM decs")
+            .expect("prepare select for invalid text test");
         let column_count = stmt.column_count();
-        let rows = stmt.query([]).unwrap();
+        let rows = stmt.query([]).expect("query rows for invalid text test");
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
@@ -504,21 +525,27 @@ mod tests {
             true,
         )]));
 
-        let err = rows_to_arrow(rows, column_count, Some(schema)).unwrap_err();
+        let err = rows_to_arrow(rows, column_count, Some(schema))
+            .expect_err("expect parse failure for invalid decimal");
         assert!(matches!(err, Error::FailedToParseDecimal { .. }));
     }
 
     #[test]
     fn decode_decimal256_negative_and_null_first_row() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
-        conn.execute("INSERT INTO decs (d) VALUES (NULL)", []).unwrap();
+        let conn = rusqlite::Connection::open_in_memory()
+            .expect("open in-memory sqlite for negative/null test");
+        conn.execute("CREATE TABLE decs (d TEXT)", [])
+            .expect("create decs table");
+        conn.execute("INSERT INTO decs (d) VALUES (NULL)", [])
+            .expect("insert null row");
         conn.execute("INSERT INTO decs (d) VALUES ('-42.135')", [])
-            .unwrap();
+            .expect("insert negative decimal row");
 
-        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT d FROM decs")
+            .expect("prepare select for negative/null test");
         let column_count = stmt.column_count();
-        let rows = stmt.query([]).unwrap();
+        let rows = stmt.query([]).expect("query rows for negative/null test");
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
@@ -526,14 +553,15 @@ mod tests {
             true,
         )]));
 
-        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let batch =
+            rows_to_arrow(rows, column_count, Some(schema)).expect("decode negative/null decimals");
         assert_eq!(batch.num_rows(), 2);
 
         let arr = batch
             .column(0)
             .as_any()
             .downcast_ref::<Decimal256Array>()
-            .unwrap();
+            .expect("downcast to Decimal256Array");
         assert!(arr.is_null(0));
         assert_eq!(arr.value(1).to_string(), "-42135"); // scale 3
     }
