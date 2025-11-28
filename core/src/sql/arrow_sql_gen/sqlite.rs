@@ -19,14 +19,19 @@ use std::sync::Arc;
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
-        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
-        RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder, UInt32Builder,
-        UInt64Builder, UInt8Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Decimal128Builder,
+        Decimal256Builder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+        Int8Builder, LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions,
+        StringBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
     },
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use rusqlite::{types::Type, Row, Rows};
+use arrow_buffer::i256;
+use bigdecimal::{num_bigint::Sign, BigDecimal, FromPrimitive, ToPrimitive};
+use rusqlite::{
+    types::{Type, ValueRef},
+    Row, Rows,
+};
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
@@ -47,6 +52,18 @@ pub enum Error {
 
     #[snafu(display("Failed to extract column name: {source}"))]
     FailedToExtractColumnName { source: rusqlite::Error },
+
+    #[snafu(display("Failed to parse decimal value: {detail}"))]
+    FailedToParseDecimal { detail: String },
+
+    #[snafu(display("Invalid UTF-8 sequence: {source}"))]
+    InvalidUtf8 { source: std::str::Utf8Error },
+
+    #[snafu(display("Decimal value exceeds precision {precision} with scale {scale}"))]
+    DecimalOutOfRange { precision: u8, scale: i8 },
+
+    #[snafu(display("Unsupported SQLite column type {sqlite_type} for decimal decoding"))]
+    UnsupportedDecimalType { sqlite_type: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -138,31 +155,7 @@ pub fn rows_to_arrow(
     }
 }
 
-fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType {
-    if *sqlite_type == Type::Text {
-        // Text is a special case as it can represent different types while correctly decoded to
-        // desired Arrow type during additional type casting step.
-        return DataType::Utf8;
-    }
-    
-    // When the first row has NULL, we can't determine the actual storage type.
-    // For decimal types which are stored as TEXT in SQLite, we should decode as Utf8.
-    if *sqlite_type == Type::Null {
-        match data_type {
-            DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => {
-                // Decimals are stored as TEXT in SQLite
-                return DataType::Utf8;
-            }
-            _ => {
-                // For other types, NULL is fine - the builder will handle it
-            }
-        }
-    }
-    
-    // Other SQLite types are Integer, Real, Blob, Null are safe to decode based on target Arrow type
+fn to_sqlite_decoding_type(data_type: &DataType, _sqlite_type: &Type) -> DataType {
     match data_type {
         DataType::Null => DataType::Null,
         DataType::Int8 => DataType::Int8,
@@ -179,12 +172,13 @@ fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType
         DataType::Float64 => DataType::Float64,
         DataType::Utf8 => DataType::Utf8,
         DataType::LargeUtf8 => DataType::LargeUtf8,
-        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => DataType::Binary,
-        // Decimals stored as TEXT - decode as Utf8 for casting later
+        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
+            DataType::Binary
+        }
         DataType::Decimal32(_, _)
         | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _) => DataType::Utf8,
+        | DataType::Decimal256(_, _) => data_type.clone(),
         DataType::Duration(_) => DataType::Int64,
 
         // Timestamp, Date32, Date64, Time32, Time64, List, Struct, Union, Dictionary, Map
@@ -206,6 +200,122 @@ macro_rules! append_value {
             None => builder.append_null(),
         }
     }};
+}
+
+fn value_ref_to_bigdecimal(value_ref: ValueRef<'_>) -> Result<BigDecimal> {
+    match value_ref {
+        ValueRef::Integer(v) => Ok(BigDecimal::from(v)),
+        ValueRef::Real(v) => BigDecimal::from_f64(v).ok_or_else(|| {
+            FailedToParseDecimalSnafu {
+                detail: format!("Unable to convert real value {v} to decimal"),
+            }
+            .build()
+        }),
+        ValueRef::Text(text) => {
+            let utf8 = std::str::from_utf8(text).context(InvalidUtf8Snafu)?;
+            BigDecimal::from_str(utf8).map_err(|err| {
+                FailedToParseDecimalSnafu {
+                    detail: err.to_string(),
+                }
+                .build()
+            })
+        }
+        ValueRef::Null => FailedToParseDecimalSnafu {
+            detail: "NULL value".to_string(),
+        }
+        .fail(),
+        other => UnsupportedDecimalTypeSnafu {
+            sqlite_type: format!("{other:?}"),
+        }
+        .fail(),
+    }
+}
+
+fn scaled_mantissa(
+    decimal: BigDecimal,
+    _precision: u8,
+    scale: i8,
+) -> Result<bigdecimal::num_bigint::BigInt> {
+    let rounded = decimal.round(i64::from(scale));
+    let (mut mantissa, exponent) = rounded.as_bigint_and_exponent();
+    let target_exp = i64::from(scale);
+
+    if exponent < target_exp {
+        let factor = bigdecimal::num_bigint::BigInt::from(10u8)
+            .pow((target_exp - exponent) as u32);
+        mantissa *= factor;
+    } else if exponent > target_exp {
+        let factor = bigdecimal::num_bigint::BigInt::from(10u8)
+            .pow((exponent - target_exp) as u32);
+        mantissa /= factor;
+    }
+
+    Ok(mantissa)
+}
+
+fn decimal128_from_value_ref(
+    value_ref: ValueRef<'_>,
+    precision: u8,
+    scale: i8,
+) -> Result<i128> {
+    let mantissa = scaled_mantissa(value_ref_to_bigdecimal(value_ref)?, precision, scale)?;
+    mantissa
+        .to_i128()
+        .ok_or_else(|| DecimalOutOfRangeSnafu { precision, scale }.build())
+}
+
+fn decimal256_from_value_ref(
+    value_ref: ValueRef<'_>,
+    precision: u8,
+    scale: i8,
+) -> Result<i256> {
+    let mantissa = scaled_mantissa(value_ref_to_bigdecimal(value_ref)?, precision, scale)?;
+    let bytes = mantissa.to_signed_bytes_be();
+    if bytes.len() > 32 {
+        return DecimalOutOfRangeSnafu { precision, scale }.fail();
+    }
+
+    let fill = if mantissa.sign() == Sign::Minus {
+        0xFF
+    } else {
+        0x00
+    };
+
+    let mut fixed = [fill; 32];
+    let start = 32 - bytes.len();
+    fixed[start..].copy_from_slice(&bytes);
+
+    Ok(i256::from_be_bytes(fixed))
+}
+
+fn append_utf8_from_value_ref(
+    builder: &mut Box<dyn ArrayBuilder>,
+    value_ref: ValueRef<'_>,
+) -> Result<()> {
+    let Some(string_builder) = builder.as_any_mut().downcast_mut::<StringBuilder>() else {
+        return FailedToDowncastBuilderSnafu {
+            sqlite_type: format!("{value_ref:?}"),
+        }
+        .fail();
+    };
+
+    match value_ref {
+        ValueRef::Null => string_builder.append_null(),
+        ValueRef::Text(text) => {
+            let utf8 = std::str::from_utf8(text).context(InvalidUtf8Snafu)?;
+            string_builder.append_value(utf8);
+        }
+        ValueRef::Integer(v) => string_builder.append_value(v.to_string()),
+        ValueRef::Real(v) => string_builder.append_value(v.to_string()),
+        ValueRef::Blob(_) => {
+            return UnsupportedDecimalTypeSnafu {
+                sqlite_type: "Blob".to_string(),
+            }
+            .fail()
+        }
+    }
+
+    Ok(())
 }
 
 fn add_row_to_builders(
@@ -244,9 +354,71 @@ fn add_row_to_builders(
             DataType::Float32 => append_value!(builder, row, i, f32, Float32Builder, Type::Real),
             DataType::Float64 => append_value!(builder, row, i, f64, Float64Builder, Type::Real),
 
-            DataType::Utf8 => append_value!(builder, row, i, String, StringBuilder, Type::Text),
+            DataType::Utf8 => {
+                let value_ref = row.get_ref(i).context(FailedToExtractRowValueSnafu)?;
+                append_utf8_from_value_ref(builder, value_ref)?;
+            }
             DataType::LargeUtf8 => {
-                append_value!(builder, row, i, String, LargeStringBuilder, Type::Text)
+                let Some(string_builder) = builder.as_any_mut().downcast_mut::<LargeStringBuilder>()
+                else {
+                    return FailedToDowncastBuilderSnafu {
+                        sqlite_type: format!("{}", Type::Text),
+                    }
+                    .fail();
+                };
+
+                match row.get_ref(i).context(FailedToExtractRowValueSnafu)? {
+                    ValueRef::Null => string_builder.append_null(),
+                    ValueRef::Text(text) => {
+                        let utf8 = std::str::from_utf8(text).context(InvalidUtf8Snafu)?;
+                        string_builder.append_value(utf8);
+                    }
+                    ValueRef::Integer(v) => string_builder.append_value(v.to_string()),
+                    ValueRef::Real(v) => string_builder.append_value(v.to_string()),
+                    ValueRef::Blob(_) => {
+                        return UnsupportedDecimalTypeSnafu {
+                            sqlite_type: "Blob".to_string(),
+                        }
+                        .fail()
+                    }
+                }
+            }
+
+            DataType::Decimal128(precision, scale) => {
+                let Some(decimal_builder) =
+                    builder.as_any_mut().downcast_mut::<Decimal128Builder>()
+                else {
+                    return FailedToDowncastBuilderSnafu {
+                        sqlite_type: format!("{}", Type::Real),
+                    }
+                    .fail();
+                };
+
+                match row.get_ref(i).context(FailedToExtractRowValueSnafu)? {
+                    ValueRef::Null => decimal_builder.append_null(),
+                    value_ref => {
+                        let value = decimal128_from_value_ref(value_ref, precision, scale)?;
+                        decimal_builder.append_value(value);
+                    }
+                }
+            }
+            DataType::Decimal256(precision, scale) => {
+                let Some(decimal_builder) =
+                    builder.as_any_mut().downcast_mut::<Decimal256Builder>()
+                else {
+                    return FailedToDowncastBuilderSnafu {
+                        sqlite_type: format!("{}", Type::Real),
+                    }
+                    .fail();
+                };
+
+                match row.get_ref(i).context(FailedToExtractRowValueSnafu)? {
+                    ValueRef::Null => decimal_builder.append_null(),
+                    value_ref => {
+                        let value = decimal256_from_value_ref(value_ref, precision, scale)?;
+                        decimal_builder.append_value(value);
+                    }
+                }
             }
 
             DataType::Binary => append_value!(builder, row, i, Vec<u8>, BinaryBuilder, Type::Blob),
