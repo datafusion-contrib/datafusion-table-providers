@@ -15,18 +15,23 @@ limitations under the License.
 */
 
 use std::sync::Arc;
+use std::str::FromStr;
 
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
-        Int16Builder, Int32Builder, Int64Builder, Int8Builder, LargeStringBuilder, NullBuilder,
-        RecordBatch, RecordBatchOptions, StringBuilder, UInt16Builder, UInt32Builder,
-        UInt64Builder, UInt8Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Decimal128Builder,
+        Decimal256Builder, Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+        Int8Builder, LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions,
+        StringBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
     },
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{DataType, Field, Schema, SchemaRef, i256},
 };
-use rusqlite::{types::Type, Row, Rows};
+use bigdecimal::{num_bigint::Sign, BigDecimal, FromPrimitive, ToPrimitive};
+use rusqlite::{
+    types::{Type, ValueRef},
+    Row, Rows,
+};
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
@@ -47,6 +52,18 @@ pub enum Error {
 
     #[snafu(display("Failed to extract column name: {source}"))]
     FailedToExtractColumnName { source: rusqlite::Error },
+
+    #[snafu(display("Failed to parse decimal value: {detail}"))]
+    FailedToParseDecimal { detail: String },
+
+    #[snafu(display("Invalid UTF-8 sequence: {source}"))]
+    InvalidUtf8 { source: std::str::Utf8Error },
+
+    #[snafu(display("Decimal value exceeds precision {precision} with scale {scale}"))]
+    DecimalOutOfRange { precision: u8, scale: i8 },
+
+    #[snafu(display("Unsupported SQLite column type {sqlite_type} for decimal decoding"))]
+    UnsupportedDecimalType { sqlite_type: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -138,31 +155,8 @@ pub fn rows_to_arrow(
     }
 }
 
-fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType {
-    if *sqlite_type == Type::Text {
-        // Text is a special case as it can represent different types while correctly decoded to
-        // desired Arrow type during additional type casting step.
-        return DataType::Utf8;
-    }
-    
-    // When the first row has NULL, we can't determine the actual storage type.
-    // For decimal types which are stored as TEXT in SQLite, we should decode as Utf8.
-    if *sqlite_type == Type::Null {
-        match data_type {
-            DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => {
-                // Decimals are stored as TEXT in SQLite
-                return DataType::Utf8;
-            }
-            _ => {
-                // For other types, NULL is fine - the builder will handle it
-            }
-        }
-    }
-    
-    // Other SQLite types are Integer, Real, Blob, Null are safe to decode based on target Arrow type
+fn to_sqlite_decoding_type(data_type: &DataType, _sqlite_type: &Type) -> DataType {
+    // Decode based on the projected Arrow type; decimals may be stored as TEXT/REAL/INTEGER in SQLite.
     match data_type {
         DataType::Null => DataType::Null,
         DataType::Int8 => DataType::Int8,
@@ -180,11 +174,10 @@ fn to_sqlite_decoding_type(data_type: &DataType, sqlite_type: &Type) -> DataType
         DataType::Utf8 => DataType::Utf8,
         DataType::LargeUtf8 => DataType::LargeUtf8,
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => DataType::Binary,
-        // Decimals stored as TEXT - decode as Utf8 for casting later
         DataType::Decimal32(_, _)
         | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _) => DataType::Utf8,
+        | DataType::Decimal256(_, _) => data_type.clone(),
         DataType::Duration(_) => DataType::Int64,
 
         // Timestamp, Date32, Date64, Time32, Time64, List, Struct, Union, Dictionary, Map
@@ -206,6 +199,92 @@ macro_rules! append_value {
             None => builder.append_null(),
         }
     }};
+}
+
+fn value_ref_to_bigdecimal(value_ref: ValueRef<'_>) -> Result<BigDecimal> {
+    match value_ref {
+        ValueRef::Integer(v) => Ok(BigDecimal::from(v)),
+        ValueRef::Real(v) => BigDecimal::from_f64(v).ok_or_else(|| {
+            FailedToParseDecimalSnafu {
+                detail: format!("Unable to convert real value {v} to decimal"),
+            }
+            .build()
+        }),
+        ValueRef::Text(text) => {
+            let utf8 = std::str::from_utf8(text).context(InvalidUtf8Snafu)?;
+            BigDecimal::from_str(utf8).map_err(|err| {
+                FailedToParseDecimalSnafu {
+                    detail: err.to_string(),
+                }
+                .build()
+            })
+        }
+        ValueRef::Null => FailedToParseDecimalSnafu {
+            detail: "NULL value".to_string(),
+        }
+        .fail(),
+        other => UnsupportedDecimalTypeSnafu {
+            sqlite_type: format!("{other:?}"),
+        }
+        .fail(),
+    }
+}
+
+fn scaled_mantissa(
+    decimal: BigDecimal,
+    _precision: u8,
+    scale: i8,
+) -> Result<bigdecimal::num_bigint::BigInt> {
+    let rounded = decimal.round(i64::from(scale));
+    let (mut mantissa, exponent) = rounded.as_bigint_and_exponent();
+    let target_exp = i64::from(scale);
+
+    if exponent < target_exp {
+        let factor = bigdecimal::num_bigint::BigInt::from(10u8)
+            .pow((target_exp - exponent) as u32);
+        mantissa *= factor;
+    } else if exponent > target_exp {
+        let factor = bigdecimal::num_bigint::BigInt::from(10u8)
+            .pow((exponent - target_exp) as u32);
+        mantissa /= factor;
+    }
+
+    Ok(mantissa)
+}
+
+fn decimal128_from_value_ref(
+    value_ref: ValueRef<'_>,
+    precision: u8,
+    scale: i8,
+) -> Result<i128> {
+    let mantissa = scaled_mantissa(value_ref_to_bigdecimal(value_ref)?, precision, scale)?;
+    mantissa
+        .to_i128()
+        .ok_or_else(|| DecimalOutOfRangeSnafu { precision, scale }.build())
+}
+
+fn decimal256_from_value_ref(
+    value_ref: ValueRef<'_>,
+    precision: u8,
+    scale: i8,
+) -> Result<i256> {
+    let mantissa = scaled_mantissa(value_ref_to_bigdecimal(value_ref)?, precision, scale)?;
+    let bytes = mantissa.to_signed_bytes_be();
+    if bytes.len() > 32 {
+        return DecimalOutOfRangeSnafu { precision, scale }.fail();
+    }
+
+    let fill = if mantissa.sign() == Sign::Minus {
+        0xFF
+    } else {
+        0x00
+    };
+
+    let mut fixed = [fill; 32];
+    let start = 32 - bytes.len();
+    fixed[start..].copy_from_slice(&bytes);
+
+    Ok(i256::from_be_bytes(fixed))
 }
 
 fn add_row_to_builders(
@@ -250,6 +329,42 @@ fn add_row_to_builders(
             }
 
             DataType::Binary => append_value!(builder, row, i, Vec<u8>, BinaryBuilder, Type::Blob),
+            DataType::Decimal128(precision, scale) => {
+                let Some(decimal_builder) =
+                    builder.as_any_mut().downcast_mut::<Decimal128Builder>()
+                else {
+                    return FailedToDowncastBuilderSnafu {
+                        sqlite_type: format!("{}", Type::Real),
+                    }
+                    .fail();
+                };
+
+                match row.get_ref(i).context(FailedToExtractRowValueSnafu)? {
+                    ValueRef::Null => decimal_builder.append_null(),
+                    value_ref => {
+                        let value = decimal128_from_value_ref(value_ref, precision, scale)?;
+                        decimal_builder.append_value(value);
+                    }
+                }
+            }
+            DataType::Decimal256(precision, scale) => {
+                let Some(decimal_builder) =
+                    builder.as_any_mut().downcast_mut::<Decimal256Builder>()
+                else {
+                    return FailedToDowncastBuilderSnafu {
+                        sqlite_type: format!("{}", Type::Real),
+                    }
+                    .fail();
+                };
+
+                match row.get_ref(i).context(FailedToExtractRowValueSnafu)? {
+                    ValueRef::Null => decimal_builder.append_null(),
+                    value_ref => {
+                        let value = decimal256_from_value_ref(value_ref, precision, scale)?;
+                        decimal_builder.append_value(value);
+                    }
+                }
+            }
             _ => {
                 unimplemented!("Unsupported data type {arrow_type} for column index {i}")
             }
@@ -266,5 +381,160 @@ fn map_column_type_to_data_type(column_type: Type) -> DataType {
         Type::Real => DataType::Float64,
         Type::Text => DataType::Utf8,
         Type::Blob => DataType::Binary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Decimal128Array, Decimal256Array};
+    use std::sync::Arc;
+
+    #[test]
+    fn decode_decimal128_mixed_storage_classes() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        conn.execute("INSERT INTO decs (d) VALUES ('123.45')", [])
+            .unwrap(); // stored as TEXT
+        conn.execute("INSERT INTO decs (d) VALUES (7)", []).unwrap(); // stored as INTEGER
+        conn.execute("INSERT INTO decs (d) VALUES (8.9)", [])
+            .unwrap(); // stored as REAL
+        conn.execute("INSERT INTO decs (d) VALUES (NULL)", []).unwrap();
+
+        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let column_count = stmt.column_count();
+        let rows = stmt.query([]).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal128(20, 2),
+            true,
+        )]));
+
+        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        assert_eq!(batch.num_rows(), 4);
+
+        let arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 12345); // 123.45 -> 12345 with scale 2
+        assert_eq!(arr.value(1), 700); // 7 -> 7.00 -> 700
+        assert_eq!(arr.value(2), 890); // 8.9 -> 8.90 -> 890
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn decode_decimal256_large_value() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE big_dec (d TEXT)", []).unwrap();
+        conn.execute(
+            "INSERT INTO big_dec (d) VALUES ('123456789012345678901234567890.12')",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn.prepare("SELECT d FROM big_dec").unwrap();
+        let column_count = stmt.column_count();
+        let rows = stmt.query([]).unwrap();
+
+        // Precision large enough to hold the inserted value
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal256(76, 2),
+            true,
+        )]));
+
+        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal256Array>()
+            .unwrap();
+
+        // Raw mantissa (scale already applied)
+        assert_eq!(
+            arr.value(0).to_string(),
+            "12345678901234567890123456789012"
+        );
+    }
+
+    #[test]
+    fn decode_decimal128_allows_large_values_without_precision_check() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        conn.execute("INSERT INTO decs (d) VALUES ('123456')", [])
+            .unwrap(); // exceeds precision 5, scale 2
+
+        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let column_count = stmt.column_count();
+        let rows = stmt.query([]).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal128(5, 2),
+            true,
+        )]));
+
+        // Current behavior: value is accepted and scaled even if it exceeds declared precision.
+        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        let arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 12_345_600); // 123456 * 10^2
+    }
+
+    #[test]
+    fn decode_decimal128_invalid_text_errors() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        conn.execute("INSERT INTO decs (d) VALUES ('not-a-number')", [])
+            .unwrap();
+
+        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let column_count = stmt.column_count();
+        let rows = stmt.query([]).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal128(10, 2),
+            true,
+        )]));
+
+        let err = rows_to_arrow(rows, column_count, Some(schema)).unwrap_err();
+        assert!(matches!(err, Error::FailedToParseDecimal { .. }));
+    }
+
+    #[test]
+    fn decode_decimal256_negative_and_null_first_row() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE decs (d TEXT)", []).unwrap();
+        conn.execute("INSERT INTO decs (d) VALUES (NULL)", []).unwrap();
+        conn.execute("INSERT INTO decs (d) VALUES ('-42.135')", [])
+            .unwrap();
+
+        let mut stmt = conn.prepare("SELECT d FROM decs").unwrap();
+        let column_count = stmt.column_count();
+        let rows = stmt.query([]).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal256(38, 3),
+            true,
+        )]));
+
+        let batch = rows_to_arrow(rows, column_count, Some(schema)).unwrap();
+        assert_eq!(batch.num_rows(), 2);
+
+        let arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal256Array>()
+            .unwrap();
+        assert!(arr.is_null(0));
+        assert_eq!(arr.value(1).to_string(), "-42135"); // scale 3
     }
 }
