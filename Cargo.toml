@@ -49,6 +49,3 @@ datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.3.2", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.21.0" }
 adbc_driver_manager = { version = "0.21.0" }
-
-[patch.crates-io]
-r2d2_adbc = { git = "https://github.com/nuno-faria/r2d2-adbc", branch = "bump_adbc_core" }
