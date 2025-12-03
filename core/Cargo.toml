@@ -130,6 +130,7 @@ duckdb = [
   "dep:async-stream",
   "dep:arrow-schema",
   "dep:byte-unit",
+  "dep:datafusion-physical-expr",
 ]
 flight = [
   "dep:arrow-array",

@@ -26,6 +26,7 @@ use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
+use datafusion_physical_expr::EquivalenceProperties;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -152,6 +153,7 @@ pub struct DuckSqlExec<T, P> {
     indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
     optimized_sql_schema: Option<SchemaRef>,
+    optimized_sql_properties: Option<PlanProperties>,
 }
 
 impl<T, P> Clone for DuckSqlExec<T, P> {
@@ -162,11 +164,12 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
             indexes: self.indexes.clone(),
             optimized_sql: self.optimized_sql.clone(),
             optimized_sql_schema: self.optimized_sql_schema.clone(),
+            optimized_sql_properties: self.optimized_sql_properties.clone(),
         }
     }
 }
 
-impl<T, P> DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         projections: Option<&Vec<usize>>,
@@ -194,6 +197,7 @@ impl<T, P> DuckSqlExec<T, P> {
             indexes,
             optimized_sql: None,
             optimized_sql_schema: None,
+            optimized_sql_properties: None,
         })
     }
 
@@ -236,18 +240,26 @@ impl<T, P> DuckSqlExec<T, P> {
     ) -> Self {
         self.optimized_sql = Some(sql.into());
         self.optimized_sql_schema = new_schema;
+
+        if let Some(schema) = self.optimized_sql_schema.as_ref() {
+            let mut properties = self.base_exec.properties().clone();
+            let eq_properties = EquivalenceProperties::new(Arc::clone(schema));
+            properties.eq_properties = eq_properties;
+            self.optimized_sql_properties = Some(properties);
+        }
+
         self
     }
 }
 
-impl<T, P> std::fmt::Debug for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> std::fmt::Debug for DuckSqlExec<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> DisplayAs for DuckSqlExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
@@ -271,7 +283,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.base_exec.properties()
+        self.optimized_sql_properties.as_ref().unwrap_or(&self.base_exec.properties())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
