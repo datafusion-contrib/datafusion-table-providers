@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::sqlparser::ast::{self, VisitMut};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::ast_analyzer::AstAnalyzerRule;
 use datafusion_federation::sql::{
     ast_analyzer::AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -30,12 +29,12 @@ impl<T, P> SQLiteTable<T, P> {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.clone();
+        let table_reference = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::from(table_name),
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
@@ -49,29 +48,30 @@ impl<T, P> SQLiteTable<T, P> {
             self,
         ))
     }
+}
 
-    fn sqlite_ast_analyzer(&self) -> AstAnalyzerRule {
-        let decimal_between = self.decimal_between;
-        Box::new(move |ast| {
-            match ast {
-                ast::Statement::Query(query) => {
-                    let mut new_query = query.clone();
+fn sqlite_ast_analyzer(
+    decimal_between: bool,
+) -> impl Fn(ast::Statement) -> Result<ast::Statement, DataFusionError> {
+    move |ast: ast::Statement| -> Result<ast::Statement, DataFusionError> {
+        match ast {
+            ast::Statement::Query(query) => {
+                let mut new_query = query.clone();
 
-                    // iterate over the query and find any INTERVAL statements
-                    // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
-                    let mut interval_visitor = SQLiteIntervalVisitor::default();
-                    let _ = new_query.visit(&mut interval_visitor);
+                // normalize INTERVAL usage into SQLite-compatible datetime expressions
+                let mut interval_visitor = SQLiteIntervalVisitor::default();
+                let _ = new_query.visit(&mut interval_visitor);
 
-                    if decimal_between {
-                        let mut between_visitor = SQLiteBetweenVisitor::default();
-                        let _ = new_query.visit(&mut between_visitor);
-                    }
-
-                    Ok(ast::Statement::Query(new_query))
+                // rewrite BETWEEN clauses with numeric operands to decimal comparisons
+                if decimal_between {
+                    let mut between_visitor = SQLiteBetweenVisitor::default();
+                    let _ = new_query.visit(&mut between_visitor);
                 }
-                _ => Ok(ast),
+
+                Ok(ast::Statement::Query(new_query))
             }
-        })
+            _ => Ok(ast),
+        }
     }
 }
 
@@ -90,7 +90,8 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![self.sqlite_ast_analyzer()]))
+        let rule = Box::new(sqlite_ast_analyzer(self.decimal_between));
+        Some(AstAnalyzer::new(vec![rule]))
     }
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
         // Default to not federate if [`Self::function_support`] provided, otherwise true.

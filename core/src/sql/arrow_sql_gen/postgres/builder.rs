@@ -1,4 +1,4 @@
-use arrow::datatypes::Fields;
+use datafusion::arrow::datatypes::Fields;
 use sea_query::{Alias, ColumnDef, PostgresQueryBuilder, TableBuilder};
 
 use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
@@ -80,7 +80,7 @@ fn fields_to_simple_column_defs(fields: &Fields) -> Vec<ColumnDef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
 

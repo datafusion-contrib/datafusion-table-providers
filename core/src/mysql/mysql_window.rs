@@ -1,5 +1,6 @@
-use datafusion::sql::sqlparser::ast::ObjectNamePart;
-use datafusion::sql::sqlparser::ast::{Expr, Function, Ident, VisitorMut, WindowType};
+use datafusion::sql::sqlparser::ast::{
+    Expr, Function, Ident, ObjectNamePart, VisitorMut, WindowType,
+};
 use std::ops::ControlFlow;
 
 #[derive(PartialEq, Eq)]
@@ -76,6 +77,7 @@ mod test {
     use datafusion::sql::sqlparser::{
         self,
         ast::{self, helpers::attached_token::AttachedToken, ObjectName, WindowFrame},
+        tokenizer::{Span, Token, TokenWithSpan},
     };
 
     use super::*;
@@ -83,13 +85,19 @@ mod test {
     #[test]
     fn test_remove_frame_clause() {
         let mut func = Function {
-            name: ObjectName(vec![ObjectNamePart::Identifier(Ident::new("RANK"))]),
+            name: ObjectName(vec![ObjectNamePart::Identifier(Ident {
+                value: "RANK".to_string(),
+                quote_style: None,
+                span: Span::empty(),
+            })]),
             args: ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(ast::WindowSpec {
                 window_name: None,
                 partition_by: vec![],
                 order_by: vec![sqlparser::ast::OrderByExpr {
-                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken::empty()),
+                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                        Token::Char('*'),
+                    ))),
                     options: sqlparser::ast::OrderByOptions {
                         asc: None,
                         nulls_first: Some(true),
@@ -113,7 +121,9 @@ mod test {
             window_name: None,
             partition_by: vec![],
             order_by: vec![sqlparser::ast::OrderByExpr {
-                expr: sqlparser::ast::Expr::Wildcard(AttachedToken::empty()),
+                expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                    Token::Char('*'),
+                ))),
                 options: sqlparser::ast::OrderByOptions {
                     asc: None,
                     nulls_first: Some(true),
@@ -131,13 +141,19 @@ mod test {
     #[test]
     fn test_remove_nulls_first_last() {
         let mut func = Function {
-            name: ObjectName(vec![ObjectNamePart::Identifier(Ident::new("RANK"))]),
+            name: ObjectName(vec![ObjectNamePart::Identifier(Ident {
+                value: "RANK".to_string(),
+                quote_style: None,
+                span: Span::empty(),
+            })]),
             args: sqlparser::ast::FunctionArguments::None,
             over: Some(WindowType::WindowSpec(sqlparser::ast::WindowSpec {
                 window_name: None,
                 partition_by: vec![],
                 order_by: vec![sqlparser::ast::OrderByExpr {
-                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken::empty()),
+                    expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                        Token::Char('*'),
+                    ))),
                     options: sqlparser::ast::OrderByOptions {
                         asc: None,
                         nulls_first: Some(true),
@@ -161,7 +177,9 @@ mod test {
             window_name: None,
             partition_by: vec![],
             order_by: vec![sqlparser::ast::OrderByExpr {
-                expr: sqlparser::ast::Expr::Wildcard(AttachedToken::empty()),
+                expr: sqlparser::ast::Expr::Wildcard(AttachedToken(TokenWithSpan::wrap(
+                    Token::Char('*'),
+                ))),
                 options: sqlparser::ast::OrderByOptions {
                     asc: None,
                     nulls_first: None,

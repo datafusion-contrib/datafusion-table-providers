@@ -75,13 +75,13 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to create table in Sqlite: {source}"))]
-    UnableToCreateTable { source: tokio_rusqlite::Error },
+    UnableToCreateTable { source: tokio_rusqlite::Error<rusqlite::Error> },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTable { source: rusqlite::Error },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
-    UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error },
+    UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error<rusqlite::Error> },
 
     #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
     DiskFull {},
@@ -123,8 +123,8 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
-    decimal_between: bool,
     batch_insert_use_prepared_statements: bool,
+    decimal_between: bool,
     function_support: Option<FunctionSupport>,
 }
 
@@ -465,8 +465,13 @@ impl SqliteTableFactory {
         let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
 
         let read_provider = Arc::new(
-            SQLiteTable::new_with_schema(&dyn_pool, Arc::clone(&schema), table_reference, None)
-                .with_decimal_between(self.decimal_between),
+            SQLiteTable::new_with_schema(
+                &dyn_pool,
+                Arc::clone(&schema),
+                table_reference,
+                None, // No constraints for this read provider
+            )
+            .with_decimal_between(self.decimal_between),
         );
 
         Ok(read_provider)
@@ -475,6 +480,32 @@ impl SqliteTableFactory {
 
 fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
+}
+
+/// Parse a timezone offset string like "+10:00" or "-05:30" to seconds
+fn parse_timezone_offset_seconds(tz: &str) -> Option<i32> {
+    let tz = tz.trim();
+    if tz.is_empty() {
+        return None;
+    }
+
+    let (sign, rest) = if let Some(stripped) = tz.strip_prefix('+') {
+        (1, stripped)
+    } else if let Some(stripped) = tz.strip_prefix('-') {
+        (-1, stripped)
+    } else {
+        return None;
+    };
+    
+    let parts: Vec<&str> = rest.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    
+    let hours: i32 = parts[0].parse().ok()?;
+    let minutes: i32 = parts[1].parse().ok()?;
+    
+    Some(sign * (hours * 3600 + minutes * 60))
 }
 
 #[derive(Clone)]
@@ -567,7 +598,7 @@ impl Sqlite {
             .call(move |conn| {
                 let mut stmt = conn.prepare(&sql)?;
                 let exists = stmt.query_row([], |row| row.get(0))?;
-                Ok(exists)
+                Ok::<bool, rusqlite::Error>(exists)
             })
             .await
             .unwrap_or(false)
@@ -849,44 +880,64 @@ impl Sqlite {
                             params.push(Box::new(timestamp));
                         }
                     }
-                    DataType::Timestamp(unit, _) => {
-                        // Handle all timestamp types dynamically
+                    DataType::Timestamp(unit, timezone) => {
+                        // Convert timestamps to ISO-8601 strings for SQLite compatibility.
+                        // SQLite's datetime functions expect TEXT in ISO-8601 format.
+                        // Storing as integers loses the datetime semantics and causes
+                        // round-trip failures when reading back as timestamps.
                         if column.is_null(row_idx) {
                             params.push(Box::new(rusqlite::types::Null));
                         } else {
-                            match unit {
+                            let nanos: i64 = match unit {
                                 arrow::datatypes::TimeUnit::Second => {
                                     let array = column
                                         .as_any()
                                         .downcast_ref::<TimestampSecondArray>()
                                         .unwrap();
-                                    params.push(Box::new(array.value(row_idx)));
+                                    array.value(row_idx) * 1_000_000_000
                                 }
                                 arrow::datatypes::TimeUnit::Millisecond => {
                                     let array = column
                                         .as_any()
                                         .downcast_ref::<TimestampMillisecondArray>()
                                         .unwrap();
-                                    let value = array.value(row_idx) / 1000; // Convert to seconds
-                                    params.push(Box::new(value));
+                                    array.value(row_idx) * 1_000_000
                                 }
                                 arrow::datatypes::TimeUnit::Microsecond => {
                                     let array = column
                                         .as_any()
                                         .downcast_ref::<TimestampMicrosecondArray>()
                                         .unwrap();
-                                    let value = array.value(row_idx) / 1_000_000; // Convert to seconds
-                                    params.push(Box::new(value));
+                                    array.value(row_idx) * 1_000
                                 }
                                 arrow::datatypes::TimeUnit::Nanosecond => {
                                     let array = column
                                         .as_any()
                                         .downcast_ref::<TimestampNanosecondArray>()
                                         .unwrap();
-                                    let value = array.value(row_idx) / 1_000_000_000; // Convert to seconds
-                                    params.push(Box::new(value));
+                                    array.value(row_idx)
                                 }
-                            }
+                            };
+
+                            // Format as ISO-8601 string (RFC3339 is a profile of ISO-8601)
+                            let datetime = chrono::DateTime::from_timestamp_nanos(nanos);
+                            let iso_string = if let Some(tz) = timezone {
+                                // Handle timezone-aware timestamps with offset format like "+10:00"
+                                if let Some(offset_secs) = parse_timezone_offset_seconds(tz) {
+                                    if let Some(offset) = chrono::FixedOffset::east_opt(offset_secs) {
+                                        datetime.with_timezone(&offset).to_rfc3339()
+                                    } else {
+                                        datetime.to_rfc3339()
+                                    }
+                                } else {
+                                    // Unknown timezone format, use UTC
+                                    datetime.to_rfc3339()
+                                }
+                            } else {
+                                // Naive timestamp - format without timezone suffix
+                                datetime.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
+                            };
+                            params.push(Box::new(iso_string));
                         }
                     }
                     DataType::Time32(unit) => {
@@ -1015,6 +1066,18 @@ impl Sqlite {
                             params.push(Box::new(array.value(row_idx).to_vec()));
                         }
                     }
+                    DataType::Float16 => {
+                        let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
+                        if array.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            // Convert to f32 for storage
+                            params.push(Box::new(array.value(row_idx).to_f32()));
+                        }
+                    }
+                    DataType::Null => {
+                        params.push(Box::new(rusqlite::types::Null));
+                    }
                     DataType::Decimal32(_, scale) => {
                         let array = column.as_any().downcast_ref::<Decimal32Array>().unwrap();
                         if array.is_null(row_idx) {
@@ -1054,23 +1117,12 @@ impl Sqlite {
                             params.push(Box::new(rusqlite::types::Null));
                         } else {
                             use bigdecimal::{num_bigint::BigInt, BigDecimal};
-                            let bigint =
-                                BigInt::from_signed_bytes_le(&array.value(row_idx).to_le_bytes());
-                            let value = BigDecimal::new(bigint, i64::from(*scale));
-                            params.push(Box::new(value.to_string()));
+                            let value = array.value(row_idx);
+                            let bytes = value.to_be_bytes();
+                            let big_int = BigInt::from_signed_bytes_be(&bytes);
+                            let decimal = BigDecimal::new(big_int, i64::from(*scale));
+                            params.push(Box::new(decimal.to_string()));
                         }
-                    }
-                    DataType::Float16 => {
-                        let array = column.as_any().downcast_ref::<Float16Array>().unwrap();
-                        if array.is_null(row_idx) {
-                            params.push(Box::new(rusqlite::types::Null));
-                        } else {
-                            // Convert to f32 for storage
-                            params.push(Box::new(array.value(row_idx).to_f32()));
-                        }
-                    }
-                    DataType::Null => {
-                        params.push(Box::new(rusqlite::types::Null));
                     }
                     DataType::List(_)
                     | DataType::LargeList(_)

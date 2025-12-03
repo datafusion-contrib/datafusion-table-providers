@@ -1,14 +1,12 @@
 use std::any::Any;
 use std::error::Error;
 use std::sync::Arc;
-use tokio_postgres::Row;
 
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
 use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
 use crate::util::handle_unsupported_type_error;
 use crate::util::schema::SchemaValidator;
-use crate::UnsupportedTypeAction;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -16,7 +14,6 @@ use arrow_schema::DataType;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
 use bb8_postgres::PostgresConnectionManager;
-use bitflags::bitflags;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -26,16 +23,11 @@ use futures::StreamExt;
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 
+use crate::UnsupportedTypeAction;
+
 use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
-
-bitflags! {
-    #[derive(PartialEq)]
-    pub struct PostgresConnectionQuirks: u8 {
-        const CheckVariant = 0b0000_0001;
-    }
-}
 
 const SCHEMA_QUERY: &str = r"
 WITH custom_type_details AS (
@@ -111,37 +103,18 @@ WHERE ns.nspname = $1
 ORDER BY a.attnum;
 ";
 
-const REDSHIFT_SCHEMA_QUERY: &str = r#"
-SELECT
-    a.attname AS column_name,
-    CASE
-        WHEN t.typelem != 0 AND et.typname IS NOT NULL THEN 'array'
-        ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
-    END AS data_type,
-    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
-    CASE
-        WHEN t.typelem != 0 AND et.typname IS NOT NULL THEN
-            -- JSON_PARSE returns a super type tokio-postgres does not understand, so cast to text
-            JSON_PARSE('{"type": "array", "element_type": "' || et.typname || '"}')::text
-        ELSE NULL
-    END AS type_details
-FROM pg_class cls
-JOIN pg_namespace ns ON cls.relnamespace = ns.oid
-JOIN pg_attribute a ON a.attrelid = cls.oid
-LEFT JOIN pg_type t ON t.oid = a.atttypid
-LEFT JOIN pg_type et ON t.typelem = et.oid
-WHERE ns.nspname = $1
-    AND cls.relname = $2
-    AND cls.relkind IN ('r','v','m')
-    AND a.attnum > 0
-    AND NOT a.attisdropped
-ORDER BY a.attnum;
-"#;
+const SCHEMAS_QUERY: &str = "
+SELECT nspname AS schema_name
+FROM pg_namespace
+WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+  AND nspname !~ '^pg_toast';
+";
 
-pub enum PostgresVariant {
-    Default,
-    Redshift,
-}
+const TABLES_QUERY: &str = "
+SELECT tablename
+FROM pg_tables
+WHERE schemaname = $1;
+";
 
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
@@ -161,7 +134,6 @@ pub enum PostgresError {
 pub struct PostgresConnection {
     pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
     unsupported_type_action: UnsupportedTypeAction,
-    quirks: PostgresConnectionQuirks,
 }
 
 impl SchemaValidator for PostgresConnection {
@@ -218,15 +190,62 @@ impl<'a>
         PostgresConnection {
             conn,
             unsupported_type_action: UnsupportedTypeAction::default(),
-            quirks: PostgresConnectionQuirks::CheckVariant,
         }
+    }
+
+    async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
+        let rows = self
+            .conn
+            .query(TABLES_QUERY, &[&schema])
+            .await
+            .map_err(|e| super::Error::UnableToGetTables {
+                source: Box::new(e),
+            })?;
+
+        Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
+    }
+
+    async fn schemas(&self) -> Result<Vec<String>, super::Error> {
+        let rows = self.conn.query(SCHEMAS_QUERY, &[]).await.map_err(|e| {
+            super::Error::UnableToGetSchemas {
+                source: Box::new(e),
+            }
+        })?;
+
+        Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
     }
 
     async fn get_schema(
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let (variant, rows) = self.query_variant_and_schema(table_reference).await?;
+        let table_name = table_reference.table();
+        let schema_name = table_reference.schema().unwrap_or("public");
+
+        let rows = match self
+            .conn
+            .query(SCHEMA_QUERY, &[&schema_name, &table_name])
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                if let Some(error_source) = e.source() {
+                    if let Some(pg_error) =
+                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
+                    {
+                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
+                            return Err(super::Error::UndefinedTable {
+                                source: Box::new(pg_error.clone()),
+                                table_name: table_reference.to_string(),
+                            });
+                        }
+                    }
+                }
+                return Err(super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                });
+            }
+        };
 
         let mut fields = Vec::new();
         for row in rows {
@@ -234,16 +253,7 @@ impl<'a>
             let pg_type = row.get::<usize, String>(1);
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
-
-            let type_details = match variant {
-                PostgresVariant::Default => row.get::<usize, Option<serde_json::Value>>(3),
-                // Redshift has no json* functions, so we make and parse the same value struct
-                // from a text column instead.
-                PostgresVariant::Redshift => row
-                    .get::<usize, Option<&str>>(3)
-                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
-            };
-
+            let type_details = row.get::<usize, Option<serde_json::Value>>(3);
             let mut context =
                 ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
 
@@ -334,78 +344,5 @@ impl PostgresConnection {
     pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
         self.unsupported_type_action = action;
         self
-    }
-
-    #[must_use]
-    pub fn with_quirks(mut self, quirks: PostgresConnectionQuirks) -> Self {
-        self.quirks = quirks;
-        self
-    }
-
-    pub async fn get_variant(&self) -> Result<PostgresVariant, super::Error> {
-        let row = self
-            .conn
-            .query_one("SELECT version()", &[])
-            .await
-            .map_err(|e| super::Error::UnableToGetSchema {
-                source: Box::new(e),
-            })?;
-
-        let version: String = row
-            .try_get(0)
-            .map_err(|e| super::Error::UnableToGetSchema {
-                source: Box::new(e),
-            })?;
-
-        let variant = if version.contains("Redshift") {
-            PostgresVariant::Redshift
-        } else {
-            PostgresVariant::Default
-        };
-
-        Ok(variant)
-    }
-
-    async fn query_variant_and_schema(
-        &self,
-        table_reference: &TableReference,
-    ) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
-        let table_name = table_reference.table();
-        let schema_name = table_reference.schema().unwrap_or("public");
-
-        let variant = if self.quirks.contains(PostgresConnectionQuirks::CheckVariant) {
-            self.get_variant().await?
-        } else {
-            PostgresVariant::Default
-        };
-
-        let query = match variant {
-            PostgresVariant::Default => SCHEMA_QUERY,
-            PostgresVariant::Redshift => REDSHIFT_SCHEMA_QUERY,
-        };
-
-        let rows = self
-            .conn
-            .query(query, &[&schema_name, &table_name])
-            .await
-            .map_err(|e| {
-                if let Some(error_source) = e.source() {
-                    if let Some(pg_error) =
-                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
-                    {
-                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
-                            return super::Error::UndefinedTable {
-                                source: Box::new(pg_error.clone()),
-                                table_name: table_reference.to_string(),
-                            };
-                        }
-                    }
-                }
-                super::Error::UnableToGetSchema {
-                    source: Box::new(e),
-                }
-            });
-
-        Ok((variant, rows?))
     }
 }
