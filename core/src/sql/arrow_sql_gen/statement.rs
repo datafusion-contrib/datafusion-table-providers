@@ -1054,7 +1054,7 @@ impl InsertBuilder {
     ///
     /// Returns an error if any `RecordBatch` fails to convert into a valid postgres insert statement.
     pub fn build_postgres(self, on_conflict: Option<OnConflict>) -> Result<String> {
-        self.build(PostgresQueryBuilder, on_conflict)
+        self.build(PostgresQueryBuilder, on_conflict, false)
     }
 
     ///
@@ -1062,7 +1062,16 @@ impl InsertBuilder {
     ///
     /// Returns an error if any `RecordBatch` fails to convert into a valid sqlite insert statement.
     pub fn build_sqlite(self, on_conflict: Option<OnConflict>) -> Result<String> {
-        self.build(SqliteQueryBuilder, on_conflict)
+        self.build(SqliteQueryBuilder, on_conflict, false)
+    }
+
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any `RecordBatch` fails to convert into a valid sqlite REPLACE statement.
+    /// Uses SQLite's REPLACE INTO syntax which deletes existing rows with conflicting keys.
+    pub fn build_sqlite_replace(self) -> Result<String> {
+        self.build(SqliteQueryBuilder, None, true)
     }
 
     ///
@@ -1070,17 +1079,20 @@ impl InsertBuilder {
     ///
     /// Returns an error if any `RecordBatch` fails to convert into a valid `MySQL` insert statement.
     pub fn build_mysql(self, on_conflict: Option<OnConflict>) -> Result<String> {
-        self.build(MysqlQueryBuilder, on_conflict)
+        self.build(MysqlQueryBuilder, on_conflict, false)
     }
 
     /// # Errors
     ///
     /// Returns an error if any `RecordBatch` fails to convert into a valid insert statement. Upon
     /// error, no further `RecordBatch` is processed.
+    ///
+    /// If `replace` is true, uses REPLACE INTO syntax (SQLite/MySQL) instead of INSERT INTO.
     pub fn build<T: GenericBuilder + 'static>(
         &self,
         query_builder: T,
         on_conflict: Option<OnConflict>,
+        replace: bool,
     ) -> Result<String> {
         let columns: Vec<Alias> = (self.record_batches[0])
             .schema()
@@ -1093,6 +1105,10 @@ impl InsertBuilder {
             .into_table(table_reference_to_sea_table_ref(&self.table))
             .columns(columns)
             .to_owned();
+
+        if replace {
+            insert_stmt.replace();
+        }
 
         for record_batch in &self.record_batches {
             self.construct_insert_stmt(&mut insert_stmt, record_batch, &query_builder)?;

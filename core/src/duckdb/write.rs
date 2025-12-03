@@ -325,7 +325,11 @@ impl DataSink for DuckDBDataSink {
         while let Some(batch) = data.next().await {
             let batch = batch.map_err(check_and_mark_retriable_error)?;
 
-            if let Some(constraints) = self.table_definition.constraints() {
+            // Skip constraint validation for Overwrite operations since we're replacing all data
+            // and uniqueness constraints don't apply to the incoming data in isolation.
+            let batches = if self.overwrite == InsertOp::Overwrite {
+                vec![batch]
+            } else if let Some(constraints) = self.table_definition.constraints() {
                 constraints::validate_batch_with_constraints(
                     vec![batch.clone()],
                     constraints,
@@ -571,7 +575,7 @@ fn insert_overwrite(
         .map_err(to_retriable_data_write_error)?;
 
     new_table
-        .create_table(cloned_pool, &tx)
+        .create_table_without_constraints(cloned_pool, &tx)
         .map_err(to_retriable_data_write_error)?;
 
     let existing_tables = new_table
@@ -618,21 +622,14 @@ fn insert_overwrite(
             ));
         }
 
+        // Note: We skip primary key verification for insert_overwrite because
+        // the internal staging table is intentionally created without constraints
+        // to allow loading data with potential duplicates.
         if !should_apply_indexes {
-            // compare indexes and primary keys
-            let primary_keys_match = new_table
-                .verify_primary_keys_match(last_table, &tx)
-                .map_err(to_retriable_data_write_error)?;
+            // Only verify indexes match, skip primary key verification
             let indexes_match = new_table
                 .verify_indexes_match(last_table, &tx)
                 .map_err(to_retriable_data_write_error)?;
-
-            if !primary_keys_match {
-                return Err(DataFusionError::Execution(
-                    "Primary keys do not match between the new table and the existing table.\nEnsure primary key configuration is the same as the existing table, or manually migrate the table."
-                        .to_string(),
-                ));
-            }
 
             if !indexes_match {
                 return Err(DataFusionError::Execution(
