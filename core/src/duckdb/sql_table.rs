@@ -283,7 +283,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.optimized_sql_properties.as_ref().unwrap_or(&self.base_exec.properties())
+        self.optimized_sql_properties.as_ref().unwrap_or(self.base_exec.properties())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
