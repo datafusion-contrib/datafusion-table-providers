@@ -162,9 +162,7 @@ impl DuckDBAttachments {
             );
             for db in &self.attachments {
                 if !existing_attachments.contains_key(db.as_ref()) {
-                    // Only partial attachments may be available in some cases (for example, right after pool creation).
-                    // This does not always indicate an error, so we log it at debug level.
-                    tracing::debug!("{db} not found among existing attachments");
+                    tracing::warn!("{db} not found among existing attachments");
                 }
             }
             // The connection can have attachments but not the search_path, so we must set it based on the existing attachment names
@@ -217,7 +215,8 @@ impl DuckDBAttachments {
 
 pub struct DuckDbConnection {
     pub conn: r2d2::PooledConnection<DuckdbConnectionManager>,
-    attachments: Option<Arc<DuckDBAttachments>>,
+    /// Pre-computed search_path for attached databases.
+    search_path: Option<Arc<str>>,
     unsupported_type_action: UnsupportedTypeAction,
     connection_setup_queries: Vec<Arc<str>>,
 }
@@ -277,8 +276,8 @@ impl DuckDbConnection {
     }
 
     #[must_use]
-    pub fn with_attachments(mut self, attachments: Option<Arc<DuckDBAttachments>>) -> Self {
-        self.attachments = attachments;
+    pub fn with_search_path(mut self, search_path: Option<Arc<str>>) -> Self {
+        self.search_path = search_path;
         self
     }
 
@@ -288,26 +287,16 @@ impl DuckDbConnection {
         self
     }
 
-    /// Passthrough if Option is Some for `DuckDBAttachments::attach`
+    /// Sets the search_path on the given connection if one is configured.
     ///
     /// # Errors
     ///
-    /// See `DuckDBAttachments::attach` for more information.
-    pub fn attach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
-        if let Some(attachments) = attachments {
-            attachments.attach(conn)?;
-        }
-        Ok(())
-    }
-
-    /// Passthrough if Option is Some for `DuckDBAttachments::detach`
-    ///
-    /// # Errors
-    ///
-    /// See `DuckDBAttachments::detach` for more information.
-    pub fn detach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
-        if let Some(attachments) = attachments {
-            attachments.detach(conn)?;
+    /// Returns an error if the SET command fails.
+    pub fn set_search_path(conn: &Connection, search_path: &Option<Arc<str>>) -> Result<()> {
+        if let Some(path) = search_path {
+            tracing::trace!("Setting search_path to {path}");
+            conn.execute("SET search_path = ?", [path.as_ref()])
+                .context(DuckDBConnectionSnafu)?;
         }
         Ok(())
     }
@@ -346,7 +335,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
     fn new(conn: r2d2::PooledConnection<DuckdbConnectionManager>) -> Self {
         DuckDbConnection {
             conn,
-            attachments: None,
+            search_path: None,
             unsupported_type_action: UnsupportedTypeAction::default(),
             connection_setup_queries: Vec::new(),
         }
@@ -429,7 +418,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
         let conn = self.conn.try_clone()?;
-        Self::attach(&conn, &self.attachments)?;
+        Self::set_search_path(&conn, &self.search_path)?;
         self.apply_connection_setup_queries(&conn)?;
 
         let fetch_schema_sql =
