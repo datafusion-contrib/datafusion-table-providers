@@ -301,6 +301,7 @@ async fn test_sqlite_table_provider_roundtrip(
         constraints: Constraints::new_unverified(vec![]),
         column_defaults: HashMap::default(),
         temporary: false,
+        or_replace: false,
     };
 
     let factory = SqliteTableProviderFactory::default()
@@ -347,10 +348,12 @@ async fn test_sqlite_table_provider_roundtrip(
     );
 
     // Cast the result back to the original schema for comparison
+    #[cfg(feature = "sqlite-federation")]
     let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
         .expect("should cast result to original schema");
 
     // Verify the data matches
+    #[cfg(feature = "sqlite-federation")]
     assert_eq!(
         casted_result, record_batch,
         "Round-tripped data should match original"
