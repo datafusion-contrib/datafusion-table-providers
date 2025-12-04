@@ -188,7 +188,7 @@ impl TableProviderFactory for MySQLTableProviderFactory {
     ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
-        let schema: Schema = cmd.schema.as_ref().into();
+        let schema: Schema = cmd.schema.as_ref().as_arrow().clone();
 
         let indexes_option_str = options.remove("indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {

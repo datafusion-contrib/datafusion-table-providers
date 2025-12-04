@@ -311,7 +311,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             )
         };
 
-        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().as_arrow().clone());
         let schema: SchemaRef =
             SqliteConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
                 .map_err(|e| DataFusionError::External(e.into()))?;
@@ -1282,6 +1282,7 @@ pub(crate) mod tests {
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()

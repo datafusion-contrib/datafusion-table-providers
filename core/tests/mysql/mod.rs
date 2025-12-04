@@ -706,6 +706,7 @@ async fn arrow_mysql_round_trip(
             .collect(),
         constraints: Constraints::default(),
         column_defaults: Default::default(),
+        or_replace: false,
     };
     let table_provider = factory
         .create(&ctx.state(), &cmd)
