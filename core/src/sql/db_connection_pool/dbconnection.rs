@@ -5,10 +5,16 @@ use datafusion::{
 };
 use snafu::prelude::*;
 
+#[cfg(feature = "adbc")]
+pub mod adbcconn;
+#[cfg(feature = "clickhouse")]
+pub mod clickhouseconn;
 #[cfg(feature = "duckdb")]
 pub mod duckdbconn;
 #[cfg(feature = "mysql")]
 pub mod mysqlconn;
+#[cfg(feature = "odbc")]
+pub mod odbcconn;
 #[cfg(feature = "postgres")]
 pub mod postgresconn;
 #[cfg(feature = "sqlite")]
@@ -41,12 +47,22 @@ pub enum Error {
         table_name: String,
         source: GenericError,
     },
+
+    #[snafu(display("Unable to get schemas: {source}"))]
+    UnableToGetSchemas { source: GenericError },
+
+    #[snafu(display("Unable to get tables: {source}"))]
+    UnableToGetTables { source: GenericError },
 }
 
 pub trait SyncDbConnection<T, P>: DbConnection<T, P> {
     fn new(conn: T) -> Self
     where
         Self: Sized;
+
+    fn tables(&self, schema: &str) -> Result<Vec<String>, Error>;
+
+    fn schemas(&self) -> Result<Vec<String>, Error>;
 
     /// Get the schema for a table reference.
     ///
@@ -95,13 +111,42 @@ pub trait AsyncDbConnection<T, P>: DbConnection<T, P> + Sync {
     fn new(conn: T) -> Self
     where
         Self: Sized;
+
+    async fn tables(&self, schema: &str) -> Result<Vec<String>, Error>;
+
+    async fn schemas(&self) -> Result<Vec<String>, Error>;
+
+    /// Get the schema for a table reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `table_reference` - The table reference.
     async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error>;
+
+    /// Query the database with the given SQL statement and parameters, returning a `Result` of `SendableRecordBatchStream`.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL statement.
+    /// * `params` - The parameters for the SQL statement.
+    /// * `projected_schema` - The Projected schema for the query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
     async fn query_arrow(
         &self,
         sql: &str,
         params: &[P],
         projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream>;
+
+    /// Execute the given SQL statement with parameters, returning the number of affected rows.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL statement.
+    /// * `params` - The parameters for the SQL statement.
     async fn execute(&self, sql: &str, params: &[P]) -> Result<u64>;
 }
 
@@ -117,6 +162,36 @@ pub trait DbConnection<T, P>: Send {
     }
 }
 
+pub async fn get_tables<T, P>(
+    conn: Box<dyn DbConnection<T, P>>,
+    schema: &str,
+) -> Result<Vec<String>, Error> {
+    let schema = if let Some(conn) = conn.as_sync() {
+        conn.tables(schema)?
+    } else if let Some(conn) = conn.as_async() {
+        conn.tables(schema).await?
+    } else {
+        return Err(Error::UnableToDowncastConnection {});
+    };
+    Ok(schema)
+}
+
+/// Get the schemas for the database.
+///
+/// # Errors
+///
+/// Returns an error if the schemas cannot be retrieved.
+pub async fn get_schemas<T, P>(conn: Box<dyn DbConnection<T, P>>) -> Result<Vec<String>, Error> {
+    let schema = if let Some(conn) = conn.as_sync() {
+        conn.schemas()?
+    } else if let Some(conn) = conn.as_async() {
+        conn.schemas().await?
+    } else {
+        return Err(Error::UnableToDowncastConnection {});
+    };
+    Ok(schema)
+}
+
 /// Get the schema for a table reference.
 ///
 /// # Arguments
@@ -130,7 +205,7 @@ pub trait DbConnection<T, P>: Send {
 pub async fn get_schema<T, P>(
     conn: Box<dyn DbConnection<T, P>>,
     table_reference: &datafusion::sql::TableReference,
-) -> Result<Arc<arrow::datatypes::Schema>, Error> {
+) -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
     let schema = if let Some(conn) = conn.as_sync() {
         conn.get_schema(table_reference)?
     } else if let Some(conn) = conn.as_async() {

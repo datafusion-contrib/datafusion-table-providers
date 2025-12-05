@@ -63,7 +63,7 @@ async fn test_postgres_schema_inference() {
         order_exprs: vec![],
         unbounded: false,
         options: common::get_pg_params(port),
-        constraints: Constraints::new_unverified(vec![]),
+        constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
     };
@@ -160,7 +160,7 @@ async fn test_postgres_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool.clone());
@@ -204,7 +204,7 @@ async fn test_postgres_materialized_view_schema_inference() {
             .conn
             .execute(cmd, &[])
             .await
-            .expect("executing SQL from complex_table_pg.sql");
+            .expect("executing SQL from complex_table.sql");
     }
 
     let table_factory = PostgresTableFactory::new(postgres_pool);

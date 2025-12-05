@@ -9,7 +9,7 @@
 //! ### `CREATE TABLE` statement
 //! ```rust
 //! use std::sync::Arc;
-//! use arrow::datatypes::{DataType, Field, Schema};
+//! use datafusion::arrow::datatypes::{DataType, Field, Schema};
 //! use datafusion_table_providers::sql::arrow_sql_gen::statement::CreateTableBuilder;
 //!
 //! let schema = Arc::new(Schema::new(vec![
@@ -26,7 +26,7 @@
 //! With primary key constraints:
 //! ```rust
 //! use std::sync::Arc;
-//! use arrow::datatypes::{DataType, Field, Schema};
+//! use datafusion::arrow::datatypes::{DataType, Field, Schema};
 //! use datafusion_table_providers::sql::arrow_sql_gen::statement::CreateTableBuilder;
 //!
 //! let schema = Arc::new(Schema::new(vec![

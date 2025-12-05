@@ -1,17 +1,19 @@
 use crate::arrow_record_batch_gen::*;
+use anyhow::Result;
 use arrow::array::{
-    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch,
+    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Decimal128Type, DecimalType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{dml::InsertOp, CreateExternalTable};
 use datafusion::physical_plan::collect;
 use datafusion::sql::TableReference;
+#[cfg(feature = "sqlite-federation")]
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, InsertBuilder,
@@ -102,6 +104,7 @@ async fn arrow_sqlite_round_trip(
 
         let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
+        #[cfg(feature = "sqlite-federation")]
         let casted_record =
             try_cast_to(record_batch[0].clone(), Arc::clone(&source_schema)).unwrap();
 
@@ -115,6 +118,7 @@ async fn arrow_sqlite_round_trip(
         assert_eq!(record_batch.len(), 1);
         assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
         assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
+        #[cfg(feature = "sqlite-federation")]
         assert_eq!(casted_record, arrow_record);
     }
 }
@@ -128,6 +132,7 @@ async fn arrow_sqlite_round_trip(
 #[case::timestamp(get_arrow_timestamp_record_batch(), "timestamp")]
 #[case::date(get_arrow_date_record_batch(), "date")]
 #[case::struct_type(get_arrow_struct_record_batch(), "struct")]
+#[ignore] // Requires a custom sqlite extension for decimal types
 #[case::decimal(get_arrow_decimal_record_batch(), "decimal")]
 #[ignore] // TODO: interval types are broken in SQLite - Interval is not available in Sqlite.
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
@@ -209,11 +214,18 @@ fn create_comprehensive_test_data() -> (RecordBatch, SchemaRef) {
         None,
         Some(500000u64),
     ]);
-    #[allow(clippy::approx_constant)]
-    let col_float32 = Float32Array::from(vec![Some(1.5), None, Some(-3.14), Some(2.71)]);
-    #[allow(clippy::approx_constant)]
-    let col_float64 =
-        Float64Array::from(vec![None, Some(2.718281828), Some(-1.414), Some(3.14159)]);
+    let col_float32 = Float32Array::from(vec![
+        Some(1.5),
+        None,
+        Some(-std::f32::consts::PI),
+        Some(2.71),
+    ]);
+    let col_float64 = Float64Array::from(vec![
+        None,
+        Some(std::f64::consts::E),
+        Some(-1.414),
+        Some(std::f64::consts::PI),
+    ]);
     let col_utf8 = StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);
     let col_large_utf8 = LargeStringArray::from(vec![
         None,
@@ -355,4 +367,154 @@ async fn test_sqlite_table_provider_roundtrip(
         casted_result, record_batch,
         "Round-tripped data should match original"
     );
+}
+
+#[tokio::test]
+async fn test_sqlite_decimal_memory() {
+    let arrow_record =
+        download_parquet_as_record_batch("https://public-data.spiceai.org/decimal.parquet")
+            .await
+            .expect("Failed to download and convert parquet file");
+
+    let table_name = "decimal_types";
+
+    let pool = SqliteConnectionPoolFactory::new(
+        ":memory:",
+        Mode::Memory,
+        std::time::Duration::from_millis(5000),
+    )
+    .build()
+    .await
+    .expect("Sqlite connection pool to be created");
+
+    let conn = pool
+        .connect()
+        .await
+        .expect("Sqlite connection should be established");
+    let conn = conn.as_async().unwrap();
+
+    // Create sqlite table from arrow records and insert arrow records
+    let schema = Arc::clone(&arrow_record.schema());
+    let create_table_stmts =
+        CreateTableBuilder::new(Arc::clone(&schema), table_name).build_sqlite();
+    let insert_table_stmt = InsertBuilder::new(
+        &TableReference::from(table_name),
+        vec![arrow_record.clone()],
+    )
+    .build_sqlite(None)
+    .expect("SQLite insert statement should be constructed");
+
+    // Test arrow -> Sqlite row coverage
+    let _ = conn
+        .execute(&create_table_stmts, &[])
+        .await
+        .expect("Sqlite table should be created");
+    let _ = conn
+        .execute(&insert_table_stmt, &[])
+        .await
+        .expect("Sqlite data should be inserted");
+
+    let sqltable_pool: Arc<DynSqliteConnectionPool> = Arc::new(pool);
+
+    let sqltable = SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None);
+
+    let ctx = SessionContext::new();
+    ctx.register_table(table_name, Arc::new(sqltable))
+        .expect("Table should be registered");
+
+    let sql = format!("SELECT SUM(small_decimal), SUM(medium_decimal), SUM(large_decimal), SUM(precise_decimal) FROM {table_name}");
+    let df = ctx
+        .sql(&sql)
+        .await
+        .expect("DataFrame should be created from query");
+
+    let results = df.collect().await.expect("RecordBatch should be collected");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].num_columns(), 4);
+    assert_eq!(results[0].num_rows(), 1);
+    assert_eq!(
+        downcast_decimal_array(results[0].column(0))
+            .value(0)
+            .to_string(),
+        "22381"
+    );
+    let schema = results[0].schema();
+
+    // small_decimal
+    let DataType::Decimal128(precision, scale) = schema.field(0).data_type() else {
+        panic!("Expected decimal type");
+    };
+    let decimal_array = downcast_decimal_array(results[0].column(0));
+    assert_eq!(
+        Decimal128Type::format_decimal(decimal_array.value(0), *precision, *scale),
+        "223.81"
+    );
+
+    // medium_decimal
+    let DataType::Decimal128(precision, scale) = schema.field(1).data_type() else {
+        panic!("Expected decimal type");
+    };
+    let decimal_array = downcast_decimal_array(results[0].column(1));
+    assert_eq!(
+        Decimal128Type::format_decimal(decimal_array.value(0), *precision, *scale),
+        "186109.5051"
+    );
+
+    // large_decimal
+    let DataType::Decimal128(precision, scale) = schema.field(2).data_type() else {
+        panic!("Expected decimal type");
+    };
+    let decimal_array = downcast_decimal_array(results[0].column(2));
+    assert_eq!(
+        Decimal128Type::format_decimal(decimal_array.value(0), *precision, *scale),
+        "10866582.506250"
+    );
+
+    // precise_decimal
+    let DataType::Decimal128(precision, scale) = schema.field(3).data_type() else {
+        panic!("Expected decimal type");
+    };
+    let decimal_array = downcast_decimal_array(results[0].column(3));
+    assert_eq!(
+        Decimal128Type::format_decimal(decimal_array.value(0), *precision, *scale),
+        "-1.7443152324"
+    );
+}
+
+fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
+    match array.as_any().downcast_ref::<Decimal128Array>() {
+        Some(array) => array,
+        None => panic!("Expected decimal array"),
+    }
+}
+
+async fn download_parquet_as_record_batch(url: &str) -> Result<RecordBatch> {
+    // Download the parquet file
+    let response = reqwest::get(url).await?;
+    let parquet_bytes = response.bytes().await?;
+
+    // Write to a temporary file
+    let temp_dir = tempfile::tempdir()?;
+    let temp_path = temp_dir.path().join("downloaded.parquet");
+    std::fs::write(&temp_path, &parquet_bytes)?;
+
+    // Read the parquet file using DataFusion
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "parquet_data",
+        temp_path.to_str().unwrap(),
+        Default::default(),
+    )
+    .await?;
+
+    let df = ctx.sql("SELECT * FROM parquet_data").await?;
+
+    let batches = df.collect().await?;
+    let record_batch = batches
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No record batches found in parquet file"))?;
+
+    Ok(record_batch)
 }

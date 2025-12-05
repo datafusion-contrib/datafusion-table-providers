@@ -15,11 +15,14 @@ use chrono::{NaiveDate, NaiveTime, Timelike};
 use mysql_async::{consts::ColumnFlags, consts::ColumnType, FromValueError, Row, Value};
 use snafu::{ResultExt, Snafu};
 use std::{convert, sync::Arc};
+use time::PrimitiveDateTime;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to build record batch: {source}"))]
-    FailedToBuildRecordBatch { source: arrow::error::ArrowError },
+    FailedToBuildRecordBatch {
+        source: datafusion::arrow::error::ArrowError,
+    },
 
     #[snafu(display("No builder found for index {index}"))]
     NoBuilderForIndex { index: usize },
@@ -533,7 +536,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         .fail();
                     };
                     let v = match handle_null_error(
-                        row.get_opt::<chrono::NaiveDateTime, usize>(i).transpose(),
+                        row.get_opt::<PrimitiveDateTime, usize>(i).transpose(),
                     ) {
                         Ok(v) => v,
                         Err(err) => {
@@ -552,7 +555,10 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
                     match v {
                         Some(v) => {
-                            builder.append_value(v.and_utc().timestamp_micros());
+                            let micros: i64 = (v.assume_utc().unix_timestamp_nanos() / 1000)
+                                .try_into()
+                                .unwrap();
+                            builder.append_value(micros);
                         }
                         None => builder.append_null(),
                     }

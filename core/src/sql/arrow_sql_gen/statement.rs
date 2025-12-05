@@ -1,4 +1,6 @@
-use arrow::{
+use bigdecimal::BigDecimal;
+use chrono::{DateTime, Offset, TimeZone};
+use datafusion::arrow::{
     array::{
         array, timezone::Tz, Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array,
         Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray,
@@ -7,18 +9,14 @@ use arrow::{
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
-use bigdecimal::BigDecimal;
-use chrono::{DateTime, Offset, TimeZone};
 use datafusion::sql::TableReference;
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, StringLen, Table, TableRef,
+    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, Table, TableRef,
 };
 use snafu::Snafu;
-#[cfg(feature = "sqlite")]
-use std::any::Any;
 use std::{str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
 
@@ -39,6 +37,7 @@ pub struct CreateTableBuilder {
     schema: SchemaRef,
     table_name: String,
     primary_keys: Vec<String>,
+    temporary: bool,
 }
 
 impl CreateTableBuilder {
@@ -48,6 +47,7 @@ impl CreateTableBuilder {
             schema,
             table_name: table_name.to_string(),
             primary_keys: Vec::new(),
+            temporary: false,
         }
     }
 
@@ -57,6 +57,13 @@ impl CreateTableBuilder {
         T: Into<String>,
     {
         self.primary_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    #[must_use]
+    /// Set whether the table is temporary or not.
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
         self
     }
 
@@ -101,13 +108,29 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
-            map_data_type_to_column_type(f.data_type())
+            // SQLite stores decimals as TEXT strings (via BigDecimal::to_string()).
+            // Using TEXT column type avoids sea-query's precision limit of 16 for decimals.
+            // The decimal.c extension (enabled via bundled-decimal feature) provides
+            // exact arithmetic operations on these text-stored decimal values.
+            // https://sqlite.org/floatingpoint.html
+            match f.data_type() {
+                DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => ColumnType::Text,
+                _ => map_data_type_to_column_type(f.data_type()),
+            }
         })
     }
 
     #[must_use]
     pub fn build_mysql(self) -> String {
         self.build(MysqlQueryBuilder, &|f: &Arc<Field>| -> ColumnType {
+            // MySQL does not natively support Arrays, Structs, etc
+            // so we use JSON column type for List, FixedSizeList, LargeList, Struct, etc
+            if f.data_type().is_nested() {
+                return ColumnType::JsonBinary;
+            }
             map_data_type_to_column_type(f.data_type())
         })
     }
@@ -140,6 +163,10 @@ impl CreateTableBuilder {
                 index.col(Alias::new(key).into_iden().into_index_column());
             }
             create_stmt.primary_key(&mut index);
+        }
+
+        if self.temporary {
+            create_stmt.temporary();
         }
 
         create_stmt.to_string(query_builder)
@@ -179,16 +206,26 @@ pub struct InsertBuilder {
     record_batches: Vec<RecordBatch>,
 }
 
+#[allow(unused_variables)]
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
-    _data_type: &DataType,
-    #[allow(unused_variables)] query_builder: &T,
+    data_type: &DataType,
+    query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
-    if (query_builder as &dyn Any)
-        .downcast_ref::<SqliteQueryBuilder>()
-        .is_some()
     {
-        return _data_type.is_nested();
+        use std::any::Any;
+        let any_builder = query_builder as &dyn Any;
+        if any_builder.is::<SqliteQueryBuilder>() {
+            return data_type.is_nested();
+        }
+    }
+    #[cfg(feature = "mysql")]
+    {
+        use std::any::Any;
+        let any_builder = query_builder as &dyn Any;
+        if any_builder.is::<MysqlQueryBuilder>() {
+            return data_type.is_nested();
+        }
     }
     false
 }
@@ -1312,9 +1349,11 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         | DataType::FixedSizeList(list_type, _) => {
             ColumnType::Array(map_data_type_to_column_type(list_type.data_type()).into())
         }
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            ColumnType::VarBinary(StringLen::Max)
-        }
+        // Originally mapped to VarBinary type, corresponding to MySQL's varbinary, which has a maximum length of 65535.
+        // This caused the error: "Row size too large. The maximum row size for the used table type, not counting BLOBs, is 65535.
+        // This includes storage overhead, check the manual. You have to change some columns to TEXT or BLOBs."
+        // Changing to Blob fixes this issue. This change does not affect Postgres, and for Sqlite, the mapping type changes from varbinary_blob to blob.
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => ColumnType::Blob,
         DataType::FixedSizeBinary(num_bytes) => ColumnType::Binary(num_bytes.to_owned() as u32),
         DataType::Interval(_) => ColumnType::Interval(None, None),
         // Add more mappings here as needed
@@ -1393,7 +1432,7 @@ fn insert_struct_into_row_values_json(
             source: Box::new(e),
         })?;
 
-    let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
+    let mut writer = datafusion::arrow::json::LineDelimitedWriter::new(Vec::new());
     writer
         .write(&batch)
         .map_err(|e| Error::FailedToCreateInsertStatement {
@@ -1421,7 +1460,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
 
     #[test]
     fn test_basic_table_creation() {
@@ -1536,6 +1575,50 @@ mod tests {
             .build_sqlite();
 
         assert_eq!(sql, "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"id2\" integer NOT NULL, \"name\" text NOT NULL, \"age\" integer, PRIMARY KEY (\"id\", \"id2\") )");
+    }
+
+    #[test]
+    fn test_temporary_table_creation() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users")
+            .primary_keys(vec!["id"])
+            .temporary(true)
+            .build_sqlite();
+
+        assert_eq!(sql, "CREATE TEMPORARY TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL, PRIMARY KEY (\"id\") )");
+    }
+
+    #[test]
+    fn test_sqlite_decimal_mapped_to_text() {
+        // Test that all decimals are mapped to TEXT for SQLite to preserve full precision.
+        // SQLite stores decimals as TEXT strings via BigDecimal, supporting all decimal precisions
+        // including high-precision Decimal128 (up to precision 38) and Decimal256 (up to precision 76).
+        let schema = Schema::new(vec![
+            Field::new("high_precision", DataType::Decimal128(38, 10), true),
+            Field::new("decimal256", DataType::Decimal256(76, 20), true),
+            Field::new("normal_decimal", DataType::Decimal128(10, 2), true),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "decimals").build_sqlite();
+
+        // All decimals should be mapped to "text" for SQLite to preserve full precision
+        assert!(
+            sql.contains("text"),
+            "Decimals should be mapped to text for SQLite, got: {}",
+            sql
+        );
+        assert!(
+            !sql.to_lowercase().contains("decimal("),
+            "SQL should not contain decimal type for SQLite, got: {}",
+            sql
+        );
+        // Verify the expected output
+        assert_eq!(
+            sql,
+            "CREATE TABLE IF NOT EXISTS \"decimals\" ( \"high_precision\" text, \"decimal256\" text, \"normal_decimal\" text )"
+        );
     }
 
     #[test]

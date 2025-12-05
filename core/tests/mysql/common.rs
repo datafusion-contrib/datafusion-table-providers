@@ -12,7 +12,10 @@ use crate::{
 const MYSQL_ROOT_PASSWORD: &str = "integration-test-pw";
 const MYSQL_DOCKER_CONTAINER: &str = "runtime-integration-test-mysql";
 
-fn get_mysql_params(port: usize, time_zone: Option<&str>) -> HashMap<String, SecretString> {
+pub(super) fn get_mysql_params(
+    port: usize,
+    time_zone: Option<&str>,
+) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
     params.insert(
         "mysql_host".to_string(),
@@ -38,6 +41,12 @@ fn get_mysql_params(port: usize, time_zone: Option<&str>) -> HashMap<String, Sec
         "mysql_sslmode".to_string(),
         SecretString::from("disabled".to_string()),
     );
+    if let Some(tz) = time_zone {
+        params.insert(
+            "mysql_connection_time_zone".to_string(),
+            SecretString::from(tz.to_string()),
+        );
+    }
     params.insert(
         "mysql_pool_min".to_string(),
         SecretString::from("1".to_string()),
@@ -46,9 +55,6 @@ fn get_mysql_params(port: usize, time_zone: Option<&str>) -> HashMap<String, Sec
         "mysql_pool_max".to_string(),
         SecretString::from("10".to_string()),
     );
-    if let Some(tz) = time_zone {
-        params.insert("mysql_time_zone".to_string(), SecretString::from(tz));
-    }
     params
 }
 

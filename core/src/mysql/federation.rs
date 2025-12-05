@@ -28,12 +28,12 @@ impl MySQLTable {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
-        let table_name = self.base_table.table_reference.clone();
+        let table_reference = self.base_table.table_reference.clone();
         let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,
-            RemoteTableRef::from(table_name),
+            RemoteTableRef::from(table_reference),
             schema,
         )))
     }
@@ -79,7 +79,8 @@ impl SQLExecutor for MySQLTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(AstAnalyzer::new(vec![Box::new(mysql_ast_analyzer)]))
+        let rule = Box::new(mysql_ast_analyzer);
+        Some(AstAnalyzer::new(vec![rule]))
     }
 
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {

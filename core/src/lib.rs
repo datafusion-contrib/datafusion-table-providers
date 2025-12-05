@@ -1,9 +1,16 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 
+pub mod common;
 pub mod sql;
 pub mod util;
 
+#[cfg(feature = "adbc")]
+pub mod adbc;
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
 #[cfg(feature = "flight")]
@@ -12,6 +19,8 @@ pub mod flight;
 pub mod mongodb;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "odbc")]
+pub mod odbc;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]
