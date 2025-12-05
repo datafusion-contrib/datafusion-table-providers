@@ -120,6 +120,7 @@ duckdb = [
   "dep:async-stream",
   "dep:arrow-schema",
   "dep:byte-unit",
+  "dep:datafusion-physical-expr",
 ]
 duckdb-federation = ["duckdb", "federation"]
 federation = ["dep:datafusion-federation"]
