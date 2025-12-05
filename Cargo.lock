@@ -2224,6 +2224,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "odbc-api",
+ "once_cell",
  "parquet",
  "pem",
  "postgres-native-tls",
