@@ -1850,6 +1850,7 @@ dependencies = [
  "native-tls",
  "num-bigint",
  "num-traits",
+ "once_cell",
  "pem",
  "postgres-native-tls",
  "prost",
