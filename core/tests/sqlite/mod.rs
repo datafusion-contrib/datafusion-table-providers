@@ -138,6 +138,7 @@ async fn arrow_sqlite_round_trip(
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
 #[case::list(get_arrow_list_record_batch(), "list")]
+#[case::list_utf8(get_arrow_list_utf8_record_batch(), "list_utf8")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_sqlite_roundtrip(
@@ -317,6 +318,87 @@ async fn test_sqlite_table_provider_roundtrip(
 
     let factory = SqliteTableProviderFactory::default()
         .with_batch_insert_use_prepared_statements(use_prepared_statements);
+    let table = factory
+        .create(&ctx.state(), &external_table)
+        .await
+        .expect("table should be created");
+
+    // Insert data using TableProvider's insert_into method
+    let exec = MockExec::new(vec![Ok(record_batch.clone())], Arc::clone(&schema));
+    let insertion = table
+        .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+        .await
+        .expect("insertion should be successful");
+
+    collect(insertion, ctx.task_ctx())
+        .await
+        .expect("insert should complete");
+
+    // Register the table to query it back
+    ctx.register_table(table_name, Arc::clone(&table))
+        .expect("table should be registered");
+
+    // Query the data back
+    let query_sql = format!("SELECT * FROM {table_name}");
+    let df = ctx.sql(&query_sql).await.expect("query should succeed");
+
+    let result_batches = df.collect().await.expect("should collect results");
+
+    // Verify results
+    assert_eq!(result_batches.len(), 1, "Should have one result batch");
+    let result_batch = &result_batches[0];
+
+    assert_eq!(
+        result_batch.num_rows(),
+        record_batch.num_rows(),
+        "Should have same number of rows"
+    );
+    assert_eq!(
+        result_batch.num_columns(),
+        record_batch.num_columns(),
+        "Should have same number of columns"
+    );
+
+    // Cast the result back to the original schema for comparison
+    let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
+        .expect("should cast result to original schema");
+
+    // Verify the data matches
+    assert_eq!(
+        casted_result, record_batch,
+        "Round-tripped data should match original"
+    );
+}
+
+/// Test List(Utf8) round-trip through SqliteTableProviderFactory with federation enabled
+/// This test uses the factory which wraps the table with federation support when the feature is enabled
+#[cfg(feature = "sqlite-federation")]
+#[tokio::test]
+async fn test_sqlite_list_utf8_federation_roundtrip() {
+    let ctx = SessionContext::new();
+    let (record_batch, schema) = get_arrow_list_utf8_record_batch();
+    let table_name = "list_utf8_federation_test";
+
+    let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+    // Create external table using SqliteTableProviderFactory (enables federation)
+    let external_table = CreateExternalTable {
+        schema: df_schema,
+        name: TableReference::bare(table_name),
+        location: String::new(),
+        file_type: String::new(),
+        table_partition_cols: vec![],
+        if_not_exists: true,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Constraints::new_unverified(vec![]),
+        column_defaults: HashMap::default(),
+        temporary: false,
+    };
+
+    let factory = SqliteTableProviderFactory::default();
     let table = factory
         .create(&ctx.state(), &external_table)
         .await
