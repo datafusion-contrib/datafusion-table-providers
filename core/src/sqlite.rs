@@ -1259,7 +1259,7 @@ impl Sqlite {
                         } else {
                             let json_str =
                                 serialize_list_to_json(column, row_idx, field_ref.data_type())
-                                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e))?;
+                                    .map_err(rusqlite::Error::ToSqlConversionFailure)?;
                             params.push(Box::new(json_str));
                         }
                     }
@@ -1269,7 +1269,7 @@ impl Sqlite {
                         } else {
                             let json_str =
                                 serialize_list_to_json(column, row_idx, field_ref.data_type())
-                                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e))?;
+                                    .map_err(rusqlite::Error::ToSqlConversionFailure)?;
                             params.push(Box::new(json_str));
                         }
                     }
