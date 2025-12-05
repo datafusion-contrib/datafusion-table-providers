@@ -93,7 +93,7 @@ sea-query = { version = "0.32", features = [
 ] }
 
 [patch.crates-io]
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "007c82d039220478f406d648417d28c0d40a7987" } # spiceai-50
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "afcbd1ce99703f1322d176fc1b99745f647234d0" } # spiceai-50
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "dd02045c3aa77895723e873222cbe30f5c8f77a9" }                            # spiceai-1.3.2
 
 datafusion = { git = "https://github.com/spiceai/datafusion.git", rev = "41d08054e37e9cdca9b760c16fc2b97a21893af2" }               # spiceai-50
