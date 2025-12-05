@@ -435,7 +435,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::File => {
                 let read_pool = pool.clone();
 
-                read_pool.set_attached_databases(&self.attach_databases(&options))
+                read_pool
+                    .set_attached_databases(&self.attach_databases(&options))
+                    .context(DbConnectionPoolSnafu)
+                    .map_err(to_datafusion_error)?
             }
             Mode::Memory => pool.clone(),
         };

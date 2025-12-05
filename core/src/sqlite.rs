@@ -75,13 +75,17 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to create table in Sqlite: {source}"))]
-    UnableToCreateTable { source: tokio_rusqlite::Error<rusqlite::Error> },
+    UnableToCreateTable {
+        source: tokio_rusqlite::Error<rusqlite::Error>,
+    },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTable { source: rusqlite::Error },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
-    UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error<rusqlite::Error> },
+    UnableToInsertIntoTableAsync {
+        source: tokio_rusqlite::Error<rusqlite::Error>,
+    },
 
     #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
     DiskFull {},
@@ -496,16 +500,140 @@ fn parse_timezone_offset_seconds(tz: &str) -> Option<i32> {
     } else {
         return None;
     };
-    
+
     let parts: Vec<&str> = rest.split(':').collect();
     if parts.len() != 2 {
         return None;
     }
-    
+
     let hours: i32 = parts[0].parse().ok()?;
     let minutes: i32 = parts[1].parse().ok()?;
-    
+
     Some(sign * (hours * 3600 + minutes * 60))
+}
+
+/// Serialize a list array element at a given row index to a JSON string.
+/// This ensures proper JSON encoding (e.g., strings are quoted).
+fn serialize_list_to_json(
+    column: &arrow::array::ArrayRef,
+    row_idx: usize,
+    element_type: &arrow::datatypes::DataType,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    use arrow::array::*;
+    use arrow::datatypes::DataType;
+
+    // Get the list value for this row
+    let list_array: Arc<dyn Array> = match column.data_type() {
+        DataType::List(_) => {
+            let arr = column.as_any().downcast_ref::<ListArray>().unwrap();
+            arr.value(row_idx)
+        }
+        DataType::LargeList(_) => {
+            let arr = column.as_any().downcast_ref::<LargeListArray>().unwrap();
+            arr.value(row_idx)
+        }
+        DataType::FixedSizeList(_, _) => {
+            let arr = column
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+            arr.value(row_idx)
+        }
+        _ => return Err("Unsupported list type".into()),
+    };
+
+    // Serialize the list elements to JSON based on element type
+    let json_str = match element_type {
+        DataType::Int8 => {
+            let arr = list_array.as_any().downcast_ref::<Int8Array>().unwrap();
+            let values: Vec<i8> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Int16 => {
+            let arr = list_array.as_any().downcast_ref::<Int16Array>().unwrap();
+            let values: Vec<i16> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Int32 => {
+            let arr = list_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            let values: Vec<i32> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Int64 => {
+            let arr = list_array.as_any().downcast_ref::<Int64Array>().unwrap();
+            let values: Vec<i64> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::UInt8 => {
+            let arr = list_array.as_any().downcast_ref::<UInt8Array>().unwrap();
+            let values: Vec<u8> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::UInt16 => {
+            let arr = list_array.as_any().downcast_ref::<UInt16Array>().unwrap();
+            let values: Vec<u16> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::UInt32 => {
+            let arr = list_array.as_any().downcast_ref::<UInt32Array>().unwrap();
+            let values: Vec<u32> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::UInt64 => {
+            let arr = list_array.as_any().downcast_ref::<UInt64Array>().unwrap();
+            let values: Vec<u64> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Float32 => {
+            let arr = list_array.as_any().downcast_ref::<Float32Array>().unwrap();
+            let values: Vec<f32> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Float64 => {
+            let arr = list_array.as_any().downcast_ref::<Float64Array>().unwrap();
+            let values: Vec<f64> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Utf8 => {
+            let arr = list_array.as_any().downcast_ref::<StringArray>().unwrap();
+            let values: Vec<String> = (0..arr.len()).map(|i| arr.value(i).to_string()).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::LargeUtf8 => {
+            let arr = list_array
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap();
+            let values: Vec<String> = (0..arr.len()).map(|i| arr.value(i).to_string()).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Utf8View => {
+            let arr = list_array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap();
+            let values: Vec<String> = (0..arr.len()).map(|i| arr.value(i).to_string()).collect();
+            serde_json::to_string(&values)?
+        }
+        DataType::Boolean => {
+            let arr = list_array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            let values: Vec<bool> = (0..arr.len()).map(|i| arr.value(i)).collect();
+            serde_json::to_string(&values)?
+        }
+        _ => {
+            // Fallback to ArrayFormatter for unsupported types
+            use arrow::util::display::{ArrayFormatter, FormatOptions};
+            let formatter =
+                ArrayFormatter::try_new(list_array.as_ref(), &FormatOptions::default())?;
+            let mut values = Vec::new();
+            for i in 0..list_array.len() {
+                values.push(formatter.value(i).to_string());
+            }
+            serde_json::to_string(&values)?
+        }
+    };
+
+    Ok(json_str)
 }
 
 #[derive(Clone)]
@@ -924,7 +1052,8 @@ impl Sqlite {
                             let iso_string = if let Some(tz) = timezone {
                                 // Handle timezone-aware timestamps with offset format like "+10:00"
                                 if let Some(offset_secs) = parse_timezone_offset_seconds(tz) {
-                                    if let Some(offset) = chrono::FixedOffset::east_opt(offset_secs) {
+                                    if let Some(offset) = chrono::FixedOffset::east_opt(offset_secs)
+                                    {
                                         datetime.with_timezone(&offset).to_rfc3339()
                                     } else {
                                         datetime.to_rfc3339()
@@ -1124,17 +1253,34 @@ impl Sqlite {
                             params.push(Box::new(decimal.to_string()));
                         }
                     }
-                    DataType::List(_)
-                    | DataType::LargeList(_)
-                    | DataType::ListView(_)
+                    DataType::List(field_ref) | DataType::LargeList(field_ref) => {
+                        if column.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            let json_str =
+                                serialize_list_to_json(column, row_idx, field_ref.data_type())
+                                    .map_err(rusqlite::Error::ToSqlConversionFailure)?;
+                            params.push(Box::new(json_str));
+                        }
+                    }
+                    DataType::FixedSizeList(field_ref, _) => {
+                        if column.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            let json_str =
+                                serialize_list_to_json(column, row_idx, field_ref.data_type())
+                                    .map_err(rusqlite::Error::ToSqlConversionFailure)?;
+                            params.push(Box::new(json_str));
+                        }
+                    }
+                    DataType::ListView(_)
                     | DataType::LargeListView(_)
-                    | DataType::FixedSizeList(_, _)
                     | DataType::Struct(_)
                     | DataType::Map(_, _)
                     | DataType::Union(_, _)
                     | DataType::Dictionary(_, _)
                     | DataType::RunEndEncoded(_, _) => {
-                        // For complex nested types, use JSON serialization
+                        // For complex nested types, use JSON serialization via ArrayFormatter
                         use arrow::util::display::{ArrayFormatter, FormatOptions};
                         let formatter =
                             ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
