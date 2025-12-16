@@ -17,6 +17,7 @@ use std::sync::Arc;
 use super::between::SQLiteBetweenVisitor;
 use super::sql_table::SQLiteTable;
 use super::sqlite_interval::SQLiteIntervalVisitor;
+use crate::sqlite::sqlite_decimal::SQLiteDecimalRewriter;
 use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -52,6 +53,7 @@ impl<T, P> SQLiteTable<T, P> {
 
 fn sqlite_ast_analyzer(
     decimal_between: bool,
+    schema: SchemaRef,
 ) -> impl Fn(ast::Statement) -> Result<ast::Statement, DataFusionError> {
     move |ast: ast::Statement| -> Result<ast::Statement, DataFusionError> {
         match ast {
@@ -67,6 +69,9 @@ fn sqlite_ast_analyzer(
                     let mut between_visitor = SQLiteBetweenVisitor::default();
                     let _ = new_query.visit(&mut between_visitor);
                 }
+
+                let mut decimal_rewriter = SQLiteDecimalRewriter::new(Arc::clone(&schema));
+                let _ = new_query.visit(&mut decimal_rewriter);
 
                 Ok(ast::Statement::Query(new_query))
             }
@@ -90,7 +95,8 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        let rule = Box::new(sqlite_ast_analyzer(self.decimal_between));
+        let rule = Box::new(sqlite_ast_analyzer(self.decimal_between, self.schema()));
+        println!("Current schema {:?}", self.schema());
         Some(AstAnalyzer::new(vec![rule]))
     }
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
@@ -105,6 +111,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
         query: &str,
         schema: SchemaRef,
     ) -> DataFusionResult<SendableRecordBatchStream> {
+        println!("Executing query {}", query);
         let fut = get_stream(
             self.base_table.clone_pool(),
             query.to_string(),

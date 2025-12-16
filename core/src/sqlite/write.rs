@@ -233,13 +233,14 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(|e| {
                 if let super::Error::UnableToInsertIntoTableAsync {
-                    source: tokio_rusqlite::Error::Error(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error {
-                            code: rusqlite::ffi::ErrorCode::DiskFull,
-                            ..
-                        },
-                        _,
-                    )),
+                    source:
+                        tokio_rusqlite::Error::Error(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error {
+                                code: rusqlite::ffi::ErrorCode::DiskFull,
+                                ..
+                            },
+                            _,
+                        )),
                 } = e
                 {
                     DataFusionError::External(super::Error::DiskFull {}.into())
