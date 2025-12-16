@@ -1,13 +1,15 @@
 use arrow_schema::{DataType, SchemaRef};
+use datafusion::logical_expr::sqlparser::ast::Query;
 use datafusion::sql::sqlparser::ast::{
-    self, visit_expressions, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentList, Ident,
-    ObjectName, ObjectNamePart, VisitorMut,
+    self, visit_expressions, visit_expressions_mut, Expr, FunctionArg, FunctionArgExpr,
+    FunctionArgumentList, Ident, ObjectName, ObjectNamePart, SetExpr, VisitorMut,
 };
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 pub struct SQLiteDecimalRewriter {
     decimal_idents: HashSet<String>,
+    query_count: usize,
 }
 
 impl SQLiteDecimalRewriter {
@@ -24,6 +26,7 @@ impl SQLiteDecimalRewriter {
                     }
                 })
                 .collect(),
+            query_count: 0,
         }
     }
 
@@ -39,12 +42,12 @@ impl SQLiteDecimalRewriter {
         }
     }
 
-    fn is_sum_function(func: &ast::Function) -> bool {
+    fn function_name_starts_with(func: &ast::Function, name: &str) -> bool {
         let ObjectName(ref parts) = func.name;
         parts
             .first()
             .and_then(|part| part.as_ident())
-            .map(|ident| ident.value.to_lowercase() == "sum")
+            .map(|ident| ident.value.to_lowercase().starts_with(name))
             .unwrap_or(false)
     }
 
@@ -66,11 +69,18 @@ impl SQLiteDecimalRewriter {
     }
 
     fn wrap_in_decimal(expr: Expr) -> Expr {
+        let cast_expr = Expr::Cast {
+            expr: Box::new(expr),
+            data_type: ast::DataType::Text,
+            format: None,
+            kind: ast::CastKind::Cast,
+        };
+
         Expr::Function(ast::Function {
             name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new("decimal"))]),
             args: ast::FunctionArguments::List(FunctionArgumentList {
                 duplicate_treatment: None,
-                args: vec![FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))],
+                args: vec![FunctionArg::Unnamed(FunctionArgExpr::Expr(cast_expr))],
                 clauses: Vec::new(),
             }),
             over: None,
@@ -100,16 +110,74 @@ impl SQLiteDecimalRewriter {
             within_group: Vec::new(),
         })
     }
+
+    fn realias_decimal_functions(query: &mut Query) {
+        match query.body.as_mut() {
+            SetExpr::Select(select) => {
+                let _ = visit_expressions_mut(&mut select.projection, |expr| {
+                    let Expr::Function(func) = &expr else {
+                        return ControlFlow::Continue(());
+                    };
+
+                    if !Self::function_name_starts_with(func, "decimal") {
+                        return ControlFlow::Continue(());
+                    }
+
+                    if let Some(ident) = Self::extract_column_name_from_decimal(func) {
+                        *expr = Expr::Named {
+                            expr: Box::new(expr.clone()),
+                            name: ident,
+                        };
+                    }
+
+                    ControlFlow::<()>::Continue(())
+                });
+            }
+            SetExpr::Query(inner) => Self::realias_decimal_functions(inner.as_mut()),
+            _ => {}
+        }
+    }
+
+    fn extract_column_name_from_decimal(func: &ast::Function) -> Option<Ident> {
+        let maybe_ident = visit_expressions(func, |expr| match expr {
+            Expr::Identifier(ident) => ControlFlow::Break(ident.clone()),
+            Expr::CompoundIdentifier(idents) if !idents.is_empty() => {
+                ControlFlow::Break(idents.last().unwrap().clone())
+            }
+            _ => ControlFlow::Continue(()),
+        });
+
+        maybe_ident.break_value()
+    }
 }
 
 impl VisitorMut for SQLiteDecimalRewriter {
     type Break = ();
 
+    fn pre_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+        self.query_count += 1;
+        ControlFlow::Continue(())
+    }
+
+    /// After doing all rewrites, inspect the query selection for invocations of "decimal*" and
+    /// percolate up an ident for them if they are nested
+    fn post_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
+        // Lame, but have to count to leave the topmost select alone
+        if self.query_count == 2 {
+            Self::realias_decimal_functions(query);
+        }
+
+        self.query_count -= 1;
+
+        ControlFlow::Continue(())
+    }
+
     fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
         match expr {
             // push down decimal_sum()
             Expr::Function(func)
-                if Self::is_sum_function(func) && self.function_has_decimal_ident(func) =>
+                if Self::function_name_starts_with(func, "sum")
+                    && self.function_has_decimal_ident(func) =>
             {
                 func.name =
                     ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new("decimal_sum"))]);

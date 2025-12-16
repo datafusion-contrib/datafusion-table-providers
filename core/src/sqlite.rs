@@ -54,6 +54,8 @@ pub mod sqlite_interval;
 pub mod between;
 
 pub mod sql_table;
+#[cfg(feature = "sqlite-federation")]
+pub mod sqlite_decimal;
 pub mod write;
 
 #[derive(Debug, Snafu)]
