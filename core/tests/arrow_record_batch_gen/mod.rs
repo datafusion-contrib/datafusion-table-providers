@@ -438,61 +438,6 @@ pub(crate) fn get_mysql_arrow_decimal_record() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
-/// Decimal record batch for roundtrip testing
-/// SQLite stores decimals as TEXT strings via BigDecimal, supporting all decimal precisions.
-pub(crate) fn get_sqlite_compatible_decimal_record_batch() -> (RecordBatch, SchemaRef) {
-    // Small decimal (10, 2) - typical currency format
-    let decimal_small = Decimal128Array::from(vec![
-        Some(12345_i128),   // 123.45
-        Some(-9999_i128),   // -99.99
-        None,               // null
-        Some(0_i128),       // 0.00
-        Some(100_i128),     // 1.00
-    ])
-    .with_precision_and_scale(10, 2)
-    .expect("valid decimal");
-
-    // Medium decimal (12, 4) - higher precision
-    let decimal_medium = Decimal128Array::from(vec![
-        Some(123456789_i128),  // 12345.6789
-        Some(-987654321_i128), // -98765.4321
-        Some(0_i128),          // 0.0000
-        None,                  // null
-        Some(11111_i128),      // 1.1111
-    ])
-    .with_precision_and_scale(12, 4)
-    .expect("valid decimal");
-
-    // Larger decimal (15, 6) - close to SQLite's max of 16
-    let decimal_large = Decimal128Array::from(vec![
-        Some(123456789012345_i128),  // 123456789.012345
-        None,                         // null
-        Some(-999999999999999_i128), // -999999999.999999
-        Some(0_i128),                // 0.000000
-        Some(1000000_i128),          // 1.000000
-    ])
-    .with_precision_and_scale(15, 6)
-    .expect("valid decimal");
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("decimal_small", DataType::Decimal128(10, 2), true),
-        Field::new("decimal_medium", DataType::Decimal128(12, 4), true),
-        Field::new("decimal_large", DataType::Decimal128(15, 6), true),
-    ]));
-
-    let record_batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(decimal_small),
-            Arc::new(decimal_medium),
-            Arc::new(decimal_large),
-        ],
-    )
-    .expect("Failed to create SQLite-compatible decimal record batch");
-
-    (record_batch, schema)
-}
-
 // Duration
 pub(crate) fn get_arrow_duration_record_batch() -> (RecordBatch, SchemaRef) {
     let duration_nano_array = DurationNanosecondArray::from(vec![1, 2, 3]);

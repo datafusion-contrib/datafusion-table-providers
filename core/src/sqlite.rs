@@ -31,6 +31,7 @@ use sql_table::SQLiteTable;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use tokio_rusqlite::Connection;
 
@@ -991,10 +992,13 @@ impl Sqlite {
                         if array.is_null(row_idx) {
                             params.push(Box::new(rusqlite::types::Null));
                         } else {
-                            // Date32 is days since epoch
+                            // Date32 is days since epoch - convert to ISO-8601 date string
                             let days = array.value(row_idx);
-                            let timestamp = i64::from(days) * 86_400;
-                            params.push(Box::new(timestamp));
+                            let timestamp_secs = i64::from(days) * 86_400;
+                            let date_str = OffsetDateTime::from_unix_timestamp(timestamp_secs)
+                                .map(|dt| dt.date().to_string())
+                                .unwrap_or_else(|_| String::new());
+                            params.push(Box::new(date_str));
                         }
                     }
                     DataType::Date64 => {
@@ -1002,10 +1006,13 @@ impl Sqlite {
                         if array.is_null(row_idx) {
                             params.push(Box::new(rusqlite::types::Null));
                         } else {
-                            // Date64 is milliseconds since epoch
+                            // Date64 is milliseconds since epoch - convert to ISO-8601 date string
                             let millis = array.value(row_idx);
-                            let timestamp = millis / 1000;
-                            params.push(Box::new(timestamp));
+                            let timestamp_secs = millis / 1000;
+                            let date_str = OffsetDateTime::from_unix_timestamp(timestamp_secs)
+                                .map(|dt| dt.date().to_string())
+                                .unwrap_or_else(|_| String::new());
+                            params.push(Box::new(date_str));
                         }
                     }
                     DataType::Timestamp(unit, timezone) => {

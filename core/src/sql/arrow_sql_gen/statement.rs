@@ -37,7 +37,6 @@ pub struct CreateTableBuilder {
     schema: SchemaRef,
     table_name: String,
     primary_keys: Vec<String>,
-    temporary: bool,
 }
 
 impl CreateTableBuilder {
@@ -47,7 +46,6 @@ impl CreateTableBuilder {
             schema,
             table_name: table_name.to_string(),
             primary_keys: Vec::new(),
-            temporary: false,
         }
     }
 
@@ -57,13 +55,6 @@ impl CreateTableBuilder {
         T: Into<String>,
     {
         self.primary_keys = keys.into_iter().map(Into::into).collect();
-        self
-    }
-
-    #[must_use]
-    /// Set whether the table is temporary or not.
-    pub fn temporary(mut self, temporary: bool) -> Self {
-        self.temporary = temporary;
         self
     }
 
@@ -108,18 +99,7 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
-            // SQLite stores decimals as TEXT strings (via BigDecimal::to_string()).
-            // Using TEXT column type avoids sea-query's precision limit of 16 for decimals.
-            // The decimal.c extension (enabled via bundled-decimal feature) provides
-            // exact arithmetic operations on these text-stored decimal values.
-            // https://sqlite.org/floatingpoint.html
-            match f.data_type() {
-                DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _) => ColumnType::Text,
-                _ => map_data_type_to_column_type(f.data_type()),
-            }
+            map_data_type_to_column_type(f.data_type())
         })
     }
 
@@ -163,10 +143,6 @@ impl CreateTableBuilder {
                 index.col(Alias::new(key).into_iden().into_index_column());
             }
             create_stmt.primary_key(&mut index);
-        }
-
-        if self.temporary {
-            create_stmt.temporary();
         }
 
         create_stmt.to_string(query_builder)
@@ -1575,50 +1551,6 @@ mod tests {
             .build_sqlite();
 
         assert_eq!(sql, "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"id2\" integer NOT NULL, \"name\" text NOT NULL, \"age\" integer, PRIMARY KEY (\"id\", \"id2\") )");
-    }
-
-    #[test]
-    fn test_temporary_table_creation() {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-        ]);
-        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users")
-            .primary_keys(vec!["id"])
-            .temporary(true)
-            .build_sqlite();
-
-        assert_eq!(sql, "CREATE TEMPORARY TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL, PRIMARY KEY (\"id\") )");
-    }
-
-    #[test]
-    fn test_sqlite_decimal_mapped_to_text() {
-        // Test that all decimals are mapped to TEXT for SQLite to preserve full precision.
-        // SQLite stores decimals as TEXT strings via BigDecimal, supporting all decimal precisions
-        // including high-precision Decimal128 (up to precision 38) and Decimal256 (up to precision 76).
-        let schema = Schema::new(vec![
-            Field::new("high_precision", DataType::Decimal128(38, 10), true),
-            Field::new("decimal256", DataType::Decimal256(76, 20), true),
-            Field::new("normal_decimal", DataType::Decimal128(10, 2), true),
-        ]);
-        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "decimals").build_sqlite();
-
-        // All decimals should be mapped to "text" for SQLite to preserve full precision
-        assert!(
-            sql.contains("text"),
-            "Decimals should be mapped to text for SQLite, got: {}",
-            sql
-        );
-        assert!(
-            !sql.to_lowercase().contains("decimal("),
-            "SQL should not contain decimal type for SQLite, got: {}",
-            sql
-        );
-        // Verify the expected output
-        assert_eq!(
-            sql,
-            "CREATE TABLE IF NOT EXISTS \"decimals\" ( \"high_precision\" text, \"decimal256\" text, \"normal_decimal\" text )"
-        );
     }
 
     #[test]
