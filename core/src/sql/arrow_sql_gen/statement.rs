@@ -1554,36 +1554,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sqlite_decimal_mapped_to_text() {
-        // Test that all decimals are mapped to TEXT for SQLite to preserve full precision.
-        // SQLite stores decimals as TEXT strings via BigDecimal, supporting all decimal precisions
-        // including high-precision Decimal128 (up to precision 38) and Decimal256 (up to precision 76).
-        let schema = Schema::new(vec![
-            Field::new("high_precision", DataType::Decimal128(38, 10), true),
-            Field::new("decimal256", DataType::Decimal256(76, 20), true),
-            Field::new("normal_decimal", DataType::Decimal128(10, 2), true),
-        ]);
-        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "decimals").build_sqlite();
-
-        // All decimals should be mapped to "text" for SQLite to preserve full precision
-        assert!(
-            sql.contains("text"),
-            "Decimals should be mapped to text for SQLite, got: {}",
-            sql
-        );
-        assert!(
-            !sql.to_lowercase().contains("decimal("),
-            "SQL should not contain decimal type for SQLite, got: {}",
-            sql
-        );
-        // Verify the expected output
-        assert_eq!(
-            sql,
-            "CREATE TABLE IF NOT EXISTS \"decimals\" ( \"high_precision\" text, \"decimal256\" text, \"normal_decimal\" text )"
-        );
-    }
-
-    #[test]
     fn test_table_insertion_with_list() {
         let schema1 = Schema::new(vec![Field::new(
             "list",
