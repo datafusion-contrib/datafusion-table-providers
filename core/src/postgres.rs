@@ -419,7 +419,8 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
+        let batches = vec![batch];
+        let insert_table_builder = InsertBuilder::new(&self.table, &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));

@@ -190,9 +190,9 @@ macro_rules! push_list_values {
     }};
 }
 
-pub struct InsertBuilder {
+pub struct InsertBuilder<'a> {
     table: TableReference,
-    record_batches: Vec<RecordBatch>,
+    record_batches: &'a Vec<RecordBatch>,
 }
 
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
@@ -218,9 +218,9 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
     false
 }
 
-impl InsertBuilder {
+impl<'a> InsertBuilder<'a> {
     #[must_use]
-    pub fn new(table: &TableReference, record_batches: Vec<RecordBatch>) -> Self {
+    pub fn new(table: &TableReference, record_batches: &'a Vec<RecordBatch>) -> Self {
         Self {
             table: table.clone(),
             record_batches,
@@ -1082,7 +1082,7 @@ impl InsertBuilder {
             .columns(columns)
             .to_owned();
 
-        for record_batch in &self.record_batches {
+        for record_batch in self.record_batches {
             self.construct_insert_stmt(&mut insert_stmt, record_batch, &query_builder)?;
         }
         if let Some(on_conflict) = on_conflict {
@@ -1500,7 +1500,7 @@ mod tests {
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new(&TableReference::from("users"), record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("users"), &record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
@@ -1544,7 +1544,7 @@ mod tests {
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new(&TableReference::from("schema.users"), record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("schema.users"), &record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"schema\".\"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
@@ -1595,7 +1595,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema1.clone()), vec![Arc::new(list_array)])
             .expect("Unable to build record batch");
 
-        let sql = InsertBuilder::new(&TableReference::from("arrays"), vec![batch])
+        let sql = InsertBuilder::new(&TableReference::from("arrays"), &vec![batch])
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(

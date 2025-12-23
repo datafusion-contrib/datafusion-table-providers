@@ -382,8 +382,9 @@ impl MySQL {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
+        let batches = vec![batch];
         let insert_table_builder =
-            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), vec![batch]);
+            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
