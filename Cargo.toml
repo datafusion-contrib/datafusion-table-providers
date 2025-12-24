@@ -35,7 +35,7 @@ arrow-flight = { version = "57.0.0", features = [
   "tls-ring",
 ] }
 arrow-ipc = { version = "57.0.0" }
-arrow-schema = { version = "57.0.0", features = ["serde"] }
+arrow-schema = { version = "57.1.0", features = ["serde"] }
 arrow-json = "57.0.0"
 arrow-odbc = { version = "21.0.0" }
 datafusion = { version = "51", default-features = false }
