@@ -71,13 +71,17 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to create table in Sqlite: {source}"))]
-    UnableToCreateTable { source: tokio_rusqlite::Error<rusqlite::Error> },
+    UnableToCreateTable {
+        source: tokio_rusqlite::Error<rusqlite::Error>,
+    },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTable { source: rusqlite::Error },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
-    UnableToInsertIntoTableAsync { source: tokio_rusqlite::Error<rusqlite::Error> },
+    UnableToInsertIntoTableAsync {
+        source: tokio_rusqlite::Error<rusqlite::Error>,
+    },
 
     #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
     DiskFull {},
@@ -549,7 +553,8 @@ impl Sqlite {
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
     ) -> rusqlite::Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
+        let batches = vec![batch];
+        let insert_table_builder = InsertBuilder::new(&self.table, &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
