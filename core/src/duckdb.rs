@@ -698,6 +698,18 @@ impl DuckDBTableFactory {
 
         Ok(Arc::new(table_writer_builder.build()?))
     }
+
+    /// Returns connection pool metrics.
+    ///
+    /// Provides access to connection pool statistics such as:
+    /// - `connection_count`: Total connections managed by the pool
+    /// - `idle_connections`: Connections currently idle in the pool
+    /// and more.
+    pub fn conn_pool_metrics(
+        &self,
+    ) -> crate::sql::db_connection_pool::duckdbpool::DuckDBPoolMetrics {
+        self.pool.metrics()
+    }
 }
 
 /// For a [`TableReference`] that is a table function, create a name for a view on the original [`TableReference`]

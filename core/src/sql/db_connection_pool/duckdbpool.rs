@@ -32,6 +32,52 @@ pub enum Error {
     UnableToExtractDatabaseNameFromPath { path: Arc<str> },
 }
 
+/// Metrics for the DuckDB connection pool.
+///
+/// This struct provides access to connection pool statistics similar to
+/// other database connectors like MySQL.
+#[derive(Clone)]
+pub struct DuckDBPoolMetrics {
+    pool: Arc<r2d2::Pool<DuckdbConnectionManager>>,
+}
+
+impl std::fmt::Debug for DuckDBPoolMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuckDBPoolMetrics")
+            .field("connection_count", &self.connection_count())
+            .field("idle_connections", &self.idle_connections())
+            .field("max_size", &self.max_size())
+            .field("min_idle", &self.min_idle())
+            .finish()
+    }
+}
+
+impl DuckDBPoolMetrics {
+    /// Returns the total number of connections currently being managed by the pool.
+    #[must_use]
+    pub fn connection_count(&self) -> u32 {
+        self.pool.state().connections
+    }
+
+    /// Returns the number of idle connections currently in the pool.
+    #[must_use]
+    pub fn idle_connections(&self) -> u32 {
+        self.pool.state().idle_connections
+    }
+
+    /// Returns the configured maximum pool size.
+    #[must_use]
+    pub fn max_size(&self) -> u32 {
+        self.pool.max_size()
+    }
+
+    /// Returns the configured minimum idle connection count, if any.
+    #[must_use]
+    pub fn min_idle(&self) -> Option<u32> {
+        self.pool.min_idle()
+    }
+}
+
 pub struct DuckDbConnectionPoolBuilder {
     path: String,
     max_size: Option<u32>,
@@ -204,6 +250,19 @@ impl DuckDbConnectionPool {
     /// Get the dataset path. Returns `:memory:` if the in memory database is used.
     pub fn db_path(&self) -> &str {
         self.path.as_ref()
+    }
+
+    /// Returns metrics for the connection pool.
+    ///
+    /// Provides access to connection pool statistics such as:
+    /// - `connection_count`: Total connections managed by the pool
+    /// - `idle_connections`: Connections currently idle in the pool
+    /// and more.
+    #[must_use]
+    pub fn metrics(&self) -> DuckDBPoolMetrics {
+        DuckDBPoolMetrics {
+            pool: Arc::clone(&self.pool),
+        }
     }
 
     /// Create a new `DuckDbConnectionPool` from memory.
