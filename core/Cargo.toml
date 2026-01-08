@@ -58,8 +58,10 @@ mysql_async = { version = "0.36", features = [
   "time",
   "bigdecimal",
 ], optional = true }
+mongodb = { version = "3.2.2", features = ["openssl-tls"], optional = true }
 native-tls = { version = "0.2", optional = true }
 num-bigint = "0.4"
+num-traits = { version = "0.2", optional = true }
 odbc-api = { version = "19.0", optional = true }
 pem = { version = "3.0.4", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
@@ -141,6 +143,12 @@ flight = [
 ]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 mysql-federation = ["mysql", "federation"]
+mongodb = [
+  "dep:mongodb",
+  "dep:async-stream",
+  "dep:arrow-schema",
+  "dep:num-traits",
+]
 odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]
 odbc-federation = ["odbc", "federation"]
 postgres = [
@@ -204,3 +212,8 @@ required-features = ["sqlite"]
 name = "adbc"
 path = "examples/adbc_duckdb.rs"
 required-features = ["adbc"]
+
+[[example]]
+name = "mongodb"
+path = "examples/mongodb.rs"
+required-features = ["mongodb"]
