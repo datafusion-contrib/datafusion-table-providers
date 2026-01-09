@@ -264,12 +264,22 @@ pub fn project_schema_safe(
     Ok(schema)
 }
 
-#[derive(Clone)]
 pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
     properties: PlanProperties,
+}
+
+impl<T, P> Clone for SqlExec<T, P> {
+    fn clone(&self) -> Self {
+        Self {
+            projected_schema: Arc::clone(&self.projected_schema),
+            pool: Arc::clone(&self.pool),
+            sql: self.sql.clone(),
+            properties: self.properties.clone(),
+        }
+    }
 }
 
 impl<T, P> SqlExec<T, P> {
