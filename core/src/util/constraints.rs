@@ -186,3 +186,33 @@ pub(crate) mod tests {
         Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
     }
 }
+
+/// Configuration options for upsert behavior
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpsertOptions {
+    /// Remove duplicates after validation to resolve primary key conflicts
+    pub remove_duplicates: bool,
+    /// Use "last write wins" behavior - when duplicates are found, keep the row with the highest row number
+    pub last_write_wins: bool,
+}
+
+impl UpsertOptions {
+    /// Create a new instance with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_remove_duplicates(mut self, remove_duplicates: bool) -> Self {
+        self.remove_duplicates = remove_duplicates;
+        self
+    }
+
+    pub fn with_last_write_wins(mut self, last_write_wins: bool) -> Self {
+        self.last_write_wins = last_write_wins;
+        self
+    }
+
+    pub fn is_default(&self) -> bool {
+        !self.remove_duplicates && !self.last_write_wins
+    }
+}
