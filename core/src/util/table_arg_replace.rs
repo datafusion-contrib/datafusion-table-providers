@@ -45,7 +45,7 @@ impl TableArgReplace {
 
     #[cfg(feature = "federation")]
     /// Converts the `TableArgReplace` instance into an `AstAnalyzer`.
-    pub fn into_analyzer(self) -> datafusion_federation::sql::AstAnalyzer {
+    pub fn into_analyzer(self) -> datafusion_federation::sql::AstAnalyzerRule {
         let mut visitor = self;
         let x = move |mut statement: datafusion::sql::sqlparser::ast::Statement| {
             let _ = datafusion::sql::sqlparser::ast::VisitMut::visit(&mut statement, &mut visitor);
