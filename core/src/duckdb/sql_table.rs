@@ -1,6 +1,9 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::util::column_reference::ColumnReference;
+use crate::util::indexes::IndexType;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::sql::unparser::dialect::Dialect;
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -28,6 +31,9 @@ pub struct DuckDBTable<T: 'static, P: 'static> {
 
     /// A mapping of table/view names to `DuckDB` functions that can instantiate a table (e.g. "`read_parquet`('`my_file.parquet`')").
     pub(crate) table_functions: Option<HashMap<String, String>>,
+
+    /// Indexes defined on the table that optimizer rules can use
+    pub(crate) indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl<T, P> std::fmt::Debug for DuckDBTable<T, P> {
@@ -52,7 +58,14 @@ impl<T, P> DuckDBTable<T, P> {
         Self {
             base_table,
             table_functions,
+            indexes: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
+        self
     }
 
     fn create_physical_plan(
@@ -67,6 +80,7 @@ impl<T, P> DuckDBTable<T, P> {
             self.base_table.clone_pool(),
             sql,
             self.table_functions.clone(),
+            self.indexes.clone(),
         )?))
     }
 }
@@ -100,7 +114,7 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
-        return self.create_physical_plan(projection, &self.schema(), sql);
+        self.create_physical_plan(projection, &self.schema(), sql)
     }
 }
 
@@ -111,9 +125,13 @@ impl<T, P> Display for DuckDBTable<T, P> {
 }
 
 #[derive(Clone)]
-struct DuckSqlExec<T, P> {
+pub struct DuckSqlExec<T, P> {
     base_exec: SqlExec<T, P>,
     table_functions: Option<HashMap<String, String>>,
+    indexes: Vec<(ColumnReference, IndexType)>,
+    optimized_sql: Option<String>,
+    optimized_sql_schema: Option<SchemaRef>,
+    optimized_sql_properties: Option<PlanProperties>,
 }
 
 impl<T, P> DuckSqlExec<T, P> {
@@ -123,16 +141,29 @@ impl<T, P> DuckSqlExec<T, P> {
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
         table_functions: Option<HashMap<String, String>>,
+        indexes: Vec<(ColumnReference, IndexType)>,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(projection, schema, pool, sql)?;
 
         Ok(Self {
             base_exec,
             table_functions,
+            indexes,
+            optimized_sql: None,
+            optimized_sql_schema: None,
+            optimized_sql_properties: None,
         })
     }
+}
 
-    fn sql(&self) -> SqlResult<String> {
+impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
+    /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`
+    /// if rewritten by an optimization step.
+    pub fn sql(&self) -> SqlResult<String> {
+        if let Some(sql) = &self.optimized_sql {
+            return Ok(sql.clone());
+        }
+
         let sql = self.base_exec.sql()?;
 
         Ok(format!(
@@ -140,16 +171,48 @@ impl<T, P> DuckSqlExec<T, P> {
             cte_expr = get_cte(&self.table_functions)
         ))
     }
+
+    /// Indexes that may be bound for the SQL expression in this execution node
+    #[must_use]
+    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
+        &self.indexes
+    }
+
+    /// The unoptimized SQL expression for this execution node
+    pub fn base_sql(&self) -> SqlResult<String> {
+        self.base_exec.sql()
+    }
+
+    /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`. Provide
+    /// a `new_schema` if changing the output schema of this node.
+    #[must_use]
+    pub fn with_optimized_sql(
+        mut self,
+        sql: impl Into<String>,
+        new_schema: Option<SchemaRef>,
+    ) -> Self {
+        self.optimized_sql = Some(sql.into());
+        self.optimized_sql_schema = new_schema;
+
+        if let Some(schema) = self.optimized_sql_schema.as_ref() {
+            let mut properties = self.base_exec.properties().clone();
+            let eq_properties = EquivalenceProperties::new(Arc::clone(schema));
+            properties.eq_properties = eq_properties;
+            self.optimized_sql_properties = Some(properties);
+        }
+
+        self
+    }
 }
 
-impl<T, P> std::fmt::Debug for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> std::fmt::Debug for DuckSqlExec<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for DuckSqlExec<T, P> {
+impl<T: 'static, P: 'static> DisplayAs for DuckSqlExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "DuckSqlExec sql={sql}")
@@ -166,11 +229,16 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.base_exec.schema()
+        self.optimized_sql_schema
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| self.base_exec.schema())
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.base_exec.properties()
+        self.optimized_sql_properties
+            .as_ref()
+            .unwrap_or_else(|| self.base_exec.properties())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
