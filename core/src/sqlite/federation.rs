@@ -79,7 +79,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(Box::new(sqlite_ast_analyzer))
+        AstAnalyzer::new(vec![Box::new(sqlite_ast_analyzer)]).into()
     }
 
     fn execute(

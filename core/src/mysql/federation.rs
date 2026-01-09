@@ -77,7 +77,7 @@ impl SQLExecutor for MySQLTable {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        Some(Box::new(mysql_ast_analyzer))
+        AstAnalyzer::new(vec![Box::new(mysql_ast_analyzer)]).into()
     }
 
     fn execute(
