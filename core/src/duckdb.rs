@@ -50,7 +50,7 @@ mod federation;
 
 mod creator;
 mod settings;
-mod sql_table;
+pub mod sql_table;
 pub mod write;
 pub use creator::{RelationName, TableDefinition};
 
