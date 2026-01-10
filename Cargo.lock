@@ -1773,13 +1773,14 @@ dependencies = [
 [[package]]
 name = "datafusion-federation"
 version = "0.4.2"
-source = "git+https://github.com/spiceai/datafusion-federation.git?rev=007c82d039220478f406d648417d28c0d40a7987#007c82d039220478f406d648417d28c0d40a7987"
+source = "git+https://github.com/spiceai/datafusion-federation.git?rev=afcbd1ce99703f1322d176fc1b99745f647234d0#afcbd1ce99703f1322d176fc1b99745f647234d0"
 dependencies = [
  "arrow-json",
  "async-stream",
  "async-trait",
  "datafusion",
  "futures",
+ "tracing",
 ]
 
 [[package]]
@@ -2223,6 +2224,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "odbc-api",
+ "once_cell",
  "parquet",
  "pem",
  "postgres-native-tls",
@@ -3568,8 +3570,7 @@ dependencies = [
 [[package]]
 name = "libsqlite3-sys"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "133c182a6a2c87864fe97778797e46c7e999672690dc9fa3ee8e241aa4a9c13f"
+source = "git+https://github.com/spiceai/rusqlite.git?rev=3d1f5f6f6d6d062676210d095df45eafa6e19fd8#3d1f5f6f6d6d062676210d095df45eafa6e19fd8"
 dependencies = [
  "cc",
  "pkg-config",
@@ -5239,8 +5240,7 @@ dependencies = [
 [[package]]
 name = "rusqlite"
 version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "165ca6e57b20e1351573e3729b958bc62f0e48025386970b6e4d29e7a7e71f3f"
+source = "git+https://github.com/spiceai/rusqlite.git?rev=3d1f5f6f6d6d062676210d095df45eafa6e19fd8#3d1f5f6f6d6d062676210d095df45eafa6e19fd8"
 dependencies = [
  "bitflags 2.10.0",
  "fallible-iterator 0.3.0",
@@ -5442,9 +5442,8 @@ checksum = "04c565b551bafbef4157586fa379538366e4385d42082f255bfd96e4fe8519da"
 
 [[package]]
 name = "sea-query"
-version = "0.32.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a5d1c518eaf5eda38e5773f902b26ab6d5e9e9e2bb2349ca6c64cf96f80448c"
+version = "0.32.0-rc.1"
+source = "git+https://github.com/spiceai/sea-query.git?rev=213b6b876068f58159ebdd5852604a021afaebf9#213b6b876068f58159ebdd5852604a021afaebf9"
 dependencies = [
  "bigdecimal",
  "chrono",
@@ -5456,16 +5455,14 @@ dependencies = [
 
 [[package]]
 name = "sea-query-derive"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae0cbad6ab996955664982739354128c58d16e126114fe88c2a493642502aab"
+version = "0.4.1"
+source = "git+https://github.com/spiceai/sea-query.git?rev=213b6b876068f58159ebdd5852604a021afaebf9#213b6b876068f58159ebdd5852604a021afaebf9"
 dependencies = [
- "darling 0.20.11",
  "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
- "thiserror 2.0.17",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
