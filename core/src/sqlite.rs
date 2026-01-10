@@ -21,7 +21,7 @@ use datafusion::{
     common::Constraints,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
-    logical_expr::CreateExternalTable,
+    logical_expr::{dml::InsertOp, CreateExternalTable},
     sql::TableReference,
 };
 use futures::TryStreamExt;
@@ -740,15 +740,31 @@ impl Sqlite {
         transaction: &Transaction<'_>,
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
+        insert_op: InsertOp,
     ) -> rusqlite::Result<()> {
         let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
 
-        let sea_query_on_conflict =
-            on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
-
-        let sql = insert_table_builder
-            .build_sqlite(sea_query_on_conflict)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        // Validate supported insert operations
+        let sql = match insert_op {
+            InsertOp::Overwrite => {
+                // Use REPLACE INTO for overwrite mode
+                insert_table_builder
+                    .build_sqlite_replace()
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?
+            }
+            InsertOp::Append => {
+                let sea_query_on_conflict =
+                    on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
+                insert_table_builder
+                    .build_sqlite(sea_query_on_conflict)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?
+            }
+            _ => {
+                return Err(rusqlite::Error::ToSqlConversionFailure(
+                    format!("Unsupported insert operation: {insert_op:?}").into(),
+                ));
+            }
+        };
 
         transaction.execute(&sql, [])?;
 
@@ -785,6 +801,7 @@ impl Sqlite {
         transaction: &Transaction<'_>,
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
+        insert_op: InsertOp,
     ) -> rusqlite::Result<()> {
         use arrow::array::*;
         use arrow::datatypes::DataType;
@@ -792,6 +809,17 @@ impl Sqlite {
         if batch.num_rows() == 0 {
             return Ok(());
         }
+
+        // Validate supported insert operations
+        let insert_keyword = match insert_op {
+            InsertOp::Overwrite => "REPLACE INTO",
+            InsertOp::Append => "INSERT INTO",
+            _ => {
+                return Err(rusqlite::Error::ToSqlConversionFailure(
+                    format!("Unsupported insert operation: {insert_op:?}").into(),
+                ));
+            }
+        };
 
         // Build the prepared statement SQL
         let schema = batch.schema();
@@ -807,7 +835,8 @@ impl Sqlite {
             .collect();
 
         let mut sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
+            "{} {} ({}) VALUES ({})",
+            insert_keyword,
             self.table.to_quoted_string(),
             column_names.join(", "),
             placeholders.join(", ")

@@ -290,6 +290,28 @@ impl TableManager {
         Ok(())
     }
 
+    /// Creates the internal staging table without PRIMARY KEY constraints.
+    /// This is used for overwrite operations where we're loading data into a temporary table
+    /// before swapping with the main table. The incoming data may have duplicates that would
+    /// violate PRIMARY KEY constraints.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn create_table_without_constraints(
+        &self,
+        pool: Arc<DuckDbConnectionPool>,
+        tx: &Transaction<'_>,
+    ) -> super::Result<()> {
+        let mut db_conn = pool.connect_sync().context(super::DbConnectionPoolSnafu)?;
+        let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+
+        let create_stmt = self.get_table_create_statement(duckdb_conn)?;
+        tracing::debug!("{create_stmt}");
+
+        tx.execute(&create_stmt, [])
+            .context(super::UnableToCreateDuckDBTableSnafu)?;
+
+        Ok(())
+    }
+
     /// Drops indexes from the table, then drops the table itself.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
