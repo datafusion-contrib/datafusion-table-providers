@@ -58,7 +58,7 @@ pub struct TableDefinition {
 
 impl TableDefinition {
     #[must_use]
-    pub(crate) fn new(name: RelationName, schema: SchemaRef) -> Self {
+    pub fn new(name: RelationName, schema: SchemaRef) -> Self {
         Self {
             name,
             schema,
@@ -68,29 +68,42 @@ impl TableDefinition {
     }
 
     #[must_use]
-    pub(crate) fn with_constraints(mut self, constraints: Constraints) -> Self {
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
         self
     }
 
     #[must_use]
-    pub(crate) fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
         self.indexes = indexes;
         self
     }
 
+
+    #[must_use]
+    pub fn with_name(self, name: RelationName) -> Self {
+        Self {
+            name,
+            schema: self.schema,
+            constraints: self.constraints,
+            indexes: self.indexes,
+        }
+    }
     #[must_use]
     pub fn name(&self) -> &RelationName {
         &self.name
     }
 
-    #[cfg(test)]
-    pub(crate) fn schema(&self) -> SchemaRef {
+    pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 
+
+    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
+        &self.indexes
+    }
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
-    pub(crate) fn generate_internal_name(&self) -> super::Result<RelationName> {
+    pub fn generate_internal_name(&self) -> super::Result<RelationName> {
         let unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .context(super::UnableToGetSystemTimeSnafu)?
@@ -101,7 +114,7 @@ impl TableDefinition {
         )))
     }
 
-    pub(crate) fn constraints(&self) -> Option<&Constraints> {
+    pub fn constraints(&self) -> Option<&Constraints> {
         self.constraints.as_ref()
     }
 
@@ -176,13 +189,13 @@ impl TableDefinition {
 
 /// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
 #[derive(Debug, Clone)]
-pub(crate) struct TableManager {
+pub struct TableManager {
     table_definition: Arc<TableDefinition>,
     internal_name: Option<RelationName>,
 }
 
 impl TableManager {
-    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> Self {
+    pub fn new(table_definition: Arc<TableDefinition>) -> Self {
         Self {
             table_definition,
             internal_name: None,
@@ -190,7 +203,7 @@ impl TableManager {
     }
 
     /// Set the internal flag for the table creator.
-    pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
+    pub fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
         if is_internal {
             self.internal_name = Some(self.table_definition.generate_internal_name()?);
         } else {
@@ -200,21 +213,26 @@ impl TableManager {
         Ok(self)
     }
 
-    pub(crate) fn definition_name(&self) -> &RelationName {
+    pub fn definition_name(&self) -> &RelationName {
         &self.table_definition.name
     }
 
     /// Returns the canonical name for this table, which is the internal name if the table is internal, or the table name if it is not.
-    pub(crate) fn table_name(&self) -> &RelationName {
+    pub fn table_name(&self) -> &RelationName {
         self.internal_name
             .as_ref()
             .unwrap_or_else(|| &self.table_definition.name)
     }
 
+
+    /// Returns the table definition for the table creator.
+    pub fn table_definition(&self) -> &Arc<TableDefinition> {
+        &self.table_definition
+    }
     /// Searches if a table by the name specified in the table definition exists in the database.
     /// Returns None if the table does not exist, or an instance of a `TableCreator` for the base table if it does.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
+    pub fn base_table(&self, tx: &Transaction<'_>) -> super::Result<Option<Self>> {
         let mut stmt = tx
             .prepare("SELECT 1 FROM duckdb_tables() WHERE table_name = ?")
             .context(super::UnableToQueryDataSnafu)?;
@@ -234,7 +252,7 @@ impl TableManager {
         }
     }
 
-    pub(crate) fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
+    pub fn indexes_vec(&self) -> Vec<(Vec<&str>, IndexType)> {
         self.table_definition
             .indexes
             .iter()
@@ -244,7 +262,7 @@ impl TableManager {
 
     /// Creates the table for this `TableManager`. Does not create indexes - use `TableManager::create_indexes` to apply indexes.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_table(
+    pub fn create_table(
         &self,
         pool: Arc<DuckDbConnectionPool>,
         tx: &Transaction<'_>,
@@ -275,7 +293,7 @@ impl TableManager {
 
     /// Drops indexes from the table, then drops the table itself.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn delete_table(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop indexes first
         self.drop_indexes(tx)?;
         self.drop_table(tx)?;
@@ -354,7 +372,7 @@ impl TableManager {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn create_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // create indexes on this table
         for index in self.indexes_vec() {
             self.create_index(tx, index)?;
@@ -437,7 +455,7 @@ impl TableManager {
     /// List all internal tables related to this table manager's table definition.
     /// Excludes itself from the list of tables, if created.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn list_other_internal_tables(
+    pub fn list_other_internal_tables(
         &self,
         tx: &Transaction<'_>,
     ) -> super::Result<Vec<(Self, u64)>> {
@@ -463,7 +481,7 @@ impl TableManager {
 
     /// If this table is an internal table, creates a view with the table definition name targeting this table.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn create_view(&self, tx: &Transaction<'_>) -> super::Result<()> {
         if self.internal_name.is_none() {
             return Ok(());
         }
@@ -514,7 +532,7 @@ impl TableManager {
 
     /// Returns the current indexes in database for this table.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
+    pub fn current_indexes(&self, tx: &Transaction<'_>) -> super::Result<HashSet<String>> {
         let sql = format!(
             "SELECT index_name FROM duckdb_indexes WHERE table_name = '{table_name}'",
             table_name = &self.table_name().to_string()
@@ -539,7 +557,7 @@ impl TableManager {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_table_name(
+    pub fn from_table_name(
         table_definition: Arc<TableDefinition>,
         table_name: RelationName,
     ) -> Self {
@@ -687,7 +705,7 @@ fn create_empty_record_batch_reader(schema: SchemaRef) -> impl RecordBatchReader
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ViewCreator {
+pub struct ViewCreator {
     name: RelationName,
 }
 
