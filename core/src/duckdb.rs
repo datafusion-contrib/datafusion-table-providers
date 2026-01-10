@@ -1,3 +1,4 @@
+use crate::util::supported_functions::FunctionSupport;
 use crate::sql::sql_provider_datafusion;
 use crate::util::{
     self,
@@ -182,6 +183,7 @@ pub struct DuckDBTableProviderFactory {
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
     settings_registry: DuckDBSettingsRegistry,
+    function_support: Option<FunctionSupport>,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -204,6 +206,7 @@ impl DuckDBTableProviderFactory {
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
             settings_registry: DuckDBSettingsRegistry::new(),
+            function_support: None,
         }
     }
 
@@ -225,6 +228,12 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn with_settings_registry(mut self, settings_registry: DuckDBSettingsRegistry) -> Self {
         self.settings_registry = settings_registry;
+        self
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
         self
     }
 
@@ -546,6 +555,9 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
+    schema: Option<SchemaRef>,
+    function_support: Option<FunctionSupport>,
+    indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl DuckDBTableFactory {
@@ -554,12 +566,33 @@ impl DuckDBTableFactory {
         Self {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
+            schema: None,
+            function_support: None,
+            indexes: vec![],
         }
     }
 
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
         self
     }
 

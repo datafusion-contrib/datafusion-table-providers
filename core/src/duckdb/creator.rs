@@ -316,7 +316,7 @@ impl TableManager {
     /// Inserts data from this table into the target table.
     #[tracing::instrument(level = "debug", skip_all)]
     #[allow(dead_code)]
-    pub(crate) fn insert_into(
+    pub fn insert_into(
         &self,
         table: &TableManager,
         tx: &Transaction<'_>,
@@ -394,7 +394,7 @@ impl TableManager {
         Ok(())
     }
 
-    pub(crate) fn drop_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn drop_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop indexes on this table
         for index in self.indexes_vec() {
             self.drop_index(tx, index)?;
@@ -711,11 +711,11 @@ pub struct ViewCreator {
 
 impl ViewCreator {
     #[must_use]
-    pub(crate) fn from_name(name: RelationName) -> Self {
+    pub fn from_name(name: RelationName) -> Self {
         Self { name }
     }
 
-    pub(crate) fn insert_into(
+    pub fn insert_into(
         &self,
         table: &TableManager,
         tx: &Transaction<'_>,
@@ -742,7 +742,7 @@ impl ViewCreator {
         Ok(rows as u64)
     }
 
-    pub(crate) fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop this view
         tx.execute(
             &format!(
