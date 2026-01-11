@@ -17,6 +17,8 @@ pub mod flight;
 pub mod mysql;
 #[cfg(feature = "odbc")]
 pub mod odbc;
+#[cfg(feature = "oracle")]
+pub mod oracle;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]

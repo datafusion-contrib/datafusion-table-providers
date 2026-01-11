@@ -45,6 +45,8 @@
 pub mod arrow;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+#[cfg(feature = "oracle")]
+pub mod oracle;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "sqlite")]

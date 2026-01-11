@@ -22,6 +22,7 @@ let ctx = SessionContext::with_state(state);
 
 - PostgreSQL
 - MySQL
+- Oracle
 - SQLite
 - ClickHouse
 - DuckDB
@@ -163,6 +164,57 @@ EOF
 ```bash
 # Run from repo folder
 cargo run -p datafusion-table-providers --example mysql --features mysql
+```
+
+### Oracle
+
+In order to run the Oracle example, you need to have an Oracle database server running. You can use the following command to start an Oracle Free server in a Docker container the example can use:
+
+```bash
+docker run --name oracle-free \
+    -e ORACLE_PASSWORD=OraclePassword123 \
+    -p 1521:1521 \
+    -d gvenzl/oracle-free:latest
+
+# Wait for the Oracle server to start and healthcheck to pass
+echo "Waiting for Oracle to start (this may take 1-2 minutes)..."
+until docker exec oracle-free /usr/local/bin/checkHealth.sh >/dev/null 2>&1; do
+    sleep 5
+done
+echo "Oracle is ready!"
+
+# Create a table in the Oracle server and insert some data
+docker exec -i oracle-free sqlplus system/OraclePassword123@FREEPDB1 <<EOF
+CREATE TABLE companies (
+   id NUMBER PRIMARY KEY,
+   name VARCHAR2(100)
+);
+
+INSERT INTO companies (id, name) VALUES (1, 'Acme Corporation');
+INSERT INTO companies (id, name) VALUES (2, 'Widget Inc.');
+COMMIT;
+EXIT;
+EOF
+```
+
+**Prerequisites:** The `rust-oracle` crate requires Oracle Instant Client libraries (ODPI-C). Install them:
+
+- **Linux (Debian/Ubuntu):**
+  ```bash
+  apt-get install libaio1 wget unzip
+  wget https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
+  unzip instantclient-basiclite-linuxx64.zip -d /opt/oracle
+  export LD_LIBRARY_PATH=/opt/oracle/instantclient_XX_X:$LD_LIBRARY_PATH
+  ```
+
+- **macOS:**
+  ```bash
+  brew install instantclient-basic
+  ```
+
+```bash
+# Run from repo folder
+cargo run -p datafusion-table-providers --example oracle --features oracle
 ```
 
 ### Flight SQL
