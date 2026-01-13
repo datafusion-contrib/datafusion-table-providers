@@ -389,6 +389,7 @@ async fn test_sqlite_list_utf8_federation_roundtrip() {
         file_type: String::new(),
         table_partition_cols: vec![],
         if_not_exists: true,
+        or_replace: false,
         definition: None,
         order_exprs: vec![],
         unbounded: false,
