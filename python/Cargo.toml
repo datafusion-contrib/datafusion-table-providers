@@ -16,17 +16,18 @@ doc = false
 [dependencies]
 arrow = { workspace = true }
 arrow-flight = { workspace = true, optional = true }
-datafusion = { workspace = true, features = ["pyarrow"] }
+datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true }
-pyo3 = { version = "0.26.0" }
+duckdb = { workspace = true, optional = true }
+
+pyo3 = { version = "0.26" }
 tokio = { version = "1.46", features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "sync",
 ] }
-duckdb = { workspace = true, optional = true }
 
 [features]
 default = [
