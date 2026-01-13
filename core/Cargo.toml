@@ -98,7 +98,7 @@ adbc_core = { workspace = true, optional = true }
 anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
-insta = { version = "1.43.2", features = ["filters"] }
+insta = { version = "1.46.0", features = ["filters"] }
 parquet = { workspace = true }
 prost = { version = "=0.14.1" }
 rand = { workspace = true }
