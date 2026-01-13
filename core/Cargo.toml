@@ -45,7 +45,7 @@ bb8-postgres = { version = "0.9", optional = true }
 bigdecimal = "0.4"
 byteorder = "1.5"
 bytes = { version = "1.11", optional = true }
-byte-unit = { version = "5.1", optional = true }
+byte-unit = { version = "5.2", optional = true }
 chrono = "0.4"
 clickhouse = { version = "0.13", optional = true }
 dashmap = "6.1"
