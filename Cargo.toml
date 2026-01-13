@@ -41,7 +41,7 @@ arrow-odbc = { version = "21.0.0" }
 datafusion = { version = "51", default-features = false }
 datafusion-expr = { version = "51" }
 datafusion-federation = { version = "0.4.11" }
-datafusion-ffi = { version = "51" }
+datafusion-ffi = { version = "52" }
 datafusion-proto = { version = "51" }
 datafusion-physical-expr = { version = "51" }
 datafusion-physical-plan = { version = "51" }
