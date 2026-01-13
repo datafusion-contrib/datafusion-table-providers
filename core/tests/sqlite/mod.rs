@@ -5,7 +5,7 @@ use arrow::array::{
     StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::datatypes::{DataType, Decimal128Type, DecimalType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
@@ -452,6 +452,7 @@ async fn test_sqlite_list_utf8_federation_roundtrip() {
     );
 }
 
+#[allow(dead_code)]
 fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
     match array.as_any().downcast_ref::<Decimal128Array>() {
         Some(array) => array,
@@ -459,6 +460,7 @@ fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
     }
 }
 
+#[allow(dead_code)]
 async fn download_parquet_as_record_batch(url: &str) -> anyhow::Result<RecordBatch> {
     // Download the parquet file
     let response = reqwest::get(url).await?;

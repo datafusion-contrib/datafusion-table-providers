@@ -354,8 +354,7 @@ pub(crate) mod tests {
             .await?;
 
         // Read parquet into record batches
-        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)?
-            .build()?;
+        let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)?.build()?;
 
         let batches: Vec<RecordBatch> = parquet_reader.collect::<Result<Vec<_>, _>>()?;
         let schema = batches[0].schema();
@@ -365,8 +364,7 @@ pub(crate) mod tests {
 
         // This should fail because there are duplicate vendor_ids
         let result =
-            validate_batch_with_constraints(batches, &constraints, &UpsertOptions::default())
-                .await;
+            validate_batch_with_constraints(batches, &constraints, &UpsertOptions::default()).await;
         assert!(result.is_err());
 
         Ok(())

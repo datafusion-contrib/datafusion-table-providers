@@ -22,11 +22,11 @@ use datafusion::{
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
+use datafusion_physical_expr::EquivalenceProperties;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
-use datafusion_physical_expr::EquivalenceProperties;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,

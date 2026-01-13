@@ -79,7 +79,6 @@ impl TableDefinition {
         self
     }
 
-
     #[must_use]
     pub fn with_name(self, name: RelationName) -> Self {
         Self {
@@ -97,7 +96,6 @@ impl TableDefinition {
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
-
 
     pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
         &self.indexes
