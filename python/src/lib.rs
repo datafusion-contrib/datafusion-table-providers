@@ -4,6 +4,7 @@ use std::{
 };
 
 use datafusion::catalog::TableProvider;
+use datafusion::execution::{context::SessionContext, TaskContextProvider};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
@@ -33,10 +34,15 @@ impl RawTableProvider {
             None
         };
 
+        // XXX Not sure if we should pass down a default empty context here ???
+        let ctx: Arc<dyn TaskContextProvider> = Arc::new(SessionContext::default());
+
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
             runtime,
+            &ctx,
+            None,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
