@@ -28,6 +28,18 @@ let ctx = SessionContext::with_state(state);
 - Flight SQL
 - ODBC
 
+## Development
+
+During development, and especially before opening a PR, it is recommended to run:
+
+```bash
+cargo check --all-features --all
+```
+
+This verifies that all features and all crates compile without building
+binaries. It’s much faster than cargo build and avoids issues with
+native/shared library dependencies and heavy compilation.
+
 ## Examples (in Rust)
 
 Run the included examples to see how to use the table providers:
