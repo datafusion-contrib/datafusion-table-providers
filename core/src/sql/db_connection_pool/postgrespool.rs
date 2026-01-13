@@ -197,13 +197,30 @@ impl PostgresConnectionPool {
             .map(SecretBox::expose_secret)
         {
             connection_pool_size = pg_pool_size.parse().context(InvalidIntegerParameterSnafu {
-                parameter_name: "pool_size".to_string(),
+                parameter_name: "connection_pool_size".to_string(),
             })?;
         }
 
-        let pool = bb8::Pool::builder()
+        let mut connection_pool_min_idle: Option<u32> = None;
+        if let Some(pg_pool_min) = params
+            .get("connection_pool_min_idle")
+            .map(SecretBox::expose_secret)
+        {
+            connection_pool_min_idle =
+                Some(pg_pool_min.parse().context(InvalidIntegerParameterSnafu {
+                    parameter_name: "connection_pool_min_idle".to_string(),
+                })?);
+        }
+
+        let mut pool_builder = bb8::Pool::builder()
             .max_size(connection_pool_size)
-            .error_sink(Box::new(error_sink))
+            .error_sink(Box::new(error_sink));
+
+        if let Some(min_idle) = connection_pool_min_idle {
+            pool_builder = pool_builder.min_idle(Some(min_idle));
+        }
+
+        let pool = pool_builder
             .build(manager)
             .await
             .context(ConnectionPoolSnafu)?;

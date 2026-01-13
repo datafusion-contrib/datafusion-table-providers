@@ -1,11 +1,11 @@
 use crate::arrow_record_batch_gen::*;
 use arrow::array::{
-    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch,
+    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Decimal128Type, DecimalType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
@@ -82,10 +82,12 @@ async fn arrow_sqlite_round_trip(
         }
 
         let table = match projected_schema {
-            None => SqlTable::new("sqlite", &sqltable_pool, table_name)
+            None => SqlTable::new("sqlite", &sqltable_pool, table_name, None)
                 .await
                 .expect("Table should be created"),
-            Some(schema) => SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name),
+            Some(schema) => {
+                SqlTable::new_with_schema("sqlite", &sqltable_pool, schema, table_name, None)
+            }
         };
 
         ctx.register_table(table_name, Arc::new(table))
@@ -133,6 +135,7 @@ async fn arrow_sqlite_round_trip(
 #[case::interval(get_arrow_interval_record_batch(), "interval")]
 #[case::duration(get_arrow_duration_record_batch(), "duration")]
 #[case::list(get_arrow_list_record_batch(), "list")]
+#[case::list_utf8(get_arrow_list_utf8_record_batch(), "list_utf8")]
 #[case::null(get_arrow_null_record_batch(), "null")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_sqlite_roundtrip(
@@ -365,4 +368,122 @@ async fn test_sqlite_table_provider_roundtrip(
         casted_result, record_batch,
         "Round-tripped data should match original"
     );
+}
+
+/// Test List(Utf8) round-trip through SqliteTableProviderFactory with federation enabled
+/// This test uses the factory which wraps the table with federation support when the feature is enabled
+#[cfg(feature = "sqlite-federation")]
+#[tokio::test]
+async fn test_sqlite_list_utf8_federation_roundtrip() {
+    let ctx = SessionContext::new();
+    let (record_batch, schema) = get_arrow_list_utf8_record_batch();
+    let table_name = "list_utf8_federation_test";
+
+    let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+    // Create external table using SqliteTableProviderFactory (enables federation)
+    let external_table = CreateExternalTable {
+        schema: df_schema,
+        name: TableReference::bare(table_name),
+        location: String::new(),
+        file_type: String::new(),
+        table_partition_cols: vec![],
+        if_not_exists: true,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Constraints::new_unverified(vec![]),
+        column_defaults: HashMap::default(),
+        temporary: false,
+    };
+
+    let factory = SqliteTableProviderFactory::default();
+    let table = factory
+        .create(&ctx.state(), &external_table)
+        .await
+        .expect("table should be created");
+
+    // Insert data using TableProvider's insert_into method
+    let exec = MockExec::new(vec![Ok(record_batch.clone())], Arc::clone(&schema));
+    let insertion = table
+        .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+        .await
+        .expect("insertion should be successful");
+
+    collect(insertion, ctx.task_ctx())
+        .await
+        .expect("insert should complete");
+
+    // Register the table to query it back
+    ctx.register_table(table_name, Arc::clone(&table))
+        .expect("table should be registered");
+
+    // Query the data back
+    let query_sql = format!("SELECT * FROM {table_name}");
+    let df = ctx.sql(&query_sql).await.expect("query should succeed");
+
+    let result_batches = df.collect().await.expect("should collect results");
+
+    // Verify results
+    assert_eq!(result_batches.len(), 1, "Should have one result batch");
+    let result_batch = &result_batches[0];
+
+    assert_eq!(
+        result_batch.num_rows(),
+        record_batch.num_rows(),
+        "Should have same number of rows"
+    );
+    assert_eq!(
+        result_batch.num_columns(),
+        record_batch.num_columns(),
+        "Should have same number of columns"
+    );
+
+    // Cast the result back to the original schema for comparison
+    let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
+        .expect("should cast result to original schema");
+
+    // Verify the data matches
+    assert_eq!(
+        casted_result, record_batch,
+        "Round-tripped data should match original"
+    );
+}
+
+fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
+    match array.as_any().downcast_ref::<Decimal128Array>() {
+        Some(array) => array,
+        None => panic!("Expected decimal array"),
+    }
+}
+
+async fn download_parquet_as_record_batch(url: &str) -> anyhow::Result<RecordBatch> {
+    // Download the parquet file
+    let response = reqwest::get(url).await?;
+    let parquet_bytes = response.bytes().await?;
+
+    // Write to a temporary file
+    let temp_dir = tempfile::tempdir()?;
+    let temp_path = temp_dir.path().join("downloaded.parquet");
+    std::fs::write(&temp_path, &parquet_bytes)?;
+
+    // Read the parquet file using DataFusion
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "parquet_data",
+        temp_path.to_str().unwrap(),
+        Default::default(),
+    )
+    .await?;
+
+    let df = ctx.sql("SELECT * FROM parquet_data").await?;
+
+    let batches = df.collect().await?;
+    let record_batch = batches
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No record batches found in parquet file"))?;
+
+    Ok(record_batch)
 }

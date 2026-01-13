@@ -604,6 +604,42 @@ pub(crate) fn get_arrow_list_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
+// List(Utf8) - List of strings
+pub(crate) fn get_arrow_list_utf8_record_batch() -> (RecordBatch, SchemaRef) {
+    let mut list_builder = ListBuilder::new(StringBuilder::new());
+    list_builder.append_value([Some("foo"), Some("bar"), Some("baz")]);
+    list_builder.append_value([Some("hello")]);
+    list_builder.append_value([Some("world"), Some("test")]);
+    let list_array = list_builder.finish();
+
+    let mut large_list_builder = LargeListBuilder::new(StringBuilder::new());
+    large_list_builder.append_value([Some("alpha"), Some("beta"), Some("gamma")]);
+    large_list_builder.append_value([Some("delta")]);
+    large_list_builder.append_value([Some("epsilon")]);
+    let large_list_array = large_list_builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "list_utf8",
+            DataType::List(Field::new("item", DataType::Utf8, true).into()),
+            false,
+        ),
+        Field::new(
+            "large_list_utf8",
+            DataType::LargeList(Field::new("item", DataType::Utf8, true).into()),
+            false,
+        ),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(list_array), Arc::new(large_list_array)],
+    )
+    .expect("Failed to created arrow list utf8 record batch");
+
+    (record_batch, schema)
+}
+
 pub(crate) fn get_arrow_list_of_structs_record_batch() -> (RecordBatch, SchemaRef) {
     let input_batch_json_data = r#"
             {"labels": [{"id": 1}, {"id": 2}]}

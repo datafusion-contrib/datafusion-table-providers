@@ -19,7 +19,8 @@ use crate::sql::db_connection_pool::dbconnection::mysqlconn::MySQLConnection;
 use crate::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::{self, mysqlpool, DbConnectionPool};
-use crate::sql::sql_provider_datafusion::{self, SqlTable};
+use crate::sql::sql_provider_datafusion::{self, expr::Engine, SqlTable};
+use crate::util::supported_functions::FunctionSupport;
 use crate::util::{
     self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
     indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
@@ -111,12 +112,22 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct MySQLTableFactory {
     pool: Arc<MySQLConnectionPool>,
+    function_support: Option<FunctionSupport>,
 }
 
 impl MySQLTableFactory {
     #[must_use]
     pub fn new(pool: Arc<MySQLConnectionPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            function_support: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     pub async fn table_provider(
@@ -125,7 +136,7 @@ impl MySQLTableFactory {
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let table_provider = Arc::new(
-            MySQLTable::new(&pool, table_reference)
+            MySQLTable::new(&pool, table_reference, None, self.function_support.clone())
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );
@@ -285,6 +296,7 @@ impl TableProviderFactory for MySQLTableProviderFactory {
                 &dyn_pool,
                 Arc::clone(&schema),
                 TableReference::bare(name.clone()),
+                Some(Engine::MySQL),
             )
             .with_dialect(Arc::new(MySqlDialect {})),
         );

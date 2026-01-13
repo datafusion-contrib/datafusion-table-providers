@@ -57,12 +57,24 @@ pub struct MySQLConnectionPool {
     join_push_down: JoinPushDown,
 }
 
+#[allow(dead_code)]
 const SETUP_QUERIES: [&str; 4] = [
     "SET time_zone = '+00:00'",
     "SET character_set_results = 'utf8mb4'",
     "SET character_set_client = 'utf8mb4'",
     "SET character_set_connection = 'utf8mb4'",
 ];
+
+/// Returns the setup queries for the MySQL connection, optionally overriding default time zone (UTC).
+fn get_setup_queries(time_zone: Option<&str>) -> Vec<String> {
+    let tz = time_zone.unwrap_or("+00:00");
+    vec![
+        format!("SET time_zone = '{tz}'"),
+        "SET character_set_results = 'utf8mb4'".to_string(),
+        "SET character_set_client = 'utf8mb4'".to_string(),
+        "SET character_set_connection = 'utf8mb4'".to_string(),
+    ]
+}
 
 impl MySQLConnectionPool {
     /// Creates a new instance of `MySQLConnectionPool`.
@@ -80,6 +92,7 @@ impl MySQLConnectionPool {
     ///   * `sslrootcert` - The path to the root certificate to use when connecting to the MySQL database.
     ///   * `pool_min` - The minimum number of connections to keep open in the pool, lazily created when requested.
     ///   * `pool_max` - The maximum number of connections to allow in the pool.
+    ///   * `time_zone` - The time zone to use for the MySQL connection (e.g., "+2:00", "UTC", etc.). Default is "+00:00" (UTC).
     ///
     /// # Errors
     ///
@@ -167,7 +180,9 @@ impl MySQLConnectionPool {
 
         connection_string = connection_string.ssl_opts(ssl_opts);
 
-        connection_string = connection_string.setup(SETUP_QUERIES.to_vec());
+        connection_string = connection_string.setup(get_setup_queries(
+            params.get("time_zone").map(SecretBox::expose_secret),
+        ));
 
         let opts = mysql_async::Opts::from(connection_string);
 

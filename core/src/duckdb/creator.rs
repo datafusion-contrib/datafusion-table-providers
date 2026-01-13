@@ -89,7 +89,7 @@ impl TableDefinition {
             indexes: self.indexes,
         }
     }
-    #[must_use]
+
     pub fn name(&self) -> &RelationName {
         &self.name
     }
@@ -102,6 +102,7 @@ impl TableDefinition {
     pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
         &self.indexes
     }
+
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
     pub fn generate_internal_name(&self) -> super::Result<RelationName> {
         let unix_ms = std::time::SystemTime::now()
@@ -224,11 +225,11 @@ impl TableManager {
             .unwrap_or_else(|| &self.table_definition.name)
     }
 
-
     /// Returns the table definition for the table creator.
     pub fn table_definition(&self) -> &Arc<TableDefinition> {
         &self.table_definition
     }
+
     /// Searches if a table by the name specified in the table definition exists in the database.
     /// Returns None if the table does not exist, or an instance of a `TableCreator` for the base table if it does.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -568,7 +569,7 @@ impl TableManager {
     }
 
     /// Verifies that the primary keys match between this table creator and another table creator.
-    pub(crate) fn verify_primary_keys_match(
+    pub fn verify_primary_keys_match(
         &self,
         other_table: &TableManager,
         tx: &Transaction<'_>,
@@ -617,7 +618,7 @@ impl TableManager {
     }
 
     /// Verifies that the indexes match between this table creator and another table creator.
-    pub(crate) fn verify_indexes_match(
+    pub fn verify_indexes_match(
         &self,
         other_table: &TableManager,
         tx: &Transaction<'_>,
@@ -673,7 +674,7 @@ impl TableManager {
     }
 
     /// Returns the current schema in database for this table.
-    pub(crate) fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
+    pub fn current_schema(&self, tx: &Transaction<'_>) -> super::Result<SchemaRef> {
         let sql = format!(
             "SELECT * FROM {table_name} LIMIT 0",
             table_name = quote_identifier(&self.table_name().to_string())
@@ -685,7 +686,7 @@ impl TableManager {
         Ok(result.get_schema())
     }
 
-    pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
+    pub fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
         let sql = format!(
             "SELECT COUNT(1) FROM {table_name}",
             table_name = quote_identifier(&self.table_name().to_string())
@@ -765,9 +766,10 @@ pub(crate) mod tests {
             dbconnection::duckdbconn::DuckDbConnection, duckdbpool::DuckDbConnectionPool,
         },
     };
-    use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
+        arrow::array::RecordBatch,
         common::SchemaExt,
+        datasource::sink::DataSink,
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
@@ -837,6 +839,7 @@ pub(crate) mod tests {
         ))
     }
 
+    #[ignore = "External parquet data source is currently unavailable (403 Forbidden)"]
     #[tokio::test]
     async fn test_table_creator() {
         let _guard = init_tracing(None);
@@ -954,6 +957,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[ignore = "External parquet data source is currently unavailable (403 Forbidden)"]
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_table_creator_primary_key() {
@@ -1657,5 +1661,341 @@ pub(crate) mod tests {
             first_tables.first().expect("should have a table").0,
             second_tables.first().expect("should have a table").0
         );
+    }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_index_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![(
+                    ColumnReference::try_from("id").expect("valid column ref"),
+                    IndexType::Enabled,
+                )]),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES ('Alice', 1, 30, 'active'), ('Bob', 2, 25, 'inactive'), ('Charlie', 3, 35, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let queries = [
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+        ];
+
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
+
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_{idx}"), explain_result);
+            });
+        }
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_multiple_indexes_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![
+                    (
+                        ColumnReference::try_from("id").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                    (
+                        ColumnReference::try_from("age").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                    (
+                        ColumnReference::try_from("status").expect("valid column ref"),
+                        IndexType::Enabled,
+                    ),
+                ]),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES 
+                ('Alice', 1, 30, 'active'), 
+                ('Bob', 2, 25, 'inactive'), 
+                ('Charlie', 3, 35, 'active'),
+                ('David', 4, 30, 'pending'),
+                ('Eve', 5, 40, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let queries = [
+            // Test index on id column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name, status FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            // Test index on age column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, name FROM {} WHERE age = 30",
+                table_definition.name()
+            ),
+            // Test index on status column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, age FROM {} WHERE status = 'active'",
+                table_definition.name()
+            ),
+        ];
+
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
+
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_multiple_indexes_{idx}"), explain_result);
+            });
+        }
+
+        tx.rollback().expect("should rollback transaction");
+    }
+
+    #[tokio::test]
+    async fn test_explain_analyze_with_primary_key_and_index_and_view() {
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, true),
+            arrow::datatypes::Field::new("status", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_indexes(vec![(
+                    ColumnReference::try_from("id").expect("valid column ref"),
+                    IndexType::Enabled,
+                )])
+                .with_constraints(get_pk_constraints(&["name"], Arc::clone(&schema))),
+        );
+
+        let mut pool_conn = Arc::clone(&pool).connect_sync().expect("to get connection");
+        let conn = pool_conn
+            .as_any_mut()
+            .downcast_mut::<DuckDbConnection>()
+            .expect("to downcast to duckdb connection");
+        let tx = conn
+            .get_underlying_conn_mut()
+            .transaction()
+            .expect("should begin transaction");
+
+        let table_manager = TableManager::new(Arc::clone(&table_definition))
+            .with_internal(true)
+            .expect("to create table manager");
+
+        table_manager
+            .create_table(Arc::clone(&pool), &tx)
+            .expect("to create table");
+
+        table_manager
+            .create_indexes(&tx)
+            .expect("to create indexes");
+
+        tx.execute(
+            &format!(
+                r#"INSERT INTO "{table_name}" VALUES 
+                ('Alice', 1, 30, 'active'), 
+                ('Bob', 2, 25, 'inactive'), 
+                ('Charlie', 3, 35, 'active'),
+                ('David', 4, 30, 'pending'),
+                ('Eve', 5, 40, 'active')"#,
+                table_name = table_manager.table_name()
+            ),
+            [],
+        )
+        .expect("to insert test data");
+
+        table_manager.create_view(&tx).expect("to create view");
+
+        let queries = [
+            // Test index on id column
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT name, status FROM {} WHERE id = 1",
+                table_definition.name()
+            ),
+            // Test primary key
+            format!(
+                "EXPLAIN ANALYZE SELECT * FROM {} WHERE name = 'Alice'",
+                table_definition.name()
+            ),
+            format!(
+                "EXPLAIN ANALYZE SELECT id, status FROM {} WHERE name = 'Bob'",
+                table_definition.name()
+            ),
+        ];
+
+        for (idx, query) in queries.iter().enumerate() {
+            let mut stmt = tx.prepare(query).expect("to prepare statement");
+            let mut rows = stmt.query([]).expect("to execute query");
+
+            let mut explain_output = Vec::new();
+            while let Some(row) = rows.next().expect("to get next row") {
+                let line: String = row.get(1).expect("to get explain line");
+                explain_output.push(line);
+            }
+
+            let explain_result = explain_output.join("\n");
+
+            insta::with_settings!({
+                filters => vec![
+                    (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
+                    (r"\(\d+\.\d+s\)", "(0.00s)"),
+                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                ],
+            }, {
+                insta::assert_snapshot!(format!("explain_analyze_primary_key_and_index_{idx}"), explain_result);
+            });
+        }
+
+        tx.rollback().expect("should rollback transaction");
     }
 }

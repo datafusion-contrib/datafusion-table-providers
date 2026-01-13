@@ -1,5 +1,7 @@
 use rand::Rng;
 
+#[cfg(feature = "adbc")]
+mod adbc;
 mod arrow_record_batch_gen;
 #[cfg(feature = "clickhouse")]
 mod clickhouse;
@@ -8,18 +10,18 @@ mod docker;
 mod duckdb;
 #[cfg(feature = "flight")]
 mod flight;
+#[cfg(feature = "mongodb")]
+mod mongodb;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "sqlite")]
 mod sqlite;
-#[cfg(feature = "adbc")]
-mod adbc;
 
 fn container_registry() -> String {
     std::env::var("CONTAINER_REGISTRY")
-        .unwrap_or_else(|_| "public.ecr.aws/docker/library/".to_string())
+        .unwrap_or_else(|_| "public.ecr.aws/docker/library".to_string())
 }
 
 fn get_random_port() -> usize {

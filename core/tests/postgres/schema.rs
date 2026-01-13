@@ -14,7 +14,7 @@ use datafusion_table_providers::postgres::PostgresTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::util::secrets::to_secret_map;
 
-const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table.sql");
+const COMPLEX_TABLE_SQL: &str = include_str!("scripts/complex_table_pg.sql");
 
 fn get_schema() -> SchemaRef {
     let fields = vec![
@@ -43,7 +43,7 @@ fn get_schema() -> SchemaRef {
 #[tokio::test]
 async fn test_postgres_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container(port)
+    let container = common::start_postgres_docker_container("postgres:latest", port, None)
         .await
         .expect("Postgres container to start");
 
@@ -96,7 +96,7 @@ async fn test_postgres_schema_inference() {
 #[tokio::test]
 async fn test_postgres_schema_inference_complex_types() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container(port)
+    let container = common::start_postgres_docker_container("postgres:latest", port, None)
         .await
         .expect("Postgres container to start");
 
@@ -139,7 +139,7 @@ async fn test_postgres_schema_inference_complex_types() {
 #[tokio::test]
 async fn test_postgres_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container(port)
+    let container = common::start_postgres_docker_container("postgres:latest", port, None)
         .await
         .expect("Postgres container to start");
 
@@ -183,7 +183,7 @@ async fn test_postgres_view_schema_inference() {
 #[tokio::test]
 async fn test_postgres_materialized_view_schema_inference() {
     let port = crate::get_random_port();
-    let container = common::start_postgres_docker_container(port)
+    let container = common::start_postgres_docker_container("postgres:latest", port, None)
         .await
         .expect("Postgres container to start");
 

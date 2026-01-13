@@ -1,6 +1,9 @@
 use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::sql_provider_datafusion::expr::Engine;
+use crate::util::supported_functions::FunctionSupport;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::SqliteDialect;
 use futures::TryStreamExt;
 use std::fmt::Display;
@@ -24,12 +27,15 @@ use datafusion::{
 
 pub struct SQLiteTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
+    pub(crate) decimal_between: bool,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl<T, P> std::fmt::Debug for SQLiteTable<T, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SQLiteTable")
             .field("base_table", &self.base_table)
+            .field("decimal_between", &self.decimal_between)
             .finish()
     }
 }
@@ -39,24 +45,51 @@ impl<T, P> SQLiteTable<T, P> {
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
+        constraints: Option<Constraints>,
     ) -> Self {
-        let base_table = SqlTable::new_with_schema("sqlite", pool, schema, table_reference)
-            .with_dialect(Arc::new(SqliteDialect {}));
+        let base_table = SqlTable::new_with_schema(
+            "sqlite",
+            pool,
+            schema,
+            table_reference,
+            Some(Engine::SQLite),
+        )
+        .with_dialect(Arc::new(SqliteDialect {}))
+        .with_constraints_opt(constraints);
 
-        Self { base_table }
+        Self {
+            base_table,
+            decimal_between: false,
+            function_support: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_decimal_between(mut self, decimal_between: bool) -> Self {
+        self.decimal_between = decimal_between;
+        self
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: Option<FunctionSupport>) -> Self {
+        self.function_support = function_support;
+        self
     }
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SQLiteSqlExec::new(
-            projection,
+            projections,
             schema,
+            &self.base_table.table_reference,
             self.base_table.clone_pool(),
-            sql,
+            filters,
+            limit,
         )?))
     }
 }
@@ -89,8 +122,7 @@ impl<T, P> TableProvider for SQLiteTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
-        return self.create_physical_plan(projection, &self.schema(), sql);
+        return self.create_physical_plan(projection, &self.schema(), filters, limit);
     }
 }
 
@@ -107,12 +139,22 @@ struct SQLiteSqlExec<T, P> {
 
 impl<T, P> SQLiteSqlExec<T, P> {
     fn new(
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
+        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
+        let base_exec = SqlExec::new(
+            projections,
+            schema,
+            table_reference,
+            pool,
+            filters,
+            limit,
+            Some(Engine::SQLite),
+        )?;
 
         Ok(Self { base_exec })
     }

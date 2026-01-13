@@ -1,5 +1,6 @@
-use crate::util::supported_functions::FunctionSupport;
+use crate::duckdb::write_settings::DuckDBWriteSettings;
 use crate::sql::sql_provider_datafusion;
+use crate::util::supported_functions::FunctionSupport;
 use crate::util::{
     self,
     column_reference::{self, ColumnReference},
@@ -150,6 +151,12 @@ pub enum Error {
     #[snafu(display("Failed to parse the system time: {source}"))]
     UnableToParseSystemTime { source: std::num::ParseIntError },
 
+    #[snafu(display("Failed to parse 'connection_pool_size' value '{value}': {source}. Provide a valid positive integer value, e.g. '10', '20' and try again."))]
+    UnableToParseConnectionPoolSize {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+
     #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
     MissingReadProvider,
 
@@ -193,6 +200,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
             .field("access_mode", &self.access_mode)
             .field("instances", &self.instances)
             .field("unsupported_type_action", &self.unsupported_type_action)
+            .field("settings_registry", &self.settings_registry)
             .finish()
     }
 }
@@ -208,6 +216,12 @@ impl DuckDBTableProviderFactory {
             settings_registry: DuckDBSettingsRegistry::new(),
             function_support: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
     }
 
     #[must_use]
@@ -228,12 +242,6 @@ impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn with_settings_registry(mut self, settings_registry: DuckDBSettingsRegistry) -> Self {
         self.settings_registry = settings_registry;
-        self
-    }
-
-    #[must_use]
-    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
-        self.function_support = Some(function_support);
         self
     }
 
@@ -285,17 +293,30 @@ impl DuckDBTableProviderFactory {
         Ok(filepath.to_string())
     }
 
-    pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
-        let pool_builder = DuckDbConnectionPoolBuilder::memory();
+    pub async fn get_or_init_memory_instance(
+        &self,
+        options: &HashMap<String, String>,
+    ) -> Result<DuckDbConnectionPool> {
+        let mut pool_builder = DuckDbConnectionPoolBuilder::memory();
+
+        if let Some(max_size) = extract_connection_pool_size(options)? {
+            pool_builder = pool_builder.with_max_size(Some(max_size));
+        }
+
         self.get_or_init_instance_with_builder(pool_builder).await
     }
 
     pub async fn get_or_init_file_instance(
         &self,
         db_path: impl Into<Arc<str>>,
+        options: &HashMap<String, String>,
     ) -> Result<DuckDbConnectionPool> {
         let db_path: Arc<str> = db_path.into();
-        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+        let mut pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+
+        if let Some(max_size) = extract_connection_pool_size(options)? {
+            pool_builder = pool_builder.with_max_size(Some(max_size));
+        }
 
         self.get_or_init_instance_with_builder(pool_builder).await
     }
@@ -400,12 +421,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance(db_path, &options)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance(&options)
                 .await
                 .map_err(to_datafusion_error)?,
         };
@@ -414,7 +435,10 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::File => {
                 let read_pool = pool.clone();
 
-                read_pool.set_attached_databases(&self.attach_databases(&options))
+                read_pool
+                    .set_attached_databases(&self.attach_databases(&options))
+                    .context(DbConnectionPoolSnafu)
+                    .map_err(to_datafusion_error)?
             }
             Mode::Memory => pool.clone(),
         };
@@ -436,10 +460,13 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let pool = Arc::new(pool);
         make_initial_table(Arc::new(table_definition.clone()), &pool)?;
 
+        let write_settings = DuckDBWriteSettings::from_params(&options);
+
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(table_definition)
             .with_pool(pool)
-            .set_on_conflict(on_conflict);
+            .set_on_conflict(on_conflict)
+            .with_write_settings(write_settings);
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
@@ -462,6 +489,9 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             TableReference::bare(name.clone()),
             None,
             Some(self.dialect.clone()),
+            Some(cmd.constraints.clone()),
+            self.function_support.clone(),
+            indexes,
         ));
 
         #[cfg(feature = "duckdb-federation")]
@@ -552,6 +582,19 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
         .or_else(|| options.remove(&format!("duckdb.{key}")))
 }
 
+fn extract_connection_pool_size(options: &HashMap<String, String>) -> Result<Option<u32>> {
+    if let Some(pool_size_str) = options.get("connection_pool_size") {
+        pool_size_str
+            .parse()
+            .context(UnableToParseConnectionPoolSizeSnafu {
+                value: pool_size_str.clone(),
+            })
+            .map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
@@ -573,6 +616,12 @@ impl DuckDBTableFactory {
     }
 
     #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
+        self
+    }
+
+    #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
         self
@@ -581,12 +630,6 @@ impl DuckDBTableFactory {
     #[must_use]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
-        self
-    }
-
-    #[must_use]
-    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
-        self.function_support = Some(function_support);
         self
     }
 
@@ -604,7 +647,10 @@ impl DuckDBTableFactory {
         let conn = Arc::clone(&pool).connect().await?;
         let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
 
-        let schema = get_schema(conn, &table_reference).await?;
+        let schema = match self.schema.as_ref() {
+            Some(schema) => Arc::clone(schema),
+            None => get_schema(conn, &table_reference).await?,
+        };
         let (tbl_ref, cte) = if is_table_function(&table_reference) {
             let tbl_ref_view = create_table_function_view_name(&table_reference);
             (
@@ -624,6 +670,9 @@ impl DuckDBTableFactory {
             tbl_ref,
             cte,
             Some(self.dialect.clone()),
+            None,
+            self.function_support.clone(),
+            self.indexes.clone(),
         ));
 
         #[cfg(feature = "duckdb-federation")]

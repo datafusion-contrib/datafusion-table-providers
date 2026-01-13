@@ -1,9 +1,6 @@
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, LogicalTableSource};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::sql::sqlparser::ast::VisitMut;
-use datafusion::sql::unparser::Unparser;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::{any::Any, fmt};
@@ -15,42 +12,9 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
 };
 
-use crate::sql::sql_provider_datafusion::{default_filter_pushdown, SqlExec};
-use crate::util::table_arg_replace::TableArgReplace;
+use crate::sql::sql_provider_datafusion::{expr, SqlExec};
 
-use super::{into_table_args, ClickHouseTable};
-
-impl ClickHouseTable {
-    fn create_logical_plan(
-        &self,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<LogicalPlan> {
-        let table_source = LogicalTableSource::new(self.schema.clone());
-        LogicalPlanBuilder::scan_with_filters(
-            self.table_reference.clone(),
-            Arc::new(table_source),
-            projection.cloned(),
-            filters.to_vec(),
-        )?
-        .limit(0, limit)?
-        .build()
-    }
-
-    fn create_physical_plan(
-        &self,
-        projection: Option<&Vec<usize>>,
-        sql: String,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SqlExec::new(
-            projection,
-            &self.schema(),
-            self.pool.clone(),
-            sql,
-        )?))
-    }
-}
+use super::ClickHouseTable;
 
 #[async_trait]
 impl TableProvider for ClickHouseTable {
@@ -70,7 +34,13 @@ impl TableProvider for ClickHouseTable {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let filter_push_down = default_filter_pushdown(filters, &*self.dialect);
+        let filter_push_down: Vec<TableProviderFilterPushDown> = filters
+            .iter()
+            .map(|f| match expr::to_sql_with_engine(f, None) {
+                Ok(_) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            })
+            .collect();
         Ok(filter_push_down)
     }
 
@@ -81,17 +51,18 @@ impl TableProvider for ClickHouseTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let logical_plan = self.create_logical_plan(projection, filters, limit)?;
-        let mut sql = Unparser::new(&*self.dialect).plan_to_sql(&logical_plan)?;
+        let exec = SqlExec::new(
+            projection,
+            &self.schema(),
+            &self.table_reference,
+            self.pool.clone(),
+            filters,
+            limit,
+            None, // engine - ClickHouse doesn't use specific engine
+        )?
+        .with_custom_table_expr(self.table_expr.clone());
 
-        if let Some(args) = self.args.clone() {
-            let args = into_table_args(args);
-            let mut table_args = TableArgReplace::new(vec![(self.table_reference.clone(), args)]);
-            let _ = sql.visit(&mut table_args);
-        }
-
-        let sql = sql.to_string();
-        return self.create_physical_plan(projection, sql);
+        Ok(Arc::new(exec))
     }
 }
 

@@ -33,6 +33,7 @@ arrow-array = { version = "57.0.0" }
 arrow-flight = { version = "57.0.0", features = [
   "flight-sql-experimental",
   "tls-ring",
+  "tls-native-roots",
 ] }
 arrow-ipc = { version = "57.0.0" }
 arrow-schema = { version = "57.0.0", features = ["serde"] }
@@ -49,3 +50,47 @@ datafusion-table-providers = { path = "core" }
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "923c33ede98429f6b5e9692fa9680ac455708c32" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.21.0" }
 adbc_driver_manager = { version = "0.21.0" }
+parquet = "57"
+rusqlite = "0.37"
+tokio-rusqlite = "0.7.0"
+async-stream = "0.3.5"
+async-trait = "0.1.80"
+bigdecimal = "0.4.5"
+byteorder = "1.5.0"
+chrono = "0.4"
+futures = "0.3.30"
+itertools = "0.14.0"
+num-bigint = "0.4"
+secrecy = "0.10.3"
+serde = { version = "1.0.209", features = ["derive"] }
+serde_json = "1.0.124"
+snafu = "0.8.3"
+time = "0.3.36"
+tokio = { version = "1.46", features = ["macros", "fs"] }
+tracing = "0.1.40"
+url = "2.5.1"
+rand = "0.9"
+regex = "1"
+uuid = "1.9.1"
+prost = "0.14.1"
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-webpki-roots"] }
+bytes = "1.7.1"
+base64 = "0.22.1"
+dashmap = "6.1.0"
+fallible-iterator = "0.3.0"
+fundu = "2.0.1"
+geo-types = "0.7.13"
+sha2 = "0.10"
+hickory-resolver = "0.25.2"
+sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = [
+  "backend-sqlite",
+  "backend-postgres",
+  "postgres-array",
+  "with-rust_decimal",
+  "with-bigdecimal",
+  "with-time",
+  "with-chrono",
+] }
+
+[patch.crates-io]
+rusqlite = { git = "https://github.com/spiceai/rusqlite.git", rev = "3d1f5f6f6d6d062676210d095df45eafa6e19fd8" } # spiceai-v0.37.0

@@ -85,6 +85,8 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "bit" | "bit varying" => Ok(DataType::Binary),
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
         "xml" | "json" => Ok(DataType::Utf8),
+        // `Name` is a 64 bytes (varchar) / internal type for object names
+        "\"Name\"" => Ok(DataType::Utf8),
         "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
         "array" => parse_array_type(context),
         "anyarray" => Ok(DataType::List(Arc::new(Field::new(

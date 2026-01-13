@@ -16,7 +16,8 @@ limitations under the License.
 
 use crate::sql::db_connection_pool::dbconnection::odbcconn::ODBCDbConnectionPool;
 use crate::sql::{
-    db_connection_pool as db_connection_pool_datafusion, sql_provider_datafusion::SqlTable,
+    db_connection_pool as db_connection_pool_datafusion,
+    sql_provider_datafusion::{expr, SqlTable},
 };
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
@@ -70,7 +71,7 @@ where
         let pool = Arc::clone(&self.pool);
         let dyn_pool: Arc<ODBCDbConnectionPool<'a>> = pool;
 
-        let table = SqlTable::new("odbc", &dyn_pool, table_reference)
+        let table = SqlTable::new("odbc", &dyn_pool, table_reference, Some(expr::Engine::ODBC))
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 

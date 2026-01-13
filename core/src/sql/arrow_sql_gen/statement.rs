@@ -37,7 +37,6 @@ pub struct CreateTableBuilder {
     schema: SchemaRef,
     table_name: String,
     primary_keys: Vec<String>,
-    temporary: bool,
 }
 
 impl CreateTableBuilder {
@@ -47,7 +46,6 @@ impl CreateTableBuilder {
             schema,
             table_name: table_name.to_string(),
             primary_keys: Vec::new(),
-            temporary: false,
         }
     }
 
@@ -57,13 +55,6 @@ impl CreateTableBuilder {
         T: Into<String>,
     {
         self.primary_keys = keys.into_iter().map(Into::into).collect();
-        self
-    }
-
-    #[must_use]
-    /// Set whether the table is temporary or not.
-    pub fn temporary(mut self, temporary: bool) -> Self {
-        self.temporary = temporary;
         self
     }
 
@@ -154,10 +145,6 @@ impl CreateTableBuilder {
             create_stmt.primary_key(&mut index);
         }
 
-        if self.temporary {
-            create_stmt.temporary();
-        }
-
         create_stmt.to_string(query_builder)
     }
 }
@@ -209,9 +196,10 @@ pub struct InsertBuilder<'a> {
     record_batches: &'a Vec<RecordBatch>,
 }
 
+#[allow(unused_variables)]
 pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
-    #[allow(unused_variables)] data_type: &DataType,
-    #[allow(unused_variables)] query_builder: &T,
+    data_type: &DataType,
+    query_builder: &T,
 ) -> bool {
     #[cfg(feature = "sqlite")]
     {
@@ -1590,20 +1578,6 @@ mod tests {
             .build_sqlite();
 
         assert_eq!(sql, "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"id2\" integer NOT NULL, \"name\" text NOT NULL, \"age\" integer, PRIMARY KEY (\"id\", \"id2\") )");
-    }
-
-    #[test]
-    fn test_temporary_table_creation() {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-        ]);
-        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users")
-            .primary_keys(vec!["id"])
-            .temporary(true)
-            .build_sqlite();
-
-        assert_eq!(sql, "CREATE TEMPORARY TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL, PRIMARY KEY (\"id\") )");
     }
 
     #[test]

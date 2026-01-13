@@ -327,8 +327,9 @@ impl DataSink for DuckDBDataSink {
 
             if let Some(constraints) = self.table_definition.constraints() {
                 constraints::validate_batch_with_constraints(
-                    std::slice::from_ref(&batch),
+                    vec![batch.clone()],
                     constraints,
+                    &crate::util::constraints::UpsertOptions::default(),
                 )
                 .await
                 .context(super::ConstraintViolationSnafu)

@@ -1,5 +1,8 @@
+#![allow(deprecated)]
+
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
+#[allow(deprecated)]
 use bollard::{
     container::{
         Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,

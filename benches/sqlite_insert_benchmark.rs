@@ -1,3 +1,6 @@
+#![allow(clippy::wildcard_in_or_patterns)]
+#![allow(clippy::type_complexity)]
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -50,7 +53,6 @@ async fn main() {
     let methods_to_test = match test_mode.as_str() {
         "inline" => vec![InsertMethod::Inline],
         "prepared" => vec![InsertMethod::Prepared],
-        "both" => vec![InsertMethod::Inline, InsertMethod::Prepared],
         _ => vec![InsertMethod::Inline, InsertMethod::Prepared],
     };
 

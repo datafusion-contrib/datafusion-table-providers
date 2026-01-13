@@ -1,43 +1,46 @@
-//! # SQL DataFusion TableProvider
+//! # SQL DataFusion `TableProvider`
 //!
-//! This module implements a SQL TableProvider for DataFusion.
+//! This module implements a SQL `TableProvider` for DataFusion.
 //!
 //! This is used as a fallback if the `datafusion-federation` optimizer is not enabled.
 
-use crate::sql::db_connection_pool::{
-    self,
-    dbconnection::{get_schema, query_arrow},
-    DbConnectionPool,
+use crate::{
+    sql::db_connection_pool::{
+        self,
+        dbconnection::{get_schema, query_arrow},
+        DbConnectionPool,
+    },
+    util::supported_functions::FunctionSupport,
 };
 use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
-    physical_plan::execution_plan::{Boundedness, EmissionType},
-    sql::unparser::dialect::{DefaultDialect, Dialect},
+    common::Constraints,
+    sql::unparser::{
+        dialect::{DefaultDialect, Dialect},
+        Unparser,
+    },
 };
+use expr::Engine;
 use futures::TryStreamExt;
 use snafu::prelude::*;
+use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
-use std::{
-    fmt::{Display, Formatter},
-    sync::LazyLock,
-};
 
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema, SchemaRef},
+    arrow::datatypes::SchemaRef,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
-    logical_expr::{
-        logical_plan::builder::LogicalTableSource, Expr, LogicalPlan, LogicalPlanBuilder,
-        TableProviderFilterPushDown, TableType,
-    },
+    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
-        Partitioning, PlanProperties, SendableRecordBatchStream,
+        execution_plan::{Boundedness, EmissionType},
+        stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+        SendableRecordBatchStream,
     },
-    sql::{unparser::Unparser, TableReference},
+    sql::TableReference,
 };
 
 pub mod expr;
@@ -55,35 +58,50 @@ pub enum Error {
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
-    UnableToGenerateSQL { source: DataFusionError },
+    UnableToGenerateSQL { source: expr::Error },
+
+    #[snafu(display("Unable to generate SQL: {source}"))]
+    UnableToGenerateSQLDataFusion { source: DataFusionError },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Clone)]
 pub struct SqlTable<T: 'static, P: 'static> {
-    name: String,
+    name: &'static str,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     schema: SchemaRef,
     pub table_reference: TableReference,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    engine: Option<Engine>,
+    pub(crate) dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    constraints: Option<Constraints>,
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
-impl<T, P> fmt::Debug for SqlTable<T, P> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<T, P> std::fmt::Debug for SqlTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlTable")
             .field("name", &self.name)
-            .field("schema", &self.schema)
             .field("table_reference", &self.table_reference)
-            .finish()
+            .field("schema", &self.schema)
+            .field("engine", &self.engine)
+            .field("dialect", &self.dialect.is_some())
+            .field("constraints", &self.constraints)
+            .field("function_support", &self.function_support)
+            .finish_non_exhaustive()
     }
 }
 
 impl<T, P> SqlTable<T, P> {
+    /// Creates a new SQL table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema cannot be retrieved from the database.
     pub async fn new(
-        name: &str,
+        name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         table_reference: impl Into<TableReference>,
+        engine: Option<expr::Engine>,
     ) -> Result<Self> {
         let table_reference = table_reference.into();
         let conn = pool
@@ -95,66 +113,53 @@ impl<T, P> SqlTable<T, P> {
             .await
             .context(UnableToGetSchemaSnafu)?;
 
-        Ok(Self::new_with_schema(name, pool, schema, table_reference))
+        Ok(Self {
+            name,
+            pool: Arc::clone(pool),
+            schema,
+            table_reference,
+            engine,
+            dialect: None,
+            constraints: None,
+            function_support: None,
+        })
     }
 
     pub fn new_with_schema(
-        name: &str,
+        name: &'static str,
         pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
+        engine: Option<expr::Engine>,
     ) -> Self {
         Self {
-            name: name.to_owned(),
+            name,
             pool: Arc::clone(pool),
             schema: schema.into(),
             table_reference: table_reference.into(),
+            engine,
             dialect: None,
+            constraints: None,
+            function_support: None,
         }
     }
 
-    pub fn scan_to_sql(
-        &self,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<String> {
-        let logical_plan = self.create_logical_plan(projection, filters, limit)?;
-        let sql = Unparser::new(self.dialect())
-            .plan_to_sql(&logical_plan)?
-            .to_string();
-
-        Ok(sql)
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: Option<FunctionSupport>) -> Self {
+        self.function_support = function_support;
+        self
     }
 
-    fn create_logical_plan(
-        &self,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<LogicalPlan> {
-        let table_source = LogicalTableSource::new(self.schema());
-        LogicalPlanBuilder::scan_with_filters(
-            self.table_reference.clone(),
-            Arc::new(table_source),
-            projection.cloned(),
-            filters.to_vec(),
-        )?
-        .limit(0, limit)?
-        .build()
+    #[must_use]
+    pub fn with_constraints_opt(mut self, constraints: Option<Constraints>) -> Self {
+        self.constraints = constraints;
+        self
     }
 
-    fn create_physical_plan(
-        &self,
-        projection: Option<&Vec<usize>>,
-        sql: String,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SqlExec::new(
-            projection,
-            &self.schema(),
-            Arc::clone(&self.pool),
-            sql,
-        )?))
+    #[must_use]
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = Some(constraints);
+        self
     }
 
     #[must_use]
@@ -165,21 +170,36 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
+    fn create_physical_plan(
+        &self,
+        projections: Option<&Vec<usize>>,
+        schema: &SchemaRef,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let mut exec = SqlExec::new(
+            projections,
+            schema,
+            &self.table_reference,
+            Arc::clone(&self.pool),
+            filters,
+            limit,
+            self.engine,
+        )?;
+        if let Some(dialect) = &self.dialect {
+            exec = exec.with_dialect(Arc::clone(dialect));
+        }
+        Ok(Arc::new(exec))
+    }
+
     #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> &'static str {
+        self.name
     }
 
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
-    }
-
-    fn dialect(&self) -> &(dyn Dialect + Send + Sync) {
-        match &self.dialect {
-            Some(dialect) => dialect.as_ref(),
-            None => &DefaultDialect {},
-        }
     }
 }
 
@@ -193,6 +213,10 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         Arc::clone(&self.schema)
     }
 
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
+    }
+
     fn table_type(&self) -> TableType {
         TableType::Base
     }
@@ -201,7 +225,14 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let filter_push_down = default_filter_pushdown(filters, self.dialect());
+        let filter_push_down: Vec<TableProviderFilterPushDown> = filters
+            .iter()
+            .map(|f| match expr::to_sql_with_engine(f, self.engine) {
+                Ok(_) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            })
+            .collect();
+
         Ok(filter_push_down)
     }
 
@@ -212,27 +243,8 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.scan_to_sql(projection, filters, limit)?;
-        return self.create_physical_plan(projection, sql);
+        return self.create_physical_plan(projection, &self.schema(), filters, limit);
     }
-}
-
-pub fn default_filter_pushdown(
-    filters: &[&Expr],
-    dialect: &dyn Dialect,
-) -> Vec<TableProviderFilterPushDown> {
-    filters
-        .iter()
-        .map(|f| match Unparser::new(dialect).expr_to_sql(f) {
-            // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
-            Ok(_) => match expr::expr_contains_subquery(f) {
-                Ok(true) => TableProviderFilterPushDown::Unsupported,
-                Ok(false) => TableProviderFilterPushDown::Exact,
-                Err(_) => TableProviderFilterPushDown::Unsupported,
-            },
-            Err(_) => TableProviderFilterPushDown::Unsupported,
-        })
-        .collect()
 }
 
 impl<T, P> Display for SqlTable<T, P> {
@@ -241,9 +253,41 @@ impl<T, P> Display for SqlTable<T, P> {
     }
 }
 
-static ONE_COLUMN_SCHEMA: LazyLock<SchemaRef> =
-    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new("1", DataType::Int64, true)])));
+pub struct SqlExec<T, P> {
+    projected_schema: SchemaRef,
+    table_reference: TableReference,
+    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    filters: Vec<Expr>,
+    limit: Option<usize>,
+    properties: PlanProperties,
+    engine: Option<Engine>,
+    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    /// Custom table expression to use instead of quoted table_reference
+    /// Useful for database-specific syntax like ClickHouse parameterized views
+    custom_table_expr: Option<String>,
+}
 
+impl<T, P> Clone for SqlExec<T, P> {
+    fn clone(&self) -> Self {
+        SqlExec {
+            projected_schema: Arc::clone(&self.projected_schema),
+            table_reference: self.table_reference.clone(),
+            pool: Arc::clone(&self.pool),
+            filters: self.filters.clone(),
+            limit: self.limit,
+            properties: self.properties.clone(),
+            engine: self.engine,
+            dialect: self.dialect.clone(),
+            custom_table_expr: self.custom_table_expr.clone(),
+        }
+    }
+}
+
+/// Projects a schema to include only the specified columns.
+///
+/// # Errors
+///
+/// Returns an error if the projection fails.
 pub fn project_schema_safe(
     schema: &SchemaRef,
     projection: Option<&Vec<usize>>,
@@ -251,10 +295,7 @@ pub fn project_schema_safe(
     let schema = match projection {
         Some(columns) => {
             if columns.is_empty() {
-                // If the projection is Some([]) then it gets unparsed as `SELECT 1`, so return a schema with a single Int64 column.
-                //
-                // See: <https://github.com/apache/datafusion/blob/83ce79c39412a4f150167d00e40ea05948c4870f/datafusion/sql/src/unparser/plan.rs#L998>
-                Arc::clone(&ONE_COLUMN_SCHEMA)
+                Arc::clone(schema)
             } else {
                 Arc::new(schema.project(columns)?)
             }
@@ -264,44 +305,55 @@ pub fn project_schema_safe(
     Ok(schema)
 }
 
-pub struct SqlExec<T, P> {
-    projected_schema: SchemaRef,
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-    sql: String,
-    properties: PlanProperties,
-}
-
-impl<T, P> Clone for SqlExec<T, P> {
-    fn clone(&self) -> Self {
-        Self {
-            projected_schema: Arc::clone(&self.projected_schema),
-            pool: Arc::clone(&self.pool),
-            sql: self.sql.clone(),
-            properties: self.properties.clone(),
-        }
-    }
-}
-
 impl<T, P> SqlExec<T, P> {
+    /// Creates a new SQL execution plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema projection fails.
     pub fn new(
-        projection: Option<&Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: &SchemaRef,
+        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        sql: String,
+        filters: &[Expr],
+        limit: Option<usize>,
+        engine: Option<Engine>,
     ) -> DataFusionResult<Self> {
-        let projected_schema = project_schema_safe(schema, projection)?;
+        let projected_schema = project_schema_safe(schema, projections)?;
 
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
+            table_reference: table_reference.clone(),
             pool,
-            sql,
+            filters: filters.to_vec(),
+            limit,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ),
+            engine,
+            dialect: None,
+            custom_table_expr: None,
         })
+    }
+
+    #[must_use]
+    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        Self {
+            dialect: Some(dialect),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_custom_table_expr(self, custom_table_expr: String) -> Self {
+        Self {
+            custom_table_expr: Some(custom_table_expr),
+            ..self
+        }
     }
 
     #[must_use]
@@ -309,8 +361,65 @@ impl<T, P> SqlExec<T, P> {
         Arc::clone(&self.pool)
     }
 
+    /// Generates the SQL query string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQL generation fails.
     pub fn sql(&self) -> Result<String> {
-        Ok(self.sql.clone())
+        let columns = self
+            .projected_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                // To ensure backwards compatibility, dialect only used when explicitly set
+                // (i.e. Don't use `DefaultDialect`, don't derive from `self.engine`).
+                let quote = if let Some(dialect) = &self.dialect {
+                    dialect
+                        .identifier_quote_style(f.name())
+                        .unwrap_or_default()
+                        .to_string()
+                } else if matches!(self.engine, Some(Engine::ODBC)) {
+                    String::new()
+                } else {
+                    '"'.to_string()
+                };
+                format!("{quote}{}{quote}", f.name())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let limit_expr = match self.limit {
+            Some(limit) => format!("LIMIT {limit}"),
+            None => String::new(),
+        };
+
+        let where_expr = if self.filters.is_empty() {
+            String::new()
+        } else {
+            let dialect = self.dialect.clone().unwrap_or(self.engine.map_or(
+                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
+                |e| e.dialect(),
+            ));
+            let unparser = Unparser::new(dialect.as_ref());
+
+            let filter_expr = self
+                .filters
+                .iter()
+                .map(|f| unparser.expr_to_sql(f).map(|s| s.to_string()))
+                .collect::<Result<Vec<String>, DataFusionError>>()
+                .context(UnableToGenerateSQLDataFusionSnafu)?;
+            format!("WHERE {}", filter_expr.join(" AND "))
+        };
+
+        let table_expr = match &self.custom_table_expr {
+            Some(expr) => expr.clone(),
+            None => self.table_reference.to_quoted_string(),
+        };
+
+        Ok(format!(
+            "SELECT {columns} FROM {table_expr} {where_expr} {limit_expr}"
+        ))
     }
 }
 
@@ -373,6 +482,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
     }
 }
 
+/// Executes a SQL query and returns a stream of record batches.
+///
+/// # Errors
+///
+/// Returns an error if the connection fails or the query execution fails.
 pub async fn get_stream<T: 'static, P: 'static>(
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
@@ -411,111 +525,12 @@ mod tests {
         tracing::dispatcher::set_default(&dispatch)
     }
 
-    mod sql_table_plan_to_sql_tests {
-        use std::any::Any;
-
-        use async_trait::async_trait;
-        use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-        use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
-        use datafusion::{
-            logical_expr::{col, lit},
-            sql::TableReference,
-        };
-
-        use crate::sql::db_connection_pool::{
-            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
-        };
-
-        use super::*;
-
-        struct MockConn {}
-
-        impl DbConnection<(), &'static dyn ToString> for MockConn {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
-            fn as_any_mut(&mut self) -> &mut dyn Any {
-                self
-            }
-        }
-
-        struct MockDBPool {}
-
-        #[async_trait]
-        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
-            async fn connect(
-                &self,
-            ) -> Result<
-                Box<dyn DbConnection<(), &'static dyn ToString>>,
-                Box<dyn Error + Send + Sync>,
-            > {
-                Ok(Box::new(MockConn {}))
-            }
-
-            fn join_push_down(&self) -> JoinPushDown {
-                JoinPushDown::Disallow
-            }
-        }
-
-        fn new_sql_table(
-            table_reference: &'static str,
-            dialect: Option<Arc<dyn Dialect + Send + Sync>>,
-        ) -> Result<SqlTable<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
-            let fields = vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("age", DataType::Int16, false),
-                Field::new(
-                    "createdDate",
-                    DataType::Timestamp(TimeUnit::Millisecond, None),
-                    false,
-                ),
-                Field::new("userId", DataType::LargeUtf8, false),
-                Field::new("active", DataType::Boolean, false),
-                Field::new("5e48", DataType::LargeUtf8, false),
-            ];
-            let schema = Arc::new(Schema::new(fields));
-            let pool = Arc::new(MockDBPool {})
-                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
-            let table_ref = TableReference::parse_str(table_reference);
-
-            let sql_table = SqlTable::new_with_schema(table_reference, &pool, schema, table_ref);
-            if let Some(dialect) = dialect {
-                Ok(sql_table.with_dialect(dialect))
-            } else {
-                Ok(sql_table)
-            }
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
-            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
-            assert_eq!(result, "SELECT `users`.`name` FROM `users`");
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_sql_to_string_with_filters_and_limit(
-        ) -> Result<(), Box<dyn Error + Send + Sync>> {
-            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
-            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
-            let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
-            assert_eq!(
-                result,
-                "SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"
-            );
-            Ok(())
-        }
-    }
-
     #[test]
     fn test_references() {
         let table_ref = TableReference::bare("test");
         assert_eq!(format!("{table_ref}"), "test");
     }
 
-    // XXX move this to duckdb mod??
     #[cfg(feature = "duckdb")]
     mod duckdb_tests {
         use super::*;
@@ -544,6 +559,7 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
+            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()
@@ -551,7 +567,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test").await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion limit 1";
             let df = ctx.sql(sql).await?;
@@ -579,6 +595,7 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
+            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()
@@ -586,7 +603,7 @@ mod tests {
             db_conn.conn.execute_batch(
                 "CREATE TABLE test (a INTEGER, b VARCHAR); INSERT INTO test VALUES (3, 'bar');",
             )?;
-            let duckdb_table = SqlTable::new("duckdb", &pool, "test").await?;
+            let duckdb_table = SqlTable::new("duckdb", &pool, "test", None).await?;
             ctx.register_table("test_datafusion", Arc::new(duckdb_table))?;
             let sql = "SELECT * FROM test_datafusion where a > 1 and b = 'bar' limit 1";
             let df = ctx.sql(sql).await?;

@@ -203,16 +203,19 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_name = column.name();
             let column_type = column.type_();
 
+            let projected_field = projected_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(column_name).ok());
+
             let mut numeric_scale: Option<u32> = None;
 
             let data_type = if *column_type == Type::NUMERIC {
-                if let Some(schema) = projected_schema.as_ref() {
-                    match get_decimal_column_precision_and_scale(column_name, schema) {
-                        Some((precision, scale)) => {
-                            numeric_scale = Some(u32::try_from(scale).unwrap_or_default());
-                            Some(DataType::Decimal128(precision, scale))
-                        }
-                        None => None,
+                if let Some(field) = projected_field.as_ref() {
+                    if let DataType::Decimal128(precision, scale) = field.data_type() {
+                        numeric_scale = Some(u32::try_from(*scale).unwrap_or_default());
+                        Some(DataType::Decimal128(*precision, *scale))
+                    } else {
+                        None
                     }
                 } else {
                     None
@@ -221,9 +224,13 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 map_column_type_to_data_type(column_type, column_name)?
             };
 
+            let nullable = projected_field
+                .map(|field| field.is_nullable())
+                .unwrap_or(true);
+
             match &data_type {
                 Some(data_type) => {
-                    arrow_fields.push(Some(Field::new(column_name, data_type.clone(), true)));
+                    arrow_fields.push(Some(Field::new(column_name, data_type.clone(), nullable)));
                 }
                 None => arrow_fields.push(None),
             }
@@ -263,25 +270,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     handle_primitive_type!(builder, Type::OID, UInt32Builder, u32, row, i);
                 }
                 Type::XID => {
-                    let Some(builder) = builder else {
-                        return NoBuilderForIndexSnafu { index: i }.fail();
-                    };
-                    let Some(builder) = builder.as_any_mut().downcast_mut::<UInt32Builder>() else {
-                        return FailedToDowncastBuilderSnafu {
-                            postgres_type: format!("{postgres_type}"),
-                        }
-                        .fail();
-                    };
-                    let v = row
-                        .try_get::<usize, Option<XidFromSql>>(i)
-                        .with_context(|_| FailedToGetRowValueSnafu { pg_type: Type::XID })?;
-
-                    match v {
-                        Some(v) => {
-                            builder.append_value(v.xid);
-                        }
-                        None => builder.append_null(),
-                    }
+                    handle_primitive_type!(builder, Type::XID, UInt32Builder, u32, row, i);
                 }
                 Type::FLOAT4 => {
                     handle_primitive_type!(builder, Type::FLOAT4, Float32Builder, f32, row, i);
@@ -1078,36 +1067,6 @@ impl<'a> FromSql<'a> for GeometryFromSql<'a> {
 
     fn accepts(ty: &Type) -> bool {
         matches!(ty.name(), "geometry" | "geography")
-    }
-}
-
-struct XidFromSql {
-    xid: u32,
-}
-
-impl<'a> FromSql<'a> for XidFromSql {
-    fn from_sql(
-        _ty: &Type,
-        raw: &'a [u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        let mut cursor = std::io::Cursor::new(raw);
-        let xid = cursor.read_u32::<BigEndian>()?;
-        Ok(XidFromSql { xid })
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        matches!(*ty, Type::XID)
-    }
-}
-
-fn get_decimal_column_precision_and_scale(
-    column_name: &str,
-    projected_schema: &SchemaRef,
-) -> Option<(u8, i8)> {
-    let field = projected_schema.field_with_name(column_name).ok()?;
-    match field.data_type() {
-        DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
-        _ => None,
     }
 }
 

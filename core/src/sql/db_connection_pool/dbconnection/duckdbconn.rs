@@ -18,6 +18,7 @@ use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
 use rand::distr::{Alphanumeric, SampleString};
+use once_cell::sync::OnceCell;
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
@@ -63,11 +64,15 @@ impl<T: ToSql + Sync + Send + DynClone> DuckDBSyncParameter for T {
 dyn_clone::clone_trait_object!(DuckDBSyncParameter);
 pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 
+/// Configuration and state for attaching external DuckDB databases.
 #[derive(Debug)]
 pub struct DuckDBAttachments {
     attachments: HashSet<Arc<str>>,
     random_id: String,
     main_db: String,
+    /// Cached search_path after first successful attachments initialization.
+    /// Uses OnceCell to ensure attachment happens exactly once.
+    search_path_cache: OnceCell<Arc<str>>,
 }
 
 impl DuckDBAttachments {
@@ -80,7 +85,14 @@ impl DuckDBAttachments {
             attachments,
             random_id,
             main_db: main_db.to_string(),
+            search_path_cache: OnceCell::new(),
         }
+    }
+
+    /// Returns a reference to the set of database paths to attach.
+    #[must_use]
+    pub fn attachments(&self) -> &HashSet<Arc<str>> {
+        &self.attachments
     }
 
     /// Returns the search path for the given database and attachments.
@@ -162,7 +174,9 @@ impl DuckDBAttachments {
             );
             for db in &self.attachments {
                 if !existing_attachments.contains_key(db.as_ref()) {
-                    tracing::warn!("{db} not found among existing attachments");
+                    // Only partial attachments may be available in some cases (for example, right after pool creation).
+                    // This does not always indicate an error, so we log it at debug level.
+                    tracing::debug!("{db} not found among existing attachments");
                 }
             }
             // The connection can have attachments but not the search_path, so we must set it based on the existing attachment names
@@ -210,6 +224,23 @@ impl DuckDBAttachments {
     #[must_use]
     fn get_attachment_name(random_id: &str, index: usize) -> String {
         format!("attachment_{random_id}_{index}")
+    }
+
+    /// Lazily attaches databases on first call, then applies search_path to the connection.
+    /// Uses cached search_path on subsequent calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if attachment or search_path setting fails.
+    pub fn attach_once(&self, conn: &Connection) -> Result<()> {
+        let search_path = self.search_path_cache.get_or_try_init(|| {
+            self.attach(conn)
+        })?;
+
+        conn.execute(&format!("SET search_path = '{}'", search_path), [])
+            .context(DuckDBConnectionSnafu)?;
+
+        Ok(())
     }
 }
 
@@ -264,7 +295,7 @@ impl DuckDbConnection {
     ) -> &mut r2d2::PooledConnection<DuckdbConnectionManager> {
         &mut self.conn
     }
-
+ 
     #[must_use]
     pub fn with_unsupported_type_action(
         mut self,
@@ -427,7 +458,11 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
         let conn = self.conn.try_clone()?;
-        Self::attach(&conn, &self.attachments)?;
+
+        if let Some(attachments) = &self.attachments {
+            attachments.attach_once(&conn)?;
+        }
+
         self.apply_connection_setup_queries(&conn)?;
 
         let fetch_schema_sql =
