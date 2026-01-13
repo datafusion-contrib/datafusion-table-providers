@@ -162,4 +162,3 @@ mod tests {
         assert_eq!(result, expected);
     }
 }
-pub mod supported_functions;
