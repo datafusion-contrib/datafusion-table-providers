@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::mongodb::utils::arrow::mongo_docs_to_arrow;
 use crate::mongodb::utils::schema::infer_arrow_schema_from_documents;
 use crate::mongodb::utils::unnest::{unnest_bson_documents, UnnestBehavior, UnnestParameters};
-use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu};
+use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu, UnableToGetTablesSnafu};
 
 pub struct MongoDBConnection {
     pub client: Arc<Client>,
@@ -44,6 +44,16 @@ impl MongoDBConnection {
 
     fn get_collection(&self, collection: &str) -> Collection<Document> {
         self.client.database(&self.db_name).collection(collection)
+    }
+
+    pub async fn tables(&self) -> Result<Vec<String>, Error> {
+        let db = self.client.database(&self.db_name);
+        let collections = db
+            .list_collection_names()
+            .await
+            .boxed()
+            .context(UnableToGetTablesSnafu)?;
+        Ok(collections)
     }
 
     pub async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error> {
