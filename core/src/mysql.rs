@@ -199,7 +199,7 @@ impl TableProviderFactory for MySQLTableProviderFactory {
     ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
         let name = cmd.name.to_string();
         let mut options = cmd.options.clone();
-        let schema: Schema = cmd.schema.as_ref().into();
+        let schema: Schema = cmd.schema.as_ref().as_arrow().clone();
 
         let indexes_option_str = options.remove("indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
@@ -394,8 +394,9 @@ impl MySQL {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
+        let batches = vec![batch];
         let insert_table_builder =
-            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), vec![batch]);
+            InsertBuilder::new(&TableReference::bare(self.table_name.clone()), &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));

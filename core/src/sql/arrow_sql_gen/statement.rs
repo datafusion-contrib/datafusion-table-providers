@@ -162,6 +162,20 @@ macro_rules! push_value {
     }};
 }
 
+macro_rules! push_big_decimal_value {
+    ($row_values:expr, $column:expr, $row:expr, $scale:expr, $array_type:ident) => {{
+        let array = $column.as_any().downcast_ref::<array::$array_type>();
+        if let Some(valid_array) = array {
+            if valid_array.is_null($row) {
+                $row_values.push(Keyword::Null.into());
+                continue;
+            }
+            $row_values
+                .push(BigDecimal::new(valid_array.value($row).into(), i64::from(*$scale)).into());
+        }
+    }};
+}
+
 macro_rules! push_list_values {
     ($data_type:expr, $list_array:expr, $row_values:expr, $array_type:ty, $vec_type:ty, $sql_type:expr) => {{
         let mut list_values: Vec<$vec_type> = Vec::new();
@@ -177,9 +191,9 @@ macro_rules! push_list_values {
     }};
 }
 
-pub struct InsertBuilder {
+pub struct InsertBuilder<'a> {
     table: TableReference,
-    record_batches: Vec<RecordBatch>,
+    record_batches: &'a Vec<RecordBatch>,
 }
 
 #[allow(unused_variables)]
@@ -206,9 +220,9 @@ pub fn use_json_insert_for_type<T: QueryBuilder + 'static>(
     false
 }
 
-impl InsertBuilder {
+impl<'a> InsertBuilder<'a> {
     #[must_use]
-    pub fn new(table: &TableReference, record_batches: Vec<RecordBatch>) -> Self {
+    pub fn new(table: &TableReference, record_batches: &'a Vec<RecordBatch>) -> Self {
         Self {
             table: table.clone(),
             record_batches,
@@ -248,18 +262,14 @@ impl InsertBuilder {
                     DataType::LargeUtf8 => push_value!(row_values, column, row, LargeStringArray),
                     DataType::Utf8View => push_value!(row_values, column, row, StringViewArray),
                     DataType::Boolean => push_value!(row_values, column, row, BooleanArray),
+                    DataType::Decimal32(_, scale) => {
+                        push_big_decimal_value!(row_values, column, row, scale, Decimal32Array)
+                    }
+                    DataType::Decimal64(_, scale) => {
+                        push_big_decimal_value!(row_values, column, row, scale, Decimal64Array)
+                    }
                     DataType::Decimal128(_, scale) => {
-                        let array = column.as_any().downcast_ref::<array::Decimal128Array>();
-                        if let Some(valid_array) = array {
-                            if valid_array.is_null(row) {
-                                row_values.push(Keyword::Null.into());
-                                continue;
-                            }
-                            row_values.push(
-                                BigDecimal::new(valid_array.value(row).into(), i64::from(*scale))
-                                    .into(),
-                            );
-                        }
+                        push_big_decimal_value!(row_values, column, row, scale, Decimal128Array)
                     }
                     DataType::Decimal256(_, scale) => {
                         let array = column.as_any().downcast_ref::<array::Decimal256Array>();
@@ -1070,7 +1080,7 @@ impl InsertBuilder {
             .columns(columns)
             .to_owned();
 
-        for record_batch in &self.record_batches {
+        for record_batch in self.record_batches {
             self.construct_insert_stmt(&mut insert_stmt, record_batch, &query_builder)?;
         }
         if let Some(on_conflict) = on_conflict {
@@ -1309,9 +1319,10 @@ pub(crate) fn map_data_type_to_column_type(data_type: &DataType) -> ColumnType {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => ColumnType::Text,
         DataType::Boolean => ColumnType::Boolean,
         #[allow(clippy::cast_sign_loss)] // This is safe because scale will never be negative
-        DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
-            ColumnType::Decimal(Some((u32::from(*p), *s as u32)))
-        }
+        DataType::Decimal32(p, s)
+        | DataType::Decimal64(p, s)
+        | DataType::Decimal128(p, s)
+        | DataType::Decimal256(p, s) => ColumnType::Decimal(Some((u32::from(*p), *s as u32))),
         DataType::Timestamp(_unit, time_zone) => {
             if time_zone.is_some() {
                 return ColumnType::TimestampWithTimeZone;
@@ -1456,10 +1467,14 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
             Field::new("age", DataType::Int32, true),
+            Field::new("balance", DataType::Decimal64(10, 2), true),
         ]);
         let id_array = array::Int32Array::from(vec![1, 2, 3]);
         let name_array = array::StringArray::from(vec!["a", "b", "c"]);
         let age_array = array::Int32Array::from(vec![10, 20, 30]);
+        let balance_array = array::Decimal64Array::from(vec![12345, -12345, 12300])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema1.clone()),
@@ -1467,6 +1482,7 @@ mod tests {
                 Arc::new(id_array.clone()),
                 Arc::new(name_array.clone()),
                 Arc::new(age_array.clone()),
+                Arc::new(balance_array.clone()),
             ],
         )
         .expect("Unable to build record batch");
@@ -1475,6 +1491,7 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
             Field::new("blah", DataType::Int32, true),
+            Field::new("balance", DataType::Decimal64(10, 2), true),
         ]);
 
         let batch2 = RecordBatch::try_new(
@@ -1483,15 +1500,25 @@ mod tests {
                 Arc::new(id_array),
                 Arc::new(name_array),
                 Arc::new(age_array),
+                Arc::new(balance_array),
             ],
         )
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new(&TableReference::from("users"), record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("users"), &record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
-        assert_eq!(sql, "INSERT INTO \"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
+        assert_eq!(
+            sql,
+            "INSERT INTO \"users\" (\"id\", \"name\", \"age\", \"balance\") VALUES \
+            (1, 'a', 10, 123.45), \
+            (2, 'b', 20, -123.45), \
+            (3, 'c', 30, 123.00), \
+            (1, 'a', 10, 123.45), \
+            (2, 'b', 20, -123.45), \
+            (3, 'c', 30, 123.00)"
+        );
     }
 
     #[test]
@@ -1532,7 +1559,7 @@ mod tests {
         .expect("Unable to build record batch");
         let record_batches = vec![batch1, batch2];
 
-        let sql = InsertBuilder::new(&TableReference::from("schema.users"), record_batches)
+        let sql = InsertBuilder::new(&TableReference::from("schema.users"), &record_batches)
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(sql, "INSERT INTO \"schema\".\"users\" (\"id\", \"name\", \"age\") VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
@@ -1569,7 +1596,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema1.clone()), vec![Arc::new(list_array)])
             .expect("Unable to build record batch");
 
-        let sql = InsertBuilder::new(&TableReference::from("arrays"), vec![batch])
+        let sql = InsertBuilder::new(&TableReference::from("arrays"), &vec![batch])
             .build_postgres(None)
             .expect("Failed to build insert statement");
         assert_eq!(

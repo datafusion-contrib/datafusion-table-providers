@@ -97,6 +97,10 @@ impl TableDefinition {
         Arc::clone(&self.schema)
     }
 
+    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
+        &self.indexes
+    }
+
     /// For an internal table, generate a unique name based on the table definition name and the current system time.
     pub fn generate_internal_name(&self) -> super::Result<RelationName> {
         let unix_ms = std::time::SystemTime::now()
@@ -111,10 +115,6 @@ impl TableDefinition {
 
     pub fn constraints(&self) -> Option<&Constraints> {
         self.constraints.as_ref()
-    }
-
-    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
-        &self.indexes
     }
 
     /// Returns true if this table definition has a base table matching the exact `RelationName` of the definition
@@ -315,7 +315,7 @@ impl TableManager {
     /// Inserts data from this table into the target table.
     #[tracing::instrument(level = "debug", skip_all)]
     #[allow(dead_code)]
-    pub(crate) fn insert_into(
+    pub fn insert_into(
         &self,
         table: &TableManager,
         tx: &Transaction<'_>,
@@ -393,7 +393,7 @@ impl TableManager {
         Ok(())
     }
 
-    pub(crate) fn drop_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
+    pub fn drop_indexes(&self, tx: &Transaction<'_>) -> super::Result<()> {
         // drop indexes on this table
         for index in self.indexes_vec() {
             self.drop_index(tx, index)?;

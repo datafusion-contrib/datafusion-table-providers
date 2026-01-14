@@ -20,7 +20,9 @@ use super::Result;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("ConnectionError {source}"))]
-    ConnectionError { source: tokio_rusqlite::Error<rusqlite::Error> },
+    ConnectionError {
+        source: tokio_rusqlite::Error<rusqlite::Error>,
+    },
 
     #[snafu(display("Unable to query: {source}"))]
     QueryError { source: rusqlite::Error },

@@ -336,7 +336,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             )
         };
 
-        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().as_arrow().clone());
         let schema: SchemaRef =
             SqliteConnection::handle_unsupported_schema(&schema, UnsupportedTypeAction::Error)
                 .map_err(|e| DataFusionError::External(e.into()))?;
@@ -741,7 +741,8 @@ impl Sqlite {
         batch: RecordBatch,
         on_conflict: Option<&OnConflict>,
     ) -> rusqlite::Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
+        let batches = vec![batch];
+        let insert_table_builder = InsertBuilder::new(&self.table, &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));
@@ -1560,6 +1561,7 @@ pub(crate) mod tests {
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()

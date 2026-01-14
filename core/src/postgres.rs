@@ -234,7 +234,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
 
         let name = cmd.name.clone();
         let mut options = cmd.options.clone();
-        let schema: Schema = cmd.schema.as_ref().into();
+        let schema: Schema = cmd.schema.as_ref().as_arrow().clone();
 
         let indexes_option_str = options.remove("indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
@@ -442,7 +442,8 @@ impl Postgres {
         batch: RecordBatch,
         on_conflict: Option<OnConflict>,
     ) -> Result<()> {
-        let insert_table_builder = InsertBuilder::new(&self.table, vec![batch]);
+        let batches = vec![batch];
+        let insert_table_builder = InsertBuilder::new(&self.table, &batches);
 
         let sea_query_on_conflict =
             on_conflict.map(|oc| oc.build_sea_query_on_conflict(&self.schema));

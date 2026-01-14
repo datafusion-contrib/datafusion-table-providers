@@ -181,6 +181,7 @@ async fn run_benchmark(
         constraints: Constraints::new_unverified(vec![]),
         column_defaults: std::collections::HashMap::default(),
         temporary: false,
+        or_replace: false,
     };
 
     let ctx = SessionContext::new();

@@ -30,7 +30,7 @@ byte-unit = { version = "5.1.4", optional = true }
 chrono = { workspace = true }
 clickhouse = { version = "0.13.3", optional = true }
 dashmap = { workspace = true }
-datafusion = { workspace = true, default-features = false }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-expr = { workspace = true, optional = true }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-physical-expr = { workspace = true, optional = true }
@@ -68,7 +68,7 @@ prost = { workspace = true, optional = true }
 rand = { workspace = true }
 regex = { workspace = true }
 r2d2 = { version = "0.8", optional = true }
-r2d2_adbc = { version = "0.1.0", optional = true }
+r2d2_adbc = { version = "0.2.0", optional = true }
 rusqlite = { workspace = true, optional = true }
 rust_decimal = { version = "1.38.0", features = ["db-postgres"], optional = true }
 sea-query = { workspace = true }
@@ -88,9 +88,9 @@ tokio-postgres = { version = "0.7.10", features = [
 tokio-rusqlite = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tracing = { workspace = true }
-uuid = { workspace = true, optional = true }
 hickory-resolver = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true, optional = true }
 adbc_driver_manager = { workspace = true, optional = true }
 adbc_core = { workspace = true, optional = true }
 
@@ -98,9 +98,9 @@ adbc_core = { workspace = true, optional = true }
 anyhow = "1.0"
 bollard = "0.19"
 geozero = { version = "0.14.0", features = ["with-wkb"] }
-insta = { version = "1.43.2", features = ["filters"] }
+insta = { version = "1.46.0", features = ["filters"] }
 parquet = { workspace = true }
-prost = { version = "=0.13.5" }
+prost = { version = "=0.14.1" }
 rand = { workspace = true }
 reqwest = "0.12"
 rstest = "0.26.1"

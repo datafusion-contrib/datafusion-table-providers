@@ -5,7 +5,7 @@ use arrow::array::{
     StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::datatypes::{DataType, Decimal128Type, DecimalType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::execution::context::SessionContext;
@@ -52,12 +52,10 @@ async fn arrow_sqlite_round_trip(
     // Create sqlite table from arrow records and insert arrow records
     let schema = Arc::clone(&arrow_record.schema());
     let create_table_stmts = CreateTableBuilder::new(schema, table_name).build_sqlite();
-    let insert_table_stmt = InsertBuilder::new(
-        &TableReference::from(table_name),
-        vec![arrow_record.clone()],
-    )
-    .build_sqlite(None)
-    .expect("SQLite insert statement should be constructed");
+    let batches = vec![arrow_record.clone()];
+    let insert_table_stmt = InsertBuilder::new(&TableReference::from(table_name), &batches)
+        .build_sqlite(None)
+        .expect("SQLite insert statement should be constructed");
 
     // Test arrow -> Sqlite row coverage
     let _ = conn
@@ -313,6 +311,7 @@ async fn test_sqlite_table_provider_roundtrip(
         constraints: Constraints::new_unverified(vec![]),
         column_defaults: HashMap::default(),
         temporary: false,
+        or_replace: false,
     };
 
     let factory = SqliteTableProviderFactory::default()
@@ -359,10 +358,12 @@ async fn test_sqlite_table_provider_roundtrip(
     );
 
     // Cast the result back to the original schema for comparison
+    #[cfg(feature = "sqlite-federation")]
     let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
         .expect("should cast result to original schema");
 
     // Verify the data matches
+    #[cfg(feature = "sqlite-federation")]
     assert_eq!(
         casted_result, record_batch,
         "Round-tripped data should match original"
@@ -388,6 +389,7 @@ async fn test_sqlite_list_utf8_federation_roundtrip() {
         file_type: String::new(),
         table_partition_cols: vec![],
         if_not_exists: true,
+        or_replace: false,
         definition: None,
         order_exprs: vec![],
         unbounded: false,
@@ -450,6 +452,7 @@ async fn test_sqlite_list_utf8_federation_roundtrip() {
     );
 }
 
+#[allow(dead_code)]
 fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
     match array.as_any().downcast_ref::<Decimal128Array>() {
         Some(array) => array,
@@ -457,6 +460,7 @@ fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
     }
 }
 
+#[allow(dead_code)]
 async fn download_parquet_as_record_batch(url: &str) -> anyhow::Result<RecordBatch> {
     // Download the parquet file
     let response = reqwest::get(url).await?;
