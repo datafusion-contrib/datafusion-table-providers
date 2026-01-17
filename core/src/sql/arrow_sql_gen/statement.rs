@@ -1080,6 +1080,20 @@ impl<'a> InsertBuilder<'a> {
         query_builder: T,
         on_conflict: Option<OnConflict>,
     ) -> Result<String> {
+        if self.record_batches.is_empty() {
+            return Result::Err(Error::FailedToCreateInsertStatement {
+                source: "no record batches have been provided".into(),
+            });
+        }
+
+        let num_rows: usize = self.record_batches.iter().map(|b| b.num_rows()).sum();
+        // return an error to avoid generating invalid SQL (i.e., INSERT without VALUES)
+        if num_rows == 0 {
+            return Result::Err(Error::FailedToCreateInsertStatement {
+                source: "no rows have been provided".into(),
+            });
+        }
+
         let columns: Vec<Alias> = (self.record_batches[0])
             .schema()
             .fields()
@@ -1530,6 +1544,57 @@ mod tests {
             (1, 'a', 10, 123.45), \
             (2, 'b', 20, -123.45), \
             (3, 'c', 30, 123.00)"
+        );
+    }
+
+    #[test]
+    fn test_table_insertion_empty_batches() {
+        // no batches are provided
+        let result =
+            InsertBuilder::new(&TableReference::from("users"), &vec![]).build_postgres(None);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to build insert statement: no record batches have been provided"
+        );
+
+        // batches are provided but are empty (would result in invalid SQL)
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let empty_batch = RecordBatch::new_empty(Arc::new(schema.clone()));
+        let result = InsertBuilder::new(
+            &TableReference::from("users"),
+            &vec![empty_batch.clone(), empty_batch.clone()],
+        )
+        .build_postgres(None);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to build insert statement: no rows have been provided"
+        );
+
+        // if only some batches are empty, the SQL is valid
+        let filled_batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(array::Int32Array::from(vec![1, 2, 3])),
+                Arc::new(array::StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .expect("Unable to build record batch");
+        let sql = InsertBuilder::new(
+            &TableReference::from("users"),
+            &vec![
+                empty_batch.clone(),
+                filled_batch.clone(),
+                empty_batch.clone(),
+            ],
+        )
+        .build_postgres(None)
+        .unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"users\" (\"id\", \"name\") VALUES (1, 'a'), (2, 'b'), (3, 'c')"
         );
     }
 
