@@ -13,6 +13,8 @@ pub mod duckdbconn;
 pub mod mysqlconn;
 #[cfg(feature = "odbc")]
 pub mod odbcconn;
+#[cfg(feature = "oracle")]
+pub mod oracleconn;
 #[cfg(feature = "postgres")]
 pub mod postgresconn;
 #[cfg(feature = "sqlite")]
