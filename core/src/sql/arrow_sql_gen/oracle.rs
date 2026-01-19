@@ -1,10 +1,14 @@
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use arrow::{
     array::{
-        ArrayBuilder, ArrayRef, BinaryBuilder, Decimal128Builder, Decimal256Builder,
+        ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
+        Decimal256Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
         LargeBinaryBuilder, LargeStringBuilder, StringBuilder, TimestampMicrosecondBuilder,
+        TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
     },
-    datatypes::{i256, DataType, Field, Schema, SchemaRef, TimeUnit},
+    datatypes::{
+        i256, DataType, Field, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit,
+    },
     error::ArrowError,
     record_batch::RecordBatch,
 };
@@ -13,7 +17,7 @@ use bigdecimal::num_bigint;
 use bigdecimal::{BigDecimal, ToPrimitive};
 use chrono::{TimeZone, Utc};
 use oracle::Row;
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
 
 #[derive(Debug, Snafu)]
@@ -38,6 +42,9 @@ pub enum Error {
         value: String,
         source: bigdecimal::ParseBigDecimalError,
     },
+
+    #[snafu(display("Failed to map column {name} to arrow type"))]
+    FailedToMapColumnType { name: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -60,21 +67,26 @@ pub fn rows_to_arrow(rows: Vec<Row>, projected_schema: &Option<SchemaRef>) -> Re
     if let Some(schema) = projected_schema {
         for field in schema.fields() {
             arrow_fields.push((**field).clone());
-            builders
-                .push(map_data_type_to_array_builder_optional(Some(field.data_type())).unwrap());
+            builders.push(
+                map_data_type_to_array_builder_optional(Some(field.data_type()))
+                    .context(FailedToMapColumnTypeSnafu { name: field.name() })?,
+            );
         }
     } else {
-        // Infer from first row - using ODPI-C metadata if available
-        // In rust-oracle, Row doesn't directly expose column names easily without Statement metadata.
-        // However, we usually have a projected_schema from get_schema which queries metadata.
-
-        let column_count = first_row.column_info().len();
-        for i in 0..column_count {
-            let name = format!("col_{}", i);
+        // Infer from first row - using ODPI-C metadata
+        // We can get column names from the Row's column_info.
+        // We default to Utf8 for all columns when schema is not provided,
+        // as we don't have the explicit mappings available here easily without the broader context.
+        let column_info = first_row.column_info();
+        for info in column_info {
+            let name = info.name().to_string();
             let data_type = DataType::Utf8;
             let field = Field::new(name, data_type.clone(), true);
-            arrow_fields.push(field);
-            builders.push(map_data_type_to_array_builder_optional(Some(&data_type)).unwrap());
+            arrow_fields.push(field.clone());
+            builders.push(
+                map_data_type_to_array_builder_optional(Some(&data_type))
+                    .context(FailedToMapColumnTypeSnafu { name: field.name() })?,
+            );
         }
     }
 
@@ -203,6 +215,132 @@ pub fn rows_to_arrow(rows: Vec<Row>, projected_schema: &Option<SchemaRef>) -> Re
                         builder.append_null();
                     }
                 }
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<TimestampSecondBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::Timestamp> = row
+                        .get::<_, Option<oracle::sql_type::Timestamp>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(ts) = val {
+                        let chrono_ts = Utc
+                            .with_ymd_and_hms(
+                                ts.year(),
+                                ts.month(),
+                                ts.day(),
+                                ts.hour(),
+                                ts.minute(),
+                                ts.second(),
+                            )
+                            .single();
+
+                        if let Some(chrono_ts) = chrono_ts {
+                            builder.append_value(chrono_ts.timestamp());
+                        } else {
+                            builder.append_null();
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::Timestamp> = row
+                        .get::<_, Option<oracle::sql_type::Timestamp>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(ts) = val {
+                        let chrono_ts = Utc
+                            .with_ymd_and_hms(
+                                ts.year(),
+                                ts.month(),
+                                ts.day(),
+                                ts.hour(),
+                                ts.minute(),
+                                ts.second(),
+                            )
+                            .single();
+
+                        if let Some(chrono_ts) = chrono_ts {
+                            let millis = chrono_ts.timestamp() * 1_000
+                                + (ts.nanosecond() / 1_000_000) as i64;
+                            builder.append_value(millis);
+                        } else {
+                            builder.append_null();
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<TimestampNanosecondBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::Timestamp> = row
+                        .get::<_, Option<oracle::sql_type::Timestamp>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(ts) = val {
+                        let chrono_ts = Utc
+                            .with_ymd_and_hms(
+                                ts.year(),
+                                ts.month(),
+                                ts.day(),
+                                ts.hour(),
+                                ts.minute(),
+                                ts.second(),
+                            )
+                            .single();
+
+                        if let Some(chrono_ts) = chrono_ts {
+                            let nanos =
+                                chrono_ts.timestamp() * 1_000_000_000 + ts.nanosecond() as i64;
+                            builder.append_value(nanos);
+                        } else {
+                            builder.append_null();
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                DataType::Date32 => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<Date32Builder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::Timestamp> = row
+                        .get::<_, Option<oracle::sql_type::Timestamp>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(ts) = val {
+                        // Date32 is days since Unix epoch
+                        // Use NaiveDate to avoid timezone issues
+                        use chrono::NaiveDate;
+                        let naive_date = NaiveDate::from_ymd_opt(ts.year(), ts.month(), ts.day());
+                        if let Some(date) = naive_date {
+                            // Calculate days since Unix epoch (1970-01-01)
+                            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                            let days = date.signed_duration_since(epoch).num_days() as i32;
+                            builder.append_value(days);
+                        } else {
+                            builder.append_null();
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                DataType::Boolean => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<BooleanBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<bool> = row
+                        .get::<_, Option<bool>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    builder.append_option(val);
+                }
                 DataType::Binary => {
                     let builder = builder
                         .as_any_mut()
@@ -233,6 +371,43 @@ pub fn rows_to_arrow(rows: Vec<Row>, projected_schema: &Option<SchemaRef>) -> Re
                         .map_err(|e| Error::OracleError { source: e })?;
                     builder.append_option(val);
                 }
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<IntervalYearMonthBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::IntervalYM> = row
+                        .get::<_, Option<oracle::sql_type::IntervalYM>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(interval) = val {
+                        // Convert to total months: years * 12 + months
+                        let total_months = interval.years() * 12 + interval.months();
+                        builder.append_value(total_months);
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let builder = builder
+                        .as_any_mut()
+                        .downcast_mut::<IntervalMonthDayNanoBuilder>()
+                        .ok_or(Error::FailedToDowncastBuilder { index: i })?;
+                    let val: Option<oracle::sql_type::IntervalDS> = row
+                        .get::<_, Option<oracle::sql_type::IntervalDS>>(i)
+                        .map_err(|e| Error::OracleError { source: e })?;
+                    if let Some(interval) = val {
+                        // Convert to nanoseconds: hours, minutes, seconds, nanoseconds
+                        let nanos = (interval.hours() as i64 * 3600
+                            + interval.minutes() as i64 * 60
+                            + interval.seconds() as i64)
+                            * 1_000_000_000
+                            + interval.nanoseconds() as i64;
+                        let interval_value = IntervalMonthDayNano::new(0, interval.days(), nanos);
+                        builder.append_value(interval_value);
+                    } else {
+                        builder.append_null();
+                    }
+                }
                 _ => {
                     // Fallback: try to get as string
                     let builder = builder
@@ -255,7 +430,8 @@ pub fn rows_to_arrow(rows: Vec<Row>, projected_schema: &Option<SchemaRef>) -> Re
 }
 
 fn to_decimal_128(decimal: &BigDecimal, scale: i64) -> Option<i128> {
-    (decimal * 10i128.pow(scale.try_into().unwrap_or_default())).to_i128()
+    let scale_u32: u32 = scale.try_into().ok()?;
+    (decimal * 10i128.pow(scale_u32)).to_i128()
 }
 
 fn to_decimal_256(decimal: &BigDecimal) -> i256 {

@@ -11,7 +11,8 @@ use crate::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::{DataType, SchemaRef},
+    common::utils::quote_identifier,
     datasource::TableProvider,
     error::Result as DataFusionResult,
     execution::TaskContext,
@@ -19,6 +20,13 @@ use datafusion::{
     physical_plan::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
         PlanProperties, SendableRecordBatchStream,
+    },
+    sql::{
+        sqlparser,
+        unparser::{
+            dialect::{CustomDialect, CustomDialectBuilder},
+            Unparser,
+        },
     },
 };
 
@@ -43,6 +51,16 @@ impl OracleTable {
         Self { pool, base_table }
     }
 
+    pub(crate) fn dialect() -> CustomDialect {
+        CustomDialectBuilder::new()
+            .with_identifier_quote_style('"')
+            // There is no 'DOUBLE' SQL type in Oracle: it can use 'FLOAT' for both single and double precision float values
+            .with_float64_ast_dtype(sqlparser::ast::DataType::Float(
+                sqlparser::ast::ExactNumberInfo::None,
+            ))
+            .build()
+    }
+
     fn create_physical_plan(
         &self,
         projections: Option<&Vec<usize>>,
@@ -50,13 +68,88 @@ impl OracleTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let sql = self.base_table.scan_to_sql(projections, filters, limit)?;
+        let projected_schema = if let Some(proj) = projections {
+            Arc::new(schema.project(proj)?)
+        } else {
+            Arc::clone(schema)
+        };
+
+        let columns = projected_schema
+            .fields()
+            .iter()
+            .map(|f| quote_identifier(f.name()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let dialect = Self::dialect();
+
+        let where_expr = if filters.is_empty() {
+            String::new()
+        } else {
+            let filter_expr = filters
+                .iter()
+                .map(|f| {
+                    Unparser::new(&dialect)
+                        .expr_to_sql(f)
+                        .map(|e| e.to_string())
+                })
+                .collect::<DataFusionResult<Vec<String>>>()?
+                .join(" AND ");
+            format!("WHERE {filter_expr}")
+        };
+
+        let limit_expr = if let Some(limit) = limit {
+            format!("FETCH FIRST {limit} ROWS ONLY")
+        } else {
+            String::new()
+        };
+
+        let table_reference = self.base_table.table_reference.to_quoted_string();
+        let sql = format!("SELECT {columns} FROM {table_reference} {where_expr} {limit_expr}");
+
         Ok(Arc::new(OracleSQLExec::new(
             projections,
             schema,
             Arc::clone(&self.pool),
             sql,
         )?))
+    }
+
+    /// Check if an expression contains datetime-related types that Oracle cannot handle
+    /// in filter pushdown due to datetime literal format requirements.
+    fn contains_datetime_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::BinaryExpr(binary_expr) => {
+                Self::is_datetime_type_expr(&binary_expr.left)
+                    || Self::is_datetime_type_expr(&binary_expr.right)
+                    || Self::contains_datetime_expr(&binary_expr.left)
+                    || Self::contains_datetime_expr(&binary_expr.right)
+            }
+            Expr::Not(inner) => Self::contains_datetime_expr(inner),
+            _ => Self::is_datetime_type_expr(expr),
+        }
+    }
+
+    fn is_datetime_type_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::Cast(cast) => matches!(
+                cast.data_type,
+                DataType::Time32(_)
+                    | DataType::Time64(_)
+                    | DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+            ),
+            Expr::Literal(literal, _) => matches!(
+                literal.data_type(),
+                DataType::Time32(_)
+                    | DataType::Time64(_)
+                    | DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+            ),
+            _ => false,
+        }
     }
 }
 
@@ -78,7 +171,20 @@ impl TableProvider for OracleTable {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        self.base_table.supports_filters_pushdown(filters)
+        // Oracle requires specific format for datetime literals that the expression
+        // unparser cannot handle correctly, resulting in ORA-01843 errors.
+        // We mark datetime-related filters as unsupported to prevent pushdown.
+        let mut results = Vec::with_capacity(filters.len());
+        for filter in filters {
+            if Self::contains_datetime_expr(filter) {
+                results.push(TableProviderFilterPushDown::Unsupported);
+            } else {
+                // For non-datetime filters, delegate to base table
+                let base_result = self.base_table.supports_filters_pushdown(&[filter])?;
+                results.extend(base_result);
+            }
+        }
+        Ok(results)
     }
 
     async fn scan(

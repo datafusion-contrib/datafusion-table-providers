@@ -57,7 +57,7 @@ impl SQLExecutor for OracleTable {
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(datafusion::sql::unparser::dialect::PostgreSqlDialect {})
+        Arc::new(Self::dialect())
     }
 
     fn execute(

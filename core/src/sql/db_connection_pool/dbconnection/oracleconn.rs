@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use bb8_oracle::OracleConnectionManager;
 use datafusion::{
-    arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream, sql::TableReference,
+    arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream,
+    physical_plan::stream::RecordBatchStreamAdapter, sql::TableReference,
 };
 use std::{any::Any, sync::Arc};
 
+use async_stream::stream;
 use snafu::ResultExt;
+use tokio::sync::mpsc;
 use tokio::task;
 
 use crate::sql::{
@@ -130,30 +133,88 @@ impl AsyncDbConnection<OraclePooledConnection, oracle::sql_type::OracleType> for
     ) -> Result<SendableRecordBatchStream> {
         let sql = sql.to_string();
         let conn = self.conn.clone();
+        let schema_clone = projected_schema.clone();
 
-        let rows = task::spawn_blocking(move || {
-            let rows = conn.query(&sql, &[])?;
-            rows.collect::<std::result::Result<Vec<oracle::Row>, _>>()
-        })
-        .await
-        .map_err(|e| Box::new(e) as GenericError)
-        .context(super::UnableToQueryArrowSnafu)?
-        .map_err(|e| Box::new(e) as GenericError)
-        .context(super::UnableToQueryArrowSnafu)?;
+        let (tx, mut rx) = mpsc::channel(2);
 
-        let batch = rows_to_arrow(rows, &projected_schema)
-            .map_err(|e| Box::new(e) as GenericError)
-            .context(super::UnableToQueryArrowSnafu)
-            .map_err(|e| Box::new(e) as GenericError)?;
+        task::spawn_blocking(move || {
+            let process = || -> std::result::Result<(), GenericError> {
+                let mut stmt = conn
+                    .statement(&sql)
+                    .fetch_array_size(100_000)
+                    .build()
+                    .map_err(|e| Box::new(e) as GenericError)
+                    .context(super::UnableToQueryArrowSnafu)?;
 
-        let schema = batch.schema();
-        let stream = futures::stream::iter(vec![Ok(batch)]);
-        Ok(Box::pin(
-            datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
-                projected_schema.unwrap_or(schema),
-                stream,
-            ),
-        ))
+                let rows = stmt
+                    .query(&[])
+                    .map_err(|e| Box::new(e) as GenericError)
+                    .context(super::UnableToQueryArrowSnafu)?;
+
+                let mut chunk = Vec::with_capacity(4096);
+                for row_result in rows {
+                    let row = row_result
+                        .map_err(|e| Box::new(e) as GenericError)
+                        .context(super::UnableToQueryArrowSnafu)?;
+
+                    chunk.push(row);
+                    if chunk.len() >= 4096 {
+                        let batch_res = rows_to_arrow(chunk, &schema_clone)
+                            .map_err(|e| Box::new(e) as GenericError)
+                            .context(super::UnableToQueryArrowSnafu)
+                            .map_err(|e| Box::new(e) as GenericError);
+
+                        if tx.blocking_send(batch_res).is_err() {
+                            return Ok(());
+                        }
+                        chunk = Vec::with_capacity(4096);
+                    }
+                }
+                if !chunk.is_empty() {
+                    let batch_res = rows_to_arrow(chunk, &schema_clone)
+                        .map_err(|e| Box::new(e) as GenericError)
+                        .context(super::UnableToQueryArrowSnafu)
+                        .map_err(|e| Box::new(e) as GenericError);
+                    let _ = tx.blocking_send(batch_res);
+                }
+                Ok(())
+            };
+
+            if let Err(e) = process() {
+                let _ = tx.blocking_send(Err(e));
+            }
+        });
+
+        // Peek first batch to determine schema if needed
+        let first_result = rx.recv().await;
+
+        let Some(first_batch_res) = first_result else {
+            // Stream empty
+            let empty_schema = projected_schema
+                .unwrap_or_else(|| Arc::new(datafusion::arrow::datatypes::Schema::empty()));
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                empty_schema,
+                futures::stream::empty(),
+            )));
+        };
+
+        let first_batch = first_batch_res?;
+        let schema = first_batch.schema();
+
+        let output_stream = stream! {
+            yield Ok(first_batch);
+            while let Some(result) = rx.recv().await {
+                 match result {
+                     Ok(batch) => yield Ok(batch),
+                     Err(e) => yield Err(datafusion::error::DataFusionError::External(e)),
+                 }
+            }
+        };
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            projected_schema.unwrap_or(schema),
+            output_stream,
+        )))
     }
 
     async fn execute(&self, sql: &str, _params: &[oracle::sql_type::OracleType]) -> Result<u64> {
@@ -248,6 +309,10 @@ fn map_oracle_type_to_arrow(
         "NUMBER" | "NUMERIC" | "DECIMAL" | "DEC" => {
             let p = precision.unwrap_or(38) as u8;
             let s = scale.unwrap_or(0) as i8;
+            // Int64 for integer types (scale = 0, precision ≤ 18)
+            if s == 0 && p <= 18 {
+                return DataType::Int64;
+            }
             if p > 38 {
                 DataType::Decimal256(p, s)
             } else {
@@ -255,17 +320,31 @@ fn map_oracle_type_to_arrow(
             }
         }
         "INTEGER" | "INT" | "SMALLINT" => DataType::Int64,
-        "FLOAT" | "REAL" | "DOUBLE PRECISION" => DataType::Float64,
+        "FLOAT" => {
+            // FLOAT precision in Oracle is binary: ≤24 → Float32, >24 → Float64
+            match precision {
+                Some(p) if p <= 24 => DataType::Float32,
+                _ => DataType::Float64,
+            }
+        }
+        "REAL" | "DOUBLE PRECISION" => DataType::Float64,
         "BINARY_FLOAT" => DataType::Float32,
         "BINARY_DOUBLE" => DataType::Float64,
 
-        // Date/Time types
-        "DATE" => {
-            use datafusion::arrow::datatypes::TimeUnit;
-            DataType::Timestamp(TimeUnit::Microsecond, None)
-        }
+        "BOOLEAN" => DataType::Boolean,
+
+        // Date/Time types - Oracle DATE is conventionally a date, not a timestamp
+        "DATE" => DataType::Date32,
         _ if type_upper.contains("TIMESTAMP") => {
             use datafusion::arrow::datatypes::TimeUnit;
+            // Precision-aware timestamp: scale contains fractional seconds precision
+            let fractional_precision = scale.unwrap_or(6);
+            let time_unit = match fractional_precision {
+                0 => TimeUnit::Second,
+                1..=3 => TimeUnit::Millisecond,
+                4..=6 => TimeUnit::Microsecond,
+                _ => TimeUnit::Nanosecond,
+            };
             let tz = if type_upper.contains("WITH TIME ZONE")
                 || type_upper.contains("WITH LOCAL TIME ZONE")
             {
@@ -273,7 +352,17 @@ fn map_oracle_type_to_arrow(
             } else {
                 None
             };
-            DataType::Timestamp(TimeUnit::Microsecond, tz)
+            DataType::Timestamp(time_unit, tz)
+        }
+
+        // Interval types
+        _ if type_upper.starts_with("INTERVAL YEAR") => {
+            use datafusion::arrow::datatypes::IntervalUnit;
+            DataType::Interval(IntervalUnit::YearMonth)
+        }
+        _ if type_upper.starts_with("INTERVAL DAY") => {
+            use datafusion::arrow::datatypes::IntervalUnit;
+            DataType::Interval(IntervalUnit::MonthDayNano)
         }
 
         // Binary types

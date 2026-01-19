@@ -1,14 +1,29 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bb8::CustomizeConnection;
 use bb8_oracle::OracleConnectionManager;
-use oracle::Connector;
+use oracle::{Connection, Connector};
 
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
 
 use super::DbConnectionPool;
+
+/// Default TCP port for Oracle Database
+const DEFAULT_ORACLE_PORT: u16 = 1521;
+
+/// Default service name for Oracle Database connections
+static DEFAULT_SERVICE_NAME: &str = "ORCL";
+
+/// Default maximum pool size
+const DEFAULT_POOL_MAX_SIZE: u32 = 10;
+
+/// Default timezone for Oracle sessions (UTC for consistent timestamp handling)
+static DEFAULT_TIMEZONE: &str = "UTC";
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -25,12 +40,32 @@ pub enum Error {
 
     #[snafu(display("Missing required parameter: {param}"))]
     MissingParameter { param: String },
-
-    #[snafu(display("Wallet configuration error: {message}"))]
-    WalletConfigError { message: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Customizer that sets session timezone on connection acquire.
+/// This ensures consistent timestamp handling across all connections.
+#[derive(Debug, Clone)]
+pub struct SetTimezoneCustomizer {
+    pub timezone: String,
+}
+
+impl CustomizeConnection<Arc<Connection>, bb8_oracle::Error> for SetTimezoneCustomizer {
+    fn on_acquire<'a>(
+        &'a self,
+        conn: &'a mut Arc<Connection>,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), bb8_oracle::Error>> + Send + 'a>> {
+        let sql = format!("ALTER SESSION SET TIME_ZONE = '{}'", self.timezone);
+        Box::pin(async move {
+            // Execute the timezone setting synchronously
+            // rust-oracle is synchronous, so this is safe in async context
+            conn.execute(&sql, &[])
+                .map_err(bb8_oracle::Error::Database)?;
+            Ok(())
+        })
+    }
+}
 
 pub struct OracleConnectionPool {
     pool: Arc<bb8::Pool<OracleConnectionManager>>,
@@ -67,14 +102,18 @@ impl OracleConnectionPool {
 
         let port = params
             .get("port")
-            .map(|s| s.expose_secret().parse::<u16>().unwrap_or(1521))
-            .unwrap_or(1521);
+            .map(|s| {
+                s.expose_secret()
+                    .parse::<u16>()
+                    .unwrap_or(DEFAULT_ORACLE_PORT)
+            })
+            .unwrap_or(DEFAULT_ORACLE_PORT);
 
         let service_name = params
             .get("service_name")
             .or_else(|| params.get("sid"))
             .map(|s| s.expose_secret().to_string())
-            .unwrap_or_else(|| "ORCL".to_string());
+            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
 
         let connector = Connector::new(
             user,
@@ -82,20 +121,22 @@ impl OracleConnectionPool {
             format!("//{}:{}/{}", host, port, service_name),
         );
 
-        // Apply wallet configuration if provided
-        if let Some(_wallet_path) = params.get("wallet_path") {
-            // Note: rust-oracle (ODPI-C) handles wallets via TNS_ADMIN or connect string
-        }
-
         let manager = OracleConnectionManager::from_connector(connector);
+
+        // Get timezone setting (default to UTC for consistent timestamp handling)
+        let timezone = params
+            .get("timezone")
+            .map(|s| s.expose_secret().to_string())
+            .unwrap_or_else(|| DEFAULT_TIMEZONE.to_string());
 
         let pool = bb8::Pool::builder()
             .max_size(
                 params
                     .get("pool_max")
                     .and_then(|s| s.expose_secret().parse().ok())
-                    .unwrap_or(10),
+                    .unwrap_or(DEFAULT_POOL_MAX_SIZE),
             )
+            .connection_customizer(Box::new(SetTimezoneCustomizer { timezone }))
             .build(manager)
             .await
             .map_err(|e| Error::PoolCreationError { source: e })?;
