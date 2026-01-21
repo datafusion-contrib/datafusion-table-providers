@@ -29,6 +29,7 @@ use std::sync::Arc;
 /// # Create the users table
 /// docker exec -i postgres psql -U postgres postgres_db <<EOF
 /// CREATE TABLE IF NOT EXISTS users (
+///    id SERIAL PRIMARY KEY,
 ///    name VARCHAR(100),
 ///    email VARCHAR(100)
 /// );
