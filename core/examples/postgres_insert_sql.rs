@@ -1,8 +1,3 @@
-use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::logical_expr::dml::InsertOp;
-use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers::{
@@ -13,23 +8,40 @@ use datafusion_table_providers::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// NOTE: This example currently FAILS due to a bug with auto-generated columns (SERIAL).
+/// When using ctx.sql() for INSERT, the returned batch has null for the auto-generated `id`
+/// column, but the schema marks it as non-nullable, causing:
+/// "Invalid batch column at '0' has null but schema specifies non-nullable"
+///
+/// WORKAROUND: If the table is created without the auto-generated `id` column (only `name`
+/// and `email`), the example works correctly. See the alternative CREATE TABLE below.
+///
 /// This example demonstrates how to:
 /// 1. Create a PostgreSQL connection pool
-/// 2. Create a "users" table in PostgreSQL
-/// 3. Use read_write_table_provider to insert data
+/// 2. Use read_write_table_provider to register a table
+/// 3. Use ctx.sql() with INSERT statement to insert data
 /// 4. Query the inserted data back
 ///
 /// Prerequisites:
 /// Start a PostgreSQL server using Docker:
 /// ```bash
-/// docker run --name postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=postgres_db -p 5432:5432 -d postgres:16-alpine
+/// docker run --name postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=postgres_db -p 5433:5432 -d postgres:16-alpine
 /// # Wait for the Postgres server to start
 /// sleep 30
 ///
-/// # Create the users table
+/// # Create the users table (this will FAIL due to SERIAL column)
 /// docker exec -i postgres psql -U postgres postgres_db <<EOF
 /// CREATE TABLE IF NOT EXISTS users (
 ///    id SERIAL PRIMARY KEY,
+///    name VARCHAR(100),
+///    email VARCHAR(100)
+/// );
+/// EOF
+///
+/// # Alternative: Create table WITHOUT auto-generated column (this WORKS)
+/// docker exec -i postgres psql -U postgres postgres_db <<EOF
+/// DROP TABLE IF EXISTS users;
+/// CREATE TABLE users (
 ///    name VARCHAR(100),
 ///    email VARCHAR(100)
 /// );
@@ -38,7 +50,7 @@ use std::sync::Arc;
 ///
 /// Run with:
 /// ```bash
-/// cargo run --example postgres_insert --features postgres
+/// cargo run -p datafusion-table-providers --example postgres_insert_sql --no-default-features --features postgres
 /// ```
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,52 +80,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("failed to create read_write_table_provider");
 
-    // Create the schema for our data
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("name", DataType::Utf8, true),
-        Field::new("email", DataType::Utf8, true),
-    ]));
-
-    // Create the data to insert
-    let name_array = StringArray::from(vec!["Alice", "Bob"]);
-    let email_array = StringArray::from(vec!["alice@example.com", "bob@example.com"]);
-
-    let record_batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(name_array), Arc::new(email_array)],
-    )?;
-
-    println!("Data to insert:");
-    println!("{:?}", record_batch);
-
     // Create a DataFusion session context
     let ctx = SessionContext::new();
 
-    // Create a MemorySourceConfig as the input data source for the insert
-    let mem_exec = MemorySourceConfig::try_new_exec(
-        &[vec![record_batch.clone()]],
-        record_batch.schema(),
-        None,
-    )?;
-
-    // Execute INSERT using insert_into
-    println!("\nInserting data into PostgreSQL...");
-    let insert_plan = table_provider
-        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
-        .await?;
-
-    // Run the insert and collect results
-    let insert_result = collect(insert_plan, ctx.task_ctx()).await?;
-    println!("Insert completed. Result: {:?}", insert_result);
-
-    // Register the table and query it back to verify the insert worked
+    // Register the table provider with DataFusion
     ctx.register_table("users", table_provider)?;
 
+    // Use ctx.sql() with INSERT statement to insert data
+    println!("Inserting data using ctx.sql()...");
+    let insert_sql = "INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com'), ('Bob', 'bob@example.com')";
+    println!("SQL: {}", insert_sql);
+
+    let df = ctx.sql(insert_sql).await?;
+
+    // Collect the insert result
+    let insert_result = df.collect().await?;
+    println!("Insert completed. Result: {:?}", insert_result);
+
+    // Query the data back to verify
     println!("\nQuerying inserted data...");
-    let df = ctx.sql("SELECT * FROM users").await?;
+    let select_df = ctx.sql("SELECT * FROM users").await?;
 
     // Collect and display results
-    let results = df.collect().await?;
+    let results = select_df.collect().await?;
     println!("\nQuery results:");
     for batch in &results {
         println!("{:?}", batch);
