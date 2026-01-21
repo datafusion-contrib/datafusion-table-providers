@@ -209,3 +209,8 @@ required-features = ["adbc"]
 name = "postgres_insert"
 path = "examples/postgres_insert.rs"
 required-features = ["postgres"]
+
+[[example]]
+name = "postgres_insert_sql"
+path = "examples/postgres_insert_sql.rs"
+required-features = ["postgres"]
