@@ -47,7 +47,7 @@ datafusion-proto = { version = "51" }
 datafusion-physical-expr = { version = "51" }
 datafusion-physical-plan = { version = "51" }
 datafusion-table-providers = { path = "core" }
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "a14c73d9" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "f4096c7592ed46b9e68755a49252d69783dece96" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.21.0" }
 adbc_driver_manager = { version = "0.21.0" }
 parquet = "57"
@@ -73,7 +73,10 @@ rand = "0.9"
 regex = "1"
 uuid = "1.9.1"
 prost = "0.14.1"
-tonic = { version = "0.14", features = ["tls-native-roots", "tls-webpki-roots"] }
+tonic = { version = "0.14", features = [
+  "tls-native-roots",
+  "tls-webpki-roots",
+] }
 bytes = "1.7.1"
 base64 = "0.22.1"
 dashmap = "6.1.0"
