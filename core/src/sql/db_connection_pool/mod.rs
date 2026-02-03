@@ -14,6 +14,8 @@ pub mod duckdbpool;
 pub mod mysqlpool;
 #[cfg(feature = "odbc")]
 pub mod odbcpool;
+#[cfg(feature = "oracle")]
+pub mod oraclepool;
 #[cfg(feature = "postgres")]
 pub mod postgrespool;
 pub mod runtime;

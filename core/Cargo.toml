@@ -103,6 +103,8 @@ rust_decimal = { version = "1.38.0", features = ["db-postgres"] }
 adbc_driver_manager = { workspace = true, optional = true }
 adbc_core = { workspace = true, optional = true }
 r2d2_adbc = { version = "0.2.0", optional = true }
+oracle = { version = "0.6", optional = true }
+bb8-oracle = { version = "0.3", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -167,6 +169,14 @@ adbc = [
   "dep:r2d2",
 ]
 adbc-federation = ["adbc", "federation"]
+oracle = [
+  "dep:oracle", 
+  "dep:bb8",
+  "dep:bb8-oracle", 
+  "dep:async-stream", 
+  "dep:arrow-schema",
+]
+oracle-federation = ["oracle", "federation"]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]

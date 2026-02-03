@@ -12,6 +12,8 @@ mod duckdb;
 mod flight;
 #[cfg(feature = "mysql")]
 mod mysql;
+#[cfg(feature = "oracle")]
+mod oracle;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "sqlite")]
