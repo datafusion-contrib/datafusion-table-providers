@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use datafusion::catalog::TableProvider;
+use datafusion::{catalog::TableProvider, execution::TaskContextProvider, prelude::SessionContext};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
@@ -33,10 +33,13 @@ impl RawTableProvider {
             None
         };
 
+        let ctx = Arc::new(SessionContext::default()) as Arc<dyn TaskContextProvider>;
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
             runtime,
+            &ctx,
+            None,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
