@@ -91,7 +91,7 @@ where
         connection_options: I,
     ) -> Self {
         if let Some(existing) = &mut self.connection_options {
-            existing.extend(connection_options);            
+            existing.extend(connection_options);
         } else {
             self.connection_options = Some(connection_options.into_iter().collect());
         }
@@ -220,14 +220,16 @@ mod test {
         .unwrap();
 
         driver
-            .new_database_with_opts([(OptionDatabase::Other("path".to_string()), ":memory:".into())])
+            .new_database_with_opts([(
+                OptionDatabase::Other("path".to_string()),
+                ":memory:".into(),
+            )])
             .unwrap()
     }
 
     #[tokio::test]
     async fn test_adbc_connection_pool() {
-        let pool =
-            ADBCPool::new(get_db(), None).expect("ADBC Connection pool to be created");
+        let pool = ADBCPool::new(get_db(), None).expect("ADBC Connection pool to be created");
 
         let conn = pool
             .connect()

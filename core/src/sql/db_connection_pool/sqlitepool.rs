@@ -180,9 +180,13 @@ impl SqliteConnectionPool {
             .await
             .map_err(|e| match e {
                 tokio_rusqlite::Error::Error(e) => Error::ConnectionPoolError { source: e },
-                tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError {
+                    source: rusqlite::Error::InvalidQuery,
+                },
                 tokio_rusqlite::Error::Close((_, e)) => Error::ConnectionPoolError { source: e },
-                _ => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                _ => Error::ConnectionPoolError {
+                    source: rusqlite::Error::InvalidQuery,
+                },
             })?;
 
             // database attachments are only supported for file-mode databases
@@ -206,9 +210,15 @@ impl SqliteConnectionPool {
                     .await
                     .map_err(|e| match e {
                         tokio_rusqlite::Error::Error(e) => Error::ConnectionPoolError { source: e },
-                        tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
-                        tokio_rusqlite::Error::Close((_, e)) => Error::ConnectionPoolError { source: e },
-                        _ => Error::ConnectionPoolError { source: rusqlite::Error::InvalidQuery },
+                        tokio_rusqlite::Error::ConnectionClosed => Error::ConnectionPoolError {
+                            source: rusqlite::Error::InvalidQuery,
+                        },
+                        tokio_rusqlite::Error::Close((_, e)) => {
+                            Error::ConnectionPoolError { source: e }
+                        }
+                        _ => Error::ConnectionPoolError {
+                            source: rusqlite::Error::InvalidQuery,
+                        },
                     })?;
                 }
 
