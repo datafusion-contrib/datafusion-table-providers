@@ -755,8 +755,8 @@ pub(crate) mod tests {
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
         physical_plan::memory::MemoryStream,
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
     };
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
