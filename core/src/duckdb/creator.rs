@@ -189,20 +189,6 @@ impl TableManager {
         }
     }
 
-    /// Creates a `TableManager` with a specific internal table name.
-    /// This is useful when you need to target an existing internal table
-    /// (e.g., for appending to a table created by a previous Overwrite operation).
-    #[must_use]
-    pub fn with_internal_name(
-        table_definition: Arc<TableDefinition>,
-        internal_name: RelationName,
-    ) -> Self {
-        Self {
-            table_definition,
-            internal_name: Some(internal_name),
-        }
-    }
-
     /// Set the internal flag for the table creator.
     pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
         if is_internal {
@@ -552,7 +538,9 @@ impl TableManager {
         Ok(indexes)
     }
 
-    #[cfg(test)]
+    /// Creates a `TableManager` with a specific internal table name.
+    /// This is useful when you need to target an existing internal table
+    /// (e.g., for appending to a table created by a previous Overwrite operation).
     pub(crate) fn from_table_name(
         table_definition: Arc<TableDefinition>,
         table_name: RelationName,

@@ -371,7 +371,7 @@ fn insert_append(
                 latest_internal_table_name,
                 base_table_manager.table_name()
             );
-            TableManager::with_internal_name(
+            TableManager::from_table_name(
                 Arc::clone(table_definition),
                 latest_internal_table_name.clone(),
             )
