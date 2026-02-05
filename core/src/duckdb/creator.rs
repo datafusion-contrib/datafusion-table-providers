@@ -189,6 +189,20 @@ impl TableManager {
         }
     }
 
+    /// Creates a `TableManager` with a specific internal table name.
+    /// This is useful when you need to target an existing internal table
+    /// (e.g., for appending to a table created by a previous Overwrite operation).
+    #[must_use]
+    pub fn with_internal_name(
+        table_definition: Arc<TableDefinition>,
+        internal_name: RelationName,
+    ) -> Self {
+        Self {
+            table_definition,
+            internal_name: Some(internal_name),
+        }
+    }
+
     /// Set the internal flag for the table creator.
     pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
         if is_internal {
@@ -752,9 +766,9 @@ pub(crate) mod tests {
         common::SchemaExt,
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
-        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
         physical_plan::memory::MemoryStream,
     };
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
