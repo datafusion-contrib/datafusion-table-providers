@@ -555,7 +555,9 @@ impl TableManager {
         Ok(indexes)
     }
 
-    #[cfg(test)]
+    /// Creates a `TableManager` with a specific internal table name.
+    /// This is useful when you need to target an existing internal table
+    /// (e.g., for appending to a table created by a previous Overwrite operation).
     pub fn from_table_name(
         table_definition: Arc<TableDefinition>,
         table_name: RelationName,
@@ -1805,9 +1807,9 @@ pub(crate) mod tests {
 
         tx.execute(
             &format!(
-                r#"INSERT INTO "{table_name}" VALUES 
-                ('Alice', 1, 30, 'active'), 
-                ('Bob', 2, 25, 'inactive'), 
+                r#"INSERT INTO "{table_name}" VALUES
+                ('Alice', 1, 30, 'active'),
+                ('Bob', 2, 25, 'inactive'),
                 ('Charlie', 3, 35, 'active'),
                 ('David', 4, 30, 'pending'),
                 ('Eve', 5, 40, 'active')"#,
@@ -1932,9 +1934,9 @@ pub(crate) mod tests {
 
         tx.execute(
             &format!(
-                r#"INSERT INTO "{table_name}" VALUES 
-                ('Alice', 1, 30, 'active'), 
-                ('Bob', 2, 25, 'inactive'), 
+                r#"INSERT INTO "{table_name}" VALUES
+                ('Alice', 1, 30, 'active'),
+                ('Bob', 2, 25, 'inactive'),
                 ('Charlie', 3, 35, 'active'),
                 ('David', 4, 30, 'pending'),
                 ('Eve', 5, 40, 'active')"#,
