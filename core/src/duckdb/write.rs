@@ -1011,7 +1011,11 @@ mod test {
             let internal_tables = table_definition
                 .list_internal_tables(&tx)
                 .expect("to list internal tables");
-            assert_eq!(internal_tables.len(), 1, "Overwrite should create 1 internal table");
+            assert_eq!(
+                internal_tables.len(),
+                1,
+                "Overwrite should create 1 internal table"
+            );
 
             let view_rows: i64 = tx
                 .query_row(
@@ -1063,7 +1067,11 @@ mod test {
         let internal_tables = table_definition
             .list_internal_tables(&tx)
             .expect("to list internal tables");
-        assert_eq!(internal_tables.len(), 1, "Should still have 1 internal table after append");
+        assert_eq!(
+            internal_tables.len(),
+            1,
+            "Should still have 1 internal table after append"
+        );
 
         // Query through the view - should see all 4 rows
         let total_rows: i64 = tx
