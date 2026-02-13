@@ -39,13 +39,13 @@ arrow-ipc = { version = "57.0.0" }
 arrow-schema = { version = "57.2.0", features = ["serde"] }
 arrow-json = "57.0.0"
 arrow-odbc = { version = "21.0.0" }
-datafusion = { version = "51", default-features = false }
-datafusion-expr = { version = "51" }
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "796bd54" }
-datafusion-ffi = { version = "51" }
-datafusion-proto = { version = "51" }
-datafusion-physical-expr = { version = "51" }
-datafusion-physical-plan = { version = "51" }
+datafusion = { version = "52", default-features = false }
+datafusion-expr = { version = "52" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "43c04eb" }
+datafusion-ffi = { version = "52" }
+datafusion-proto = { version = "52" }
+datafusion-physical-expr = { version = "52" }
+datafusion-physical-plan = { version = "52" }
 datafusion-table-providers = { path = "core" }
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "f4096c7592ed46b9e68755a49252d69783dece96" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.21.0" }
