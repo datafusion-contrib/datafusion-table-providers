@@ -327,6 +327,73 @@ async fn test_postgres_jsonb_type(port: usize) {
     .await;
 }
 
+/// Validates that [`PostgresConnectionPool::new_with_password_provider`] produces
+/// a working pool by creating a table, inserting, and querying through the provider path.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_password_provider_pool(container_manager: &Mutex<ContainerManager>) {
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_container(&mut container_manager).await;
+    }
+
+    let pool = common::get_postgres_pool_with_password_provider(container_manager.port)
+        .await
+        .expect("Pool with password provider should be created");
+
+    // Verify pool works: get a connection, create a table, insert, query
+    let conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    conn.conn
+        .execute(
+            "CREATE TABLE IF NOT EXISTS password_provider_test (id INT, name TEXT)",
+            &[],
+        )
+        .await
+        .expect("Table should be created");
+
+    conn.conn
+        .execute(
+            "INSERT INTO password_provider_test VALUES (1, 'hello')",
+            &[],
+        )
+        .await
+        .expect("Insert should succeed");
+
+    let rows = conn
+        .conn
+        .query("SELECT id, name FROM password_provider_test", &[])
+        .await
+        .expect("Query should succeed");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 1);
+    assert_eq!(rows[0].get::<_, String>(1), "hello");
+
+    // Also verify it works through the SqlTable (DataFusion) path
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, "password_provider_test")
+        .await
+        .expect("SqlTable should be created");
+
+    let ctx = SessionContext::new();
+    ctx.register_table("password_provider_test", Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql("SELECT * FROM password_provider_test")
+        .await
+        .expect("Query should execute");
+    let batches = df.collect().await.expect("Results should be collected");
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+}
+
 async fn arrow_postgres_one_way(
     port: usize,
     table_name: &str,

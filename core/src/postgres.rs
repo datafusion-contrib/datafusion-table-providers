@@ -15,10 +15,8 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
 };
 use async_trait::async_trait;
-use bb8_postgres::{
-    tokio_postgres::{types::ToSql, Transaction},
-    PostgresConnectionManager,
-};
+use bb8_postgres::tokio_postgres::{types::ToSql, Transaction};
+use crate::sql::db_connection_pool::dbconnection::postgresconn::PostgresPooledConnection;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
@@ -29,7 +27,6 @@ use datafusion::{
     logical_expr::CreateExternalTable,
     sql::TableReference,
 };
-use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
@@ -48,12 +45,12 @@ use self::write::PostgresTableWriter;
 pub mod write;
 
 pub type DynPostgresConnectionPool = dyn DbConnectionPool<
-        bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
+        PostgresPooledConnection,
         &'static (dyn ToSql + Sync),
     > + Send
     + Sync;
 pub type DynPostgresConnection = dyn DbConnection<
-    bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
+    PostgresPooledConnection,
     &'static (dyn ToSql + Sync),
 >;
 
