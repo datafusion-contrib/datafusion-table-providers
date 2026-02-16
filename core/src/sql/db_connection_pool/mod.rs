@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use dbconnection::DbConnection;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use std::sync::Arc;
 
 pub mod dbconnection;
@@ -55,7 +55,7 @@ impl StaticPasswordProvider {
 #[async_trait]
 impl PasswordProvider for StaticPasswordProvider {
     async fn get_password(&self) -> Result<SecretString> {
-        Ok(SecretString::from(self.0.expose_secret().to_string()))
+        Ok(self.0.clone())
     }
 }
 
