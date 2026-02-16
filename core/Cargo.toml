@@ -116,7 +116,7 @@ rstest = "0.26.1"
 test-log = { version = "0.2", features = ["trace"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tempfile = "3.24.0"
+tempfile = "3.25.0"
 
 [features]
 clickhouse = ["dep:clickhouse", "arrow-ipc/lz4", "dep:async-stream"]
