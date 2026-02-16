@@ -1,6 +1,7 @@
 use crate::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, Error as SqlGenError, IndexBuilder, InsertBuilder,
 };
+use crate::sql::db_connection_pool::dbconnection::postgresconn::PostgresPooledConnection;
 use crate::sql::db_connection_pool::{
     self,
     dbconnection::{postgresconn::PostgresConnection, DbConnection},
@@ -16,7 +17,6 @@ use arrow::{
 };
 use async_trait::async_trait;
 use bb8_postgres::tokio_postgres::{types::ToSql, Transaction};
-use crate::sql::db_connection_pool::dbconnection::postgresconn::PostgresPooledConnection;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
@@ -44,15 +44,10 @@ use self::write::PostgresTableWriter;
 
 pub mod write;
 
-pub type DynPostgresConnectionPool = dyn DbConnectionPool<
-        PostgresPooledConnection,
-        &'static (dyn ToSql + Sync),
-    > + Send
-    + Sync;
-pub type DynPostgresConnection = dyn DbConnection<
-    PostgresPooledConnection,
-    &'static (dyn ToSql + Sync),
->;
+pub type DynPostgresConnectionPool =
+    dyn DbConnectionPool<PostgresPooledConnection, &'static (dyn ToSql + Sync)> + Send + Sync;
+pub type DynPostgresConnection =
+    dyn DbConnection<PostgresPooledConnection, &'static (dyn ToSql + Sync)>;
 
 #[derive(Debug, Snafu)]
 pub enum Error {

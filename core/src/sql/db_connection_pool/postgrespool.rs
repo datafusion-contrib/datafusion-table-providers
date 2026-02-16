@@ -13,7 +13,9 @@ use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{prelude::*, ResultExt};
 use tokio_postgres;
 
-use super::{runtime::run_async_with_tokio, DbConnectionPool, PasswordProvider, StaticPasswordProvider};
+use super::{
+    runtime::run_async_with_tokio, DbConnectionPool, PasswordProvider, StaticPasswordProvider,
+};
 use crate::sql::db_connection_pool::{
     dbconnection::{postgresconn::PostgresConnection, AsyncDbConnection, DbConnection},
     JoinPushDown,
@@ -147,9 +149,7 @@ impl bb8::ManageConnection for ConnectionManager {
     type Connection = tokio_postgres::Client;
     type Error = ConnectionManagerError;
 
-    async fn connect(
-        &self,
-    ) -> std::result::Result<tokio_postgres::Client, ConnectionManagerError> {
+    async fn connect(&self) -> std::result::Result<tokio_postgres::Client, ConnectionManagerError> {
         let (client, connection) = if let Some(provider) = &self.password_provider {
             let password = provider
                 .get_password()
@@ -235,8 +235,7 @@ impl PostgresConnectionPool {
             .get("connection_string")
             .map(SecretBox::expose_secret)
         {
-            let (str, mode, cert_path, password) =
-                parse_connection_string(pg_connection_string);
+            let (str, mode, cert_path, password) = parse_connection_string(pg_connection_string);
             connection_string = str;
             ssl_mode = mode;
             if password_provider.is_none() {
@@ -327,9 +326,8 @@ impl PostgresConnectionPool {
         // Resolve the password provider: use the caller's, wrap the static password,
         // or leave as None for passwordless auth (trust, cert, etc.).
         let password_provider = password_provider.or_else(|| {
-            static_password.map(|pw| {
-                Arc::new(StaticPasswordProvider::new(pw)) as Arc<dyn PasswordProvider>
-            })
+            static_password
+                .map(|pw| Arc::new(StaticPasswordProvider::new(pw)) as Arc<dyn PasswordProvider>)
         });
 
         // Test the connection
@@ -484,11 +482,9 @@ fn map_pool_build_error(e: ConnectionManagerError) -> Error {
 
 fn map_pool_run_error(e: bb8::RunError<ConnectionManagerError>) -> Error {
     match e {
-        bb8::RunError::User(ConnectionManagerError::Postgres(e)) => {
-            Error::ConnectionPoolRunError {
-                source: bb8::RunError::User(e),
-            }
-        }
+        bb8::RunError::User(ConnectionManagerError::Postgres(e)) => Error::ConnectionPoolRunError {
+            source: bb8::RunError::User(e),
+        },
         bb8::RunError::User(ConnectionManagerError::PasswordProvider(e)) => {
             Error::PasswordProviderError { source: e }
         }
@@ -571,10 +567,8 @@ where
 
 #[async_trait]
 impl
-    DbConnectionPool<
-        bb8::PooledConnection<'static, ConnectionManager>,
-        &'static (dyn ToSql + Sync),
-    > for PostgresConnectionPool
+    DbConnectionPool<bb8::PooledConnection<'static, ConnectionManager>, &'static (dyn ToSql + Sync)>
+    for PostgresConnectionPool
 {
     async fn connect(
         &self,
@@ -627,8 +621,9 @@ mod tests {
 
     #[test]
     fn parse_connection_string_extracts_password() {
-        let (conn_str, ssl_mode, cert_path, password) =
-            parse_connection_string("host=localhost user=postgres password=secret dbname=mydb sslmode=disable");
+        let (conn_str, ssl_mode, cert_path, password) = parse_connection_string(
+            "host=localhost user=postgres password=secret dbname=mydb sslmode=disable",
+        );
         assert_eq!(conn_str.trim(), "host=localhost user=postgres dbname=mydb");
         assert_eq!(ssl_mode, "disable");
         assert!(cert_path.is_none());

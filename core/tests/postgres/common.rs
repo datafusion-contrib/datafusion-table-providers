@@ -77,15 +77,10 @@ pub(super) async fn get_postgres_pool_with_password_provider(
     port: usize,
 ) -> Result<PostgresConnectionPool, anyhow::Error> {
     let mut params = get_pg_params(port);
-    let password = params
-        .remove("pg_pass")
-        .expect("pg_pass should be present");
+    let password = params.remove("pg_pass").expect("pg_pass should be present");
     let provider = Arc::new(StaticPasswordProvider::new(SecretString::from(password)));
-    let pool = PostgresConnectionPool::new_with_password_provider(
-        to_secret_map(params),
-        provider,
-    )
-    .await?;
+    let pool =
+        PostgresConnectionPool::new_with_password_provider(to_secret_map(params), provider).await?;
 
     Ok(pool)
 }
