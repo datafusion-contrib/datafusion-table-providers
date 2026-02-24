@@ -31,8 +31,8 @@ description = "Extend the capabilities of DataFusion to support additional data 
 arrow = "57.2"
 arrow-array = { version = "57.2" }
 arrow-flight = { version = "57.2", features = [
-  "flight-sql-experimental",
-  "tls-ring",
+    "flight-sql-experimental",
+    "tls-ring",
 ] }
 arrow-ipc = { version = "57.2" }
 arrow-schema = { version = "57.2", features = ["serde"] }
@@ -45,7 +45,7 @@ datafusion-ffi = { version = "52.0" }
 datafusion-proto = { version = "52.0" }
 datafusion-physical-expr = { version = "52.0" }
 datafusion-physical-plan = { version = "52.0" }
-datafusion-python = { version = "51.0.0", git = "https://github.com/apache/datafusion-python", branch = "main" }
+datafusion-python = { version = "52.0" }
 datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.3", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.21" }

@@ -2244,8 +2244,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-python"
-version = "51.0.0"
-source = "git+https://github.com/apache/datafusion-python?branch=main#4cd56743e50d6b33c3d21152ec4ae87d5fe3faf4"
+version = "52.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9d74e3aff32e34998c87b06809b405f9ad9d870fec6d21c6bc8a28226f3ca3d"
 dependencies = [
  "arrow",
  "arrow-select",
