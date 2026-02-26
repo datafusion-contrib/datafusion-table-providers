@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use datafusion::catalog::TableProvider;
+use datafusion::{catalog::TableProvider, execution::TaskContextProvider, prelude::SessionContext};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
@@ -19,11 +19,20 @@ pub(crate) fn get_tokio_runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"))
 }
 
+/// Returns a static reference to a default SessionContext.
+/// This ensures the Arc backing the Weak reference inside
+/// FFI_TaskContextProvider is never dropped.
+fn get_default_session_context() -> &'static Arc<SessionContext> {
+    static CTX: OnceLock<Arc<SessionContext>> = OnceLock::new();
+    CTX.get_or_init(|| Arc::new(SessionContext::default()))
+}
+
 #[pymethods]
 impl RawTableProvider {
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
+        _session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
@@ -33,10 +42,13 @@ impl RawTableProvider {
             None
         };
 
+        let ctx = Arc::clone(get_default_session_context()) as Arc<dyn TaskContextProvider>;
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
             runtime,
+            &ctx,
+            None,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
