@@ -127,7 +127,8 @@ WHERE schemaname = $1;
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
     #[snafu(display(
-        "Query execution failed.\n{source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
+        "Query execution failed.\n{}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html",
+        format_postgres_query_error(source)
     ))]
     QueryError {
         source: bb8_postgres::tokio_postgres::Error,
@@ -137,6 +138,30 @@ pub enum PostgresError {
     ConversionError {
         source: crate::sql::arrow_sql_gen::postgres::Error,
     },
+}
+
+fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> String {
+    let Some(db_error) = source.as_db_error() else {
+        return source.to_string();
+    };
+
+    let mut rendered = format!("{db_error}\nSQLSTATE: {}", db_error.code().code());
+
+    let context: Vec<_> = [
+        ("schema", db_error.schema()),
+        ("table", db_error.table()),
+        ("column", db_error.column()),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.map(|v| format!("{k}={v}")))
+    .collect();
+
+    if !context.is_empty() {
+        rendered.push_str("\nCONTEXT: ");
+        rendered.push_str(&context.join(", "));
+    }
+
+    rendered
 }
 
 pub struct PostgresConnection {
