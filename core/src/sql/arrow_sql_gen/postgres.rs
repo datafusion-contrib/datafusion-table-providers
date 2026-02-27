@@ -12,7 +12,6 @@ use arrow::array::{
     StringDictionaryBuilder, StructBuilder, Time64NanosecondBuilder, TimestampNanosecondBuilder,
     UInt32Builder,
 };
-use arrow::compute::take;
 use arrow::datatypes::{
     DataType, Date32Type, Field, Int8Type, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit,
@@ -25,7 +24,6 @@ use composite::CompositeType;
 use geo_types::geometry::Point;
 use rust_decimal::Decimal;
 use sea_query::{Alias, ColumnType, SeaRc};
-use serde_json::Value;
 use snafu::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::types::FromSql;
@@ -384,16 +382,14 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         }
                         .fail();
                     };
-                    let v = row.try_get::<usize, Option<Value>>(i).with_context(|_| {
-                        FailedToGetRowValueSnafu {
+                    let v = row
+                        .try_get::<usize, Option<JsonbRawString>>(i)
+                        .with_context(|_| FailedToGetRowValueSnafu {
                             pg_type: postgres_type.clone(),
-                        }
-                    })?;
+                        })?;
 
                     match v {
-                        Some(v) => {
-                            builder.append_value(v.to_string());
-                        }
+                        Some(v) => builder.append_value(v.0),
                         None => builder.append_null(),
                     }
                 }
@@ -910,7 +906,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 }
             };
 
-            array = cast_string_to_list_of_struct(string_array, &list_item_field).context(
+            array = decode_json_list_of_struct(string_array, &list_item_field).context(
                 FailedToDecodeJsonListStructSnafu {
                     column_name: projected_field.name().to_string(),
                 },
@@ -958,79 +954,64 @@ fn projected_list_struct_field(
     }
 }
 
-fn cast_string_to_list_of_struct(
+/// Decodes a `StringArray` of JSON list-of-struct values into a typed
+/// `List<Struct>` Arrow array using a single batch NDJSON decode.
+///
+/// Null entries in `string_array` are emitted as the JSON literal `null` in the
+/// NDJSON buffer, which the `arrow_json` decoder interprets as a null list
+/// element — no post-hoc `take` reindexing required.
+fn decode_json_list_of_struct(
     string_array: &StringArray,
     list_item_field: &Arc<Field>,
 ) -> std::result::Result<ArrayRef, arrow::error::ArrowError> {
-    let row_count = string_array.len();
-    let non_null_count = row_count - string_array.null_count();
-
-    let item_field = Arc::new(Field::new(
+    let list_field = Arc::new(Field::new_list(
         list_item_field.name(),
-        list_item_field.data_type().clone(),
-        list_item_field.is_nullable(),
+        Arc::clone(list_item_field),
+        true,
     ));
-    let list_field = Arc::new(Field::new_list("list_item", item_field, true));
-    let list_data_type = list_field.data_type().clone();
 
-    if non_null_count == 0 {
-        return Ok(new_null_array(&list_data_type, row_count));
-    }
-
-    let mut payload: Vec<u8> = Vec::new();
-    for value in string_array.iter().flatten() {
-        payload.extend_from_slice(value.as_bytes());
-        payload.push(b'\n');
+    if string_array.is_empty() {
+        return Ok(new_null_array(list_field.data_type(), 0));
     }
 
     let mut decoder = ReaderBuilder::new_with_field(list_field)
+        .with_batch_size(string_array.len())
         .build_decoder()
         .map_err(|e| {
             arrow::error::ArrowError::CastError(format!("Failed to create decoder: {e}"))
         })?;
 
+    // Build NDJSON buffer: non-null rows get their JSON, null rows get "null".
+    let mut ndjson = Vec::new();
+    for value in string_array {
+        match value {
+            Some(s) => ndjson.extend_from_slice(s.as_bytes()),
+            None => ndjson.extend_from_slice(b"null"),
+        }
+        ndjson.push(b'\n');
+    }
+
     decoder
-        .decode(&payload)
+        .decode(&ndjson)
         .map_err(|e| arrow::error::ArrowError::CastError(format!("Failed to decode value: {e}")))?;
 
-    let maybe_batch = decoder.flush().map_err(|e| {
+    let batch = decoder.flush().map_err(|e| {
         arrow::error::ArrowError::CastError(format!("Failed to flush JSON decoder: {e}"))
     })?;
 
-    let decoded_batch = maybe_batch.ok_or_else(|| {
-        arrow::error::ArrowError::CastError(format!(
-            "Failed to flush JSON decoder: expected {non_null_count} decoded rows, got none",
-        ))
-    })?;
-
-    if decoded_batch.num_rows() != non_null_count {
-        return Err(arrow::error::ArrowError::CastError(format!(
-            "Failed to decode value: expected {non_null_count} rows, got {}",
-            decoded_batch.num_rows()
-        )));
-    }
-
-    let decoded_values = Arc::clone(decoded_batch.column(0));
-
-    if non_null_count == row_count {
-        return Ok(decoded_values);
-    }
-
-    let mut indices_builder = UInt32Builder::with_capacity(row_count);
-    let mut decoded_row_idx: u32 = 0;
-    for value in string_array {
-        if value.is_some() {
-            indices_builder.append_value(decoded_row_idx);
-            decoded_row_idx += 1;
-        } else {
-            indices_builder.append_null();
+    match batch {
+        Some(batch) if batch.num_rows() == string_array.len() => {
+            Ok(Arc::clone(batch.column(0)))
         }
+        Some(batch) => Err(arrow::error::ArrowError::CastError(format!(
+            "expected {} rows, got {}",
+            string_array.len(),
+            batch.num_rows()
+        ))),
+        None => Err(arrow::error::ArrowError::CastError(
+            "JSON decoder produced no output for non-empty input".into(),
+        )),
     }
-    let indices = indices_builder.finish();
-
-    take(decoded_values.as_ref(), &indices, None).map_err(|e| {
-        arrow::error::ArrowError::CastError(format!("Failed to reindex decoded lists: {e}"))
-    })
 }
 
 fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<Option<DataType>> {
@@ -1165,6 +1146,33 @@ pub(crate) fn map_data_type_to_column_type_postgres(
 pub(crate) fn get_postgres_composite_type_name(table_name: &str, field_name: &str) -> String {
     format!("struct_{table_name}_{field_name}")
 }
+/// Extracts the raw JSON string from Postgres JSON/JSONB wire format without
+/// parsing through `serde_json::Value`. JSONB prepends a `0x01` version byte
+/// which is stripped; JSON is returned as-is.
+#[derive(Debug)]
+struct JsonbRawString(String);
+
+impl<'a> FromSql<'a> for JsonbRawString {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let json_bytes = if *ty == Type::JSONB {
+            if raw.is_empty() || raw[0] != 1 {
+                return Err("unsupported JSONB encoding version".into());
+            }
+            &raw[1..]
+        } else {
+            raw
+        };
+        Ok(JsonbRawString(String::from_utf8(json_bytes.to_vec())?))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::JSON | Type::JSONB)
+    }
+}
+
 // interval_send - Postgres C (https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/timestamp.c#L1032)
 // interval values are internally stored as three integral fields: months, days, and microseconds
 struct IntervalFromSql {
@@ -1284,7 +1292,8 @@ mod tests {
     use super::*;
     use chrono::NaiveTime;
     use datafusion::arrow::array::{
-        ListArray, StringArray, StructArray, Time64NanosecondArray, Time64NanosecondBuilder,
+        Array, ListArray, StringArray, StructArray, Time64NanosecondArray,
+        Time64NanosecondBuilder,
     };
     use geo_types::{point, polygon, Geometry};
     use geozero::{CoordDimensions, ToWkb};
@@ -1436,7 +1445,32 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_string_to_list_of_struct_user_shape() {
+    fn test_jsonb_raw_string_from_sql() {
+        // JSONB happy path: version byte 0x01 is stripped
+        let json = r#"{"key":"value"}"#;
+        let mut jsonb_raw: Vec<u8> = vec![0x01];
+        jsonb_raw.extend_from_slice(json.as_bytes());
+        let result = JsonbRawString::from_sql(&Type::JSONB, &jsonb_raw)
+            .expect("Failed to run FromSql for JSONB");
+        assert_eq!(result.0, json);
+
+        // JSON happy path: bytes returned as-is (no version byte)
+        let json_raw = json.as_bytes();
+        let result = JsonbRawString::from_sql(&Type::JSON, json_raw)
+            .expect("Failed to run FromSql for JSON");
+        assert_eq!(result.0, json);
+
+        // JSONB wrong version byte → error
+        let err = JsonbRawString::from_sql(&Type::JSONB, &[0x02, b'{', b'}'])
+            .expect_err("Expected error for wrong JSONB version");
+        assert!(
+            err.to_string().contains("unsupported JSONB encoding version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_decode_json_list_of_struct_user_shape() {
         let string_array = StringArray::from(vec![
             Some(
                 r#"[{"id":"u1","email":"test@doss-sql.test","first_name":"Test","last_name":"User"}]"#,
@@ -1460,7 +1494,7 @@ mod tests {
         ));
 
         let array =
-            cast_string_to_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
+            decode_json_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
         let list = array
             .as_any()
             .downcast_ref::<ListArray>()
@@ -1487,7 +1521,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_string_to_list_of_struct_lookup_value_float() {
+    fn test_decode_json_list_of_struct_lookup_value_float() {
         let string_array = StringArray::from(vec![Some(r#"[{"id":"0001","value":30.0}]"#)]);
 
         let list_item_field = Arc::new(Field::new(
@@ -1503,7 +1537,7 @@ mod tests {
         ));
 
         let array =
-            cast_string_to_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
+            decode_json_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
         let list = array
             .as_any()
             .downcast_ref::<ListArray>()
@@ -1524,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_string_to_list_of_struct_invalid_json_errors() {
+    fn test_decode_json_list_of_struct_invalid_json_errors() {
         let string_array = StringArray::from(vec![Some("not-json")]);
 
         let list_item_field = Arc::new(Field::new(
@@ -1533,13 +1567,13 @@ mod tests {
             true,
         ));
 
-        let error = cast_string_to_list_of_struct(&string_array, &list_item_field)
+        let error = decode_json_list_of_struct(&string_array, &list_item_field)
             .expect_err("malformed json should error");
         assert!(error.to_string().contains("Failed to decode value"));
     }
 
     #[test]
-    fn test_cast_string_to_list_of_struct_all_null_fast_path() {
+    fn test_decode_json_list_of_struct_all_null_fast_path() {
         let string_array = StringArray::from(vec![None::<&str>, None, None]);
 
         let list_item_field = Arc::new(Field::new(
@@ -1549,7 +1583,7 @@ mod tests {
         ));
 
         let array =
-            cast_string_to_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
+            decode_json_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
         let list = array
             .as_any()
             .downcast_ref::<ListArray>()
@@ -1560,6 +1594,75 @@ mod tests {
         assert!(list.is_null(0));
         assert!(list.is_null(1));
         assert!(list.is_null(2));
+    }
+
+    /// Regression guard: the batch NDJSON decode strategy relies on `arrow_json`
+    /// treating the JSON literal `null` as a null List entry for nullable List
+    /// fields. This test asserts that contract so any future arrow-json upgrade
+    /// that changes the behaviour is caught immediately.
+    #[test]
+    fn test_decode_json_list_of_struct_null_semantics() {
+        let string_array = StringArray::from(vec![
+            Some(r#"[{"id":"a","value":1.0}]"#),
+            None,
+            Some("[]"),
+            Some(r#"[{"id":"b","value":2.0}]"#),
+        ]);
+
+        let list_item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(
+                vec![
+                    Field::new("id", DataType::Utf8, true),
+                    Field::new("value", DataType::Float64, true),
+                ]
+                .into(),
+            ),
+            true,
+        ));
+
+        let array = decode_json_list_of_struct(&string_array, &list_item_field)
+            .expect("decode succeeds");
+        let list = array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("array should be ListArray");
+
+        assert_eq!(list.len(), 4);
+
+        // row 0: non-null, length 1
+        assert!(!list.is_null(0));
+        assert_eq!(list.value_length(0), 1);
+
+        // row 1: NULL (is_null == true)
+        assert!(list.is_null(1));
+
+        // row 2: non-null, length 0 (empty list, not null)
+        assert!(!list.is_null(2));
+        assert_eq!(list.value_length(2), 0);
+
+        // row 3: non-null, length 1
+        assert!(!list.is_null(3));
+        assert_eq!(list.value_length(3), 1);
+
+        // Verify struct contents of row 3
+        let values = list.value(3);
+        let struct_values = values
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("list values should be StructArray");
+        let ids = struct_values
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("id should be Utf8");
+        assert_eq!(ids.value(0), "b");
+        let floats = struct_values
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Float64Array>()
+            .expect("value should be Float64");
+        assert_eq!(floats.value(0), 2.0);
     }
 
     #[test]
