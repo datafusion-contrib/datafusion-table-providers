@@ -880,14 +880,11 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
         };
 
         let mut array = builder.finish();
-        let Some(mut arrow_field) = arrow_fields.get(i).and_then(Clone::clone) else {
+        let Some(mut arrow_field) = arrow_fields.get(i).cloned().flatten() else {
             return NoArrowFieldForIndexSnafu { index: i }.fail();
         };
 
-        if let Some(projected_field) = projected_json_list_struct_fields
-            .get(i)
-            .and_then(Clone::clone)
-        {
+        if let Some(projected_field) = projected_json_list_struct_fields.get(i).cloned().flatten() {
             let Some(string_array) = array.as_any().downcast_ref::<StringArray>() else {
                 return InvalidJsonListStructIntermediateArraySnafu {
                     column_name: projected_field.name().to_string(),
@@ -935,7 +932,7 @@ fn projected_list_struct_field(
     column_name: &str,
     column_type: &Type,
 ) -> Option<Arc<Field>> {
-    if *column_type != Type::JSON && *column_type != Type::JSONB {
+    if !matches!(*column_type, Type::JSON | Type::JSONB) {
         return None;
     }
 
@@ -1000,9 +997,7 @@ fn decode_json_list_of_struct(
     })?;
 
     match batch {
-        Some(batch) if batch.num_rows() == string_array.len() => {
-            Ok(Arc::clone(batch.column(0)))
-        }
+        Some(batch) if batch.num_rows() == string_array.len() => Ok(Arc::clone(batch.column(0))),
         Some(batch) => Err(arrow::error::ArrowError::CastError(format!(
             "expected {} rows, got {}",
             string_array.len(),
@@ -1156,7 +1151,7 @@ impl<'a> FromSql<'a> for JsonbRawString {
     fn from_sql(
         ty: &Type,
         raw: &'a [u8],
-    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let json_bytes = if *ty == Type::JSONB {
             if raw.is_empty() || raw[0] != 1 {
                 return Err("unsupported JSONB encoding version".into());
@@ -1185,7 +1180,7 @@ impl<'a> FromSql<'a> for IntervalFromSql {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
-    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let mut cursor = std::io::Cursor::new(raw);
 
         let time = cursor.read_i64::<BigEndian>()?;
@@ -1209,7 +1204,7 @@ impl<'a> FromSql<'a> for MoneyFromSql {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
-    ) -> std::prelude::v1::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let mut cursor = std::io::Cursor::new(raw);
         let cash_value = cursor.read_i64::<BigEndian>()?;
         Ok(MoneyFromSql { cash_value })
@@ -1292,8 +1287,7 @@ mod tests {
     use super::*;
     use chrono::NaiveTime;
     use datafusion::arrow::array::{
-        Array, ListArray, StringArray, StructArray, Time64NanosecondArray,
-        Time64NanosecondBuilder,
+        Array, ListArray, StringArray, StructArray, Time64NanosecondArray, Time64NanosecondBuilder,
     };
     use geo_types::{point, polygon, Geometry};
     use geozero::{CoordDimensions, ToWkb};
@@ -1464,7 +1458,8 @@ mod tests {
         let err = JsonbRawString::from_sql(&Type::JSONB, &[0x02, b'{', b'}'])
             .expect_err("Expected error for wrong JSONB version");
         assert!(
-            err.to_string().contains("unsupported JSONB encoding version"),
+            err.to_string()
+                .contains("unsupported JSONB encoding version"),
             "unexpected error: {err}"
         );
     }
@@ -1621,8 +1616,8 @@ mod tests {
             true,
         ));
 
-        let array = decode_json_list_of_struct(&string_array, &list_item_field)
-            .expect("decode succeeds");
+        let array =
+            decode_json_list_of_struct(&string_array, &list_item_field).expect("decode succeeds");
         let list = array
             .as_any()
             .downcast_ref::<ListArray>()
