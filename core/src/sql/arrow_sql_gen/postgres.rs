@@ -903,7 +903,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 }
             };
 
-            array = decode_json_list_of_struct(string_array, &list_item_field).context(
+            array = decode_json_list_of_struct(string_array, list_item_field).context(
                 FailedToDecodeJsonListStructSnafu {
                     column_name: projected_field.name().to_string(),
                 },
