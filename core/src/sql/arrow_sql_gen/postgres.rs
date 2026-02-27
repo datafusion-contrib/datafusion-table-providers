@@ -971,6 +971,10 @@ fn decode_json_list_of_struct(
         return Ok(new_null_array(list_field.data_type(), 0));
     }
 
+    if string_array.null_count() == string_array.len() {
+        return Ok(new_null_array(list_field.data_type(), string_array.len()));
+    }
+
     let mut decoder = ReaderBuilder::new_with_field(list_field)
         .with_batch_size(string_array.len())
         .build_decoder()
