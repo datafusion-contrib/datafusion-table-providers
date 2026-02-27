@@ -893,7 +893,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             };
 
             let list_item_field = match projected_field.data_type() {
-                DataType::List(list_item_field) => Arc::clone(list_item_field),
+                DataType::List(list_item_field) => list_item_field.as_ref(),
                 _ => {
                     return UnsupportedDataTypeSnafu {
                         data_type: projected_field.data_type().to_string(),
@@ -959,11 +959,11 @@ fn projected_list_struct_field(
 /// element — no post-hoc `take` reindexing required.
 fn decode_json_list_of_struct(
     string_array: &StringArray,
-    list_item_field: &Arc<Field>,
+    list_item_field: &Field,
 ) -> std::result::Result<ArrayRef, arrow::error::ArrowError> {
     let list_field = Arc::new(Field::new_list(
         list_item_field.name(),
-        Arc::clone(list_item_field),
+        Arc::new(list_item_field.clone()),
         true,
     ));
 
@@ -979,7 +979,11 @@ fn decode_json_list_of_struct(
         })?;
 
     // Build NDJSON buffer: non-null rows get their JSON, null rows get "null".
-    let mut ndjson = Vec::new();
+    let ndjson_capacity: usize = string_array
+        .iter()
+        .map(|value| value.map_or(4, str::len) + 1)
+        .sum();
+    let mut ndjson = Vec::with_capacity(ndjson_capacity);
     for value in string_array {
         match value {
             Some(s) => ndjson.extend_from_slice(s.as_bytes()),
