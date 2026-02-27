@@ -1,6 +1,6 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
-    array::{Decimal128Array, RecordBatch},
+    array::{Decimal128Array, ListArray, RecordBatch, StringArray, StructArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion::execution::context::SessionContext;
@@ -191,6 +191,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
     test_postgres_jsonb_type(container_manager.port).await;
+    test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
 }
 
 async fn test_postgres_enum_type(port: usize) {
@@ -325,6 +326,113 @@ async fn test_postgres_jsonb_type(port: usize) {
         UnsupportedTypeAction::String,
     )
     .await;
+}
+
+async fn test_postgres_jsonb_list_struct_with_projected_schema(port: usize) {
+    let create_table_stmt = "
+    CREATE TABLE jsonb_list_struct_values (
+        id INT PRIMARY KEY,
+        data JSONB
+    );";
+
+    let insert_table_stmt = r#"
+    INSERT INTO jsonb_list_struct_values (id, data) VALUES
+        (1, '[{"id":"u1","email":"one@example.com"},{"id":"u2","email":"two@example.com"}]'),
+        (2, '[]'),
+        (3, null);
+    "#;
+
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created")
+        .with_unsupported_type_action(UnsupportedTypeAction::String);
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let _ = db_conn
+        .conn
+        .execute(create_table_stmt, &[])
+        .await
+        .expect("Postgres table should be created");
+
+    let _ = db_conn
+        .conn
+        .execute(insert_table_stmt, &[])
+        .await
+        .expect("Postgres table data should be inserted");
+
+    let projected_schema = Arc::new(Schema::new(vec![Field::new(
+        "data",
+        DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(
+                vec![
+                    Field::new("id", DataType::Utf8, true),
+                    Field::new("email", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        ))),
+        true,
+    )]));
+
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new_with_schema(
+        "postgres",
+        &sqltable_pool,
+        Arc::clone(&projected_schema),
+        "jsonb_list_struct_values",
+    );
+    ctx.register_table("jsonb_list_struct_values", Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql("SELECT data FROM jsonb_list_struct_values ORDER BY id")
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+    assert_eq!(record_batch[0].num_rows(), 3);
+
+    let data_col = record_batch[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .expect("data should decode to ListArray");
+
+    assert!(!data_col.is_null(0));
+    assert_eq!(data_col.value_length(0), 2);
+    assert!(!data_col.is_null(1));
+    assert_eq!(data_col.value_length(1), 0);
+    assert!(data_col.is_null(2));
+
+    let row_one_values = data_col.value(0);
+    let row_one_struct = row_one_values
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("row 1 values should be StructArray");
+    let ids = row_one_struct
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("id field should be StringArray");
+    let emails = row_one_struct
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("email field should be StringArray");
+
+    assert_eq!(ids.value(0), "u1");
+    assert_eq!(ids.value(1), "u2");
+    assert_eq!(emails.value(0), "one@example.com");
+    assert_eq!(emails.value(1), "two@example.com");
 }
 
 /// Validates that [`PostgresConnectionPool::new_with_password_provider`] produces
