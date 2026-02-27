@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
 use crate::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
-    new_null_array, ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder,
+    new_null_array, Array, ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder,
     Decimal128Builder, FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder,
     Int32Builder, Int64Builder, Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder,
     LargeStringBuilder, ListBuilder, RecordBatch, RecordBatchOptions, StringArray, StringBuilder,
@@ -947,7 +947,7 @@ fn projected_list_struct_field(
     let field = schema
         .field_with_name(column_name)
         .ok()
-        .cloned()
+        .map(|field| Arc::new(field.clone()))
         // Fallback to positional matching in case callers project duplicate names.
         .or_else(|| schema.fields().get(index).cloned())?;
     match field.data_type() {
@@ -1521,5 +1521,81 @@ mod tests {
             .downcast_ref::<arrow::array::Float64Array>()
             .expect("value should be Float64");
         assert_eq!(float_values.value(0), 30.0);
+    }
+
+    #[test]
+    fn test_cast_string_to_list_of_struct_invalid_json_errors() {
+        let string_array = StringArray::from(vec![Some("not-json")]);
+
+        let list_item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(vec![Field::new("id", DataType::Utf8, true)].into()),
+            true,
+        ));
+
+        let error = cast_string_to_list_of_struct(&string_array, &list_item_field)
+            .expect_err("malformed json should error");
+        assert!(error.to_string().contains("Failed to decode value"));
+    }
+
+    #[test]
+    fn test_cast_string_to_list_of_struct_all_null_fast_path() {
+        let string_array = StringArray::from(vec![None::<&str>, None, None]);
+
+        let list_item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(vec![Field::new("id", DataType::Utf8, true)].into()),
+            true,
+        ));
+
+        let array =
+            cast_string_to_list_of_struct(&string_array, &list_item_field).expect("cast succeeds");
+        let list = array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("array should be ListArray");
+
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.null_count(), 3);
+        assert!(list.is_null(0));
+        assert!(list.is_null(1));
+        assert!(list.is_null(2));
+    }
+
+    #[test]
+    fn test_projected_list_struct_field_prefers_name_match_over_index() {
+        let by_index_field = Field::new(
+            "by_index",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(vec![Field::new("id", DataType::Utf8, true)].into()),
+                true,
+            ))),
+            true,
+        );
+        let by_name_field = Field::new(
+            "payload",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(vec![Field::new("email", DataType::Utf8, true)].into()),
+                true,
+            ))),
+            true,
+        );
+
+        let schema = Arc::new(Schema::new(vec![by_index_field, by_name_field]));
+        let projected_schema = Some(schema);
+
+        let resolved = projected_list_struct_field(&projected_schema, 0, "payload", &Type::JSONB)
+            .expect("field should resolve from projected schema");
+        assert_eq!(resolved.name(), "payload");
+
+        let DataType::List(item_field) = resolved.data_type() else {
+            panic!("resolved field should be list");
+        };
+        let DataType::Struct(fields) = item_field.data_type() else {
+            panic!("resolved list item should be struct");
+        };
+        assert_eq!(fields[0].name(), "email");
     }
 }
