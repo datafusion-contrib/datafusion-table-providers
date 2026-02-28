@@ -212,11 +212,11 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
     if !rows.is_empty() {
         let row = &rows[0];
-        for (i, column) in row.columns().iter().enumerate() {
+        for column in row.columns() {
             let column_name = column.name();
             let column_type = column.type_();
             let projected_json_list_struct_field =
-                projected_list_struct_field(projected_schema, i, column_name, column_type);
+                projected_list_struct_field(projected_schema, column_name, column_type);
 
             let mut numeric_scale: Option<u32> = None;
 
@@ -928,7 +928,6 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 
 fn projected_list_struct_field(
     projected_schema: &Option<SchemaRef>,
-    index: usize,
     column_name: &str,
     column_type: &Type,
 ) -> Option<Arc<Field>> {
@@ -937,12 +936,7 @@ fn projected_list_struct_field(
     }
 
     let schema = projected_schema.as_ref()?;
-    let field = schema
-        .field_with_name(column_name)
-        .ok()
-        .map(|field| Arc::new(field.clone()))
-        // Fallback to positional matching in case callers project duplicate names.
-        .or_else(|| schema.fields().get(index).cloned())?;
+    let field = Arc::new(schema.field_with_name(column_name).ok()?.clone());
     match field.data_type() {
         DataType::List(item_field) if matches!(item_field.data_type(), DataType::Struct(_)) => {
             Some(field)
@@ -961,8 +955,10 @@ fn decode_json_list_of_struct(
     string_array: &StringArray,
     list_item_field: &Field,
 ) -> std::result::Result<ArrayRef, arrow::error::ArrowError> {
+    // The list field name is unused — the caller overwrites the field from the
+    // projected schema.  We only need the data type for the decoder.
     let list_field = Arc::new(Field::new_list(
-        list_item_field.name(),
+        "_",
         Arc::new(list_item_field.clone()),
         true,
     ));
@@ -1149,6 +1145,7 @@ pub(crate) fn map_data_type_to_column_type_postgres(
 pub(crate) fn get_postgres_composite_type_name(table_name: &str, field_name: &str) -> String {
     format!("struct_{table_name}_{field_name}")
 }
+
 /// Extracts the raw JSON string from Postgres JSON/JSONB wire format without
 /// parsing through `serde_json::Value`. JSONB prepends a `0x01` version byte
 /// which is stripped; JSON is returned as-is.
@@ -1669,17 +1666,9 @@ mod tests {
     }
 
     #[test]
-    fn test_projected_list_struct_field_prefers_name_match_over_index() {
-        let by_index_field = Field::new(
-            "by_index",
-            DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Struct(vec![Field::new("id", DataType::Utf8, true)].into()),
-                true,
-            ))),
-            true,
-        );
-        let by_name_field = Field::new(
+    fn test_projected_list_struct_field_matches_by_name() {
+        let other_field = Field::new("other", DataType::Int32, true);
+        let payload_field = Field::new(
             "payload",
             DataType::List(Arc::new(Field::new(
                 "item",
@@ -1689,10 +1678,11 @@ mod tests {
             true,
         );
 
-        let schema = Arc::new(Schema::new(vec![by_index_field, by_name_field]));
+        let schema = Arc::new(Schema::new(vec![other_field, payload_field]));
         let projected_schema = Some(schema);
 
-        let resolved = projected_list_struct_field(&projected_schema, 0, "payload", &Type::JSONB)
+        // Name match succeeds regardless of positional index.
+        let resolved = projected_list_struct_field(&projected_schema, "payload", &Type::JSONB)
             .expect("field should resolve from projected schema");
         assert_eq!(resolved.name(), "payload");
 
@@ -1703,5 +1693,11 @@ mod tests {
             panic!("resolved list item should be struct");
         };
         assert_eq!(fields[0].name(), "email");
+
+        // Name miss returns None — no positional fallback.
+        assert!(
+            projected_list_struct_field(&projected_schema, "no_such_column", &Type::JSONB)
+                .is_none()
+        );
     }
 }

@@ -191,6 +191,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
     test_postgres_jsonb_type(container_manager.port).await;
+    test_postgres_json_type(container_manager.port).await;
     test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
     test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
 }
@@ -308,6 +309,53 @@ async fn test_postgres_jsonb_type(port: usize) {
         None,
         UnsupportedTypeAction::String,
         Some("SELECT data FROM jsonb_values ORDER BY id"),
+    )
+    .await;
+    assert_eq!(batches.len(), 1);
+
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column should be StringArray");
+
+    assert_eq!(col.len(), expected_values.len());
+    for (i, expected) in expected_values.iter().enumerate() {
+        let actual: Value =
+            serde_json::from_str(col.value(i)).expect("actual value should be valid JSON");
+        assert_eq!(&actual, expected, "mismatch at row {i}");
+    }
+}
+
+/// Guards that plain JSON columns (not JSONB) still round-trip as Utf8 through
+/// `JsonbRawString` without the serde_json::Value intermediate.
+async fn test_postgres_json_type(port: usize) {
+    let create_table_stmt = "
+    CREATE TABLE json_values (
+        id INT PRIMARY KEY,
+        data JSON
+    );";
+
+    let insert_table_stmt = r#"
+    INSERT INTO json_values (id, data) VALUES
+    (1, '{"name": "Alice"}'),
+    (2, '[1, 2]'),
+    (3, 'null');
+    "#;
+
+    let expected_values: Vec<Value> = vec![
+        serde_json::from_str(r#"{"name":"Alice"}"#).unwrap(),
+        serde_json::from_str("[1,2]").unwrap(),
+        serde_json::from_str("null").unwrap(),
+    ];
+    let batches = query_postgres_one_way(
+        port,
+        "json_values",
+        create_table_stmt,
+        insert_table_stmt,
+        None,
+        UnsupportedTypeAction::String,
+        Some("SELECT data FROM json_values ORDER BY id"),
     )
     .await;
     assert_eq!(batches.len(), 1);
