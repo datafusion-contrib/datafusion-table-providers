@@ -1,6 +1,6 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
-    array::{Decimal128Array, RecordBatch},
+    array::{Array, Decimal128Array, ListArray, RecordBatch, StringArray, StructArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion::execution::context::SessionContext;
@@ -191,6 +191,9 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
     test_postgres_jsonb_type(container_manager.port).await;
+    test_postgres_json_type(container_manager.port).await;
+    test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
+    test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
 }
 
 async fn test_postgres_enum_type(port: usize) {
@@ -278,53 +281,219 @@ async fn test_postgres_numeric_type(port: usize) {
 async fn test_postgres_jsonb_type(port: usize) {
     let create_table_stmt = "
     CREATE TABLE jsonb_values (
+        id INT PRIMARY KEY,
         data JSONB
     );";
 
     let insert_table_stmt = r#"
-    INSERT INTO jsonb_values (data) VALUES 
-    ('{"name": "John", "age": 30}'),
-    ('{"name": "Jane", "age": 25}'),
-    ('[1, 2, 3]'),
-    ('null'),
-    ('{"nested": {"key": "value"}}');
+    INSERT INTO jsonb_values (id, data) VALUES
+    (1, '{"name": "John", "age": 30}'),
+    (2, '{"name": "Jane", "age": 25}'),
+    (3, '[1, 2, 3]'),
+    (4, 'null'),
+    (5, '{"nested": {"key": "value"}}');
     "#;
 
-    let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
-
-    // Parse and re-serialize the JSON to ensure consistent ordering
-    let expected_values = vec![
-        serde_json::from_str::<Value>(r#"{"name":"John","age":30}"#)
-            .unwrap()
-            .to_string(),
-        serde_json::from_str::<Value>(r#"{"name":"Jane","age":25}"#)
-            .unwrap()
-            .to_string(),
-        serde_json::from_str::<Value>("[1,2,3]")
-            .unwrap()
-            .to_string(),
-        serde_json::from_str::<Value>("null").unwrap().to_string(),
-        serde_json::from_str::<Value>(r#"{"nested":{"key":"value"}}"#)
-            .unwrap()
-            .to_string(),
+    let expected_values: Vec<Value> = vec![
+        serde_json::from_str(r#"{"name":"John","age":30}"#).unwrap(),
+        serde_json::from_str(r#"{"name":"Jane","age":25}"#).unwrap(),
+        serde_json::from_str("[1,2,3]").unwrap(),
+        serde_json::from_str("null").unwrap(),
+        serde_json::from_str(r#"{"nested":{"key":"value"}}"#).unwrap(),
     ];
-
-    let expected_record = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(arrow::array::StringArray::from(expected_values))],
-    )
-    .expect("Failed to create arrow record batch");
-
-    arrow_postgres_one_way(
+    let batches = query_postgres_one_way(
         port,
         "jsonb_values",
         create_table_stmt,
         insert_table_stmt,
         None,
-        expected_record,
         UnsupportedTypeAction::String,
+        Some("SELECT data FROM jsonb_values ORDER BY id"),
     )
     .await;
+    assert_eq!(batches.len(), 1);
+
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column should be StringArray");
+
+    assert_eq!(col.len(), expected_values.len());
+    for (i, expected) in expected_values.iter().enumerate() {
+        let actual: Value =
+            serde_json::from_str(col.value(i)).expect("actual value should be valid JSON");
+        assert_eq!(&actual, expected, "mismatch at row {i}");
+    }
+}
+
+/// Guards that plain JSON columns (not JSONB) still round-trip as Utf8 through
+/// `JsonbRawString` without the serde_json::Value intermediate.
+async fn test_postgres_json_type(port: usize) {
+    let create_table_stmt = "
+    CREATE TABLE json_values (
+        id INT PRIMARY KEY,
+        data JSON
+    );";
+
+    let insert_table_stmt = r#"
+    INSERT INTO json_values (id, data) VALUES
+    (1, '{"name": "Alice"}'),
+    (2, '[1, 2]'),
+    (3, 'null');
+    "#;
+
+    let expected_values: Vec<Value> = vec![
+        serde_json::from_str(r#"{"name":"Alice"}"#).unwrap(),
+        serde_json::from_str("[1,2]").unwrap(),
+        serde_json::from_str("null").unwrap(),
+    ];
+    let batches = query_postgres_one_way(
+        port,
+        "json_values",
+        create_table_stmt,
+        insert_table_stmt,
+        None,
+        UnsupportedTypeAction::String,
+        Some("SELECT data FROM json_values ORDER BY id"),
+    )
+    .await;
+    assert_eq!(batches.len(), 1);
+
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column should be StringArray");
+
+    assert_eq!(col.len(), expected_values.len());
+    for (i, expected) in expected_values.iter().enumerate() {
+        let actual: Value =
+            serde_json::from_str(col.value(i)).expect("actual value should be valid JSON");
+        assert_eq!(&actual, expected, "mismatch at row {i}");
+    }
+}
+
+async fn test_postgres_json_list_struct_projected(port: usize, sql_type: &str) {
+    let table_name = format!("{sql_type}_list_struct_values").to_lowercase();
+
+    let create_table_stmt = format!(
+        "CREATE TABLE {table_name} (
+            id INT PRIMARY KEY,
+            data {sql_type}
+        );"
+    );
+
+    let insert_table_stmt = format!(
+        r#"INSERT INTO {table_name} (id, data) VALUES
+            (1, '[{{"id":"u1","email":"one@example.com"}},{{"id":"u2","email":"two@example.com"}}]'),
+            (2, '[]'),
+            (3, null);
+        "#
+    );
+
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created")
+        .with_unsupported_type_action(UnsupportedTypeAction::String);
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let _ = db_conn
+        .conn
+        .execute(&create_table_stmt, &[])
+        .await
+        .expect("Postgres table should be created");
+
+    let _ = db_conn
+        .conn
+        .execute(&insert_table_stmt, &[])
+        .await
+        .expect("Postgres table data should be inserted");
+
+    let projected_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new(
+            "data",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(
+                    vec![
+                        Field::new("id", DataType::Utf8, true),
+                        Field::new("email", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ))),
+            true,
+        ),
+    ]));
+
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new_with_schema(
+        "postgres",
+        &sqltable_pool,
+        Arc::clone(&projected_schema),
+        &table_name,
+    );
+    ctx.register_table(table_name.as_str(), Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql(&format!("SELECT id, data FROM {table_name} ORDER BY id"))
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+    assert_eq!(record_batch[0].num_rows(), 3);
+
+    let data_col = record_batch[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .expect("data should decode to ListArray");
+
+    assert!(!data_col.is_null(0));
+    assert_eq!(data_col.value_length(0), 2);
+    assert!(!data_col.is_null(1));
+    assert_eq!(data_col.value_length(1), 0);
+    assert!(data_col.is_null(2));
+
+    let row_one_values = data_col.value(0);
+    let row_one_struct = row_one_values
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("row 1 values should be StructArray");
+    let ids = row_one_struct
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("id field should be StringArray");
+    let emails = row_one_struct
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("email field should be StringArray");
+
+    assert_eq!(ids.value(0), "u1");
+    assert_eq!(ids.value(1), "u2");
+    assert_eq!(emails.value(0), "one@example.com");
+    assert_eq!(emails.value(1), "two@example.com");
+}
+
+async fn test_postgres_jsonb_list_struct_with_projected_schema(port: usize) {
+    test_postgres_json_list_struct_projected(port, "JSONB").await;
+}
+
+async fn test_postgres_json_list_struct_with_projected_schema(port: usize) {
+    test_postgres_json_list_struct_projected(port, "JSON").await;
 }
 
 /// Validates that [`PostgresConnectionPool::new_with_password_provider`] produces
@@ -403,6 +572,29 @@ async fn arrow_postgres_one_way(
     expected_record: RecordBatch,
     unsupported_type_action: UnsupportedTypeAction,
 ) {
+    let record_batch = query_postgres_one_way(
+        port,
+        table_name,
+        create_table_stmt,
+        insert_table_stmt,
+        extra_stmt,
+        unsupported_type_action,
+        None,
+    )
+    .await;
+
+    assert_eq!(record_batch[0], expected_record);
+}
+
+async fn query_postgres_one_way(
+    port: usize,
+    table_name: &str,
+    create_table_stmt: &str,
+    insert_table_stmt: &str,
+    extra_stmt: Option<&str>,
+    unsupported_type_action: UnsupportedTypeAction,
+    query: Option<&str>,
+) -> Vec<RecordBatch> {
     tracing::debug!("Running tests on {table_name}");
     let ctx = SessionContext::new();
 
@@ -443,15 +635,15 @@ async fn arrow_postgres_one_way(
         .expect("Table should be created");
     ctx.register_table(table_name, Arc::new(table))
         .expect("Table should be registered");
-    let sql = format!("SELECT * FROM {table_name}");
+    let sql = query
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("SELECT * FROM {table_name}"));
     let df = ctx
         .sql(&sql)
         .await
         .expect("DataFrame should be created from query");
 
-    let record_batch = df.collect().await.expect("RecordBatch should be collected");
-
-    assert_eq!(record_batch[0], expected_record);
+    df.collect().await.expect("RecordBatch should be collected")
 }
 
 #[rstest]
