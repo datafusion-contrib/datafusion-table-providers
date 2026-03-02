@@ -1,6 +1,6 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
-    array::{Decimal128Array, RecordBatch},
+    array::{Decimal128Array, Decimal128Builder, ListBuilder, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion::execution::context::SessionContext;
@@ -190,6 +190,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
 
     test_postgres_enum_type(container_manager.port).await;
     test_postgres_numeric_type(container_manager.port).await;
+    test_postgres_numeric_array_type(container_manager.port).await;
     test_postgres_jsonb_type(container_manager.port).await;
 }
 
@@ -269,6 +270,73 @@ async fn test_postgres_numeric_type(port: usize) {
         create_table_stmt,
         insert_table_stmt,
         extra_stmt,
+        expected_record,
+        UnsupportedTypeAction::default(),
+    )
+    .await;
+}
+
+async fn test_postgres_numeric_array_type(port: usize) {
+    let create_table_stmt = "
+    CREATE TABLE numeric_array_values (
+    numeric_values NUMERIC[]
+);";
+
+    let insert_table_stmt = "
+    INSERT INTO numeric_array_values (numeric_values) VALUES
+(ARRAY[1.2300::NUMERIC, 42::NUMERIC, NULL::NUMERIC, -0.0045::NUMERIC]),
+(NULL),
+(ARRAY[]::NUMERIC[]),
+(ARRAY[100.1::NUMERIC]);
+    ";
+
+    let decimal_item_type = DataType::Decimal128(38, 20);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "numeric_values",
+        DataType::List(Arc::new(Field::new(
+            "item",
+            decimal_item_type.clone(),
+            true,
+        ))),
+        true,
+    )]));
+
+    let mut numeric_array_builder = ListBuilder::new(
+        Decimal128Builder::new()
+            .with_precision_and_scale(38, 20)
+            .expect("Failed to create Decimal128Builder with expected precision and scale"),
+    );
+
+    numeric_array_builder
+        .values()
+        .append_value(123000000000000000000);
+    numeric_array_builder
+        .values()
+        .append_value(4200000000000000000000);
+    numeric_array_builder.values().append_null();
+    numeric_array_builder
+        .values()
+        .append_value(-450000000000000000);
+    numeric_array_builder.append(true);
+    numeric_array_builder.append_null();
+    numeric_array_builder.append(true);
+    numeric_array_builder
+        .values()
+        .append_value(10010000000000000000000);
+    numeric_array_builder.append(true);
+
+    let expected_record = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(numeric_array_builder.finish())],
+    )
+    .expect("Failed to create expected record batch for NUMERIC[]");
+
+    arrow_postgres_one_way(
+        port,
+        "numeric_array_values",
+        create_table_stmt,
+        insert_table_stmt,
+        None,
         expected_record,
         UnsupportedTypeAction::default(),
     )
