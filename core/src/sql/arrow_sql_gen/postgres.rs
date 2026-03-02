@@ -217,6 +217,22 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 } else {
                     None
                 }
+            } else if *column_type == Type::NUMERIC_ARRAY {
+                if let Some(schema) = projected_schema.as_ref() {
+                    match get_decimal_array_column_precision_and_scale(column_name, schema) {
+                        Some((precision, scale)) => {
+                            numeric_scale = Some(u32::try_from(scale).unwrap_or_default());
+                            Some(DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Decimal128(precision, scale),
+                                true,
+                            ))))
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                }
             } else {
                 map_column_type_to_data_type(column_type, column_name)?
             };
@@ -518,6 +534,80 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     let dest_scale = postgres_numeric_scale.unwrap_or_default();
                     v.rescale(dest_scale);
                     dec_builder.append_value(v.mantissa());
+                }
+                Type::NUMERIC_ARRAY => {
+                    let v: Option<Vec<Option<Decimal>>> =
+                        row.try_get(i).context(FailedToGetRowValueSnafu {
+                            pg_type: Type::NUMERIC_ARRAY,
+                        })?;
+
+                    let inferred_scale = v
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .map(Decimal::scale)
+                        .max()
+                        .unwrap_or_default();
+
+                    let dest_scale = postgres_numeric_scale.unwrap_or(inferred_scale);
+                    let decimal_scale = i8::try_from(dest_scale).unwrap_or_default();
+
+                    let decimal_array_builder = builder.get_or_insert_with(|| {
+                        Box::new(ListBuilder::new(
+                            Decimal128Builder::new()
+                                .with_precision_and_scale(38, decimal_scale)
+                                .unwrap_or_default(),
+                        ))
+                    });
+
+                    let Some(decimal_array_builder) = decimal_array_builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<Decimal128Builder>>()
+                    else {
+                        return FailedToDowncastBuilderSnafu {
+                            postgres_type: format!("{postgres_type}"),
+                        }
+                        .fail();
+                    };
+
+                    if arrow_field.is_none() {
+                        let Some(field_name) = column_names.get(i) else {
+                            return NoColumnNameForIndexSnafu { index: i }.fail();
+                        };
+
+                        let new_arrow_field = Field::new(
+                            field_name,
+                            DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Decimal128(38, decimal_scale),
+                                true,
+                            ))),
+                            true,
+                        );
+
+                        *arrow_field = Some(new_arrow_field);
+                    }
+
+                    if postgres_numeric_scale.is_none() {
+                        *postgres_numeric_scale = Some(dest_scale);
+                    };
+
+                    let Some(values) = v else {
+                        decimal_array_builder.append_null();
+                        continue;
+                    };
+
+                    for item in values {
+                        if let Some(mut decimal) = item {
+                            decimal.rescale(dest_scale);
+                            decimal_array_builder
+                                .values()
+                                .append_value(decimal.mantissa());
+                        } else {
+                            decimal_array_builder.values().append_null();
+                        }
+                    }
+                    decimal_array_builder.append(true);
                 }
                 Type::TIMESTAMP => {
                     let Some(builder) = builder else {
@@ -883,6 +973,8 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
         Type::JSON | Type::JSONB => Ok(Some(DataType::Utf8)),
         // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
         Type::NUMERIC => Ok(None),
+        // Inspect the scale from the first row. Precision will always be 38 for Decimal128.
+        Type::NUMERIC_ARRAY => Ok(None),
         Type::TIMESTAMPTZ => Ok(Some(DataType::Timestamp(
             TimeUnit::Nanosecond,
             Some(Arc::from("UTC")),
@@ -1107,6 +1199,22 @@ fn get_decimal_column_precision_and_scale(
     let field = projected_schema.field_with_name(column_name).ok()?;
     match field.data_type() {
         DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+        _ => None,
+    }
+}
+
+fn get_decimal_array_column_precision_and_scale(
+    column_name: &str,
+    projected_schema: &SchemaRef,
+) -> Option<(u8, i8)> {
+    let field = projected_schema.field_with_name(column_name).ok()?;
+    match field.data_type() {
+        DataType::List(inner_field) | DataType::LargeList(inner_field) => {
+            match inner_field.data_type() {
+                DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
