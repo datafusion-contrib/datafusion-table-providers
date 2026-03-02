@@ -7,6 +7,7 @@ use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
 use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
 use crate::util::handle_unsupported_type_error;
 use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -22,8 +23,7 @@ use futures::stream;
 use futures::StreamExt;
 use postgres_native_tls::MakeTlsConnector;
 use snafu::prelude::*;
-
-use crate::UnsupportedTypeAction;
+use tokio_postgres::Row;
 
 use super::AsyncDbConnection;
 use super::DbConnection;
@@ -102,6 +102,38 @@ WHERE ns.nspname = $1
     AND NOT a.attisdropped
 ORDER BY a.attnum;
 ";
+
+const REDSHIFT_SCHEMA_QUERY: &str = r#"
+SELECT
+    a.attname AS column_name,
+    CASE
+        WHEN t.typelem != 0 AND et.typname IS NOT NULL THEN 'array'
+        ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
+    END AS data_type,
+    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+    CASE
+        WHEN t.typelem != 0 AND et.typname IS NOT NULL THEN
+            -- JSON_PARSE returns a super type tokio-postgres does not understand, so cast to text
+            JSON_PARSE('{"type": "array", "element_type": "' || et.typname || '"}')::text
+        ELSE NULL
+    END AS type_details
+FROM pg_class cls
+JOIN pg_namespace ns ON cls.relnamespace = ns.oid
+JOIN pg_attribute a ON a.attrelid = cls.oid
+LEFT JOIN pg_type t ON t.oid = a.atttypid
+LEFT JOIN pg_type et ON t.typelem = et.oid
+WHERE ns.nspname = $1
+    AND cls.relname = $2
+    AND cls.relkind IN ('r','v','m')
+    AND a.attnum > 0
+    AND NOT a.attisdropped
+ORDER BY a.attnum;
+"#;
+
+pub enum PostgresVariant {
+    Default,
+    Redshift,
+}
 
 const SCHEMAS_QUERY: &str = "
 SELECT nspname AS schema_name
@@ -219,33 +251,7 @@ impl<'a>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let table_name = table_reference.table();
-        let schema_name = table_reference.schema().unwrap_or("public");
-
-        let rows = match self
-            .conn
-            .query(SCHEMA_QUERY, &[&schema_name, &table_name])
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                if let Some(error_source) = e.source() {
-                    if let Some(pg_error) =
-                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
-                    {
-                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
-                            return Err(super::Error::UndefinedTable {
-                                source: Box::new(pg_error.clone()),
-                                table_name: table_reference.to_string(),
-                            });
-                        }
-                    }
-                }
-                return Err(super::Error::UnableToGetSchema {
-                    source: Box::new(e),
-                });
-            }
-        };
+        let (variant, rows) = self.query_variant_and_schema(table_reference).await?;
 
         let mut fields = Vec::new();
         for row in rows {
@@ -253,7 +259,16 @@ impl<'a>
             let pg_type = row.get::<usize, String>(1);
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
-            let type_details = row.get::<usize, Option<serde_json::Value>>(3);
+
+            let type_details = match variant {
+                PostgresVariant::Default => row.get::<usize, Option<serde_json::Value>>(3),
+                // Redshift has no json* functions, so we make and parse the same value struct
+                // from a text column instead.
+                PostgresVariant::Redshift => row
+                    .get::<usize, Option<&str>>(3)
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
+            };
+
             let mut context =
                 ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
 
@@ -344,5 +359,68 @@ impl PostgresConnection {
     pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
         self.unsupported_type_action = action;
         self
+    }
+
+    pub async fn get_variant(&self) -> Result<PostgresVariant, super::Error> {
+        let row = self
+            .conn
+            .query_one("SELECT version()", &[])
+            .await
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
+
+        let version: String = row
+            .try_get(0)
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
+
+        let variant = if version.contains("Redshift") {
+            PostgresVariant::Redshift
+        } else {
+            PostgresVariant::Default
+        };
+
+        Ok(variant)
+    }
+
+    async fn query_variant_and_schema(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
+        let table_name = table_reference.table();
+        let schema_name = table_reference.schema().unwrap_or("public");
+
+        let variant = self.get_variant().await?;
+
+        let query = match variant {
+            PostgresVariant::Default => SCHEMA_QUERY,
+            PostgresVariant::Redshift => REDSHIFT_SCHEMA_QUERY,
+        };
+
+        let rows = self
+            .conn
+            .query(query, &[&schema_name, &table_name])
+            .await
+            .map_err(|e| {
+                if let Some(error_source) = e.source() {
+                    if let Some(pg_error) =
+                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
+                    {
+                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
+                            return super::Error::UndefinedTable {
+                                source: Box::new(pg_error.clone()),
+                                table_name: table_reference.to_string(),
+                            };
+                        }
+                    }
+                }
+                super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                }
+            });
+
+        Ok((variant, rows?))
     }
 }
