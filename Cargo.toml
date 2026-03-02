@@ -42,7 +42,7 @@ datafusion = { version = "52.0", default-features = false }
 datafusion-expr = { version = "52.0" }
 datafusion-federation = { version = "0.4" }
 datafusion-ffi = { version = "52.0" }
-datafusion-proto = { version = "52.0" }
+datafusion-proto = { version = "52.2" }
 datafusion-physical-expr = { version = "52.0" }
 datafusion-physical-plan = { version = "52.0" }
 datafusion-python = { version = "52.0" }
