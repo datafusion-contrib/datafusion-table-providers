@@ -1,5 +1,6 @@
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
@@ -81,6 +82,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         &self,
         query: &str,
         schema: SchemaRef,
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
             Arc::clone(&self.pool),
