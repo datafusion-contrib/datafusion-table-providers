@@ -486,4 +486,6 @@ async fn test_postgres_io_runtime_segregation(container_manager: &Mutex<Containe
         .expect("query should work");
     let batches: Vec<_> = futures::StreamExt::collect(stream).await;
     assert!(!batches.is_empty(), "should return results via IO runtime");
+
+    io_runtime.shutdown_background();
 }
