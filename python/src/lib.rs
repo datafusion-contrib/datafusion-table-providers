@@ -4,8 +4,8 @@ use std::{
 };
 
 use datafusion::catalog::TableProvider;
-use datafusion::prelude::SessionContext;
 use datafusion::execution::TaskContextProvider;
+use datafusion::prelude::SessionContext;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
