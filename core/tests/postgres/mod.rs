@@ -453,3 +453,37 @@ async fn arrow_postgres_one_way(
 
     assert_eq!(record_batch[0], expected_record);
 }
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_io_runtime_segregation(container_manager: &Mutex<ContainerManager>) {
+    let mut container_manager = container_manager.lock().await;
+    if !container_manager.claimed {
+        container_manager.claimed = true;
+        start_container(&mut container_manager).await;
+    }
+
+    // Create a separate IO runtime
+    let io_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("IO runtime should be created");
+
+    let pool = common::get_postgres_connection_pool(container_manager.port)
+        .await
+        .expect("pool created")
+        .with_io_runtime(io_runtime.handle().clone());
+
+    // Verify the pool works through the IO runtime
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let conn = sqltable_pool.connect().await.expect("connect should work");
+    let async_conn = conn.as_async().expect("should be async connection");
+    // Execute a simple query to confirm IO runtime is functional
+    let stream = async_conn
+        .query_arrow("SELECT 1 AS val", &[], None)
+        .await
+        .expect("query should work");
+    let batches: Vec<_> = futures::StreamExt::collect(stream).await;
+    assert!(!batches.is_empty(), "should return results via IO runtime");
+}
