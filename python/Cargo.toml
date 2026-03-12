@@ -16,7 +16,7 @@ doc = false
 [dependencies]
 arrow = { workspace = true }
 arrow-flight = { workspace = true, optional = true }
-datafusion = { workspace = true, features = ["pyarrow"] }
+datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true }
 pyo3 = { version = "0.26.0" }
