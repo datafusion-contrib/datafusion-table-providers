@@ -4,6 +4,7 @@ use std::{
 };
 
 use datafusion::catalog::TableProvider;
+use datafusion_ffi::execution::FFI_TaskContextProvider;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
@@ -21,9 +22,11 @@ pub(crate) fn get_tokio_runtime() -> &'static tokio::runtime::Runtime {
 
 #[pymethods]
 impl RawTableProvider {
+    #[pyo3(signature = (session=None))]
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
+        session: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
@@ -33,14 +36,45 @@ impl RawTableProvider {
             None
         };
 
+        let task_ctx_provider = extract_task_ctx_provider(py, session)?;
+
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
             runtime,
+            task_ctx_provider,
+            None,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }
+}
+
+/// Extract an [`FFI_TaskContextProvider`] from a session object.
+///
+/// If a session is provided and has `__datafusion_task_context_provider__`,
+/// use its capsule (backed by the session's long-lived `Arc<SessionContext>`).
+/// Otherwise, create a minimal one from a new `SessionContext`.
+fn extract_task_ctx_provider(
+    _py: Python<'_>,
+    session: Option<Bound<'_, PyAny>>,
+) -> PyResult<FFI_TaskContextProvider> {
+    if let Some(session) = session {
+        if session.hasattr("__datafusion_task_context_provider__")? {
+            let capsule = session
+                .getattr("__datafusion_task_context_provider__")?
+                .call0()?;
+            let capsule = capsule.downcast::<PyCapsule>()?;
+            let provider = unsafe { capsule.reference::<FFI_TaskContextProvider>() };
+            return Ok(provider.clone());
+        }
+    }
+
+    // Fallback for older datafusion-python versions: create our own.
+    use datafusion::execution::TaskContextProvider;
+    use datafusion::prelude::SessionContext;
+    let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
+    Ok(FFI_TaskContextProvider::from(&ctx))
 }
 
 #[cfg(feature = "clickhouse")]
