@@ -14,3 +14,6 @@ updates:
     directory: '/' # Location of package manifests
     schedule:
       interval: 'weekly'
+    ignore:
+      - dependency-name: 'datafusion*'
+      - dependency-name: 'arrow*'
