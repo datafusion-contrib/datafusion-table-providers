@@ -538,7 +538,9 @@ impl TableManager {
         Ok(indexes)
     }
 
-    #[cfg(test)]
+    /// Creates a `TableManager` with a specific internal table name.
+    /// This is useful when you need to target an existing internal table
+    /// (e.g., for appending to a table created by a previous Overwrite operation).
     pub(crate) fn from_table_name(
         table_definition: Arc<TableDefinition>,
         table_name: RelationName,

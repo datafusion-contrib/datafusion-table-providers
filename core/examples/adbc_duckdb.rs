@@ -10,32 +10,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use datafusion::sql::TableReference;
-use datafusion::prelude::SessionContext;
-use adbc_core::{Driver, LOAD_FLAG_DEFAULT};
 use adbc_core::options::{AdbcVersion, OptionDatabase};
-use adbc_driver_manager::{ManagedDriver};
+use adbc_core::{Driver, LOAD_FLAG_DEFAULT};
+use adbc_driver_manager::ManagedDriver;
+use datafusion::prelude::SessionContext;
+use datafusion::sql::TableReference;
 use datafusion_table_providers::{
-    adbc::AdbcTableFactory, sql::db_connection_pool::adbcpool::ADBCPool,    
+    adbc::AdbcTableFactory, sql::db_connection_pool::adbcpool::ADBCPool,
 };
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
-    let mut driver = ManagedDriver::load_from_name(
-        "duckdb",
-        None,
-        AdbcVersion::V110,
-        LOAD_FLAG_DEFAULT,
-        None,
-    ).unwrap();
-    let db = driver.
-        new_database_with_opts([(OptionDatabase::Uri, "core/examples/duckdb_example.db".into())])
+    let mut driver =
+        ManagedDriver::load_from_name("duckdb", None, AdbcVersion::V110, LOAD_FLAG_DEFAULT, None)
+            .unwrap();
+    let db = driver
+        .new_database_with_opts([(
+            OptionDatabase::Uri,
+            "core/examples/duckdb_example.db".into(),
+        )])
         .unwrap();
-    
-    let adbc_pool = Arc::new(
-        ADBCPool::new(db, None).expect("Failed to create ADBC pool"),
-    );
+
+    let adbc_pool = Arc::new(ADBCPool::new(db, None).expect("Failed to create ADBC pool"));
 
     let table_factory = AdbcTableFactory::new(adbc_pool.clone());
 

@@ -1,8 +1,12 @@
 use bollard::secret::HealthConfig;
 #[cfg(feature = "postgres")]
-use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
+use datafusion_table_providers::sql::db_connection_pool::{
+    postgrespool::PostgresConnectionPool, StaticPasswordProvider,
+};
 use datafusion_table_providers::util::secrets::to_secret_map;
+use secrecy::SecretString;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::instrument;
 
 use crate::{
@@ -62,6 +66,21 @@ pub(super) async fn get_postgres_connection_pool(
     port: usize,
 ) -> Result<PostgresConnectionPool, anyhow::Error> {
     let pool = PostgresConnectionPool::new(to_secret_map(get_pg_params(port))).await?;
+
+    Ok(pool)
+}
+
+/// Creates a connection pool using [`PostgresConnectionPool::new_with_password_provider`]
+/// with a [`StaticPasswordProvider`], exercising the dynamic password path.
+#[instrument]
+pub(super) async fn get_postgres_pool_with_password_provider(
+    port: usize,
+) -> Result<PostgresConnectionPool, anyhow::Error> {
+    let mut params = get_pg_params(port);
+    let password = params.remove("pg_pass").expect("pg_pass should be present");
+    let provider = Arc::new(StaticPasswordProvider::new(SecretString::from(password)));
+    let pool =
+        PostgresConnectionPool::new_with_password_provider(to_secret_map(params), provider).await?;
 
     Ok(pool)
 }

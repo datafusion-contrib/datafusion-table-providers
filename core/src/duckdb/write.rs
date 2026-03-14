@@ -351,9 +351,35 @@ fn insert_append(
         .context(super::UnableToBeginTransactionSnafu)
         .map_err(to_retriable_data_write_error)?;
 
-    let append_table = TableManager::new(Arc::clone(table_definition))
-        .with_internal(false)
-        .map_err(to_retriable_data_write_error)?;
+    // Check if there's an internal table from a previous Overwrite operation.
+    // If so, we need to append to that internal table instead of the base table name
+    // (which would be a view after Overwrite).
+    let append_table = {
+        let base_table_manager = TableManager::new(Arc::clone(table_definition))
+            .with_internal(false)
+            .map_err(to_retriable_data_write_error)?;
+
+        // List internal tables to see if a previous Overwrite created a view structure
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .map_err(to_retriable_data_write_error)?;
+
+        if let Some((latest_internal_table_name, _)) = internal_tables.last() {
+            // There's an internal table from a previous Overwrite - use it for appending
+            tracing::debug!(
+                "Found internal table {} from previous overwrite, using it for append instead of base table {}",
+                latest_internal_table_name,
+                base_table_manager.table_name()
+            );
+            TableManager::from_table_name(
+                Arc::clone(table_definition),
+                latest_internal_table_name.clone(),
+            )
+        } else {
+            // No internal tables - use the base table as normal
+            base_table_manager
+        }
+    };
 
     let should_have_indexes = !append_table.indexes_vec().is_empty();
     let has_indexes = !append_table
@@ -932,6 +958,141 @@ mod test {
             .expect("to get count");
 
         assert_eq!(view_rows, 2);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_write_to_table_append_after_overwrite() {
+        // Test scenario: Write with Overwrite, then write with Append
+        // This tests the fix for the issue where Append fails after Overwrite because
+        // Overwrite creates a view pointing to an internal table, and Append was trying
+        // to insert into the view instead of the internal table.
+        // Expected behavior: Append should detect the internal table and insert into it.
+
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let table_definition = get_basic_table_definition();
+
+        // Step 1: Do an Overwrite operation (creates internal table + view)
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+            table_definition.schema(),
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, table_definition.schema(), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all with overwrite");
+
+        // Verify Overwrite created an internal table and view
+        {
+            let mut conn = Arc::clone(&pool).connect_sync().expect("to connect");
+            let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+            let tx = duckdb.conn.transaction().expect("to begin transaction");
+            let internal_tables = table_definition
+                .list_internal_tables(&tx)
+                .expect("to list internal tables");
+            assert_eq!(
+                internal_tables.len(),
+                1,
+                "Overwrite should create 1 internal table"
+            );
+
+            let view_rows: i64 = tx
+                .query_row(
+                    &format!("SELECT COUNT(1) FROM {}", table_definition.name()),
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("to query view");
+            assert_eq!(view_rows, 2, "View should have 2 rows after overwrite");
+            tx.rollback().expect("to rollback");
+        }
+
+        // Step 2: Do an Append operation (should append to the internal table, not fail)
+        let duckdb_sink_append = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+            table_definition.schema(),
+        );
+        let data_sink_append: Arc<dyn DataSink> = Arc::new(duckdb_sink_append);
+
+        let batches_append = vec![RecordBatch::try_new(
+            Arc::clone(&table_definition.schema()),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(3), Some(4)])),
+                Arc::new(StringArray::from(vec![Some("c"), Some("d")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream_append = Box::pin(
+            MemoryStream::try_new(batches_append, table_definition.schema(), None)
+                .expect("to get stream"),
+        );
+
+        // This should NOT fail with "is not a table" error
+        data_sink_append
+            .write_all(stream_append, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all with append after overwrite");
+
+        // Verify the append worked - should now have 4 rows total
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        // Still should have just 1 internal table
+        let internal_tables = table_definition
+            .list_internal_tables(&tx)
+            .expect("to list internal tables");
+        assert_eq!(
+            internal_tables.len(),
+            1,
+            "Should still have 1 internal table after append"
+        );
+
+        // Query through the view - should see all 4 rows
+        let total_rows: i64 = tx
+            .query_row(
+                &format!("SELECT COUNT(1) FROM {}", table_definition.name()),
+                [],
+                |row| row.get(0),
+            )
+            .expect("to query view");
+        assert_eq!(total_rows, 4, "View should have 4 rows after append");
+
+        // Query the internal table directly - should also have 4 rows
+        let (internal_table_name, _) = internal_tables.first().expect("should have internal table");
+        let internal_rows: i64 = tx
+            .query_row(
+                &format!("SELECT COUNT(1) FROM {internal_table_name}"),
+                [],
+                |row| row.get(0),
+            )
+            .expect("to query internal table");
+        assert_eq!(internal_rows, 4, "Internal table should have 4 rows");
 
         tx.rollback().expect("to rollback");
     }

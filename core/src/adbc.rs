@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-use adbc_core::{Database, Connection};
+use adbc_core::{Connection, Database};
 use arrow::array::RecordBatch;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion::{
@@ -67,7 +67,7 @@ type DynAdbcConnectionPool<D> = dyn DbConnectionPool<r2d2::PooledConnection<Adbc
     + Send
     + Sync;
 
-pub struct AdbcTableFactory<D> 
+pub struct AdbcTableFactory<D>
 where
     D: Database + Send + 'static,
     D::ConnectionType: Connection + Send + Sync,
@@ -146,7 +146,7 @@ where
     D::ConnectionType: Connection + Send + Sync,
 {
     table_name: String,
-    pool: Arc<DynAdbcConnectionPool<D>>,    
+    pool: Arc<DynAdbcConnectionPool<D>>,
 }
 
 impl<D> ADBC<D>
@@ -165,10 +165,7 @@ where
 
     pub fn adbc_conn(
         db_connection: &mut Box<
-            dyn DbConnection<
-                r2d2::PooledConnection<AdbcConnectionManager<D>>,
-                RecordBatch,
-            >,
+            dyn DbConnection<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>,
         >,
     ) -> Result<&mut AdbcDbConnection<D>> {
         db_connection

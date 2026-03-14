@@ -39,12 +39,10 @@ fn get_db(driver_name: &str) -> ManagedDatabase {
     .unwrap();
 
     driver
-        .new_database_with_opts(
-            [(
-                OptionDatabase::Uri,
-                OptionValue::String(":memory:".to_string()),
-            )],
-        )
+        .new_database_with_opts([(
+            OptionDatabase::Uri,
+            OptionValue::String(":memory:".to_string()),
+        )])
         .unwrap()
 }
 

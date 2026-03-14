@@ -10,36 +10,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{any::Any, fmt, sync::Arc};
-use crate::adbc::{ADBC};
-use crate::util::retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error};
+use crate::adbc::ADBC;
 use crate::sql::db_connection_pool::adbcpool::ADBCPool;
+use crate::util::retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error};
 use adbc_core::options::{IngestMode, OptionStatement, OptionValue};
-use adbc_core::{
-    Database, Optionable, Connection, Statement,
-};
+use adbc_core::{Connection, Database, Optionable, Statement};
+use arrow::array::{RecordBatch, RecordBatchReader};
+use arrow_schema::ArrowError;
 use async_trait::async_trait;
-use datafusion::physical_plan::metrics::MetricsSet;
-use futures::StreamExt;
-use datafusion::error::DataFusionError;
 use datafusion::common::not_impl_err;
+use datafusion::error::DataFusionError;
+use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::{
-    arrow::datatypes::SchemaRef, 
-    catalog::Session, 
-    datasource::{TableProvider, sink::{DataSink, DataSinkExec}},     
-    execution::TaskContext, 
-    logical_expr::{
-        dml::InsertOp, Expr, TableType}, 
-    physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
-    }, 
-    sql::{TableReference}
+    arrow::datatypes::SchemaRef,
+    catalog::Session,
+    datasource::{
+        sink::{DataSink, DataSinkExec},
+        TableProvider,
+    },
+    execution::TaskContext,
+    logical_expr::{dml::InsertOp, Expr, TableType},
+    physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream},
+    sql::TableReference,
 };
+use futures::StreamExt;
+use snafu::ResultExt;
+use std::{any::Any, fmt, sync::Arc};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
-use arrow::array::{RecordBatchReader, RecordBatch};
-use arrow_schema::ArrowError;
-use snafu::{ResultExt};
 
 #[derive(Default)]
 pub struct ADBCTableWriterBuilder<D>
@@ -151,7 +149,7 @@ where
         state: &dyn Session,
         project: Option<&Vec<usize>>,
         filters: &[Expr],
-        limit: Option<usize>,        
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         self.read_provider
             .scan(state, project, filters, limit)
@@ -176,7 +174,6 @@ where
         )))
     }
 }
-
 
 #[derive(Clone)]
 pub(crate) struct AdbcDataSink<D>
@@ -263,7 +260,7 @@ where
                         return Err(DataFusionError::Execution(format!(
                             "ADBC write task join error: {}, original send error: {}",
                             join_error, send_error
-                        )));                        
+                        )));
                     }
                     Ok(Err(datafusion_error)) => {
                         return Err(datafusion_error);
@@ -311,50 +308,52 @@ where
 fn bulk_insert<D>(
     pool: Arc<ADBCPool<D>>,
     table_ref: &TableReference,
-    batch_rx: Receiver<RecordBatch>,    
+    batch_rx: Receiver<RecordBatch>,
     schema: SchemaRef,
     overwrite: InsertOp,
-) -> datafusion::common::Result<u64> 
-where 
+) -> datafusion::common::Result<u64>
+where
     D: Database + Send + 'static,
     D::ConnectionType: Connection + Send + Sync,
 {
     let mut db_conn = pool
-        .connect_sync()     
-        .context(super::DbConnectionPoolSnafu)        
+        .connect_sync()
+        .context(super::DbConnectionPoolSnafu)
         .map_err(to_retriable_data_write_error)?;
 
-    let adbc_conn = ADBC::adbc_conn(&mut db_conn)        
-        .map_err(to_retriable_data_write_error)?;
+    let adbc_conn = ADBC::adbc_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
 
     let conn_mx = adbc_conn.conn.lock().unwrap();
     let mut conn = conn_mx.borrow_mut();
-    let mut stmt = conn.new_statement()
+    let mut stmt = conn
+        .new_statement()
         .map_err(to_retriable_data_write_error)?;
 
-    stmt.set_option(OptionStatement::TargetTable, OptionValue::String(table_ref.to_string()))
-        .map_err(to_retriable_data_write_error)?;
+    stmt.set_option(
+        OptionStatement::TargetTable,
+        OptionValue::String(table_ref.to_string()),
+    )
+    .map_err(to_retriable_data_write_error)?;
 
     match overwrite {
-        InsertOp::Append =>
-            stmt.set_option(OptionStatement::IngestMode, IngestMode::CreateAppend.into())
-                .map_err(to_retriable_data_write_error)?,
-        InsertOp::Overwrite =>
-            stmt.set_option(OptionStatement::IngestMode, IngestMode::Replace.into())
-                .map_err(to_retriable_data_write_error)?,
-        InsertOp::Replace =>
-            not_impl_err!("upsert is not implemented for ADBC data sink")
-                .map_err(to_retriable_data_write_error)?,
+        InsertOp::Append => stmt
+            .set_option(OptionStatement::IngestMode, IngestMode::CreateAppend.into())
+            .map_err(to_retriable_data_write_error)?,
+        InsertOp::Overwrite => stmt
+            .set_option(OptionStatement::IngestMode, IngestMode::Replace.into())
+            .map_err(to_retriable_data_write_error)?,
+        InsertOp::Replace => not_impl_err!("upsert is not implemented for ADBC data sink")
+            .map_err(to_retriable_data_write_error)?,
     }
 
-    stmt.bind_stream(
-        Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)),
-    ).map_err(to_retriable_data_write_error)?;
+    stmt.bind_stream(Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)))
+        .map_err(to_retriable_data_write_error)?;
 
-    let count = stmt.execute_update().map_err(to_retriable_data_write_error)?;
+    let count = stmt
+        .execute_update()
+        .map_err(to_retriable_data_write_error)?;
     Ok(count.unwrap_or(-1) as u64)
 }
-
 
 struct RecordBatchReaderFromStream {
     stream: Receiver<RecordBatch>,

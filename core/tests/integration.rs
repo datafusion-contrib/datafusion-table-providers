@@ -1,5 +1,7 @@
 use rand::Rng;
 
+#[cfg(feature = "adbc")]
+mod adbc;
 mod arrow_record_batch_gen;
 #[cfg(feature = "clickhouse")]
 mod clickhouse;
@@ -14,8 +16,6 @@ mod mysql;
 mod postgres;
 #[cfg(feature = "sqlite")]
 mod sqlite;
-#[cfg(feature = "adbc")]
-mod adbc;
 
 fn container_registry() -> String {
     std::env::var("CONTAINER_REGISTRY")
