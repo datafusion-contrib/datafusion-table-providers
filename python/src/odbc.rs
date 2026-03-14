@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-
 use datafusion_table_providers::{
     odbc::ODBCTableFactory, sql::db_connection_pool::odbcpool::ODBCPool,
     util::secrets::to_secret_map,
