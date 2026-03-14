@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 use datafusion_table_providers::{
     clickhouse::{Arg, ClickHouseTableFactory},
     sql::db_connection_pool::{clickhousepool::ClickHouseConnectionPool, DbConnectionPool},

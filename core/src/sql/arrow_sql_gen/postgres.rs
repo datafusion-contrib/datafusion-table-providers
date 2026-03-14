@@ -1339,25 +1339,6 @@ impl<'a> FromSql<'a> for GeometryFromSql<'a> {
     }
 }
 
-struct XidFromSql {
-    xid: u32,
-}
-
-impl<'a> FromSql<'a> for XidFromSql {
-    fn from_sql(
-        _ty: &Type,
-        raw: &'a [u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        let mut cursor = std::io::Cursor::new(raw);
-        let xid = cursor.read_u32::<BigEndian>()?;
-        Ok(XidFromSql { xid })
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        matches!(*ty, Type::XID)
-    }
-}
-
 fn get_decimal_column_precision_and_scale(
     column_name: &str,
     projected_schema: &SchemaRef,
