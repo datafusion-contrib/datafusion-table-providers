@@ -49,6 +49,8 @@ pub mod clickhouse;
 pub mod duckdb;
 #[cfg(feature = "flight")]
 pub mod flight;
+#[cfg(feature = "mongodb")]
+pub mod mongodb;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "odbc")]
@@ -111,6 +113,13 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let clickhouse = PyModule::new(py, "clickhouse")?;
         clickhouse::init_module(&clickhouse)?;
         m.add_submodule(&clickhouse)?;
+    }
+
+    #[cfg(feature = "mongodb")]
+    {
+        let mongodb = PyModule::new(py, "mongodb")?;
+        mongodb::init_module(&mongodb)?;
+        m.add_submodule(&mongodb)?;
     }
 
     Ok(())
