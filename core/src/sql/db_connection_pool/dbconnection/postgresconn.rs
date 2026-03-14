@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::sql::arrow_sql_gen::postgres::rows_to_arrow;
 use crate::sql::arrow_sql_gen::postgres::schema::pg_data_type_to_arrow_type;
 use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
+use crate::sql::db_connection_pool::postgrespool::ConnectionManager;
 use crate::util::handle_unsupported_type_error;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
@@ -14,14 +15,21 @@ use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
-use bb8_postgres::PostgresConnectionManager;
+
+/// A pooled Postgres connection obtained from a [`PostgresConnectionPool`](crate::sql::db_connection_pool::postgrespool::PostgresConnectionPool).
+///
+/// Dereferences to [`tokio_postgres::Client`](bb8_postgres::tokio_postgres::Client) for executing queries.
+// Defined here rather than in `postgrespool` to avoid a type-resolution cycle
+// between the two modules (postgrespool imports PostgresConnection, which uses
+// this alias).
+pub type PostgresPooledConnection = bb8::PooledConnection<'static, ConnectionManager>;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::TableReference;
 use futures::stream;
 use futures::StreamExt;
-use postgres_native_tls::MakeTlsConnector;
+
 use snafu::prelude::*;
 use tokio_postgres::Row;
 
@@ -151,7 +159,8 @@ WHERE schemaname = $1;
 #[derive(Debug, Snafu)]
 pub enum PostgresError {
     #[snafu(display(
-        "Query execution failed.\n{source}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html"
+        "Query execution failed.\n{}\nFor details, refer to the PostgreSQL manual: https://www.postgresql.org/docs/17/index.html",
+        format_postgres_query_error(source)
     ))]
     QueryError {
         source: bb8_postgres::tokio_postgres::Error,
@@ -163,8 +172,32 @@ pub enum PostgresError {
     },
 }
 
+fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> String {
+    let Some(db_error) = source.as_db_error() else {
+        return source.to_string();
+    };
+
+    let mut rendered = format!("{db_error}\nSQLSTATE: {}", db_error.code().code());
+
+    let context: Vec<_> = [
+        ("schema", db_error.schema()),
+        ("table", db_error.table()),
+        ("column", db_error.column()),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.map(|v| format!("{k}={v}")))
+    .collect();
+
+    if !context.is_empty() {
+        rendered.push_str("\nCONTEXT: ");
+        rendered.push_str(&context.join(", "));
+    }
+
+    rendered
+}
+
 pub struct PostgresConnection {
-    pub conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
+    pub conn: PostgresPooledConnection,
     unsupported_type_action: UnsupportedTypeAction,
 }
 
@@ -183,12 +216,7 @@ impl SchemaValidator for PostgresConnection {
     }
 }
 
-impl<'a>
-    DbConnection<
-        bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
-        &'a (dyn ToSql + Sync),
-    > for PostgresConnection
-{
+impl<'a> DbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)> for PostgresConnection {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -199,26 +227,16 @@ impl<'a>
 
     fn as_async(
         &self,
-    ) -> Option<
-        &dyn AsyncDbConnection<
-            bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
-            &'a (dyn ToSql + Sync),
-        >,
-    > {
+    ) -> Option<&dyn AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>> {
         Some(self)
     }
 }
 
 #[async_trait::async_trait]
-impl<'a>
-    AsyncDbConnection<
-        bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
-        &'a (dyn ToSql + Sync),
-    > for PostgresConnection
+impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
+    for PostgresConnection
 {
-    fn new(
-        conn: bb8::PooledConnection<'static, PostgresConnectionManager<MakeTlsConnector>>,
-    ) -> Self {
+    fn new(conn: PostgresPooledConnection) -> Self {
         PostgresConnection {
             conn,
             unsupported_type_action: UnsupportedTypeAction::default(),
