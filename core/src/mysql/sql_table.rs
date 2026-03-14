@@ -161,7 +161,7 @@ impl ExecutionPlan for MySQLSQLExec {
         self.base_exec.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.base_exec.properties()
     }
 

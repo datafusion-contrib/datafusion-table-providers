@@ -269,7 +269,7 @@ pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl<T, P> SqlExec<T, P> {
@@ -285,12 +285,12 @@ impl<T, P> SqlExec<T, P> {
             projected_schema: Arc::clone(&projected_schema),
             pool,
             sql,
-            properties: PlanProperties::new(
+            properties: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )),
         })
     }
 
@@ -331,7 +331,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         Arc::clone(&self.projected_schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

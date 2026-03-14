@@ -3,6 +3,7 @@ use crate::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
     AstAnalyzer, RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
@@ -71,6 +72,7 @@ impl SQLExecutor for ClickHouseTable {
         &self,
         query: &str,
         schema: SchemaRef,
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(self.pool.clone(), query.to_string(), Arc::clone(&schema));
         let stream = futures::stream::once(fut).try_flatten();
