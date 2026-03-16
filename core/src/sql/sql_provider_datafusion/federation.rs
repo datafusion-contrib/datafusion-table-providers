@@ -85,6 +85,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         &self,
         query: &str,
         schema: SchemaRef,
+        _filters: &[Arc<dyn datafusion::physical_plan::PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
             Arc::clone(&self.pool),

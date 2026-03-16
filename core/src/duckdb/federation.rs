@@ -66,6 +66,7 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
         &self,
         query: &str,
         schema: SchemaRef,
+        _filters: &[Arc<dyn datafusion::physical_plan::PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
             self.base_table.clone_pool(),

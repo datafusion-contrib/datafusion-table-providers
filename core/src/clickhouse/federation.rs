@@ -71,6 +71,7 @@ impl SQLExecutor for ClickHouseTable {
         &self,
         query: &str,
         schema: SchemaRef,
+        _filters: &[Arc<dyn datafusion::physical_plan::PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(self.pool.clone(), query.to_string(), Arc::clone(&schema));
         let stream = futures::stream::once(fut).try_flatten();
