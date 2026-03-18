@@ -70,14 +70,18 @@ impl<T, P> AdbcDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AdbcSqlExec::new(
+        let mut exec = AdbcSqlExec::new(
             projections,
             schema,
             table_reference,
             self.base_table.clone_pool(),
             filters,
             limit,
-        )?))
+        )?;
+        if let Some(dialect) = &self.base_table.dialect {
+            exec = exec.with_dialect(Arc::clone(dialect));
+        }
+        Ok(Arc::new(exec))
     }
 }
 
@@ -143,6 +147,11 @@ impl<T, P> AdbcSqlExec<T, P> {
             None,
         )?;
         Ok(Self { base_exec })
+    }
+
+    fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.base_exec = self.base_exec.with_dialect(dialect);
+        self
     }
 
     fn sql(&self) -> SqlResult<String> {
