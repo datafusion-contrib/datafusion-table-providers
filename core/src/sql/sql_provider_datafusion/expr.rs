@@ -93,9 +93,9 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
             ScalarValue::Int32(Some(value)) => Ok(value.to_string()),
             ScalarValue::Int64(Some(value)) => Ok(value.to_string()),
             ScalarValue::Boolean(Some(value)) => Ok(value.to_string()),
-            ScalarValue::Utf8(Some(value)) | ScalarValue::LargeUtf8(Some(value)) => {
-                Ok(format!("'{value}'"))
-            }
+            ScalarValue::Utf8(Some(value))
+            | ScalarValue::LargeUtf8(Some(value))
+            | ScalarValue::Utf8View(Some(value)) => Ok(format!("'{value}'")),
             ScalarValue::Float32(Some(value)) => Ok(value.to_string()),
             ScalarValue::Float64(Some(value)) => Ok(value.to_string()),
             ScalarValue::Int8(Some(value)) => Ok(value.to_string()),
@@ -184,10 +184,13 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                 (Some(Engine::Postgres | Engine::DuckDB), false) => format!("LIKE {pattern}"),
                 (Some(Engine::SQLite), true) => format!("LIKE {pattern}"),
                 (Some(Engine::SQLite), false) => format!("LIKE {pattern} COLLATE BINARY"),
-                _ => {
-                    return Err(Error::UnsupportedFilterExpr {
-                        expr: expr.to_string(),
-                    });
+                // Standard SQL LIKE for unknown/unspecified engines (e.g. FlightSQL federation)
+                (None | Some(Engine::MySQL | Engine::Spark | Engine::ODBC), false) => {
+                    format!("LIKE {pattern}")
+                }
+                // Case-insensitive LIKE via UPPER() for engines without ILIKE
+                (None | Some(Engine::MySQL | Engine::Spark | Engine::ODBC), true) => {
+                    return Ok(format!("UPPER({expr}) LIKE UPPER({pattern})"));
                 }
             };
 
@@ -325,6 +328,111 @@ mod tests {
             let sql = to_sql_with_engine(&expr, Some(engine))?;
             assert_eq!(sql, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8view_literal_to_sql() -> Result<()> {
+        let expr = Expr::Literal(
+            ScalarValue::Utf8View(Some("ECONOMY ANODIZED STEEL".to_string())),
+            None,
+        );
+        assert_eq!(to_sql_with_engine(&expr, None)?, "'ECONOMY ANODIZED STEEL'");
+
+        // Utf8View equality filter (common after DataFusion type coercion)
+        let eq_expr = Expr::BinaryExpr(datafusion::logical_expr::BinaryExpr {
+            left: Box::new(col("p_type")),
+            op: datafusion::logical_expr::Operator::Eq,
+            right: Box::new(Expr::Literal(
+                ScalarValue::Utf8View(Some("ECONOMY ANODIZED STEEL".to_string())),
+                None,
+            )),
+        });
+        assert_eq!(to_sql(&eq_expr)?, "\"p_type\" = 'ECONOMY ANODIZED STEEL'");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8view_inlist_to_sql() -> Result<()> {
+        let expr = Expr::InList(InList {
+            expr: Box::new(col("l_shipmode")),
+            list: vec![
+                Expr::Literal(ScalarValue::Utf8View(Some("MAIL".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8View(Some("SHIP".to_string())), None),
+            ],
+            negated: false,
+        });
+        assert_eq!(
+            to_sql_with_engine(&expr, None)?,
+            "\"l_shipmode\" IN ('MAIL', 'SHIP')"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_like_expr_no_engine_to_sql() -> Result<()> {
+        // LIKE with no engine should produce standard SQL LIKE
+        let expr = Expr::Like(Like {
+            expr: Box::new(col("name")),
+            pattern: Box::new(Expr::Literal(
+                ScalarValue::Utf8(Some("%John%".to_string())),
+                None,
+            )),
+            case_insensitive: false,
+            negated: false,
+            escape_char: None,
+        });
+        assert_eq!(to_sql(&expr)?, "\"name\" LIKE '%John%'");
+
+        // NOT LIKE with no engine
+        let expr_negated = Expr::Like(Like {
+            expr: Box::new(col("name")),
+            pattern: Box::new(Expr::Literal(
+                ScalarValue::Utf8(Some("MEDIUM POLISHED%".to_string())),
+                None,
+            )),
+            case_insensitive: false,
+            negated: true,
+            escape_char: None,
+        });
+        assert_eq!(
+            to_sql(&expr_negated)?,
+            "\"name\" NOT LIKE 'MEDIUM POLISHED%'"
+        );
+
+        // Case-insensitive LIKE with no engine uses UPPER()
+        let expr_ci = Expr::Like(Like {
+            expr: Box::new(col("name")),
+            pattern: Box::new(Expr::Literal(
+                ScalarValue::Utf8(Some("%john%".to_string())),
+                None,
+            )),
+            case_insensitive: true,
+            negated: false,
+            escape_char: None,
+        });
+        assert_eq!(to_sql(&expr_ci)?, "UPPER(\"name\") LIKE UPPER('%john%')");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_like_expr_utf8view_no_engine_to_sql() -> Result<()> {
+        // LIKE with Utf8View pattern and no engine
+        let expr = Expr::Like(Like {
+            expr: Box::new(col("p_name")),
+            pattern: Box::new(Expr::Literal(
+                ScalarValue::Utf8View(Some("forest%".to_string())),
+                None,
+            )),
+            case_insensitive: false,
+            negated: false,
+            escape_char: None,
+        });
+        assert_eq!(to_sql(&expr)?, "\"p_name\" LIKE 'forest%'");
+
         Ok(())
     }
 
