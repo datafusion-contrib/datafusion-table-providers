@@ -215,37 +215,12 @@ where
         _projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
+        let (schema_tx, schema_rx) = std::sync::mpsc::channel::<
+            std::result::Result<SchemaRef, Box<dyn std::error::Error + Send + Sync>>,
+        >();
 
         let create_stream = || -> Result<SendableRecordBatchStream> {
-            let schema: SchemaRef;
-            {
-                let conn_mx = self.conn.lock().unwrap();
-                let mut conn = conn_mx.borrow_mut();
-                let mut stmt = conn
-                    .new_statement()
-                    .boxed()
-                    .context(super::UnableToQueryArrowSnafu)?;
-                stmt.set_sql_query(sql)?;
-
-                match stmt.execute_schema() {
-                    Ok(s) => schema = s.into(),
-                    // not all drivers implement execute_schema, so fall back to executing
-                    // with LIMIT 0 to get the schema.
-                    Err(_) => {
-                        stmt.set_sql_query(format!(
-                            "WITH fetch_schema AS ({sql}) SELECT * FROM fetch_schema LIMIT 0"
-                        ))?;
-                        let result = stmt
-                            .execute()
-                            .boxed()
-                            .context(super::UnableToQueryArrowSnafu)?;
-                        schema = result.schema();
-                    }
-                }
-            }
-
             let cloned_conn = Arc::clone(&self.conn);
-
             let sql_owned = sql.to_string();
             let params_owned = params.to_vec();
 
@@ -272,16 +247,38 @@ where
                     }
                 }
 
-                let results = stmt
-                    .execute()
-                    .boxed()
-                    .context(super::UnableToQueryArrowSnafu)?;
+                // Send the schema from the actual execution results.
+                // execute_schema() may return columns in table-definition order
+                // rather than in SQL SELECT order, causing type mismatches when
+                // multiple columns are projected in a non-matching order.
+                let results = match stmt.execute().boxed() {
+                    Ok(r) => {
+                        let _ = schema_tx.send(Ok(r.schema()));
+                        r
+                    }
+                    Err(e) => {
+                        let _ = schema_tx.send(Err(e.into()));
+                        return Ok(());
+                    }
+                };
+
                 for batch in results {
                     let b = batch.boxed().context(super::UnableToQueryArrowSnafu)?;
                     blocking_channel_send(&batch_tx, b)?;
                 }
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
+
+            // Block until the spawned task sends the schema derived from the
+            // real query results (which reflects the actual column order).
+            let schema = schema_rx
+                .recv()
+                .map_err(|_| Error::ChannelError {
+                    message: "Query execution task terminated unexpectedly".to_string(),
+                })?
+                .map_err(|e| Error::ChannelError {
+                    message: format!("Failed to execute ADBC query: {e}"),
+                })?;
 
             let output_stream = stream! {
                 while let Some(batch) = batch_rx.recv().await {
