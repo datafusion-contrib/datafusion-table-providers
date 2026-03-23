@@ -58,6 +58,9 @@ pub enum Error {
 
     #[snafu(display("No column name for index: {index}"))]
     NoColumnNameForIndex { index: usize },
+
+    #[snafu(display("Projected schema field \"{field_name}\" not found in query result"))]
+    FieldNotFoundInResult { field_name: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -567,8 +570,57 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
         .collect::<Vec<ArrayRef>>();
     let arrow_fields = arrow_fields.into_iter().flatten().collect::<Vec<Field>>();
     let options = &RecordBatchOptions::new().with_row_count(Some(rows.len()));
-    RecordBatch::try_new_with_options(Arc::new(Schema::new(arrow_fields)), columns, options)
-        .map_err(|err| Error::FailedToBuildRecordBatch { source: err })
+    let batch =
+        RecordBatch::try_new_with_options(Arc::new(Schema::new(arrow_fields)), columns, options)
+            .map_err(|err| Error::FailedToBuildRecordBatch { source: err })?;
+
+    // When SqlTable is created with new_with_schema, the projected schema field
+    // order may differ from MySQL's physical column order. Reorder the result
+    // columns to match the projected schema. After upgrading to DataFusion 52,
+    // the new BatchCoalescer assumes column order matches the plan schema and
+    // panics on type mismatch.
+    if let Some(schema) = projected_schema {
+        let batch_schema = batch.schema();
+        let needs_reorder = schema
+            .fields()
+            .iter()
+            .zip(batch_schema.fields())
+            .any(|(expected, actual)| expected.name() != actual.name());
+
+        if needs_reorder {
+            let mut reordered_columns = Vec::with_capacity(schema.fields().len());
+            let mut reordered_fields = Vec::with_capacity(schema.fields().len());
+
+            for field in schema.fields() {
+                let idx = batch_schema.index_of(field.name()).map_err(|_| {
+                    Error::FieldNotFoundInResult {
+                        field_name: field.name().clone(),
+                    }
+                })?;
+
+                reordered_columns.push(batch.column(idx).clone());
+                reordered_fields.push(batch_schema.field(idx).clone());
+            }
+
+            for (idx, field) in batch_schema.fields().iter().enumerate() {
+                if schema.index_of(field.name()).is_err() {
+                    reordered_columns.push(batch.column(idx).clone());
+                    reordered_fields.push(field.as_ref().clone());
+                }
+            }
+
+            let options = &RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+
+            return RecordBatch::try_new_with_options(
+                Arc::new(Schema::new(reordered_fields)),
+                reordered_columns,
+                options,
+            )
+            .map_err(|err| Error::FailedToBuildRecordBatch { source: err });
+        }
+    }
+
+    Ok(batch)
 }
 
 #[allow(clippy::unnecessary_wraps)]
