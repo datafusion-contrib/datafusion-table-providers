@@ -1,8 +1,8 @@
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use snafu::prelude::*;
 use hickory_resolver::TokioResolver;
+use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
