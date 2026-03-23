@@ -2,7 +2,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use snafu::prelude::*;
-use trust_dns_resolver::AsyncResolver;
+use hickory_resolver::TokioResolver;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -62,10 +62,12 @@ pub async fn verify_endpoint_connection(endpoint: &str) -> Result<()> {
 pub async fn verify_ns_lookup_and_tcp_connect(host: &str, port: u16) -> Result<()> {
     // DefaultConfig uses google as upstream nameservers which won't work for kubernetes name
     // resolving
-    let resolver = AsyncResolver::tokio_from_system_conf().map_err(|_| Error::UnableToConnect {
-        host: host.to_string(),
-        port,
-    })?;
+    let resolver = TokioResolver::builder_tokio()
+        .map_err(|_| Error::UnableToConnect {
+            host: host.to_string(),
+            port,
+        })?
+        .build();
     match resolver.lookup_ip(host).await {
         Ok(ips) => {
             for ip in ips.iter() {
