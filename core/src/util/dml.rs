@@ -2,11 +2,14 @@ use std::{any::Any, fmt, sync::Arc};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use datafusion::{
+    error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::Expr,
     physical_plan::{
         stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
+        PlanProperties,
     },
 };
 
@@ -122,6 +125,186 @@ impl ExecutionPlan for DmlCountExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::once(async move { Ok(batch) }),
+        )))
+    }
+}
+
+fn count_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]))
+}
+
+fn count_to_record_batch(schema: SchemaRef, count: u64) -> datafusion::error::Result<RecordBatch> {
+    let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array])
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+}
+
+// ── DeletionSink / DeletionExec ──────────────────────────────────────
+
+#[async_trait]
+pub trait DeletionSink: Send + Sync {
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>>;
+}
+
+pub struct DeletionExec {
+    deletion_sink: Arc<dyn DeletionSink + 'static>,
+    properties: PlanProperties,
+}
+
+impl DeletionExec {
+    pub fn new(deletion_sink: Arc<dyn DeletionSink>, schema: &SchemaRef) -> Self {
+        let properties = PlanProperties::new(
+            datafusion::physical_expr::EquivalenceProperties::new(Arc::clone(schema)),
+            datafusion::physical_plan::Partitioning::UnknownPartitioning(1),
+            datafusion::physical_plan::execution_plan::EmissionType::Final,
+            datafusion::physical_plan::execution_plan::Boundedness::Bounded,
+        );
+        Self {
+            deletion_sink,
+            properties,
+        }
+    }
+}
+
+impl fmt::Debug for DeletionExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeletionExec").finish_non_exhaustive()
+    }
+}
+
+impl DisplayAs for DeletionExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DeletionExec")
+    }
+}
+
+impl ExecutionPlan for DeletionExec {
+    fn name(&self) -> &'static str {
+        "DeletionExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> datafusion::error::Result<SendableRecordBatchStream> {
+        let schema = count_schema();
+        let deletion_sink = Arc::clone(&self.deletion_sink);
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::once(async move {
+                let count = deletion_sink
+                    .delete_from()
+                    .await
+                    .map_err(DataFusionError::External)?;
+                count_to_record_batch(schema, count)
+            }),
+        )))
+    }
+}
+
+// ── UpdateSink / UpdateExec ──────────────────────────────────────────
+
+#[async_trait]
+pub trait UpdateSink: Send + Sync {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>>;
+}
+
+pub struct UpdateExec {
+    update_sink: Arc<dyn UpdateSink + 'static>,
+    properties: PlanProperties,
+}
+
+impl UpdateExec {
+    pub fn new(update_sink: Arc<dyn UpdateSink>, schema: &SchemaRef) -> Self {
+        let properties = PlanProperties::new(
+            datafusion::physical_expr::EquivalenceProperties::new(Arc::clone(schema)),
+            datafusion::physical_plan::Partitioning::UnknownPartitioning(1),
+            datafusion::physical_plan::execution_plan::EmissionType::Final,
+            datafusion::physical_plan::execution_plan::Boundedness::Bounded,
+        );
+        Self {
+            update_sink,
+            properties,
+        }
+    }
+}
+
+impl fmt::Debug for UpdateExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpdateExec").finish_non_exhaustive()
+    }
+}
+
+impl DisplayAs for UpdateExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "UpdateExec")
+    }
+}
+
+impl ExecutionPlan for UpdateExec {
+    fn name(&self) -> &'static str {
+        "UpdateExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> datafusion::error::Result<SendableRecordBatchStream> {
+        let schema = count_schema();
+        let update_sink = Arc::clone(&self.update_sink);
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::once(async move {
+                let count = update_sink
+                    .execute_update()
+                    .await
+                    .map_err(DataFusionError::External)?;
+                count_to_record_batch(schema, count)
+            }),
         )))
     }
 }

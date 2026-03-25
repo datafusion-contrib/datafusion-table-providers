@@ -20,7 +20,10 @@ use crate::sql::sql_provider_datafusion::expr;
 
 use crate::util::{
     constraints,
-    dml::{assignments_to_sql, filters_to_sql, make_count_exec},
+    dml::{
+        assignments_to_sql, filters_to_sql, make_count_exec, DeletionExec, DeletionSink,
+        UpdateExec, UpdateSink,
+    },
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -122,32 +125,23 @@ impl TableProvider for SqliteTableWriter {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let count: u64 = if filters.is_empty() {
-            0
-        } else {
-            let sql_where = filters_to_sql(&filters, Some(expr::Engine::SQLite))?;
-            let table_name = self.sqlite().table_name().to_string();
+        if filters.is_empty() {
+            return Ok(make_count_exec(0));
+        }
 
-            let mut db_conn = self.sqlite().connect().await.map_err(to_datafusion_error)?;
-            let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
+        let sql_where = filters_to_sql(&filters, Some(expr::Engine::SQLite))?;
+        let table_name = self.sqlite().table_name().to_string();
+        let sqlite = self.sqlite();
+        let schema = self.schema();
 
-            sqlite_conn
-                .conn
-                .call(move |conn| -> Result<u64, rusqlite::Error> {
-                    let tx = conn.transaction()?;
-                    tx.execute(
-                        &format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#),
-                        [],
-                    )?;
-                    let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
-                    tx.commit()?;
-                    Ok(count)
-                })
-                .await
-                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?
-        };
-
-        Ok(make_count_exec(count))
+        Ok(Arc::new(DeletionExec::new(
+            Arc::new(SqliteDeletionSink {
+                sqlite,
+                table_name,
+                sql_where,
+            }),
+            &schema,
+        )))
     }
 
     async fn update(
@@ -159,11 +153,11 @@ impl TableProvider for SqliteTableWriter {
         if assignments.is_empty() {
             return Ok(make_count_exec(0));
         }
+
         let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::SQLite))?;
         let table_name = self.sqlite().table_name().to_string();
-
-        let mut db_conn = self.sqlite().connect().await.map_err(to_datafusion_error)?;
-        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
+        let sqlite = self.sqlite();
+        let schema = self.schema();
 
         let sql = if filters.is_empty() {
             format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
@@ -171,6 +165,57 @@ impl TableProvider for SqliteTableWriter {
             let sql_where = filters_to_sql(&filters, Some(expr::Engine::SQLite))?;
             format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
         };
+
+        Ok(Arc::new(UpdateExec::new(
+            Arc::new(SqliteUpdateSink { sqlite, sql }),
+            &schema,
+        )))
+    }
+}
+
+struct SqliteDeletionSink {
+    sqlite: Arc<Sqlite>,
+    table_name: String,
+    sql_where: String,
+}
+
+#[async_trait]
+impl DeletionSink for SqliteDeletionSink {
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.sqlite.connect().await?;
+        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn)?;
+        let table_name = self.table_name.clone();
+        let sql_where = self.sql_where.clone();
+
+        let count = sqlite_conn
+            .conn
+            .call(move |conn| -> Result<u64, rusqlite::Error> {
+                let tx = conn.transaction()?;
+                tx.execute(
+                    &format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#),
+                    [],
+                )?;
+                let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
+                tx.commit()?;
+                Ok(count)
+            })
+            .await?;
+
+        Ok(count)
+    }
+}
+
+struct SqliteUpdateSink {
+    sqlite: Arc<Sqlite>,
+    sql: String,
+}
+
+#[async_trait]
+impl UpdateSink for SqliteUpdateSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.sqlite.connect().await?;
+        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn)?;
+        let sql = self.sql.clone();
 
         let count = sqlite_conn
             .conn
@@ -181,10 +226,9 @@ impl TableProvider for SqliteTableWriter {
                 tx.commit()?;
                 Ok(count)
             })
-            .await
-            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+            .await?;
 
-        Ok(make_count_exec(count))
+        Ok(count)
     }
 }
 

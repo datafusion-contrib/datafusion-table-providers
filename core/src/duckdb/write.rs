@@ -6,7 +6,10 @@ use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr;
 use crate::util::{
     constraints,
-    dml::{assignments_to_sql, filters_to_sql, make_count_exec},
+    dml::{
+        assignments_to_sql, filters_to_sql, make_count_exec, DeletionExec, DeletionSink,
+        UpdateExec, UpdateSink,
+    },
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -254,41 +257,23 @@ impl TableProvider for DuckDBTableWriter {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let count: u64 = if filters.is_empty() {
-            0
-        } else {
-            let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
-            let table_name = self.table_definition.name().to_string();
-            let pool = Arc::clone(&self.pool);
+        if filters.is_empty() {
+            return Ok(make_count_exec(0));
+        }
 
-            tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
-                let mut db_conn = pool.connect_sync().map_err(DataFusionError::External)?;
-                let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let tx = duckdb_conn
-                    .conn
-                    .transaction()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
+        let table_name = self.table_definition.name().to_string();
+        let pool = Arc::clone(&self.pool);
+        let schema = self.schema();
 
-                let count_sql = format!(r#"SELECT COUNT(*) FROM "{table_name}" WHERE {sql_where}"#);
-                let count: u64 = tx
-                    .query_row(&count_sql, [], |row| row.get::<usize, u64>(0))
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                let delete_sql = format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#);
-                tx.execute(&delete_sql, [])
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                tx.commit()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                Ok(count)
-            })
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))??
-        };
-
-        Ok(make_count_exec(count))
+        Ok(Arc::new(DeletionExec::new(
+            Arc::new(DuckDBDeletionSink {
+                pool,
+                table_name,
+                sql_where,
+            }),
+            &schema,
+        )))
     }
 
     async fn update(
@@ -300,9 +285,11 @@ impl TableProvider for DuckDBTableWriter {
         if assignments.is_empty() {
             return Ok(make_count_exec(0));
         }
+
         let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::DuckDB))?;
         let table_name = self.table_definition.name().to_string();
         let pool = Arc::clone(&self.pool);
+        let schema = self.schema();
 
         let sql = if filters.is_empty() {
             format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
@@ -311,28 +298,72 @@ impl TableProvider for DuckDBTableWriter {
             format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
         };
 
-        let count = tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
-            let mut db_conn = pool.connect_sync().map_err(DataFusionError::External)?;
-            let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let tx = duckdb_conn
-                .conn
-                .transaction()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(Arc::new(UpdateExec::new(
+            Arc::new(DuckDBUpdateSink { pool, sql }),
+            &schema,
+        )))
+    }
+}
 
-            let count = tx
-                .execute(&sql, [])
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+struct DuckDBDeletionSink {
+    pool: Arc<DuckDbConnectionPool>,
+    table_name: String,
+    sql_where: String,
+}
 
-            tx.commit()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+#[async_trait]
+impl DeletionSink for DuckDBDeletionSink {
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let pool = Arc::clone(&self.pool);
+        let table_name = self.table_name.clone();
+        let sql_where = self.sql_where.clone();
 
-            Ok(count as u64)
-        })
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))??;
+        tokio::task::spawn_blocking(
+            move || -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+                let mut db_conn = pool.connect_sync()?;
+                let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+                let tx = duckdb_conn.conn.transaction()?;
 
-        Ok(make_count_exec(count))
+                let count_sql = format!(r#"SELECT COUNT(*) FROM "{table_name}" WHERE {sql_where}"#);
+                let count: u64 = tx.query_row(&count_sql, [], |row| row.get::<usize, u64>(0))?;
+
+                let delete_sql = format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#);
+                tx.execute(&delete_sql, [])?;
+
+                tx.commit()?;
+
+                Ok(count)
+            },
+        )
+        .await?
+    }
+}
+
+struct DuckDBUpdateSink {
+    pool: Arc<DuckDbConnectionPool>,
+    sql: String,
+}
+
+#[async_trait]
+impl UpdateSink for DuckDBUpdateSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let pool = Arc::clone(&self.pool);
+        let sql = self.sql.clone();
+
+        tokio::task::spawn_blocking(
+            move || -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+                let mut db_conn = pool.connect_sync()?;
+                let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
+                let tx = duckdb_conn.conn.transaction()?;
+
+                let count = tx.execute(&sql, [])?;
+
+                tx.commit()?;
+
+                Ok(count as u64)
+            },
+        )
+        .await?
     }
 }
 
