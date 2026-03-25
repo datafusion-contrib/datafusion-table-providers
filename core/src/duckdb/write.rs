@@ -324,15 +324,12 @@ impl DeletionSink for DuckDBDeletionSink {
                 let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
                 let tx = duckdb_conn.conn.transaction()?;
 
-                let count_sql = format!(r#"SELECT COUNT(*) FROM "{table_name}" WHERE {sql_where}"#);
-                let count: u64 = tx.query_row(&count_sql, [], |row| row.get::<usize, u64>(0))?;
-
                 let delete_sql = format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#);
-                tx.execute(&delete_sql, [])?;
+                let count = tx.execute(&delete_sql, [])?;
 
                 tx.commit()?;
 
-                Ok(count)
+                Ok(count as u64)
             },
         )
         .await?
