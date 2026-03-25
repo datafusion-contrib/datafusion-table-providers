@@ -262,9 +262,7 @@ impl TableProvider for DuckDBTableWriter {
             let pool = Arc::clone(&self.pool);
 
             tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
-                let mut db_conn = pool
-                    .connect_sync()
-                    .map_err(DataFusionError::External)?;
+                let mut db_conn = pool.connect_sync().map_err(DataFusionError::External)?;
                 let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let tx = duckdb_conn
@@ -314,9 +312,7 @@ impl TableProvider for DuckDBTableWriter {
         };
 
         let count = tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
-            let mut db_conn = pool
-                .connect_sync()
-                .map_err(DataFusionError::External)?;
+            let mut db_conn = pool.connect_sync().map_err(DataFusionError::External)?;
             let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let tx = duckdb_conn
