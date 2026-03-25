@@ -1,7 +1,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::Expr,
