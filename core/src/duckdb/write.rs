@@ -3,8 +3,10 @@ use std::{any::Any, fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+use crate::sql::sql_provider_datafusion::expr;
 use crate::util::{
     constraints,
+    dml::{assignments_to_sql, filters_to_sql, make_count_exec},
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -245,6 +247,96 @@ impl TableProvider for DuckDBTableWriter {
         }
 
         Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)) as _)
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let count: u64 = if filters.is_empty() {
+            0
+        } else {
+            let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
+            let table_name = self.table_definition.name().to_string();
+            let pool = Arc::clone(&self.pool);
+
+            tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
+                let mut db_conn = pool
+                    .connect_sync()
+                    .map_err(DataFusionError::External)?;
+                let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let tx = duckdb_conn
+                    .conn
+                    .transaction()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                let count_sql = format!(r#"SELECT COUNT(*) FROM "{table_name}" WHERE {sql_where}"#);
+                let count: u64 = tx
+                    .query_row(&count_sql, [], |row| row.get::<usize, u64>(0))
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                let delete_sql = format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#);
+                tx.execute(&delete_sql, [])
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                tx.commit()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                Ok(count)
+            })
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))??
+        };
+
+        Ok(make_count_exec(count))
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if assignments.is_empty() {
+            return Ok(make_count_exec(0));
+        }
+        let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::DuckDB))?;
+        let table_name = self.table_definition.name().to_string();
+        let pool = Arc::clone(&self.pool);
+
+        let sql = if filters.is_empty() {
+            format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
+        } else {
+            let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
+            format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
+        };
+
+        let count = tokio::task::spawn_blocking(move || -> datafusion::error::Result<u64> {
+            let mut db_conn = pool
+                .connect_sync()
+                .map_err(DataFusionError::External)?;
+            let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let tx = duckdb_conn
+                .conn
+                .transaction()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let count = tx
+                .execute(&sql, [])
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            tx.commit()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            Ok(count as u64)
+        })
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))??;
+
+        Ok(make_count_exec(count))
     }
 }
 
@@ -1550,5 +1642,211 @@ mod test {
         assert_eq!(rows, 1);
 
         tx.rollback().expect("to rollback");
+    }
+
+    /// Helper: set up a DuckDB base table with columns (id: Int64, name: Utf8),
+    /// insert the given rows, and return `(DuckDBTableWriter, pool)`.
+    async fn setup_writer_with_data(
+        ids: Vec<i64>,
+        names: Vec<&str>,
+    ) -> (DuckDBTableWriter, Arc<DuckDbConnectionPool>) {
+        let pool = get_mem_duckdb();
+        let table_definition = get_basic_table_definition();
+
+        // Create a base (non-internal) table so DELETE/UPDATE can target it by name.
+        {
+            let mut conn = Arc::clone(&pool).connect_sync().expect("to connect");
+            let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+            let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+            let table_manager = TableManager::new(Arc::clone(&table_definition))
+                .with_internal(false)
+                .expect("to create table manager");
+
+            table_manager
+                .create_table(Arc::clone(&pool), &tx)
+                .expect("to create table");
+
+            tx.commit().expect("to commit");
+        }
+
+        // Insert seed data via DuckDBDataSink (Append mode reuses the base table).
+        let schema = table_definition.schema();
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+            Arc::clone(&schema),
+        );
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(StringArray::from(names)),
+            ],
+        )
+        .expect("should create a record batch")];
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, Arc::clone(&schema), None).expect("to get stream"),
+        );
+        Arc::new(duckdb_sink)
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("to write all");
+
+        // Build a DuckDBTableWriter. delete_from / update only need pool +
+        // table_definition; the read_provider is unused for DML but required
+        // by the builder. Use a datafusion MemTable as a lightweight stand-in.
+        let mem_table: Arc<dyn TableProvider> = Arc::new(
+            datafusion::datasource::MemTable::try_new(schema, vec![vec![]])
+                .expect("to create mem table"),
+        );
+        let writer = DuckDBTableWriterBuilder::new()
+            .with_read_provider(mem_table)
+            .with_pool(Arc::clone(&pool))
+            .with_table_definition((*table_definition).clone())
+            .build()
+            .expect("to build writer");
+
+        (writer, pool)
+    }
+
+    /// Helper: execute a DML plan and return the count.
+    async fn extract_count(plan: Arc<dyn ExecutionPlan>) -> u64 {
+        let batches = datafusion::physical_plan::collect(plan, Arc::new(TaskContext::default()))
+            .await
+            .expect("collect should succeed");
+        assert_eq!(batches.len(), 1, "expected exactly one batch");
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .expect("count column should be UInt64Array")
+            .value(0)
+    }
+
+    /// Helper: query all rows from the test_table ordered by id and return
+    /// `(ids, names)`.
+    fn query_all_rows(pool: &Arc<DuckDbConnectionPool>) -> (Vec<i64>, Vec<String>) {
+        let mut conn = Arc::clone(pool).connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let mut stmt = duckdb
+            .conn
+            .prepare("SELECT id, name FROM test_table ORDER BY id")
+            .expect("to prepare statement");
+        let mut rows = stmt.query([]).expect("to query");
+        let mut ids = Vec::new();
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().expect("to get next row") {
+            ids.push(row.get::<_, i64>(0).expect("to get id"));
+            names.push(row.get::<_, String>(1).expect("to get name"));
+        }
+        (ids, names)
+    }
+
+    #[tokio::test]
+    async fn test_delete_from_with_filter() {
+        let _guard = init_tracing(None);
+        let (writer, pool) = setup_writer_with_data(vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        let ctx = datafusion::prelude::SessionContext::new();
+
+        // DELETE WHERE id = 2
+        let filters =
+            vec![datafusion::logical_expr::col("id").eq(datafusion::logical_expr::lit(2i64))];
+        let plan = writer
+            .delete_from(&ctx.state(), filters)
+            .await
+            .expect("delete_from should succeed");
+
+        let count = extract_count(plan).await;
+        assert_eq!(count, 1, "should have deleted exactly 1 row");
+
+        // Verify remaining rows
+        let (ids, names) = query_all_rows(&pool);
+        assert_eq!(ids.len(), 2, "should have 2 rows remaining");
+        assert_eq!(ids, vec![1, 3]);
+        assert_eq!(names, vec!["a", "c"]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_from_empty_filters() {
+        let _guard = init_tracing(None);
+        let (writer, pool) = setup_writer_with_data(vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        let ctx = datafusion::prelude::SessionContext::new();
+
+        // DELETE with empty filters should be a no-op
+        let plan = writer
+            .delete_from(&ctx.state(), vec![])
+            .await
+            .expect("delete_from should succeed");
+
+        let count = extract_count(plan).await;
+        assert_eq!(count, 0, "should have deleted 0 rows with empty filters");
+
+        // Verify all rows still exist
+        let (ids, names) = query_all_rows(&pool);
+        assert_eq!(ids.len(), 3, "all 3 rows should still exist");
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_with_filter() {
+        let _guard = init_tracing(None);
+        let (writer, pool) = setup_writer_with_data(vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        let ctx = datafusion::prelude::SessionContext::new();
+
+        // UPDATE SET name = 'updated' WHERE id = 2
+        let assignments = vec![("name".to_string(), datafusion::logical_expr::lit("updated"))];
+        let filters =
+            vec![datafusion::logical_expr::col("id").eq(datafusion::logical_expr::lit(2i64))];
+        let plan = writer
+            .update(&ctx.state(), assignments, filters)
+            .await
+            .expect("update should succeed");
+
+        let count = extract_count(plan).await;
+        assert_eq!(count, 1, "should have updated exactly 1 row");
+
+        // Verify data
+        let (ids, names) = query_all_rows(&pool);
+        assert_eq!(ids.len(), 3, "should still have 3 rows");
+        for (id, name) in ids.iter().zip(names.iter()) {
+            match *id {
+                1 => assert_eq!(name, "a"),
+                2 => assert_eq!(name, "updated"),
+                3 => assert_eq!(name, "c"),
+                other => panic!("unexpected id {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_without_filter() {
+        let _guard = init_tracing(None);
+        let (writer, pool) = setup_writer_with_data(vec![1, 2], vec!["a", "b"]).await;
+
+        let ctx = datafusion::prelude::SessionContext::new();
+
+        // UPDATE SET name = 'all' (no filter -> all rows)
+        let assignments = vec![("name".to_string(), datafusion::logical_expr::lit("all"))];
+        let plan = writer
+            .update(&ctx.state(), assignments, vec![])
+            .await
+            .expect("update should succeed");
+
+        let count = extract_count(plan).await;
+        assert_eq!(count, 2, "should have updated 2 rows");
+
+        // Verify all rows have name = "all"
+        let (ids, names) = query_all_rows(&pool);
+        assert_eq!(ids.len(), 2, "should still have 2 rows");
+        for name in &names {
+            assert_eq!(name, "all");
+        }
     }
 }

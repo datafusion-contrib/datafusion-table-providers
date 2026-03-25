@@ -19,6 +19,7 @@ use snafu::prelude::*;
 
 use crate::util::{
     constraints::{self},
+    dml::{assignments_to_sql, filters_to_sql, make_count_exec},
     on_conflict::OnConflict,
     retriable_error::check_and_mark_retriable_error,
 };
@@ -98,6 +99,81 @@ impl TableProvider for PostgresTableWriter {
             )),
             None,
         )) as _)
+    }
+
+    #[expect(clippy::cast_sign_loss)]
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let count: u64 = if filters.is_empty() {
+            0
+        } else {
+            let sql_where = filters_to_sql(&filters, None)?;
+            let table_name = self.postgres.table_name();
+
+            let mut db_conn = self.postgres.connect().await.map_err(to_datafusion_error)?;
+            let pg_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
+            let tx = pg_conn
+                .conn
+                .transaction()
+                .await
+                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+
+            let sql = format!(
+                r#"WITH deleted AS (DELETE FROM "{table_name}" WHERE {sql_where} RETURNING *) SELECT COUNT(*) FROM deleted"#,
+            );
+            let row = tx
+                .query_one(&sql, &[])
+                .await
+                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+            let deleted: i64 = row.get(0);
+            tx.commit()
+                .await
+                .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+            deleted as u64
+        };
+
+        Ok(make_count_exec(count))
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if assignments.is_empty() {
+            return Ok(make_count_exec(0));
+        }
+        let set_clause = assignments_to_sql(&assignments, None)?;
+        let table_name = self.postgres.table_name();
+
+        let mut db_conn = self.postgres.connect().await.map_err(to_datafusion_error)?;
+        let pg_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
+        let tx = pg_conn
+            .conn
+            .transaction()
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+
+        let sql = if filters.is_empty() {
+            format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
+        } else {
+            let sql_where = filters_to_sql(&filters, None)?;
+            format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
+        };
+
+        let count = tx
+            .execute(&sql, &[])
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+        tx.commit()
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+
+        Ok(make_count_exec(count))
     }
 }
 

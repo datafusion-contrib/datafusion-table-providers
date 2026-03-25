@@ -8,6 +8,7 @@ use crate::UnsupportedTypeAction;
 
 pub mod column_reference;
 pub mod constraints;
+pub mod dml;
 pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;

@@ -833,3 +833,199 @@ async fn test_postgres_io_runtime_segregation(container_manager: &Mutex<Containe
 
     io_runtime.shutdown_background();
 }
+
+// ── DML integration tests (delete_from / update) ──────────────────────────────
+
+use arrow::array::{Int32Array, UInt64Array};
+use datafusion::catalog::TableProvider;
+use datafusion::execution::TaskContext;
+use datafusion::prelude::{col, lit};
+use datafusion_table_providers::postgres::{write::PostgresTableWriter, Postgres};
+
+/// Helper: create a test table, insert rows, return a `PostgresTableWriter`.
+async fn setup_dml_test_table(
+    port: usize,
+    table_name: &str,
+    rows: &[(i32, &str)],
+) -> (Arc<dyn TableProvider>, SessionContext) {
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("pool");
+
+    let db_conn = pool.connect_direct().await.expect("connect");
+
+    // Create table
+    db_conn
+        .conn
+        .execute(
+            &format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" (id INT, name TEXT)"#),
+            &[],
+        )
+        .await
+        .expect("create table");
+
+    // Insert rows
+    for (id, name) in rows {
+        db_conn
+            .conn
+            .execute(
+                &format!(r#"INSERT INTO "{table_name}" VALUES ({id}, '{name}')"#),
+                &[],
+            )
+            .await
+            .expect("insert row");
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+
+    let pool = Arc::new(pool);
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::clone(&pool) as _;
+    let read_provider = Arc::new(
+        SqlTable::new("postgres", &sqltable_pool, table_name, None)
+            .await
+            .expect("SqlTable"),
+    );
+
+    let postgres = Postgres::new(table_name.into(), pool, schema, Constraints::default());
+    let writer = PostgresTableWriter::create(read_provider, postgres, None);
+
+    let ctx = SessionContext::new();
+    (writer as Arc<dyn TableProvider>, ctx)
+}
+
+/// Helper: execute a DML plan and extract the u64 count.
+async fn extract_dml_count(plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>) -> u64 {
+    let batches = collect(plan, Arc::new(TaskContext::default()))
+        .await
+        .expect("collect");
+    batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("UInt64Array")
+        .value(0)
+}
+
+/// Helper: query a table and return (ids, names) sorted by id.
+async fn query_dml_table(port: usize, table_name: &str) -> (Vec<i32>, Vec<String>) {
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("pool");
+    let db_conn = pool.connect_direct().await.expect("connect");
+    let rows = db_conn
+        .conn
+        .query(
+            &format!(r#"SELECT id, name FROM "{table_name}" ORDER BY id"#),
+            &[],
+        )
+        .await
+        .expect("query");
+
+    let ids: Vec<i32> = rows.iter().map(|r| r.get(0)).collect();
+    let names: Vec<String> = rows.iter().map(|r| r.get(1)).collect();
+    (ids, names)
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_delete_from_with_filter(container_manager: &Mutex<ContainerManager>) {
+    let mut cm = container_manager.lock().await;
+    if !cm.claimed {
+        cm.claimed = true;
+        start_container(&mut cm).await;
+    }
+    let port = cm.port;
+
+    let (writer, ctx) =
+        setup_dml_test_table(port, "dml_delete_filter", &[(1, "a"), (2, "b"), (3, "c")]).await;
+
+    let plan = writer
+        .delete_from(&ctx.state(), vec![col("id").eq(lit(2))])
+        .await
+        .expect("delete_from");
+    let count = extract_dml_count(plan).await;
+    assert_eq!(count, 1);
+
+    let (ids, names) = query_dml_table(port, "dml_delete_filter").await;
+    assert_eq!(ids, vec![1, 3]);
+    assert_eq!(names, vec!["a", "c"]);
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_delete_from_empty_filters(container_manager: &Mutex<ContainerManager>) {
+    let mut cm = container_manager.lock().await;
+    if !cm.claimed {
+        cm.claimed = true;
+        start_container(&mut cm).await;
+    }
+    let port = cm.port;
+
+    let (writer, ctx) =
+        setup_dml_test_table(port, "dml_delete_empty", &[(1, "a"), (2, "b"), (3, "c")]).await;
+
+    let plan = writer
+        .delete_from(&ctx.state(), vec![])
+        .await
+        .expect("delete_from");
+    let count = extract_dml_count(plan).await;
+    assert_eq!(count, 0);
+
+    let (ids, _) = query_dml_table(port, "dml_delete_empty").await;
+    assert_eq!(ids, vec![1, 2, 3]);
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_update_with_filter(container_manager: &Mutex<ContainerManager>) {
+    let mut cm = container_manager.lock().await;
+    if !cm.claimed {
+        cm.claimed = true;
+        start_container(&mut cm).await;
+    }
+    let port = cm.port;
+
+    let (writer, ctx) =
+        setup_dml_test_table(port, "dml_update_filter", &[(1, "a"), (2, "b"), (3, "c")]).await;
+
+    let plan = writer
+        .update(
+            &ctx.state(),
+            vec![("name".to_string(), lit("updated"))],
+            vec![col("id").eq(lit(2))],
+        )
+        .await
+        .expect("update");
+    let count = extract_dml_count(plan).await;
+    assert_eq!(count, 1);
+
+    let (ids, names) = query_dml_table(port, "dml_update_filter").await;
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(names, vec!["a", "updated", "c"]);
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_update_without_filter(container_manager: &Mutex<ContainerManager>) {
+    let mut cm = container_manager.lock().await;
+    if !cm.claimed {
+        cm.claimed = true;
+        start_container(&mut cm).await;
+    }
+    let port = cm.port;
+
+    let (writer, ctx) = setup_dml_test_table(port, "dml_update_all", &[(1, "a"), (2, "b")]).await;
+
+    let plan = writer
+        .update(&ctx.state(), vec![("name".to_string(), lit("all"))], vec![])
+        .await
+        .expect("update");
+    let count = extract_dml_count(plan).await;
+    assert_eq!(count, 2);
+
+    let (_, names) = query_dml_table(port, "dml_update_all").await;
+    assert_eq!(names, vec!["all", "all"]);
+}
