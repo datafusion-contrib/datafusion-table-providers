@@ -1139,20 +1139,21 @@ mod tests {
         let (table, ctx, _schema) =
             setup_test_table("test_delete_empty", vec![1, 2, 3], vec!["a", "b", "c"]).await;
 
-        // DELETE with empty filters should be a no-op
+        // DELETE with empty filters should delete all rows
         let plan = table
             .delete_from(&ctx.state(), vec![])
             .await
             .expect("delete_from should succeed");
 
         let count = extract_count(plan, &ctx).await;
-        assert_eq!(count, 0, "should have deleted 0 rows with empty filters");
+        assert_eq!(
+            count, 3,
+            "should have deleted all 3 rows with empty filters"
+        );
 
-        // Verify all rows still exist
-        let (ids, names) = scan_all_rows(&table, &ctx).await;
-        assert_eq!(ids.len(), 3, "all 3 rows should still exist");
-        assert_eq!(ids, vec![1, 2, 3]);
-        assert_eq!(names, vec!["a", "b", "c"]);
+        // Verify no rows remain
+        let (ids, _names) = scan_all_rows(&table, &ctx).await;
+        assert_eq!(ids.len(), 0, "no rows should remain");
     }
 
     #[tokio::test]
