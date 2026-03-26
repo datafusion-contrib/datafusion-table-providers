@@ -255,11 +255,11 @@ impl TableProvider for DuckDBTableWriter {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        if filters.is_empty() {
-            return make_count_exec(0);
-        }
-
-        let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
+        let sql_where = if filters.is_empty() {
+            None
+        } else {
+            Some(filters_to_sql(&filters, Some(expr::Engine::DuckDB))?)
+        };
         let table_name = self.table_definition.name().to_string();
         let pool = Arc::clone(&self.pool);
         let schema = self.schema();
@@ -306,7 +306,7 @@ impl TableProvider for DuckDBTableWriter {
 struct DuckDBDeletionSink {
     pool: Arc<DuckDbConnectionPool>,
     table_name: String,
-    sql_where: String,
+    sql_where: Option<String>,
 }
 
 #[async_trait]
@@ -322,7 +322,11 @@ impl DeletionSink for DuckDBDeletionSink {
                 let duckdb_conn = DuckDB::duckdb_conn(&mut db_conn)?;
                 let tx = duckdb_conn.conn.transaction()?;
 
-                let delete_sql = format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#);
+                let delete_sql = if let Some(sql_where) = &sql_where {
+                    format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#)
+                } else {
+                    format!(r#"DELETE FROM "{table_name}""#)
+                };
                 let count = tx.execute(&delete_sql, [])?;
 
                 tx.commit()?;

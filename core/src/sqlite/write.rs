@@ -123,11 +123,11 @@ impl TableProvider for SqliteTableWriter {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        if filters.is_empty() {
-            return make_count_exec(0);
-        }
-
-        let sql_where = filters_to_sql(&filters, Some(expr::Engine::SQLite))?;
+        let sql_where = if filters.is_empty() {
+            None
+        } else {
+            Some(filters_to_sql(&filters, Some(expr::Engine::SQLite))?)
+        };
         let table_name = self.sqlite().table_name().to_string();
         let sqlite = self.sqlite();
         let schema = self.schema();
@@ -174,7 +174,7 @@ impl TableProvider for SqliteTableWriter {
 struct SqliteDeletionSink {
     sqlite: Arc<Sqlite>,
     table_name: String,
-    sql_where: String,
+    sql_where: Option<String>,
 }
 
 #[async_trait]
@@ -189,10 +189,12 @@ impl DeletionSink for SqliteDeletionSink {
             .conn
             .call(move |conn| -> Result<u64, rusqlite::Error> {
                 let tx = conn.transaction()?;
-                tx.execute(
-                    &format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#),
-                    [],
-                )?;
+                let delete_sql = if let Some(sql_where) = &sql_where {
+                    format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#)
+                } else {
+                    format!(r#"DELETE FROM "{table_name}""#)
+                };
+                tx.execute(&delete_sql, [])?;
                 let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
                 tx.commit()?;
                 Ok(count)

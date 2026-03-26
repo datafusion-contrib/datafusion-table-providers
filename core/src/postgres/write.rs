@@ -107,11 +107,11 @@ impl TableProvider for PostgresTableWriter {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        if filters.is_empty() {
-            return make_count_exec(0);
-        }
-
-        let sql_where = filters_to_sql(&filters, None)?;
+        let sql_where = if filters.is_empty() {
+            None
+        } else {
+            Some(filters_to_sql(&filters, None)?)
+        };
         let table_name = self.postgres.table_name().to_string();
         let postgres = self.postgres();
         let schema = self.schema();
@@ -158,7 +158,7 @@ impl TableProvider for PostgresTableWriter {
 struct PostgresDeletionSink {
     postgres: Arc<Postgres>,
     table_name: String,
-    sql_where: String,
+    sql_where: Option<String>,
 }
 
 #[async_trait]
@@ -170,10 +170,15 @@ impl DeletionSink for PostgresDeletionSink {
         let tx = pg_conn.conn.transaction().await?;
 
         let table_name = &self.table_name;
-        let sql_where = &self.sql_where;
-        let sql = format!(
-            r#"WITH deleted AS (DELETE FROM "{table_name}" WHERE {sql_where} RETURNING *) SELECT COUNT(*) FROM deleted"#,
-        );
+        let sql = if let Some(sql_where) = &self.sql_where {
+            format!(
+                r#"WITH deleted AS (DELETE FROM "{table_name}" WHERE {sql_where} RETURNING *) SELECT COUNT(*) FROM deleted"#,
+            )
+        } else {
+            format!(
+                r#"WITH deleted AS (DELETE FROM "{table_name}" RETURNING *) SELECT COUNT(*) FROM deleted"#,
+            )
+        };
         let row = tx.query_one(&sql, &[]).await?;
         let deleted: i64 = row.get(0);
         tx.commit().await?;
