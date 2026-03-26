@@ -1,7 +1,8 @@
 use std::{any::Any, fmt, sync::Arc};
 
+use arrow::array::RecordBatch;
 use async_trait::async_trait;
-use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::{
     catalog::Session,
@@ -15,8 +16,12 @@ use datafusion::{
 use futures::StreamExt;
 use snafu::prelude::*;
 
+use crate::sql::sql_provider_datafusion::expr;
+
 use crate::util::{
     constraints,
+    count_exec::make_count_exec,
+    dml::{assignments_to_sql, filters_to_sql, DeletionExec, DeletionSink, UpdateExec, UpdateSink},
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -111,6 +116,119 @@ impl TableProvider for SqliteTableWriter {
             )),
             None,
         )) as _)
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let sql_where = if filters.is_empty() {
+            None
+        } else {
+            Some(filters_to_sql(&filters, Some(expr::Engine::SQLite))?)
+        };
+        let table_name = self.sqlite().table_name().to_string();
+        let sqlite = self.sqlite();
+        let schema = self.schema();
+
+        Ok(Arc::new(DeletionExec::new(
+            Arc::new(SqliteDeletionSink {
+                sqlite,
+                table_name,
+                sql_where,
+            }),
+            &schema,
+        )))
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if assignments.is_empty() {
+            return make_count_exec(0);
+        }
+
+        let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::SQLite))?;
+        let table_name = self.sqlite().table_name().to_string();
+        let sqlite = self.sqlite();
+        let schema = self.schema();
+
+        let sql = if filters.is_empty() {
+            format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
+        } else {
+            let sql_where = filters_to_sql(&filters, Some(expr::Engine::SQLite))?;
+            format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
+        };
+
+        Ok(Arc::new(UpdateExec::new(
+            Arc::new(SqliteUpdateSink { sqlite, sql }),
+            &schema,
+        )))
+    }
+}
+
+struct SqliteDeletionSink {
+    sqlite: Arc<Sqlite>,
+    table_name: String,
+    sql_where: Option<String>,
+}
+
+#[async_trait]
+impl DeletionSink for SqliteDeletionSink {
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.sqlite.connect().await?;
+        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn)?;
+        let table_name = self.table_name.clone();
+        let sql_where = self.sql_where.clone();
+
+        let count = sqlite_conn
+            .conn
+            .call(move |conn| -> Result<u64, rusqlite::Error> {
+                let tx = conn.transaction()?;
+                let delete_sql = if let Some(sql_where) = &sql_where {
+                    format!(r#"DELETE FROM "{table_name}" WHERE {sql_where}"#)
+                } else {
+                    format!(r#"DELETE FROM "{table_name}""#)
+                };
+                tx.execute(&delete_sql, [])?;
+                let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
+                tx.commit()?;
+                Ok(count)
+            })
+            .await?;
+
+        Ok(count)
+    }
+}
+
+struct SqliteUpdateSink {
+    sqlite: Arc<Sqlite>,
+    sql: String,
+}
+
+#[async_trait]
+impl UpdateSink for SqliteUpdateSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.sqlite.connect().await?;
+        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn)?;
+        let sql = self.sql.clone();
+
+        let count = sqlite_conn
+            .conn
+            .call(move |conn| -> Result<u64, rusqlite::Error> {
+                let tx = conn.transaction()?;
+                tx.execute(&sql, [])?;
+                let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
+                tx.commit()?;
+                Ok(count)
+            })
+            .await?;
+
+        Ok(count)
     }
 }
 
@@ -300,6 +418,9 @@ mod tests {
         logical_expr::{dml::InsertOp, CreateExternalTable},
         physical_plan::collect,
     };
+
+    use datafusion::arrow::array::UInt64Array;
+    use datafusion::logical_expr::{col, lit};
 
     use crate::sqlite::SqliteTableProviderFactory;
     use crate::util::test::MockExec;
@@ -871,5 +992,219 @@ mod tests {
         assert!(!batches.is_empty(), "Should have results");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2, "Should have 2 rows with id > 1");
+    }
+
+    /// Helper: create an in-memory SQLite table with columns (id: Int64, name: Utf8),
+    /// insert the given rows, and return `(table_provider, session_context, schema)`.
+    async fn setup_test_table(
+        table_name: &str,
+        ids: Vec<i64>,
+        names: Vec<&str>,
+    ) -> (
+        Arc<dyn datafusion::datasource::TableProvider>,
+        SessionContext,
+        Arc<Schema>,
+    ) {
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("name", DataType::Utf8, false),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare(table_name),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+            or_replace: false,
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let id_arr = Int64Array::from(ids);
+        let name_arr = StringArray::from(names);
+        let data = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(id_arr), Arc::new(name_arr)],
+        )
+        .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+            .await
+            .expect("insertion should be successful");
+        collect(insertion, ctx.task_ctx())
+            .await
+            .expect("insert successful");
+
+        (table, ctx, schema)
+    }
+
+    /// Helper: extract the count (u64) from a DML plan result.
+    async fn extract_count(
+        plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        ctx: &SessionContext,
+    ) -> u64 {
+        let batches = collect(plan, ctx.task_ctx())
+            .await
+            .expect("collect should succeed");
+        assert_eq!(batches.len(), 1, "expected exactly one batch");
+        let batch = &batches[0];
+        let count_arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("count column should be UInt64Array");
+        assert_eq!(count_arr.len(), 1);
+        count_arr.value(0)
+    }
+
+    /// Helper: scan the table and return all rows as `(Vec<i64>, Vec<String>)`.
+    async fn scan_all_rows(
+        table: &Arc<dyn datafusion::datasource::TableProvider>,
+        ctx: &SessionContext,
+    ) -> (Vec<i64>, Vec<String>) {
+        let scan = table
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .expect("scan should succeed");
+        let batches = collect(scan, ctx.task_ctx())
+            .await
+            .expect("collect should succeed");
+        let mut ids = Vec::new();
+        let mut names = Vec::new();
+        for batch in &batches {
+            let id_arr = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("id column should be Int64Array");
+            let name_arr = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("name column should be StringArray");
+            for i in 0..batch.num_rows() {
+                ids.push(id_arr.value(i));
+                names.push(name_arr.value(i).to_string());
+            }
+        }
+        (ids, names)
+    }
+
+    #[tokio::test]
+    async fn test_delete_from_with_filter() {
+        let (table, ctx, _schema) =
+            setup_test_table("test_delete_filter", vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        // DELETE WHERE id = 2
+        let filters = vec![col("id").eq(lit(2i64))];
+        let plan = table
+            .delete_from(&ctx.state(), filters)
+            .await
+            .expect("delete_from should succeed");
+
+        let count = extract_count(plan, &ctx).await;
+        assert_eq!(count, 1, "should have deleted exactly 1 row");
+
+        // Verify remaining rows
+        let (ids, names) = scan_all_rows(&table, &ctx).await;
+        assert_eq!(ids.len(), 2, "should have 2 rows remaining");
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&3));
+        // Check names correspond to their ids
+        for (id, name) in ids.iter().zip(names.iter()) {
+            match *id {
+                1 => assert_eq!(name, "a"),
+                3 => assert_eq!(name, "c"),
+                other => panic!("unexpected id {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_from_empty_filters() {
+        let (table, ctx, _schema) =
+            setup_test_table("test_delete_empty", vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        // DELETE with empty filters should delete all rows
+        let plan = table
+            .delete_from(&ctx.state(), vec![])
+            .await
+            .expect("delete_from should succeed");
+
+        let count = extract_count(plan, &ctx).await;
+        assert_eq!(
+            count, 3,
+            "should have deleted all 3 rows with empty filters"
+        );
+
+        // Verify no rows remain
+        let (ids, _names) = scan_all_rows(&table, &ctx).await;
+        assert_eq!(ids.len(), 0, "no rows should remain");
+    }
+
+    #[tokio::test]
+    async fn test_update_with_filter() {
+        let (table, ctx, _schema) =
+            setup_test_table("test_update_filter", vec![1, 2, 3], vec!["a", "b", "c"]).await;
+
+        // UPDATE SET name = 'updated' WHERE id = 2
+        let assignments = vec![("name".to_string(), lit("updated"))];
+        let filters = vec![col("id").eq(lit(2i64))];
+        let plan = table
+            .update(&ctx.state(), assignments, filters)
+            .await
+            .expect("update should succeed");
+
+        let count = extract_count(plan, &ctx).await;
+        assert_eq!(count, 1, "should have updated exactly 1 row");
+
+        // Verify data
+        let (ids, names) = scan_all_rows(&table, &ctx).await;
+        assert_eq!(ids.len(), 3, "should still have 3 rows");
+        for (id, name) in ids.iter().zip(names.iter()) {
+            match *id {
+                1 => assert_eq!(name, "a"),
+                2 => assert_eq!(name, "updated"),
+                3 => assert_eq!(name, "c"),
+                other => panic!("unexpected id {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_without_filter() {
+        let (table, ctx, _schema) =
+            setup_test_table("test_update_no_filter", vec![1, 2], vec!["a", "b"]).await;
+
+        // UPDATE SET name = 'all' (no filter -> all rows)
+        let assignments = vec![("name".to_string(), lit("all"))];
+        let plan = table
+            .update(&ctx.state(), assignments, vec![])
+            .await
+            .expect("update should succeed");
+
+        let count = extract_count(plan, &ctx).await;
+        assert_eq!(count, 2, "should have updated 2 rows");
+
+        // Verify all rows have name = "all"
+        let (ids, names) = scan_all_rows(&table, &ctx).await;
+        assert_eq!(ids.len(), 2, "should still have 2 rows");
+        for name in &names {
+            assert_eq!(name, "all");
+        }
     }
 }

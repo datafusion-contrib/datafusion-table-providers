@@ -19,6 +19,8 @@ use snafu::prelude::*;
 
 use crate::util::{
     constraints::{self},
+    count_exec::make_count_exec,
+    dml::{assignments_to_sql, filters_to_sql, DeletionExec, DeletionSink, UpdateExec, UpdateSink},
     on_conflict::OnConflict,
     retriable_error::check_and_mark_retriable_error,
 };
@@ -98,6 +100,109 @@ impl TableProvider for PostgresTableWriter {
             )),
             None,
         )) as _)
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let sql_where = if filters.is_empty() {
+            None
+        } else {
+            Some(filters_to_sql(&filters, None)?)
+        };
+        let table_name = self.postgres.table_name().to_string();
+        let postgres = self.postgres();
+        let schema = self.schema();
+
+        Ok(Arc::new(DeletionExec::new(
+            Arc::new(PostgresDeletionSink {
+                postgres,
+                table_name,
+                sql_where,
+            }),
+            &schema,
+        )))
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if assignments.is_empty() {
+            return make_count_exec(0);
+        }
+
+        let set_clause = assignments_to_sql(&assignments, None)?;
+        let table_name = self.postgres.table_name().to_string();
+        let postgres = self.postgres();
+        let schema = self.schema();
+
+        let sql = if filters.is_empty() {
+            format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
+        } else {
+            let sql_where = filters_to_sql(&filters, None)?;
+            format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
+        };
+
+        Ok(Arc::new(UpdateExec::new(
+            Arc::new(PostgresUpdateSink { postgres, sql }),
+            &schema,
+        )))
+    }
+}
+
+struct PostgresDeletionSink {
+    postgres: Arc<Postgres>,
+    table_name: String,
+    sql_where: Option<String>,
+}
+
+#[async_trait]
+impl DeletionSink for PostgresDeletionSink {
+    #[expect(clippy::cast_sign_loss)]
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.postgres.connect().await?;
+        let pg_conn = Postgres::postgres_conn(&mut db_conn)?;
+        let tx = pg_conn.conn.transaction().await?;
+
+        let table_name = &self.table_name;
+        let sql = if let Some(sql_where) = &self.sql_where {
+            format!(
+                r#"WITH deleted AS (DELETE FROM "{table_name}" WHERE {sql_where} RETURNING *) SELECT COUNT(*) FROM deleted"#,
+            )
+        } else {
+            format!(
+                r#"WITH deleted AS (DELETE FROM "{table_name}" RETURNING *) SELECT COUNT(*) FROM deleted"#,
+            )
+        };
+        let row = tx.query_one(&sql, &[]).await?;
+        let deleted: i64 = row.get(0);
+        tx.commit().await?;
+
+        Ok(deleted as u64)
+    }
+}
+
+struct PostgresUpdateSink {
+    postgres: Arc<Postgres>,
+    sql: String,
+}
+
+#[async_trait]
+impl UpdateSink for PostgresUpdateSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut db_conn = self.postgres.connect().await?;
+        let pg_conn = Postgres::postgres_conn(&mut db_conn)?;
+        let tx = pg_conn.conn.transaction().await?;
+
+        let count = tx.execute(&self.sql, &[]).await?;
+        tx.commit().await?;
+
+        Ok(count)
     }
 }
 
