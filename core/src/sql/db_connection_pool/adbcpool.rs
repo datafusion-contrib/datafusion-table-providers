@@ -49,6 +49,7 @@ where
     connection_options: Option<HashMap<String, String>>,
     max_size: Option<u32>,
     min_idle: Option<u32>,
+    join_push_down: JoinPushDown,
 }
 
 pub fn hash_db_options(
@@ -83,6 +84,7 @@ where
             connection_options: None,
             max_size: None,
             min_idle: None,
+            join_push_down: JoinPushDown::Disallow,
         }
     }
 
@@ -109,6 +111,11 @@ where
         self
     }
 
+    pub fn with_join_push_down(mut self, join_push_down: JoinPushDown) -> Self {
+        self.join_push_down = join_push_down;
+        self
+    }
+
     pub fn build(self) -> Result<ADBCPool<D>> {
         let mut pool_builder = r2d2::Pool::builder();
 
@@ -128,7 +135,10 @@ where
             manager = AdbcConnectionManager::new(database);
         }
         let pool = Arc::new(pool_builder.build(manager).context(ConnectionPoolSnafu)?);
-        Ok(ADBCPool { pool })
+        Ok(ADBCPool {
+            pool,
+            join_push_down: self.join_push_down,
+        })
     }
 }
 
@@ -139,6 +149,7 @@ where
     D::ConnectionType: Connection + Send + Sync,
 {
     pool: Arc<r2d2::Pool<AdbcConnectionManager<D>>>,
+    join_push_down: JoinPushDown,
 }
 
 impl<D> std::fmt::Debug for ADBCPool<D>
@@ -197,8 +208,7 @@ where
     }
 
     fn join_push_down(&self) -> JoinPushDown {
-        // TODO: make this configurable
-        JoinPushDown::Disallow
+        self.join_push_down.clone()
     }
 }
 
