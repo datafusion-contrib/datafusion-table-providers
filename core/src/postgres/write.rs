@@ -19,10 +19,8 @@ use snafu::prelude::*;
 
 use crate::util::{
     constraints::{self},
-    dml::{
-        assignments_to_sql, filters_to_sql, make_count_exec, DeletionExec, DeletionSink,
-        UpdateExec, UpdateSink,
-    },
+    count_exec::make_count_exec,
+    dml::{assignments_to_sql, filters_to_sql, DeletionExec, DeletionSink, UpdateExec, UpdateSink},
     on_conflict::OnConflict,
     retriable_error::check_and_mark_retriable_error,
 };
@@ -110,7 +108,7 @@ impl TableProvider for PostgresTableWriter {
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if filters.is_empty() {
-            return Ok(make_count_exec(0));
+            return make_count_exec(0);
         }
 
         let sql_where = filters_to_sql(&filters, None)?;
@@ -135,7 +133,7 @@ impl TableProvider for PostgresTableWriter {
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if assignments.is_empty() {
-            return Ok(make_count_exec(0));
+            return make_count_exec(0);
         }
 
         let set_clause = assignments_to_sql(&assignments, None)?;

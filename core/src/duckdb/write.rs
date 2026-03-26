@@ -6,10 +6,8 @@ use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
 use crate::sql::sql_provider_datafusion::expr;
 use crate::util::{
     constraints,
-    dml::{
-        assignments_to_sql, filters_to_sql, make_count_exec, DeletionExec, DeletionSink,
-        UpdateExec, UpdateSink,
-    },
+    count_exec::make_count_exec,
+    dml::{assignments_to_sql, filters_to_sql, DeletionExec, DeletionSink, UpdateExec, UpdateSink},
     on_conflict::OnConflict,
     retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
@@ -258,7 +256,7 @@ impl TableProvider for DuckDBTableWriter {
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if filters.is_empty() {
-            return Ok(make_count_exec(0));
+            return make_count_exec(0);
         }
 
         let sql_where = filters_to_sql(&filters, Some(expr::Engine::DuckDB))?;
@@ -283,7 +281,7 @@ impl TableProvider for DuckDBTableWriter {
         filters: Vec<Expr>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         if assignments.is_empty() {
-            return Ok(make_count_exec(0));
+            return make_count_exec(0);
         }
 
         let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::DuckDB))?;
