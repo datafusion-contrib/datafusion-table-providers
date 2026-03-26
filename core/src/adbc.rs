@@ -36,6 +36,9 @@ use std::sync::Arc;
 
 use self::sql_table::AdbcDBTable;
 
+#[cfg(feature = "adbc-federation")]
+mod federation;
+
 mod sql_table;
 mod write;
 
@@ -73,6 +76,8 @@ where
     D::ConnectionType: Connection + Send + Sync,
 {
     pool: Arc<ADBCPool<D>>,
+    #[cfg(feature = "adbc-federation")]
+    federation_enabled: bool,
 }
 
 impl<D> AdbcTableFactory<D>
@@ -82,7 +87,18 @@ where
 {
     #[must_use]
     pub fn new(pool: Arc<ADBCPool<D>>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "adbc-federation")]
+            federation_enabled: true, // enabled by default when the feature is available
+        }
+    }
+
+    #[cfg(feature = "adbc-federation")]
+    #[must_use]
+    pub fn with_federation_enabled(mut self, enabled: bool) -> Self {
+        self.federation_enabled = enabled;
+        self
     }
 
     pub async fn create_from(
@@ -120,6 +136,13 @@ where
             table_reference.clone(),
             dialect,
         ));
+
+        #[cfg(feature = "adbc-federation")]
+        let table_provider: Arc<dyn TableProvider> = if self.federation_enabled {
+            Arc::new(table_provider.create_federated_table_provider()?)
+        } else {
+            table_provider
+        };
 
         Ok(table_provider)
     }
