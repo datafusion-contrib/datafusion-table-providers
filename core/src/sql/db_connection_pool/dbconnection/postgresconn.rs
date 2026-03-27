@@ -132,7 +132,7 @@ LEFT JOIN pg_type t ON t.oid = a.atttypid
 LEFT JOIN pg_type et ON t.typelem = et.oid
 WHERE ns.nspname = $1
     AND cls.relname = $2
-    AND cls.relkind IN ('r','v','m','p')  -- covers tables, normal views, materialized views, & partitioned tables
+    AND cls.relkind IN ('r','v','m','p')  -- 'p' unused by Redshift today, included for parity with standard PG query and future support
     AND a.attnum > 0
     AND NOT a.attisdropped
 ORDER BY a.attnum;
