@@ -223,3 +223,69 @@ async fn test_postgres_materialized_view_schema_inference() {
         .await
         .expect("to stop postgres container");
 }
+
+#[tokio::test]
+async fn test_postgres_partitioned_table_schema_inference() {
+    let port = crate::get_random_port();
+    let container = common::start_postgres_docker_container("postgres:latest", port, None)
+        .await
+        .expect("Postgres container to start");
+
+    let postgres_pool = Arc::new(
+        PostgresConnectionPool::new(to_secret_map(common::get_pg_params(port)))
+            .await
+            .expect("unable to create Postgres connection pool"),
+    );
+    let pg_conn = postgres_pool
+        .connect_direct()
+        .await
+        .expect("to connect to postgres");
+
+    let partitioned_table_sql = r#"
+        CREATE TABLE partitioned_orders (
+            id INTEGER NOT NULL,
+            order_date DATE NOT NULL,
+            amount NUMERIC(10,2),
+            description TEXT
+        ) PARTITION BY RANGE (order_date);
+
+        CREATE TABLE partitioned_orders_2024 PARTITION OF partitioned_orders
+            FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+
+        CREATE TABLE partitioned_orders_2025 PARTITION OF partitioned_orders
+            FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')
+    "#;
+
+    for cmd in partitioned_table_sql.split(";") {
+        if cmd.trim().is_empty() {
+            continue;
+        }
+        pg_conn
+            .conn
+            .execute(cmd, &[])
+            .await
+            .expect("executing partitioned table SQL");
+    }
+
+    let table_factory = PostgresTableFactory::new(postgres_pool);
+    let table_provider = table_factory
+        .table_provider(TableReference::bare("partitioned_orders"))
+        .await
+        .expect("to create table provider for partitioned table");
+
+    let expected_fields = vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("order_date", DataType::Date32, false),
+        Field::new("amount", DataType::Decimal128(10, 2), true),
+        Field::new("description", DataType::Utf8, true),
+    ];
+    let expected_schema = Arc::new(Schema::new(expected_fields));
+
+    assert_eq!(table_provider.schema(), expected_schema);
+
+    // Tear down
+    container
+        .remove()
+        .await
+        .expect("to stop postgres container");
+}
