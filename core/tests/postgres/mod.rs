@@ -1029,3 +1029,85 @@ async fn test_postgres_update_without_filter(container_manager: &Mutex<Container
     let (_, names) = query_dml_table(port, "dml_update_all").await;
     assert_eq!(names, vec!["all", "all"]);
 }
+
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_postgres_partitioned_table_query(container_manager: &Mutex<ContainerManager>) {
+    let mut cm = container_manager.lock().await;
+    if !cm.claimed {
+        cm.claimed = true;
+        start_container(&mut cm).await;
+    }
+    let port = cm.port;
+
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    db_conn
+        .conn
+        .execute(
+            "CREATE TABLE partitioned_orders (
+                id INTEGER NOT NULL,
+                order_date DATE NOT NULL,
+                amount NUMERIC(10,2),
+                description TEXT
+            ) PARTITION BY RANGE (order_date)",
+            &[],
+        )
+        .await
+        .expect("Partitioned table should be created");
+
+    db_conn
+        .conn
+        .execute(
+            "CREATE TABLE partitioned_orders_2024 PARTITION OF partitioned_orders
+                FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+            &[],
+        )
+        .await
+        .expect("2024 partition should be created");
+
+    db_conn
+        .conn
+        .execute(
+            "CREATE TABLE partitioned_orders_2025 PARTITION OF partitioned_orders
+                FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+            &[],
+        )
+        .await
+        .expect("2025 partition should be created");
+
+    db_conn
+        .conn
+        .execute(
+            "INSERT INTO partitioned_orders (id, order_date, amount, description) VALUES
+                (1, '2024-06-15', 100.50, 'order A'),
+                (2, '2025-03-20', 200.75, 'order B')",
+            &[],
+        )
+        .await
+        .expect("Data should be inserted");
+
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, "partitioned_orders", None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table("partitioned_orders", Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql("SELECT * FROM partitioned_orders ORDER BY id")
+        .await
+        .expect("DataFrame should be created");
+    let batches = df.collect().await.expect("RecordBatch should be collected");
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 2, "Should return rows from both partitions");
+}
