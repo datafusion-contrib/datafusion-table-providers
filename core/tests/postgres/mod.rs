@@ -1116,7 +1116,10 @@ async fn test_postgres_partitioned_table_query(container_manager: &Mutex<Contain
         .sql("SELECT id, description FROM partitioned_orders WHERE order_date >= '2025-01-01' ORDER BY id")
         .await
         .expect("Filtered query should succeed");
-    let batches = df.collect().await.expect("Filtered results should be collected");
+    let batches = df
+        .collect()
+        .await
+        .expect("Filtered results should be collected");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 1, "Should return only rows from 2025 partition");
 
@@ -1125,7 +1128,10 @@ async fn test_postgres_partitioned_table_query(container_manager: &Mutex<Contain
         .sql("SELECT id, description FROM partitioned_orders WHERE amount > 150 ORDER BY id")
         .await
         .expect("Non-partition filter query should succeed");
-    let batches = df.collect().await.expect("Non-partition filter results should be collected");
+    let batches = df
+        .collect()
+        .await
+        .expect("Non-partition filter results should be collected");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 1, "Should return only matching row");
 }
