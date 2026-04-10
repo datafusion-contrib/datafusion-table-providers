@@ -26,6 +26,7 @@ let ctx = SessionContext::with_state(state);
 - ClickHouse
 - DuckDB
 - Flight SQL
+- ADBC
 - ODBC
 
 ## Development
@@ -187,6 +188,20 @@ roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_20
 
 # Run from repo folder
 cargo run -p datafusion-table-providers --example flight-sql --features flight
+```
+
+### ADBC
+
+Install an ADBC driver using [dbc](https://github.com/columnar-tech/dbc):
+
+```bash
+dbc install duckdb
+```
+
+Read from a table via the installed driver (using DuckDB as an example):
+
+```bash
+cargo run --example adbc --features adbc
 ```
 
 ### ODBC
