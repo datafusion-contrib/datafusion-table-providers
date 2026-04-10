@@ -192,7 +192,7 @@ cargo run -p datafusion-table-providers --example flight-sql --features flight
 
 ### ADBC
 
-Install an ADBC driver using [dbc](https://github.com/adbc-drivers/dbc):
+Install an ADBC driver using [dbc](https://github.com/columnar-tech/dbc):
 
 ```bash
 dbc install duckdb
