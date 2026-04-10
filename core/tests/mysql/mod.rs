@@ -821,24 +821,25 @@ async fn test_arrow_mysql_roundtrip(
     .await;
 }
 
-/// When SqlTable is created with new_with_schema, the projected schema field
-/// order may differ from MySQL's physical column order. rows_to_arrow must
-/// reorder the result columns to match the projected schema. After upgrading
-/// to DataFusion 52, the new BatchCoalescer assumes column order matches the
-/// plan schema and panics on type mismatch.
+/// When SqlTable is created with new_with_schema, the projected schema may
+/// differ from MySQL's physical column order and may contain fewer columns.
+/// rows_to_arrow must reorder and filter the result columns to match the
+/// projected schema. This covers both the reordering fix (c26c407) and the
+/// column count mismatch fix (43ec55a) that caused BatchCoalescer to panic.
 async fn test_mysql_projected_schema_column_reorder(port: usize) {
     let create_table_stmt = "
 CREATE TABLE reorder_table (
     a INT,
     b VARCHAR(50),
-    c DOUBLE
+    c DOUBLE,
+    d BOOLEAN
 );
         ";
     let insert_table_stmt = "
-INSERT INTO reorder_table (a, b, c) VALUES (1, 'hello', 3.14);
+INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
         ";
 
-    // Schema with reversed column order compared to MySQL's physical order
+    // Projected schema has fewer columns than MySQL, in a different order
     let reordered_schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Float64, true),
         Field::new("b", DataType::Utf8, true),
@@ -872,7 +873,6 @@ INSERT INTO reorder_table (a, b, c) VALUES (1, 'hello', 3.14);
             + 'static,
     > = Arc::new(pool);
 
-    // Use new_with_schema with a different column order than the physical table
     let table = SqlTable::new_with_schema(
         "mysql",
         &sqltable_pool,
@@ -892,7 +892,8 @@ INSERT INTO reorder_table (a, b, c) VALUES (1, 'hello', 3.14);
     assert_eq!(record_batch.len(), 1);
 
     let batch = &record_batch[0];
-    // Verify columns are in the projected schema order (c, b, a)
+    // Verify only projected columns are present, in the projected order (c, b, a)
+    assert_eq!(batch.num_columns(), 3);
     assert_eq!(batch.schema().field(0).name(), "c");
     assert_eq!(batch.schema().field(1).name(), "b");
     assert_eq!(batch.schema().field(2).name(), "a");
