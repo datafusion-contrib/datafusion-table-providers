@@ -133,7 +133,17 @@ fn build_connection_uri(
         format!("?{}", query_params.join("&"))
     };
 
-    let uri = format!("mongodb://{auth}{host}:{port}/{db_name}{query_string}");
+    let use_srv = params
+        .get("srv")
+        .map(|s| s.expose_secret().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let uri = if use_srv {
+        // mongodb+srv:// uses DNS SRV records for discovery; port is not allowed
+        format!("mongodb+srv://{auth}{host}/{db_name}{query_string}")
+    } else {
+        format!("mongodb://{auth}{host}:{port}/{db_name}{query_string}")
+    };
     Ok((uri, Some(db_name.to_string())))
 }
 
@@ -325,6 +335,70 @@ mod tests {
         let result = build_connection_uri(&params).unwrap();
         assert_eq!(result.0, "mongodb://localhost:27017/testdb");
         assert_eq!(result.1, Some("testdb".to_string()));
+    }
+
+    #[test]
+    fn test_build_connection_uri_with_srv() {
+        let params = create_params(vec![
+            ("db", "mydb"),
+            ("host", "cluster0.example.mongodb.net"),
+            ("user", "testuser"),
+            ("pass", "testpass"),
+            ("srv", "true"),
+        ]);
+
+        let result = build_connection_uri(&params).unwrap();
+        assert_eq!(
+            result.0,
+            "mongodb+srv://testuser:testpass@cluster0.example.mongodb.net/mydb"
+        );
+        assert_eq!(result.1, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_build_connection_uri_with_srv_and_query_params() {
+        let params = create_params(vec![
+            ("db", "mydb"),
+            ("host", "cluster0.example.mongodb.net"),
+            ("srv", "true"),
+            ("auth_source", "admin"),
+        ]);
+
+        let result = build_connection_uri(&params).unwrap();
+        assert_eq!(
+            result.0,
+            "mongodb+srv://cluster0.example.mongodb.net/mydb?authSource=admin"
+        );
+        assert_eq!(result.1, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_build_connection_uri_with_srv_false() {
+        let params = create_params(vec![
+            ("db", "mydb"),
+            ("host", "localhost"),
+            ("port", "27017"),
+            ("srv", "false"),
+        ]);
+
+        let result = build_connection_uri(&params).unwrap();
+        assert_eq!(result.0, "mongodb://localhost:27017/mydb");
+        assert_eq!(result.1, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_build_connection_uri_with_connection_string_srv() {
+        let params = create_params(vec![(
+            "connection_string",
+            "mongodb+srv://user:pass@cluster0.example.mongodb.net/testdb",
+        )]);
+
+        let result = build_connection_uri(&params).unwrap();
+        assert_eq!(
+            result.0,
+            "mongodb+srv://user:pass@cluster0.example.mongodb.net/testdb"
+        );
+        assert_eq!(result.1, None);
     }
 
     #[test]
