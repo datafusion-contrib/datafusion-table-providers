@@ -75,8 +75,13 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Log in to container registries
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
       - name: Pull the Postgres/MySQL images
         run: |
+          : work around spurious network errors in curl 8.0
           docker pull ${{ env.PG_DOCKER_IMAGE }}
           docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
 
