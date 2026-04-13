@@ -47,8 +47,6 @@ byteorder = "1.5"
 bytes = { version = "1.11", optional = true }
 byte-unit = { version = "5.2", optional = true }
 chrono = "0.4.44"
-clickhouse = { version = "0.13", optional = true }
-chrono = "0.4"
 clickhouse = { version = "0.14", optional = true }
 dashmap = "6.1"
 libduckdb-sys = { version = "=1.4.4", optional = true }
