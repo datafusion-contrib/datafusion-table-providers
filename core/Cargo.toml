@@ -48,6 +48,8 @@ bytes = { version = "1.11", optional = true }
 byte-unit = { version = "5.2", optional = true }
 chrono = "0.4.44"
 clickhouse = { version = "0.13", optional = true }
+chrono = "0.4"
+clickhouse = { version = "0.14", optional = true }
 dashmap = "6.1"
 libduckdb-sys = { version = "=1.4.4", optional = true }
 dyn-clone = { version = "1.0", optional = true }
@@ -85,9 +87,9 @@ secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-snafu = "0.8"
+snafu = "0.9"
 time = "0.3"
-tokio = { version = "1.46", features = ["macros", "fs"] }
+tokio = { version = "1.51", features = ["macros", "fs"] }
 tokio-postgres = { version = "0.7", features = [
   "with-chrono-0_4",
   "with-uuid-1",
@@ -100,7 +102,7 @@ tonic = { version = "0.14", optional = true, features = [
   "tls-webpki-roots",
 ] }
 tracing = "0.1"
-trust-dns-resolver = "0.23"
+hickory-resolver = "0.25.2"
 url = "2.5"
 uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38", features = ["db-postgres"] }
@@ -109,8 +111,8 @@ r2d2_adbc = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
-bollard = "0.19"
-geozero = { version = "0.14.0", features = ["with-wkb"] }
+bollard = "0.20"
+geozero = { version = "0.15.1", features = ["with-wkb"] }
 insta = { version = "1.46.0", features = ["filters"] }
 prost = { version = "=0.14.3" }
 rand = "0.9"
@@ -119,7 +121,7 @@ rstest = "0.26.1"
 test-log = { version = "0.2", features = ["trace"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tempfile = "3.24.0"
+tempfile = "3.27.0"
 
 [features]
 clickhouse = ["dep:clickhouse", "arrow-ipc/lz4", "dep:async-stream"]

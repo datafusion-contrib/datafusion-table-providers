@@ -821,6 +821,84 @@ async fn test_arrow_mysql_roundtrip(
     .await;
 }
 
+/// When SqlTable is created with new_with_schema, the projected schema may
+/// differ from MySQL's physical column order and may contain fewer columns.
+/// rows_to_arrow must reorder and filter the result columns to match the
+/// projected schema. This covers both the reordering fix (c26c407) and the
+/// column count mismatch fix (43ec55a) that caused BatchCoalescer to panic.
+async fn test_mysql_projected_schema_column_reorder(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE reorder_table (
+    a INT,
+    b VARCHAR(50),
+    c DOUBLE,
+    d BOOLEAN
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
+        ";
+
+    // Projected schema has fewer columns than MySQL, in a different order
+    let reordered_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Float64, true),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("a", DataType::Int32, true),
+    ]));
+
+    let ctx = SessionContext::new();
+    let pool = common::get_mysql_connection_pool(port)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let _ = db_conn
+        .execute(create_table_stmt, &[])
+        .await
+        .expect("MySQL table should be created");
+
+    let _ = db_conn
+        .execute(insert_table_stmt, &[])
+        .await
+        .expect("MySQL table data should be inserted");
+
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(pool);
+
+    let table = SqlTable::new_with_schema(
+        "mysql",
+        &sqltable_pool,
+        reordered_schema.clone(),
+        "reorder_table",
+    );
+
+    ctx.register_table("reorder_table", Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql("SELECT * FROM reorder_table")
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+
+    let batch = &record_batch[0];
+    // Verify only projected columns are present, in the projected order (c, b, a)
+    assert_eq!(batch.num_columns(), 3);
+    assert_eq!(batch.schema().field(0).name(), "c");
+    assert_eq!(batch.schema().field(1).name(), "b");
+    assert_eq!(batch.schema().field(2).name(), "a");
+}
+
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {
@@ -836,6 +914,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_decimal_types_to_decimal128(port).await;
     test_mysql_decimal_types_to_decimal256(port).await;
     test_mysql_zero_date_type(port).await;
+    test_mysql_projected_schema_column_reorder(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }

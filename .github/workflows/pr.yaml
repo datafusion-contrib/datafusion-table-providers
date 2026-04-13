@@ -154,7 +154,7 @@ jobs:
         run: |
           sudo apt-get install -y unixodbc-dev libsqliteodbc
           sudo apt-get install -y libsqlite3-dev
-          cargo install --locked --git https://github.com/roapi/roapi --branch main --bins roapi
+          RUSTUP_TOOLCHAIN=stable cargo install --git https://github.com/roapi/roapi --branch main --bins roapi
 
       - name: Build Python package and run tests
         run: |

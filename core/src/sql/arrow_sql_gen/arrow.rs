@@ -99,6 +99,11 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
                 DataType::UInt32 => Box::new(ListBuilder::new(UInt32Builder::new())),
                 DataType::Float32 => Box::new(ListBuilder::new(Float32Builder::new())),
                 DataType::Float64 => Box::new(ListBuilder::new(Float64Builder::new())),
+                DataType::Decimal128(precision, scale) => Box::new(ListBuilder::new(
+                    Decimal128Builder::new()
+                        .with_precision_and_scale(*precision, *scale)
+                        .unwrap_or_default(),
+                )),
                 DataType::Utf8 => Box::new(ListBuilder::new(StringBuilder::new())),
                 DataType::Boolean => Box::new(ListBuilder::new(BooleanBuilder::new())),
                 DataType::Binary => Box::new(ListBuilder::new(BinaryBuilder::new())),
