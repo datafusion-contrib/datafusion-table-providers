@@ -27,6 +27,7 @@ let ctx = SessionContext::with_state(state);
 - DuckDB
 - Flight SQL
 - MongoDB
+- ADBC
 - ODBC
 
 ## Development
@@ -215,6 +216,20 @@ EOF
 
 # Run from repo folder
 cargo run -p datafusion-table-providers --example mongodb --features mongodb
+```
+
+### ADBC
+
+Install an ADBC driver using [dbc](https://github.com/columnar-tech/dbc):
+
+```bash
+dbc install duckdb
+```
+
+Read from a table via the installed driver (using DuckDB as an example):
+
+```bash
+cargo run --example adbc --features adbc
 ```
 
 ### ODBC

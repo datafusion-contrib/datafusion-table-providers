@@ -96,8 +96,8 @@ adbc_core = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
-bollard = "0.19"
-geozero = { version = "0.14.0", features = ["with-wkb"] }
+bollard = "0.20"
+geozero = { version = "0.15.1", features = ["with-wkb"] }
 insta = { version = "1.46.0", features = ["filters"] }
 parquet = { workspace = true }
 prost = { version = "=0.14.1" }
@@ -107,7 +107,7 @@ rstest = "0.26.1"
 test-log = { version = "0.2", features = ["trace"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tempfile = "3.24.0"
+tempfile = "3.27.0"
 
 [features]
 clickhouse = ["dep:clickhouse", "arrow-ipc/lz4", "dep:async-stream"]
