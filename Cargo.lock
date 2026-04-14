@@ -2479,7 +2479,7 @@ dependencies = [
  "prost",
  "r2d2",
  "r2d2_adbc",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "reqwest 0.13.2",
  "rstest",
