@@ -52,16 +52,6 @@ dependencies = [
 
 [[package]]
 name = "adbc_core"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a38cdcc3e43dc645038c2b6339dd98610c48ae593cc67839452e6670fa09f27"
-dependencies = [
- "arrow-array",
- "arrow-schema",
-]
-
-[[package]]
-name = "adbc_core"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46b169525a7c41670fe95874103c7c6ce713ac699123f81a200bc31f9ad3b02e"
@@ -72,25 +62,29 @@ dependencies = [
 
 [[package]]
 name = "adbc_driver_manager"
-version = "0.21.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75c8a313f30eb7d90584eda8760037c746a1827297100b64704b30f3f6cbd203"
+checksum = "12aa1ae565ec6d45cfe71c20b5c2b3cbd6ba5d7176ecd0c0a448e970a93c35e4"
 dependencies = [
- "adbc_core 0.21.0",
+ "adbc_core",
  "adbc_ffi",
  "arrow-array",
  "arrow-schema",
  "libloading 0.8.9",
+ "path-slash",
+ "regex",
  "toml",
+ "windows-registry",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "adbc_ffi"
-version = "0.21.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d36274376fdc4849cf47a78f3baeef4ae1654ef703dc3148d91adde3336c11"
+checksum = "e6851c2ab953511cf7a244aadcbc0586442fd3c67dfe371457369048880dd513"
 dependencies = [
- "adbc_core 0.21.0",
+ "adbc_core",
  "arrow-array",
  "arrow-schema",
 ]
@@ -2439,7 +2433,7 @@ dependencies = [
 name = "datafusion-table-providers"
 version = "0.10.1"
 dependencies = [
- "adbc_core 0.23.0",
+ "adbc_core",
  "adbc_driver_manager",
  "anyhow",
  "arrow",
@@ -4976,6 +4970,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "path-slash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e91099d4268b0e11973f036e885d652fb0b21fedcf69738c627f94db6a44f42"
+
+[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5490,11 +5490,11 @@ dependencies = [
 
 [[package]]
 name = "r2d2_adbc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ceae1815a5cc7165bb1841a4318561921303c9283a4706f4044d989bd29236d"
+checksum = "c927bf1acbcc9c5c99674a55e320c15effe73fd05f069469d4af360428ac368a"
 dependencies = [
- "adbc_core 0.21.0",
+ "adbc_core",
  "r2d2",
 ]
 
@@ -6979,24 +6979,15 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.12+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
+checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
 dependencies = [
  "serde_spanned",
- "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 0.7.15",
-]
-
-[[package]]
-name = "toml_datetime"
-version = "0.7.5+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
-dependencies = [
- "serde_core",
+ "winnow",
 ]
 
 [[package]]
@@ -7015,9 +7006,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b59c4d22ed448339746c59b905d24568fcbb3ab65a500494f7b8c3e97739f2b"
 dependencies = [
  "indexmap",
- "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
- "winnow 1.0.1",
+ "winnow",
 ]
 
 [[package]]
@@ -7026,7 +7017,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.1",
+ "winnow",
 ]
 
 [[package]]
@@ -7962,12 +7953,6 @@ dependencies = [
  "windows-sys 0.52.0",
  "xkbcommon-dl",
 ]
-
-[[package]]
-name = "winnow"
-version = "0.7.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 
 [[package]]
 name = "winnow"
