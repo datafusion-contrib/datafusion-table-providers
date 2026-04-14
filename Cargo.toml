@@ -48,8 +48,8 @@ datafusion-physical-expr = { version = "52" }
 datafusion-physical-plan = { version = "52" }
 datafusion-table-providers = { path = "core" }
 duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "f4096c7592ed46b9e68755a49252d69783dece96" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
-adbc_core = { version = "0.21.0" }
-adbc_driver_manager = { version = "0.21.0" }
+adbc_core = { version = "0.23" }
+adbc_driver_manager = { version = "0.23" }
 parquet = "57"
 rusqlite = "0.37"
 tokio-rusqlite = "0.7.0"
