@@ -24,7 +24,7 @@ classifier = [
     "Programming Language :: Python",
     "Programming Language :: Rust",
 ]
-dependencies = ["datafusion>=52.0.0"]
+dependencies = ["datafusion>=52.0.0,<53.0.0"]
 
 [project.urls]
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
