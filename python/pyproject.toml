@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.5.1,<1.9.0"]
+requires = ["maturin>=1.5.1,<2"]
 build-backend = "maturin"
 
 [project]
@@ -7,7 +7,7 @@ name = "datafusion_table_providers"
 version = "0.1.0"
 description = "Build and run queries against data"
 readme = "../README.md"
-license = { file = "../LICENSE" }
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 keywords = ["datafusion", "dataframe", "rust", "query-engine"]
 classifier = [
@@ -24,7 +24,7 @@ classifier = [
     "Programming Language :: Python",
     "Programming Language :: Rust",
 ]
-dependencies = ["datafusion>=45.0.0,<52.0.0"]
+dependencies = ["datafusion>=52.0.0,<53.0.0"]
 
 [project.urls]
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
