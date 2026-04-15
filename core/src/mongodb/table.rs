@@ -104,7 +104,7 @@ struct MongoDBExec {
     projected_schema: SchemaRef,
     filters_doc: Document,
     limit: Option<i32>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl MongoDBExec {
@@ -156,12 +156,12 @@ impl MongoDBExec {
             projected_schema: Arc::clone(&projected_schema),
             filters_doc: mongo_filters_doc,
             limit,
-            properties: PlanProperties::new(
+            properties: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            ),
+            )),
         })
     }
 }
@@ -199,7 +199,7 @@ impl ExecutionPlan for MongoDBExec {
         Arc::clone(&self.projected_schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
