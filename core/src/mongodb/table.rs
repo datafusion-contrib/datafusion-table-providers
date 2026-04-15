@@ -8,8 +8,9 @@ use datafusion::common::project_schema;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -103,6 +104,7 @@ struct MongoDBExec {
     pool: Arc<MongoDBConnectionPool>,
     projected_schema: SchemaRef,
     filters_doc: Document,
+    sort_doc: Document,
     limit: Option<i32>,
     properties: PlanProperties,
 }
@@ -155,6 +157,7 @@ impl MongoDBExec {
             pool,
             projected_schema: Arc::clone(&projected_schema),
             filters_doc: mongo_filters_doc,
+            sort_doc: Document::new(),
             limit,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
@@ -182,7 +185,18 @@ impl DisplayAs for MongoDBExec {
             "MongoDBExec projection=[{}] filters=[{}]",
             columns.join(", "),
             filters,
-        )
+        )?;
+
+        if !self.sort_doc.is_empty() {
+            let sort = serde_json::to_string(&self.sort_doc).map_err(|_| fmt::Error)?;
+            write!(f, " sort=[{sort}]")?;
+        }
+
+        if let Some(limit) = self.limit {
+            write!(f, " limit=[{limit}]")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -214,6 +228,44 @@ impl ExecutionPlan for MongoDBExec {
         Ok(self)
     }
 
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut sort_doc = Document::new();
+        for sort_expr in order {
+            let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
+                // Can only push down simple column references
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            let direction = if sort_expr.options.descending { -1 } else { 1 };
+            sort_doc.insert(col.name().to_string(), direction);
+        }
+
+        let mut new_exec = MongoDBExec {
+            table_reference: Arc::clone(&self.table_reference),
+            pool: Arc::clone(&self.pool),
+            projected_schema: Arc::clone(&self.projected_schema),
+            filters_doc: self.filters_doc.clone(),
+            sort_doc,
+            limit: self.limit,
+            properties: self.properties.clone(),
+        };
+
+        // Update equivalence properties to reflect the output ordering
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&self.projected_schema),
+            vec![order.to_vec()],
+        );
+        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+
+        Ok(SortOrderPushdownResult::Exact {
+            inner: Arc::new(new_exec),
+        })
+    }
+
     fn execute(
         &self,
         _partition: usize,
@@ -225,14 +277,21 @@ impl ExecutionPlan for MongoDBExec {
         let pool = Arc::clone(&self.pool);
         let projected_schema = Arc::clone(&self.projected_schema);
         let filters_doc = self.filters_doc.clone();
+        let sort_doc = self.sort_doc.clone();
         let limit = self.limit;
 
         let stream = futures::stream::once(async move {
             let conn = pool.connect().await.map_err(to_execution_error)?;
 
-            conn.query_arrow(&table_reference, &projected_schema, &filters_doc, limit)
-                .await
-                .map_err(to_execution_error)
+            conn.query_arrow(
+                &table_reference,
+                &projected_schema,
+                &filters_doc,
+                limit,
+                &sort_doc,
+            )
+            .await
+            .map_err(to_execution_error)
         })
         .try_flatten();
 
@@ -250,7 +309,35 @@ pub fn to_execution_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::{col, lit, BinaryExpr, Expr, Operator};
+    use mongodb::bson::doc;
+
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("_id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+            Field::new("active", DataType::Boolean, true),
+        ]))
+    }
+
+    /// Helper to get the DisplayAs output from a MongoDBExec.
+    fn format_exec(exec: &MongoDBExec) -> String {
+        struct Wrapper<'a>(&'a MongoDBExec);
+        impl fmt::Display for Wrapper<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt_as(DisplayFormatType::Default, f)
+            }
+        }
+        format!("{}", Wrapper(exec))
+    }
+
+    fn stub_pool() -> Arc<MongoDBConnectionPool> {
+        Arc::new(MongoDBConnectionPool::new_stub())
+    }
+
+    // --- supports_filters_pushdown ---
 
     #[tokio::test]
     async fn test_supports_filters_pushdown_supported() {
@@ -284,8 +371,435 @@ mod tests {
             vec![
                 TableProviderFilterPushDown::Exact,
                 TableProviderFilterPushDown::Exact,
-                TableProviderFilterPushDown::Unsupported,
+                TableProviderFilterPushDown::Exact,
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_supports_filters_pushdown_all_new_types() {
+        let exprs = vec![
+            col("x").is_null(),
+            col("x").is_not_null(),
+            col("x").is_true(),
+            col("x").is_false(),
+            col("x").is_not_true(),
+            col("x").is_not_false(),
+            col("x").between(lit(1), lit(10)),
+            col("x").not_between(lit(1), lit(10)),
+            col("x").in_list(vec![lit(1), lit(2)], false),
+            col("x").in_list(vec![lit(1), lit(2)], true),
+            col("x").like(lit("%foo%")),
+            col("x").not_like(lit("bar%")),
+            col("x").ilike(lit("%baz")),
+            col("x").not_ilike(lit("qux%")),
+            Expr::Not(Box::new(col("x").eq(lit(5)))),
+        ];
+        let refs: Vec<&Expr> = exprs.iter().collect();
+        let res = supports_filters_pushdown(&refs).unwrap();
+        assert!(
+            res.iter().all(|r| *r == TableProviderFilterPushDown::Exact),
+            "All new expression types should be Exact, got: {res:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_supports_filters_pushdown_empty() {
+        let res = supports_filters_pushdown(&[]).unwrap();
+        assert!(res.is_empty());
+    }
+
+    // --- DisplayAs / explain plan ---
+
+    #[tokio::test]
+    async fn test_display_no_filters_no_limit() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("MongoDBExec projection=[_id, name, age, active]"),
+            "Should show all columns: {display}"
+        );
+        assert!(display.contains("filters=[{}]"), "No filters: {display}");
+        assert!(
+            !display.contains("sort="),
+            "No sort shown when empty: {display}"
+        );
+        assert!(
+            !display.contains("limit="),
+            "No limit shown when None: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_display_with_projection() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec =
+            MongoDBExec::new(table_ref, stub_pool(), schema, Some(&vec![1, 2]), &[], None).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("projection=[name, age]"),
+            "Should show projected columns: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_display_with_filters() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(21))];
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains(r#""age":{"$gt":21}"#),
+            "Should show filter doc: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_display_with_limit() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], Some(100)).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("limit=[100]"),
+            "Should show limit: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_display_with_sort() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let mut exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+        exec.sort_doc = doc! { "name": 1, "age": -1 };
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("sort=["),
+            "Should show sort section: {display}"
+        );
+        assert!(
+            display.contains(r#""name":1"#),
+            "Should show sort fields: {display}"
+        );
+        assert!(
+            display.contains(r#""age":-1"#),
+            "Should show sort fields: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_display_with_all_options() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("active").eq(lit(true))];
+        let mut exec = MongoDBExec::new(
+            table_ref,
+            stub_pool(),
+            schema,
+            Some(&vec![1, 3]),
+            &filters,
+            Some(50),
+        )
+        .unwrap();
+        exec.sort_doc = doc! { "name": 1 };
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("projection=[name, active]"),
+            "projection: {display}"
+        );
+        assert!(display.contains(r#""active":true"#), "filter: {display}");
+        assert!(display.contains("sort=["), "sort: {display}");
+        assert!(display.contains("limit=[50]"), "limit: {display}");
+    }
+
+    #[tokio::test]
+    async fn test_display_complex_filter() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(18)).and(col("name").eq(lit("Alice")))];
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("$and"),
+            "Should show AND filter: {display}"
+        );
+        assert!(
+            display.contains(r#""age":{"$gt":18}"#),
+            "Should show age filter: {display}"
+        );
+        assert!(
+            display.contains(r#""name":"Alice""#),
+            "Should show name filter: {display}"
+        );
+    }
+
+    // --- MongoDBExec edge cases ---
+
+    #[tokio::test]
+    async fn test_exec_empty_projection_falls_back_to_id() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec =
+            MongoDBExec::new(table_ref, stub_pool(), schema, Some(&vec![]), &[], None).unwrap();
+
+        let display = format_exec(&exec);
+        assert!(
+            display.contains("projection=[_id]"),
+            "Empty projection should fall back to _id: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_limit_too_large() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let result = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], Some(usize::MAX));
+        assert!(result.is_err(), "Should fail for limit that exceeds i32");
+    }
+
+    #[tokio::test]
+    async fn test_exec_no_filters_produces_empty_doc() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        assert!(
+            exec.filters_doc.is_empty(),
+            "No filters should produce empty doc"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_multiple_filters_combined() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(18)), col("active").eq(lit(true))];
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None).unwrap();
+
+        assert!(
+            exec.filters_doc.contains_key("$and"),
+            "Multiple filters should be combined with $and: {:?}",
+            exec.filters_doc
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_properties() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        assert_eq!(exec.name(), "MongoDBExec");
+        assert_eq!(exec.children().len(), 0);
+        assert!(
+            matches!(
+                exec.properties().partitioning,
+                Partitioning::UnknownPartitioning(1)
+            ),
+            "Expected UnknownPartitioning(1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_unconvertible_combined_filter_errors() {
+        // Two filters where AND combines them, but the combined expr can't be converted
+        // (e.g., one is a Modulo that passes combine_exprs_with_and but fails expr_to_mongo_filter)
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("age")),
+            op: Operator::Modulo,
+            right: Box::new(lit(2)),
+        })];
+        let result = MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None);
+        assert!(
+            result.is_err(),
+            "Should error when combined filter can't be converted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_with_new_children_returns_self() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+        let exec_arc: Arc<dyn ExecutionPlan> = Arc::new(exec);
+        let result = exec_arc.clone().with_new_children(vec![]).unwrap();
+        assert_eq!(result.name(), "MongoDBExec");
+    }
+
+    // --- try_pushdown_sort ---
+
+    #[tokio::test]
+    async fn test_sort_pushdown_single_column_asc() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("name", 1)),
+            datafusion::arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
+                let display = format_exec(mongo_exec);
+                assert!(
+                    display.contains("sort=["),
+                    "Display should show sort: {display}"
+                );
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_single_column_desc() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("age", 2)),
+            datafusion::arrow::compute::SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "age": -1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_multiple_columns() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![
+            PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new("name", 1)),
+                datafusion::arrow::compute::SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new("age", 2)),
+                datafusion::arrow::compute::SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1, "age": -1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_non_column_returns_unsupported() {
+        use datafusion::physical_expr::expressions::Literal;
+        use datafusion::scalar::ScalarValue;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            datafusion::arrow::compute::SortOptions::default(),
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "Non-column sort should be Unsupported"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_preserves_filters_and_limit() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(21))];
+        let exec =
+            MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, Some(10)).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("name", 1)),
+            datafusion::arrow::compute::SortOptions::default(),
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert!(
+                    !mongo_exec.filters_doc.is_empty(),
+                    "Filters should be preserved"
+                );
+                assert_eq!(mongo_exec.limit, Some(10), "Limit should be preserved");
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_empty_order() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let result = exec.try_pushdown_sort(&[]).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert!(
+                    mongo_exec.sort_doc.is_empty(),
+                    "Empty sort should produce empty doc"
+                );
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
     }
 }

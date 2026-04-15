@@ -47,6 +47,7 @@ jobs:
           - 'mysql'
           - 'flight'
           - 'adbc'
+          - 'mongodb'
 
     steps:
       - uses: actions/checkout@v6
@@ -70,7 +71,7 @@ jobs:
 
     env:
       PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
-      MYSQL_DOCKER_IMAGE: public.ecr.aws/ubuntu/mysql:8.0-22.04_beta
+      MYSQL_DOCKER_IMAGE: mysql:8.0
 
     steps:
       - uses: actions/checkout@v6
@@ -80,15 +81,27 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Log in to container registries
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}
 
-      - name: Pull the Postgres/MySQL images
+      - name: Load or pull Docker images
         run: |
-          : work around spurious network errors in curl 8.0
-          docker pull ${{ env.PG_DOCKER_IMAGE }}
-          docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+          if [ -f /tmp/docker-images/postgres.tar ] && [ -f /tmp/docker-images/mysql.tar ]; then
+            echo "Loading cached Docker images..."
+            docker load -i /tmp/docker-images/postgres.tar
+            docker load -i /tmp/docker-images/mysql.tar
+          else
+            echo "Pulling Docker images..."
+            docker pull ${{ env.PG_DOCKER_IMAGE }}
+            docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
+            mkdir -p /tmp/docker-images
+            docker save -o /tmp/docker-images/postgres.tar ${{ env.PG_DOCKER_IMAGE }}
+            docker save -o /tmp/docker-images/mysql.tar ${{ env.MYSQL_DOCKER_IMAGE }}
+          fi
 
       - name: Free Disk Space
         run: |
