@@ -264,6 +264,7 @@ impl ExecutionPlan for MongoDBExec {
             Arc::clone(&self.projected_schema),
             vec![order.to_vec()],
         );
+
         new_exec.properties =
             Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
