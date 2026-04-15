@@ -12,13 +12,19 @@ use crate::sql::sql_provider_datafusion::{
 };
 use datafusion::{
     arrow::datatypes::SchemaRef,
+    config::ConfigOptions,
     datasource::TableProvider,
-    error::Result as DataFusionResult,
+    error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    physical_expr::PhysicalSortExpr,
     physical_plan::{
-        stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
-        PlanProperties, SendableRecordBatchStream,
+        filter_pushdown::{
+            ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+        },
+        sort_pushdown::SortOrderPushdownResult,
+        stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
@@ -182,6 +188,97 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        match self.base_exec.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let base_exec = inner
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(DuckSqlExec {
+                        base_exec,
+                        table_functions: self.table_functions.clone(),
+                    }),
+                })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let base_exec = inner
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: Arc::new(DuckSqlExec {
+                        base_exec,
+                        table_functions: self.table_functions.clone(),
+                    }),
+                })
+            }
+            SortOrderPushdownResult::Unsupported => Ok(SortOrderPushdownResult::Unsupported),
+        }
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_exec.fetch()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let base_exec = self
+            .base_exec
+            .with_fetch(limit)?
+            .as_any()
+            .downcast_ref::<SqlExec<T, P>>()?
+            .clone();
+        Some(Arc::new(DuckSqlExec {
+            base_exec,
+            table_functions: self.table_functions.clone(),
+        }))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        config: &ConfigOptions,
+    ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let result = self.base_exec.handle_child_pushdown_result(
+            phase,
+            child_pushdown_result,
+            config,
+        )?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node: result.updated_node.map(|node| {
+                let base_exec = node
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .expect("Failed to downcast SqlExec in filter pushdown")
+                    .clone();
+                Arc::new(DuckSqlExec {
+                    base_exec,
+                    table_functions: self.table_functions.clone(),
+                }) as Arc<dyn ExecutionPlan>
+            }),
+        })
     }
 
     fn execute(
