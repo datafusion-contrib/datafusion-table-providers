@@ -8,13 +8,14 @@ use datafusion::common::project_schema;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
+use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 use mongodb::bson::Document;
@@ -225,6 +226,48 @@ impl ExecutionPlan for MongoDBExec {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut sort_doc = Document::new();
+        for sort_expr in order {
+            let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
+                // Can only push down simple column references
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            let direction = if sort_expr.options.descending {
+                -1
+            } else {
+                1
+            };
+            sort_doc.insert(col.name().to_string(), direction);
+        }
+
+        let mut new_exec = MongoDBExec {
+            table_reference: Arc::clone(&self.table_reference),
+            pool: Arc::clone(&self.pool),
+            projected_schema: Arc::clone(&self.projected_schema),
+            filters_doc: self.filters_doc.clone(),
+            sort_doc,
+            limit: self.limit,
+            properties: self.properties.clone(),
+        };
+
+        // Update equivalence properties to reflect the output ordering
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&self.projected_schema),
+            vec![order.to_vec()],
+        );
+        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+
+        Ok(SortOrderPushdownResult::Exact {
+            inner: Arc::new(new_exec),
+        })
     }
 
     fn execute(
@@ -570,5 +613,167 @@ mod tests {
             ),
             "Expected UnknownPartitioning(1)"
         );
+    }
+
+    // --- try_pushdown_sort ---
+
+    #[tokio::test]
+    async fn test_sort_pushdown_single_column_asc() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("name", 1)),
+            datafusion::arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
+                let display = format_exec(mongo_exec);
+                assert!(display.contains("sort=["), "Display should show sort: {display}");
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_single_column_desc() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("age", 2)),
+            datafusion::arrow::compute::SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "age": -1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_multiple_columns() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![
+            PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new("name", 1)),
+                datafusion::arrow::compute::SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new("age", 2)),
+                datafusion::arrow::compute::SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1, "age": -1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_non_column_returns_unsupported() {
+        use datafusion::physical_expr::expressions::Literal;
+        use datafusion::scalar::ScalarValue;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            datafusion::arrow::compute::SortOptions::default(),
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "Non-column sort should be Unsupported"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_preserves_filters_and_limit() {
+        use datafusion::physical_expr::expressions::Column as PhysColumn;
+
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(21))];
+        let exec = MongoDBExec::new(
+            table_ref,
+            stub_pool(),
+            schema,
+            None,
+            &filters,
+            Some(10),
+        )
+        .unwrap();
+
+        let sort_exprs = vec![PhysicalSortExpr::new(
+            Arc::new(PhysColumn::new("name", 1)),
+            datafusion::arrow::compute::SortOptions::default(),
+        )];
+
+        let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert!(!mongo_exec.filters_doc.is_empty(), "Filters should be preserved");
+                assert_eq!(mongo_exec.limit, Some(10), "Limit should be preserved");
+                assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sort_pushdown_empty_order() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let result = exec.try_pushdown_sort(&[]).unwrap();
+        match result {
+            SortOrderPushdownResult::Exact { inner } => {
+                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                assert!(mongo_exec.sort_doc.is_empty(), "Empty sort should produce empty doc");
+            }
+            other => panic!("Expected Exact, got: {other:?}"),
+        }
     }
 }
