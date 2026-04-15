@@ -10,12 +10,12 @@ use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 use mongodb::bson::Document;
@@ -240,11 +240,7 @@ impl ExecutionPlan for MongoDBExec {
                 // Can only push down simple column references
                 return Ok(SortOrderPushdownResult::Unsupported);
             };
-            let direction = if sort_expr.options.descending {
-                -1
-            } else {
-                1
-            };
+            let direction = if sort_expr.options.descending { -1 } else { 1 };
             sort_doc.insert(col.name().to_string(), direction);
         }
 
@@ -615,6 +611,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_exec_unconvertible_combined_filter_errors() {
+        // Two filters where AND combines them, but the combined expr can't be converted
+        // (e.g., one is a Modulo that passes combine_exprs_with_and but fails expr_to_mongo_filter)
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("age")),
+            op: Operator::Modulo,
+            right: Box::new(lit(2)),
+        })];
+        let result = MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None);
+        assert!(
+            result.is_err(),
+            "Should error when combined filter can't be converted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exec_with_new_children_returns_self() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+        let exec_arc: Arc<dyn ExecutionPlan> = Arc::new(exec);
+        let result = exec_arc.clone().with_new_children(vec![]).unwrap();
+        assert_eq!(result.name(), "MongoDBExec");
+    }
+
     // --- try_pushdown_sort ---
 
     #[tokio::test]
@@ -639,7 +663,10 @@ mod tests {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
                 let display = format_exec(mongo_exec);
-                assert!(display.contains("sort=["), "Display should show sort: {display}");
+                assert!(
+                    display.contains("sort=["),
+                    "Display should show sort: {display}"
+                );
             }
             other => panic!("Expected Exact, got: {other:?}"),
         }
@@ -734,15 +761,8 @@ mod tests {
         let schema = test_schema();
         let table_ref = Arc::new(TableReference::bare("users"));
         let filters = vec![col("age").gt(lit(21))];
-        let exec = MongoDBExec::new(
-            table_ref,
-            stub_pool(),
-            schema,
-            None,
-            &filters,
-            Some(10),
-        )
-        .unwrap();
+        let exec =
+            MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, Some(10)).unwrap();
 
         let sort_exprs = vec![PhysicalSortExpr::new(
             Arc::new(PhysColumn::new("name", 1)),
@@ -753,7 +773,10 @@ mod tests {
         match result {
             SortOrderPushdownResult::Exact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
-                assert!(!mongo_exec.filters_doc.is_empty(), "Filters should be preserved");
+                assert!(
+                    !mongo_exec.filters_doc.is_empty(),
+                    "Filters should be preserved"
+                );
                 assert_eq!(mongo_exec.limit, Some(10), "Limit should be preserved");
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
             }
@@ -771,7 +794,10 @@ mod tests {
         match result {
             SortOrderPushdownResult::Exact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
-                assert!(mongo_exec.sort_doc.is_empty(), "Empty sort should produce empty doc");
+                assert!(
+                    mongo_exec.sort_doc.is_empty(),
+                    "Empty sort should produce empty doc"
+                );
             }
             other => panic!("Expected Exact, got: {other:?}"),
         }

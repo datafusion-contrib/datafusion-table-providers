@@ -12,7 +12,6 @@ use mongodb::bson::{Bson, Document};
 use num_traits::ToPrimitive;
 use rust_decimal::Decimal;
 use snafu::prelude::*;
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -100,15 +99,15 @@ fn create_empty_array(data_type: &DataType) -> ArrayRef {
     }
 }
 
-type BuilderMap = HashMap<String, Box<dyn ArrayBuilderTrait>>;
+type BuilderVec = Vec<Box<dyn ArrayBuilderTrait>>;
 
 trait ArrayBuilderTrait {
     fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error>;
     fn finish_builder(self: Box<Self>) -> Result<ArrayRef, Error>;
 }
 
-fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Error> {
-    let mut builders: BuilderMap = HashMap::new();
+fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderVec, Error> {
+    let mut builders: BuilderVec = Vec::with_capacity(schema.fields().len());
 
     for field in schema.fields() {
         let builder: Box<dyn ArrayBuilderTrait> = match field.data_type() {
@@ -143,7 +142,7 @@ fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Er
             }
         };
 
-        builders.insert(field.name().clone(), builder);
+        builders.push(builder);
     }
 
     Ok(builders)
@@ -152,37 +151,20 @@ fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Er
 fn append_document_to_builders(
     doc: &Document,
     schema: &SchemaRef,
-    builders: &mut BuilderMap,
+    builders: &mut BuilderVec,
 ) -> Result<(), Error> {
-    for field in schema.fields() {
-        let field_name = field.name();
-        let value = doc.get(field_name);
-
-        if let Some(builder) = builders.get_mut(field_name) {
-            builder.append_bson(value)?;
-        }
+    for (i, field) in schema.fields().iter().enumerate() {
+        let value = doc.get(field.name());
+        builders[i].append_bson(value)?;
     }
     Ok(())
 }
 
-fn finish_builders(mut builders: BuilderMap, schema: &SchemaRef) -> Result<Vec<ArrayRef>, Error> {
-    let mut arrays = Vec::new();
-
-    for field in schema.fields() {
-        let field_name = field.name();
-        if let Some(builder) = builders.remove(field_name) {
-            arrays.push(builder.finish_builder()?);
-        } else {
-            return Err(Error::ConversionError {
-                source: Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Missing builder for field: {field_name}"),
-                )),
-            });
-        }
-    }
-
-    Ok(arrays)
+fn finish_builders(builders: BuilderVec, _schema: &SchemaRef) -> Result<Vec<ArrayRef>, Error> {
+    builders
+        .into_iter()
+        .map(|builder| builder.finish_builder())
+        .collect()
 }
 
 struct BooleanArrayBuilder(BooleanBuilder);
@@ -693,10 +675,12 @@ impl ArrayBuilderTrait for Decimal128ArrayBuilder {
     fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
         match value {
             Some(Bson::Decimal128(decimal)) => {
-                let parsed_decimal = rust_decimal::Decimal::from_str(&decimal.to_string())
-                    .map_err(|e| Error::ConversionError {
-                        source: Box::new(e),
-                    })?;
+                let Ok(parsed_decimal) = rust_decimal::Decimal::from_str(&decimal.to_string())
+                else {
+                    // NaN, Infinity, -Infinity, or other unparseable values → null
+                    self.builder.append_null();
+                    return Ok(());
+                };
 
                 let scaling_factor: Decimal = if self.scale >= 0 {
                     ten_pow_decimal(self.scale as u32).map_err(|_| Error::ConversionError {
@@ -2246,5 +2230,39 @@ mod decimal_tests {
 
         let result = Decimal128ArrayBuilder::new(10, 10, 11); // scale > precision
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decimal_nan_appends_null() {
+        let mut builder = Decimal128ArrayBuilder::new(1, 18, 6).unwrap();
+        // BSON Decimal128 NaN should not error — should append null
+        let nan_decimal = "NaN".parse::<mongodb::bson::Decimal128>().unwrap();
+        let result = builder.append_bson(Some(&Bson::Decimal128(nan_decimal)));
+        assert!(result.is_ok(), "NaN should not cause an error");
+        let array = Box::new(builder).finish_builder().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0), "NaN should be stored as null");
+    }
+
+    #[test]
+    fn test_decimal_infinity_appends_null() {
+        let mut builder = Decimal128ArrayBuilder::new(1, 18, 6).unwrap();
+        let inf_decimal = "Infinity".parse::<mongodb::bson::Decimal128>().unwrap();
+        let result = builder.append_bson(Some(&Bson::Decimal128(inf_decimal)));
+        assert!(result.is_ok(), "Infinity should not cause an error");
+        let array = Box::new(builder).finish_builder().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0), "Infinity should be stored as null");
+    }
+
+    #[test]
+    fn test_decimal_neg_infinity_appends_null() {
+        let mut builder = Decimal128ArrayBuilder::new(1, 18, 6).unwrap();
+        let neg_inf_decimal = "-Infinity".parse::<mongodb::bson::Decimal128>().unwrap();
+        let result = builder.append_bson(Some(&Bson::Decimal128(neg_inf_decimal)));
+        assert!(result.is_ok(), "-Infinity should not cause an error");
+        let array = Box::new(builder).finish_builder().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0), "-Infinity should be stored as null");
     }
 }
