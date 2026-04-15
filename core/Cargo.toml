@@ -56,6 +56,7 @@ fundu = "2.0"
 futures = "0.3"
 geo-types = "0.7"
 itertools = "0.14"
+mongodb = { version = "3.5.2", features = ["openssl-tls"], optional = true }
 mysql_async = { version = "0.36", features = [
   "native-tls-tls",
   "chrono",
@@ -64,6 +65,7 @@ mysql_async = { version = "0.36", features = [
 ], optional = true }
 native-tls = { version = "0.2", optional = true }
 num-bigint = "0.4"
+num-traits = { version = "0.2", optional = true }
 odbc-api = { version = "19.0", optional = true }
 pem = { version = "3.0", optional = true }
 postgres-native-tls = { version = "0.5.0", optional = true }
@@ -103,9 +105,9 @@ tracing = "0.1"
 hickory-resolver = "0.25.2"
 url = "2.5"
 uuid = { version = "1.18", optional = true }
-rust_decimal = { version = "1.38", features = ["db-postgres"] }
+rust_decimal = { version = "1.38", features = ["db-postgres"], optional = true }
 
-r2d2_adbc = { version = "0.2.0", optional = true }
+r2d2_adbc = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -144,10 +146,18 @@ flight = [
 ]
 mysql = ["dep:mysql_async", "dep:async-stream"]
 mysql-federation = ["mysql", "federation"]
+mongodb = [
+  "dep:mongodb",
+  "dep:async-stream",
+  "dep:arrow-schema",
+  "dep:num-traits",
+  "dep:rust_decimal",
+]
 odbc = ["dep:odbc-api", "dep:arrow-odbc", "dep:async-stream", "dep:dyn-clone"]
 odbc-federation = ["odbc", "federation"]
 postgres = [
   "dep:tokio-postgres",
+  "dep:rust_decimal",
   "dep:uuid",
   "dep:postgres-native-tls",
   "dep:bb8",
@@ -197,6 +207,11 @@ required-features = ["sqlite"]
 name = "clickhouse"
 path = "examples/clickhouse.rs"
 required-features = ["clickhouse"]
+
+[[example]]
+name = "mongodb"
+path = "examples/mongodb.rs"
+required-features = ["mongodb"]
 
 [[bin]]
 name = "sqlite_insert_benchmark"
