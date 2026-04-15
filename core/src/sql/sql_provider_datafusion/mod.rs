@@ -160,6 +160,7 @@ impl<T, P> SqlTable<T, P> {
             &self.schema(),
             Arc::clone(&self.pool),
             sql,
+            self.dialect_arc(),
         )?))
     }
 
@@ -185,6 +186,14 @@ impl<T, P> SqlTable<T, P> {
         match &self.dialect {
             Some(dialect) => dialect.as_ref(),
             None => &DefaultDialect {},
+        }
+    }
+
+    /// Returns a cloneable Arc of the dialect for passing to SqlExec.
+    pub fn dialect_arc(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
         }
     }
 }
@@ -275,6 +284,7 @@ pub struct SqlExec<T, P> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
     properties: PlanProperties,
+    dialect: Arc<dyn Dialect + Send + Sync>,
 }
 
 impl<T, P> Clone for SqlExec<T, P> {
@@ -284,6 +294,7 @@ impl<T, P> Clone for SqlExec<T, P> {
             pool: Arc::clone(&self.pool),
             sql: self.sql.clone(),
             properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
         }
     }
 }
@@ -294,6 +305,7 @@ impl<T, P> SqlExec<T, P> {
         schema: &SchemaRef,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projection)?;
 
@@ -307,6 +319,7 @@ impl<T, P> SqlExec<T, P> {
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ),
+            dialect,
         })
     }
 
@@ -317,6 +330,10 @@ impl<T, P> SqlExec<T, P> {
 
     pub fn sql(&self) -> Result<String> {
         Ok(self.sql.clone())
+    }
+
+    fn dialect(&self) -> &(dyn Dialect + Send + Sync) {
+        self.dialect.as_ref()
     }
 }
 
@@ -334,138 +351,96 @@ impl<T, P> DisplayAs for SqlExec<T, P> {
     }
 }
 
-/// Convert a `PhysicalExpr` to a SQL string fragment for filter pushdown.
+/// Convert a `PhysicalExpr` to a logical `Expr` for use with the Unparser.
 /// Returns `None` if the expression cannot be safely converted.
-fn physical_expr_to_sql(expr: &Arc<dyn datafusion::physical_plan::PhysicalExpr>) -> Option<String> {
+fn physical_expr_to_logical_expr(
+    expr: &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+) -> Option<Expr> {
     use datafusion::physical_expr::expressions::{
         BinaryExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, NegativeExpr,
         NotExpr,
     };
 
     if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        return Some(format!("\"{}\"", col.name()));
+        return Some(Expr::Column(datafusion::common::Column::new_unqualified(
+            col.name(),
+        )));
     }
 
     if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
-        return scalar_value_to_sql(lit.value());
+        return Some(Expr::Literal(lit.value().clone(), None));
     }
 
     if let Some(bin) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        let left = physical_expr_to_sql(bin.left())?;
-        let right = physical_expr_to_sql(bin.right())?;
-        let op = operator_to_sql(bin.op())?;
-        return Some(format!("({left} {op} {right})"));
+        let left = physical_expr_to_logical_expr(bin.left())?;
+        let right = physical_expr_to_logical_expr(bin.right())?;
+        return Some(Expr::BinaryExpr(datafusion::logical_expr::BinaryExpr::new(
+            Box::new(left),
+            *bin.op(),
+            Box::new(right),
+        )));
     }
 
     if let Some(not) = expr.as_any().downcast_ref::<NotExpr>() {
-        let inner = physical_expr_to_sql(not.arg())?;
-        return Some(format!("(NOT {inner})"));
+        let inner = physical_expr_to_logical_expr(not.arg())?;
+        return Some(Expr::Not(Box::new(inner)));
     }
 
     if let Some(is_null) = expr.as_any().downcast_ref::<IsNullExpr>() {
-        let inner = physical_expr_to_sql(is_null.arg())?;
-        return Some(format!("({inner} IS NULL)"));
+        let inner = physical_expr_to_logical_expr(is_null.arg())?;
+        return Some(Expr::IsNull(Box::new(inner)));
     }
 
     if let Some(is_not_null) = expr.as_any().downcast_ref::<IsNotNullExpr>() {
-        let inner = physical_expr_to_sql(is_not_null.arg())?;
-        return Some(format!("({inner} IS NOT NULL)"));
+        let inner = physical_expr_to_logical_expr(is_not_null.arg())?;
+        return Some(Expr::IsNotNull(Box::new(inner)));
     }
 
     if let Some(neg) = expr.as_any().downcast_ref::<NegativeExpr>() {
-        let inner = physical_expr_to_sql(neg.arg())?;
-        return Some(format!("(-{inner})"));
+        let inner = physical_expr_to_logical_expr(neg.arg())?;
+        return Some(Expr::Negative(Box::new(inner)));
     }
 
     if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
-        let inner = physical_expr_to_sql(cast.expr())?;
-        let dt = cast.cast_type();
-        let sql_type = datatype_to_sql(dt)?;
-        return Some(format!("CAST({inner} AS {sql_type})"));
+        let inner = physical_expr_to_logical_expr(cast.expr())?;
+        return Some(Expr::Cast(datafusion::logical_expr::Cast::new(
+            Box::new(inner),
+            cast.cast_type().clone(),
+        )));
     }
 
     if let Some(in_list) = expr.as_any().downcast_ref::<InListExpr>() {
-        let value = physical_expr_to_sql(in_list.expr())?;
-        let list_items: Option<Vec<String>> =
-            in_list.list().iter().map(physical_expr_to_sql).collect();
-        let list_items = list_items?;
-        let not = if in_list.negated() { "NOT " } else { "" };
-        return Some(format!(
-            "({value} {not}IN ({}))",
-            list_items.join(", ")
-        ));
+        let value = physical_expr_to_logical_expr(in_list.expr())?;
+        let list: Option<Vec<Expr>> = in_list
+            .list()
+            .iter()
+            .map(physical_expr_to_logical_expr)
+            .collect();
+        let list = list?;
+        return Some(Expr::InList(datafusion::logical_expr::expr::InList::new(
+            Box::new(value),
+            list,
+            in_list.negated(),
+        )));
     }
 
     None
 }
 
-fn scalar_value_to_sql(value: &datafusion::scalar::ScalarValue) -> Option<String> {
-    use datafusion::scalar::ScalarValue;
-    match value {
-        ScalarValue::Null => Some("NULL".to_string()),
-        ScalarValue::Boolean(Some(b)) => Some(if *b { "TRUE" } else { "FALSE" }.to_string()),
-        ScalarValue::Int8(Some(v)) => Some(v.to_string()),
-        ScalarValue::Int16(Some(v)) => Some(v.to_string()),
-        ScalarValue::Int32(Some(v)) => Some(v.to_string()),
-        ScalarValue::Int64(Some(v)) => Some(v.to_string()),
-        ScalarValue::UInt8(Some(v)) => Some(v.to_string()),
-        ScalarValue::UInt16(Some(v)) => Some(v.to_string()),
-        ScalarValue::UInt32(Some(v)) => Some(v.to_string()),
-        ScalarValue::UInt64(Some(v)) => Some(v.to_string()),
-        ScalarValue::Float16(Some(v)) => Some(format!("{}", f32::from(*v))),
-        ScalarValue::Float32(Some(v)) => Some(v.to_string()),
-        ScalarValue::Float64(Some(v)) => Some(v.to_string()),
-        ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
-            // Escape single quotes to prevent SQL injection
-            Some(format!("'{}'", s.replace('\'', "''")))
-        }
-        _ => None,
-    }
-}
-
-fn operator_to_sql(op: &datafusion::logical_expr::Operator) -> Option<&'static str> {
-    use datafusion::logical_expr::Operator;
-    match op {
-        Operator::Eq => Some("="),
-        Operator::NotEq => Some("<>"),
-        Operator::Lt => Some("<"),
-        Operator::LtEq => Some("<="),
-        Operator::Gt => Some(">"),
-        Operator::GtEq => Some(">="),
-        Operator::And => Some("AND"),
-        Operator::Or => Some("OR"),
-        Operator::Plus => Some("+"),
-        Operator::Minus => Some("-"),
-        Operator::Multiply => Some("*"),
-        Operator::Divide => Some("/"),
-        Operator::Modulo => Some("%"),
-        Operator::IsDistinctFrom => Some("IS DISTINCT FROM"),
-        Operator::IsNotDistinctFrom => Some("IS NOT DISTINCT FROM"),
-        Operator::LikeMatch => Some("LIKE"),
-        Operator::ILikeMatch => Some("ILIKE"),
-        Operator::NotLikeMatch => Some("NOT LIKE"),
-        Operator::NotILikeMatch => Some("NOT ILIKE"),
-        _ => None,
-    }
-}
-
-fn datatype_to_sql(dt: &DataType) -> Option<&'static str> {
-    match dt {
-        DataType::Boolean => Some("BOOLEAN"),
-        DataType::Int8 => Some("SMALLINT"),
-        DataType::Int16 => Some("SMALLINT"),
-        DataType::Int32 => Some("INTEGER"),
-        DataType::Int64 => Some("BIGINT"),
-        DataType::UInt8 => Some("SMALLINT"),
-        DataType::UInt16 => Some("INTEGER"),
-        DataType::UInt32 => Some("BIGINT"),
-        DataType::UInt64 => Some("BIGINT"),
-        DataType::Float16 => Some("REAL"),
-        DataType::Float32 => Some("REAL"),
-        DataType::Float64 => Some("DOUBLE PRECISION"),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some("TEXT"),
-        _ => None,
-    }
+/// Convert a `PhysicalExpr` to a SQL string fragment for filter pushdown,
+/// using the Unparser with the given dialect for correct identifier quoting
+/// and operator support.
+/// Returns `None` if the expression cannot be safely converted.
+fn physical_expr_to_sql(
+    expr: &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+    dialect: &dyn Dialect,
+) -> Option<String> {
+    let logical_expr = physical_expr_to_logical_expr(expr)?;
+    let unparser = Unparser::new(dialect);
+    unparser
+        .expr_to_sql(&logical_expr)
+        .ok()
+        .map(|e| e.to_string())
 }
 
 /// Insert additional WHERE conditions into a SQL string.
@@ -495,7 +470,7 @@ fn insert_where_clause(sql: &str, conditions: &str) -> String {
         // No WHERE clause — insert before ORDER BY / LIMIT or at end
         let insert_pos = [" ORDER BY ", " LIMIT ", " GROUP BY ", " HAVING "]
             .iter()
-            .filter_map(|kw| upper.find(kw).map(|p| p))
+            .filter_map(|kw| upper.find(kw))
             .min()
             .unwrap_or(sql.len());
 
@@ -550,29 +525,30 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         &self,
         order: &[PhysicalSortExpr],
     ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        use datafusion::logical_expr::expr::Sort;
         use datafusion::physical_expr::expressions::Column;
 
         if order.is_empty() {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
-        // Build ORDER BY clause from physical sort expressions
+        let unparser = Unparser::new(self.dialect());
+
+        // Build ORDER BY clause from physical sort expressions using the Unparser
         let mut order_by_parts = Vec::with_capacity(order.len());
         for sort_expr in order {
             let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
                 return Ok(SortOrderPushdownResult::Unsupported);
             };
-            let direction = if sort_expr.options.descending {
-                "DESC"
-            } else {
-                "ASC"
-            };
-            let nulls = if sort_expr.options.nulls_first {
-                "NULLS FIRST"
-            } else {
-                "NULLS LAST"
-            };
-            order_by_parts.push(format!("\"{}\" {direction} {nulls}", col.name()));
+            let logical_sort = Sort::new(
+                Expr::Column(datafusion::common::Column::new_unqualified(col.name())),
+                !sort_expr.options.descending,
+                sort_expr.options.nulls_first,
+            );
+            let order_by_expr = unparser.sort_to_sql(&logical_sort).map_err(|e| {
+                DataFusionError::Internal(format!("Failed to unparse sort expression: {e}"))
+            })?;
+            order_by_parts.push(order_by_expr.to_string());
         }
 
         let order_by_clause = format!("ORDER BY {}", order_by_parts.join(", "));
@@ -594,6 +570,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
         };
 
         // Update equivalence properties to reflect the output ordering
@@ -626,6 +603,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
         }))
     }
 
@@ -640,7 +618,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         let mut any_accepted = false;
 
         for parent_filter in &child_pushdown_result.parent_filters {
-            match physical_expr_to_sql(&parent_filter.filter) {
+            match physical_expr_to_sql(&parent_filter.filter, self.dialect()) {
                 Some(sql_fragment) => {
                     accepted_filters.push(sql_fragment);
                     filter_results.push(PushedDown::Yes);
@@ -668,6 +646,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
         };
 
         Ok(
@@ -831,12 +810,13 @@ mod tests {
 
     mod sort_pushdown_tests {
         use crate::sql::sql_provider_datafusion::SqlExec;
-        use arrow_schema::SortOptions;
+        use arrow::compute::SortOptions;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::physical_expr::expressions::Column;
         use datafusion::physical_expr::PhysicalSortExpr;
         use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
         use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
         use std::sync::Arc;
 
         use crate::sql::db_connection_pool::{
@@ -880,7 +860,14 @@ mod tests {
             ]));
             let pool = Arc::new(MockDBPool {})
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
-            SqlExec::new(None, &schema, pool, sql.to_string()).unwrap()
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
         }
 
         #[test]
@@ -928,7 +915,7 @@ mod tests {
                         .unwrap();
                     assert_eq!(
                         sql_exec.sql().unwrap(),
-                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"age\" DESC NULLS LAST"
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS LAST"
                     );
                 }
                 other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
@@ -963,7 +950,7 @@ mod tests {
                         .unwrap();
                     assert_eq!(
                         sql_exec.sql().unwrap(),
-                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"age\" DESC NULLS FIRST, \"name\" ASC NULLS LAST"
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS FIRST, \"name\" ASC NULLS LAST"
                     );
                 }
                 other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
@@ -1043,6 +1030,7 @@ mod tests {
         use crate::sql::sql_provider_datafusion::SqlExec;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
         use std::sync::Arc;
 
         use crate::sql::db_connection_pool::{
@@ -1086,7 +1074,14 @@ mod tests {
             ]));
             let pool = Arc::new(MockDBPool {})
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
-            SqlExec::new(None, &schema, pool, sql.to_string()).unwrap()
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
         }
 
         #[test]
@@ -1231,6 +1226,7 @@ mod tests {
         use crate::sql::sql_provider_datafusion::SqlExec;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
         use std::sync::Arc;
 
         use crate::sql::db_connection_pool::{
@@ -1269,7 +1265,14 @@ mod tests {
             ]));
             let pool = Arc::new(MockDBPool {})
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
-            SqlExec::new(None, &schema, pool, sql.to_string()).unwrap()
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
         }
 
         #[test]
@@ -1304,6 +1307,7 @@ mod tests {
         };
         use datafusion::logical_expr::Operator;
         use datafusion::scalar::ScalarValue;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
 
         fn col(name: &str) -> Arc<dyn datafusion::physical_plan::PhysicalExpr> {
             Arc::new(Column::new(name, 0))
@@ -1317,27 +1321,31 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Utf8(Some(s.to_string()))))
         }
 
+        fn default_dialect() -> &'static dyn Dialect {
+            &DefaultDialect {}
+        }
+
         #[test]
         fn test_column() {
-            let result = physical_expr_to_sql(&col("name"));
+            let result = physical_expr_to_sql(&col("name"), default_dialect());
             assert_eq!(result, Some("\"name\"".to_string()));
         }
 
         #[test]
         fn test_literal_int() {
-            let result = physical_expr_to_sql(&lit_i32(42));
+            let result = physical_expr_to_sql(&lit_i32(42), default_dialect());
             assert_eq!(result, Some("42".to_string()));
         }
 
         #[test]
         fn test_literal_string() {
-            let result = physical_expr_to_sql(&lit_str("hello"));
+            let result = physical_expr_to_sql(&lit_str("hello"), default_dialect());
             assert_eq!(result, Some("'hello'".to_string()));
         }
 
         #[test]
         fn test_literal_string_with_quote() {
-            let result = physical_expr_to_sql(&lit_str("it's"));
+            let result = physical_expr_to_sql(&lit_str("it's"), default_dialect());
             assert_eq!(result, Some("'it''s'".to_string()));
         }
 
@@ -1345,7 +1353,7 @@ mod tests {
         fn test_literal_null() {
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(Literal::new(ScalarValue::Null));
-            let result = physical_expr_to_sql(&expr);
+            let result = physical_expr_to_sql(&expr, default_dialect());
             assert_eq!(result, Some("NULL".to_string()));
         }
 
@@ -1354,8 +1362,8 @@ mod tests {
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> = Arc::new(
                 BinaryExpr::new(col("age"), Operator::Gt, lit_i32(30)),
             );
-            let result = physical_expr_to_sql(&expr);
-            assert_eq!(result, Some("(\"age\" > 30)".to_string()));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("(age > 30)".to_string()));
         }
 
         #[test]
@@ -1368,10 +1376,10 @@ mod tests {
             );
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(BinaryExpr::new(left, Operator::And, right));
-            let result = physical_expr_to_sql(&expr);
+            let result = physical_expr_to_sql(&expr, default_dialect());
             assert_eq!(
                 result,
-                Some("((\"a\" > 1) AND (\"b\" = 'x'))".to_string())
+                Some("((a > 1) AND (b = 'x'))".to_string())
             );
         }
 
@@ -1379,16 +1387,16 @@ mod tests {
         fn test_is_null() {
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(IsNullExpr::new(col("x")));
-            let result = physical_expr_to_sql(&expr);
-            assert_eq!(result, Some("(\"x\" IS NULL)".to_string()));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("x IS NULL".to_string()));
         }
 
         #[test]
         fn test_is_not_null() {
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(IsNotNullExpr::new(col("x")));
-            let result = physical_expr_to_sql(&expr);
-            assert_eq!(result, Some("(\"x\" IS NOT NULL)".to_string()));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("x IS NOT NULL".to_string()));
         }
 
         #[test]
@@ -1398,16 +1406,16 @@ mod tests {
             );
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(NotExpr::new(inner));
-            let result = physical_expr_to_sql(&expr);
-            assert_eq!(result, Some("(NOT (\"active\" = 1))".to_string()));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("NOT (active = 1)".to_string()));
         }
 
         #[test]
         fn test_literal_bool() {
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
-            let result = physical_expr_to_sql(&expr);
-            assert_eq!(result, Some("TRUE".to_string()));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("true".to_string()));
         }
     }
 

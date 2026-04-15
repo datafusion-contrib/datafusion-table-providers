@@ -2,7 +2,7 @@ use crate::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use crate::sql::db_connection_pool::DbConnectionPool;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::sql::unparser::dialect::MySqlDialect;
+use datafusion::sql::unparser::dialect::{Dialect, MySqlDialect};
 use futures::TryStreamExt;
 use mysql_async::prelude::ToValue;
 use std::fmt::Display;
@@ -77,6 +77,7 @@ impl MySQLTable {
             schema,
             Arc::clone(&self.pool),
             sql,
+            self.base_table.dialect_arc(),
         )?))
     }
 }
@@ -129,8 +130,9 @@ impl MySQLSQLExec {
         schema: &SchemaRef,
         pool: Arc<MySQLConnectionPool>,
         sql: String,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projections, schema, pool, sql)?;
+        let base_exec = SqlExec::new(projections, schema, pool, sql, dialect)?;
 
         Ok(Self { base_exec })
     }
@@ -248,16 +250,24 @@ impl ExecutionPlan for MySQLSQLExec {
             child_pushdown_result,
             config,
         )?;
-        Ok(FilterPushdownPropagation {
-            filters: result.filters,
-            updated_node: result.updated_node.map(|node| {
+        let updated_node = result
+            .updated_node
+            .map(|node| {
                 let base_exec = node
                     .as_any()
                     .downcast_ref::<SqlExec<mysql_async::Conn, &'static (dyn ToValue + Sync)>>()
-                    .expect("Failed to downcast SqlExec in filter pushdown")
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in filter pushdown".to_string(),
+                        )
+                    })?
                     .clone();
-                Arc::new(MySQLSQLExec { base_exec }) as Arc<dyn ExecutionPlan>
-            }),
+                Ok::<_, DataFusionError>(Arc::new(MySQLSQLExec { base_exec }) as Arc<dyn ExecutionPlan>)
+            })
+            .transpose()?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node,
         })
     }
 

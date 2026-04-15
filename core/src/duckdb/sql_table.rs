@@ -73,6 +73,7 @@ impl<T, P> DuckDBTable<T, P> {
             self.base_table.clone_pool(),
             sql,
             self.table_functions.clone(),
+            self.base_table.dialect_arc(),
         )?))
     }
 }
@@ -129,8 +130,9 @@ impl<T, P> DuckSqlExec<T, P> {
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
         table_functions: Option<HashMap<String, String>>,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
+        let base_exec = SqlExec::new(projection, schema, pool, sql, dialect)?;
 
         Ok(Self {
             base_exec,
@@ -265,19 +267,27 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
             child_pushdown_result,
             config,
         )?;
-        Ok(FilterPushdownPropagation {
-            filters: result.filters,
-            updated_node: result.updated_node.map(|node| {
+        let updated_node = result
+            .updated_node
+            .map(|node| {
                 let base_exec = node
                     .as_any()
                     .downcast_ref::<SqlExec<T, P>>()
-                    .expect("Failed to downcast SqlExec in filter pushdown")
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in filter pushdown".to_string(),
+                        )
+                    })?
                     .clone();
-                Arc::new(DuckSqlExec {
+                Ok::<_, DataFusionError>(Arc::new(DuckSqlExec {
                     base_exec,
                     table_functions: self.table_functions.clone(),
-                }) as Arc<dyn ExecutionPlan>
-            }),
+                }) as Arc<dyn ExecutionPlan>)
+            })
+            .transpose()?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node,
         })
     }
 

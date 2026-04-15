@@ -79,6 +79,7 @@ impl<T, P> AdbcDBTable<T, P> {
             schema,
             self.base_table.clone_pool(),
             sql,
+            self.base_table.dialect_arc(),
         )?))
     }
 }
@@ -127,8 +128,9 @@ impl<T, P> AdbcSqlExec<T, P> {
         schema: &SchemaRef,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(projection, schema, pool, sql)?;
+        let base_exec = SqlExec::new(projection, schema, pool, sql, dialect)?;
         Ok(Self { base_exec })
     }
 
@@ -244,16 +246,24 @@ impl<T: 'static, P: 'static> ExecutionPlan for AdbcSqlExec<T, P> {
             child_pushdown_result,
             config,
         )?;
-        Ok(FilterPushdownPropagation {
-            filters: result.filters,
-            updated_node: result.updated_node.map(|node| {
+        let updated_node = result
+            .updated_node
+            .map(|node| {
                 let base_exec = node
                     .as_any()
                     .downcast_ref::<SqlExec<T, P>>()
-                    .expect("Failed to downcast SqlExec in filter pushdown")
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in filter pushdown".to_string(),
+                        )
+                    })?
                     .clone();
-                Arc::new(AdbcSqlExec { base_exec }) as Arc<dyn ExecutionPlan>
-            }),
+                Ok::<_, DataFusionError>(Arc::new(AdbcSqlExec { base_exec }) as Arc<dyn ExecutionPlan>)
+            })
+            .transpose()?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node,
         })
     }
 
