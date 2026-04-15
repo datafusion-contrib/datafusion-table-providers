@@ -455,16 +455,16 @@ dependencies = [
 
 [[package]]
 name = "arrow-odbc"
-version = "21.1.1"
+version = "23.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f947f450c62a2f1af1fd3d5e65c7443a0792cc362f2f77fcf16048af459aabdc"
+checksum = "b4b0a7cccf7bc759fd0d51121d66c497035f9bd1a5ef1dda85ec8365363920f5"
 dependencies = [
  "arrow",
  "atoi",
  "chrono",
  "encoding_rs",
  "log",
- "odbc-api 20.2.0",
+ "odbc-api",
  "simdutf8",
  "thiserror 2.0.18",
 ]
@@ -2279,7 +2279,7 @@ dependencies = [
  "native-tls",
  "num-bigint",
  "num-traits",
- "odbc-api 19.1.0",
+ "odbc-api",
  "once_cell",
  "parquet",
  "pem",
@@ -4554,27 +4554,13 @@ dependencies = [
 
 [[package]]
 name = "odbc-api"
-version = "19.1.0"
+version = "24.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f017d3949731e436bc1bb9a1fbc34197c2f39c588cdcb60d21adb1f8dd3b8514"
+checksum = "f04f75fb2176707bce6c9180bf722346005d26df377471672e65fcb63252bf6c"
 dependencies = [
  "atoi",
  "log",
- "odbc-sys 0.27.4",
- "thiserror 2.0.18",
- "widestring",
- "winit",
-]
-
-[[package]]
-name = "odbc-api"
-version = "20.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5743b1d691daa05436958bf199d985bcf3331bd29e09104a17462c7749673c"
-dependencies = [
- "atoi",
- "log",
- "odbc-sys 0.28.0",
+ "odbc-sys",
  "thiserror 2.0.18",
  "widestring",
  "winit",
@@ -4582,15 +4568,9 @@ dependencies = [
 
 [[package]]
 name = "odbc-sys"
-version = "0.27.4"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1896e52e97c2f0cf997cc627380f1af1ecb3f6c29ce6175047cd38adaadb46f5"
-
-[[package]]
-name = "odbc-sys"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "348f5e1d16a8aa07e9e76fc62f82bf44d94c099c0d291b4b4b7e10574447434c"
+checksum = "245cb4fe8236df4fd352ba96075d754233c6509d654d9f1c1482158b7d6c083d"
 
 [[package]]
 name = "once_cell"

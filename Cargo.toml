@@ -38,7 +38,7 @@ arrow-flight = { version = "57.1.0", features = [
 arrow-ipc = { version = "57.1.0" }
 arrow-schema = { version = "57.2.0", features = ["serde"] }
 arrow-json = "57.1.0"
-arrow-odbc = { version = "21.0.0" }
+arrow-odbc = { version = "23.1" }
 datafusion = { version = "52", default-features = false }
 datafusion-expr = { version = "52" }
 datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "bda2122883a184ab8e23b2af2728fefc6631f21a" }
