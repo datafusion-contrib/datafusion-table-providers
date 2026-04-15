@@ -1,9 +1,8 @@
 use async_stream::stream;
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::TableReference;
-use futures::StreamExt;
 use futures::TryStreamExt;
 use mongodb::{
     bson::{doc, Document},
@@ -89,6 +88,7 @@ impl MongoDBConnection {
         projected_schema: &SchemaRef,
         filters_doc: &Document,
         limit: Option<i32>,
+        sort_doc: &Document,
     ) -> Result<SendableRecordBatchStream> {
         let collection_name = table_reference.table();
         let coll = self.get_collection(collection_name);
@@ -96,6 +96,10 @@ impl MongoDBConnection {
         let mut find = coll
             .find(filters_doc.clone())
             .projection(schema_to_mongo_projection(projected_schema));
+
+        if !sort_doc.is_empty() {
+            find = find.sort(sort_doc.clone());
+        }
 
         if let Some(l) = limit {
             find = find.limit(l.into());
@@ -106,7 +110,8 @@ impl MongoDBConnection {
         let projected_schema_clone = Arc::clone(projected_schema);
         let unnest_parameters = self.unnest_parameters.clone();
 
-        let mut batch_stream = Box::pin(stream! {
+        let schema = Arc::clone(projected_schema);
+        let batch_stream = stream! {
             for await chunk in chunked_stream {
                 match chunk {
                     Ok(docs) => {
@@ -123,26 +128,13 @@ impl MongoDBConnection {
                     Err(e) => yield Err(Error::QueryError { source: Box::new(e) }),
                 }
             }
-        });
-
-        let Some(first_batch_result) = batch_stream.next().await else {
-            return Ok(Box::pin(RecordBatchStreamAdapter::new(
-                Arc::new(Schema::empty()),
-                futures::stream::empty().boxed(),
-            )));
         };
 
-        let first_batch = first_batch_result?;
-        let schema = first_batch.schema();
-
-        let full_stream = Box::pin(stream! {
-            yield Ok(first_batch);
-            while let Some(batch_result) = batch_stream.next().await {
-                yield batch_result.map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()));
-            }
-        });
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, full_stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            Box::pin(batch_stream)
+                .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string())),
+        )))
     }
 }
 
@@ -153,9 +145,57 @@ pub fn schema_to_mongo_projection(projected_schema: &SchemaRef) -> Document {
         return projection;
     }
 
+    let has_id = projected_schema.fields().iter().any(|f| f.name() == "_id");
+
     for field in projected_schema.fields() {
         projection.insert(field.name(), 1);
     }
 
+    // MongoDB always includes _id unless explicitly suppressed
+    if !has_id {
+        projection.insert("_id", 0);
+    }
+
     projection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use mongodb::bson::doc;
+
+    #[test]
+    fn test_projection_with_id() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("_id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let projection = schema_to_mongo_projection(&schema);
+        assert_eq!(projection, doc! { "_id": 1, "name": 1 });
+    }
+
+    #[test]
+    fn test_projection_without_id_suppresses() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+        ]));
+        let projection = schema_to_mongo_projection(&schema);
+        assert_eq!(projection, doc! { "name": 1, "age": 1, "_id": 0 });
+    }
+
+    #[test]
+    fn test_projection_empty_schema() {
+        let schema = Arc::new(Schema::empty());
+        let projection = schema_to_mongo_projection(&schema);
+        assert!(projection.is_empty());
+    }
+
+    #[test]
+    fn test_projection_single_field() {
+        let schema = Arc::new(Schema::new(vec![Field::new("email", DataType::Utf8, true)]));
+        let projection = schema_to_mongo_projection(&schema);
+        assert_eq!(projection, doc! { "email": 1, "_id": 0 });
+    }
 }
