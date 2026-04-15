@@ -1,8 +1,10 @@
 use crate::mongodb::{Error, InvalidDecimalSnafu, Result};
 use arrow::array::{
-    ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float64Builder,
-    Int32Builder, Int64Builder, ListBuilder, NullBuilder, RecordBatch, StringBuilder,
-    TimestampMillisecondBuilder,
+    ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder, Decimal128Builder,
+    Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
+    LargeBinaryBuilder, LargeStringBuilder, ListBuilder, NullBuilder, RecordBatch, StringBuilder,
+    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+    TimestampSecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
 };
 use chrono::{LocalResult, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -49,14 +51,39 @@ pub fn mongo_docs_to_arrow(
 fn create_empty_array(data_type: &DataType) -> ArrayRef {
     match data_type {
         DataType::Boolean => Arc::new(BooleanBuilder::new().finish()),
+        DataType::Int8 => Arc::new(Int8Builder::new().finish()),
+        DataType::Int16 => Arc::new(Int16Builder::new().finish()),
         DataType::Int32 => Arc::new(Int32Builder::new().finish()),
         DataType::Int64 => Arc::new(Int64Builder::new().finish()),
+        DataType::UInt8 => Arc::new(UInt8Builder::new().finish()),
+        DataType::UInt16 => Arc::new(UInt16Builder::new().finish()),
+        DataType::UInt32 => Arc::new(UInt32Builder::new().finish()),
+        DataType::UInt64 => Arc::new(UInt64Builder::new().finish()),
+        DataType::Float32 => Arc::new(Float32Builder::new().finish()),
         DataType::Float64 => Arc::new(Float64Builder::new().finish()),
         DataType::Utf8 => Arc::new(StringBuilder::new().finish()),
+        DataType::LargeUtf8 => Arc::new(LargeStringBuilder::new().finish()),
         DataType::Binary => Arc::new(BinaryBuilder::new().finish()),
+        DataType::LargeBinary => Arc::new(LargeBinaryBuilder::new().finish()),
         DataType::Date32 => Arc::new(Date32Builder::new().finish()),
+        DataType::Date64 => Arc::new(Date64Builder::new().finish()),
+        DataType::Timestamp(TimeUnit::Second, tz_opt) => Arc::new(
+            TimestampSecondBuilder::new()
+                .with_timezone_opt(tz_opt.clone())
+                .finish(),
+        ),
         DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => Arc::new(
             TimestampMillisecondBuilder::new()
+                .with_timezone_opt(tz_opt.clone())
+                .finish(),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => Arc::new(
+            TimestampMicrosecondBuilder::new()
+                .with_timezone_opt(tz_opt.clone())
+                .finish(),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => Arc::new(
+            TimestampNanosecondBuilder::new()
                 .with_timezone_opt(tz_opt.clone())
                 .finish(),
         ),
@@ -86,15 +113,25 @@ fn create_builders(schema: &SchemaRef, capacity: usize) -> Result<BuilderMap, Er
     for field in schema.fields() {
         let builder: Box<dyn ArrayBuilderTrait> = match field.data_type() {
             DataType::Boolean => Box::new(BooleanArrayBuilder::new(capacity)),
+            DataType::Int8 => Box::new(Int8ArrayBuilder::new(capacity)),
+            DataType::Int16 => Box::new(Int16ArrayBuilder::new(capacity)),
             DataType::Int32 => Box::new(Int32ArrayBuilder::new(capacity)),
             DataType::Int64 => Box::new(Int64ArrayBuilder::new(capacity)),
+            DataType::UInt8 => Box::new(UInt8ArrayBuilder::new(capacity)),
+            DataType::UInt16 => Box::new(UInt16ArrayBuilder::new(capacity)),
+            DataType::UInt32 => Box::new(UInt32ArrayBuilder::new(capacity)),
+            DataType::UInt64 => Box::new(UInt64ArrayBuilder::new(capacity)),
+            DataType::Float32 => Box::new(Float32ArrayBuilder::new(capacity)),
             DataType::Float64 => Box::new(Float64ArrayBuilder::new(capacity)),
             DataType::Utf8 => Box::new(StringArrayBuilder::new(capacity)),
+            DataType::LargeUtf8 => Box::new(LargeStringArrayBuilder::new(capacity)),
             DataType::Binary => Box::new(BinaryArrayBuilder::new(capacity)),
-            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                Box::new(TimestampArrayBuilder::new(capacity, tz_opt.clone()))
+            DataType::LargeBinary => Box::new(LargeBinaryArrayBuilder::new(capacity)),
+            DataType::Timestamp(unit, tz_opt) => {
+                Box::new(TimestampArrayBuilder::new(capacity, *unit, tz_opt.clone()))
             }
             DataType::Date32 => Box::new(Date32ArrayBuilder::new(capacity)),
+            DataType::Date64 => Box::new(Date64ArrayBuilder::new(capacity)),
             DataType::Decimal128(precision, scale) => {
                 Box::new(Decimal128ArrayBuilder::new(capacity, *precision, *scale)?)
             }
@@ -149,19 +186,36 @@ fn finish_builders(mut builders: BuilderMap, schema: &SchemaRef) -> Result<Vec<A
 }
 
 struct BooleanArrayBuilder(BooleanBuilder);
+struct Int8ArrayBuilder(Int8Builder);
+struct Int16ArrayBuilder(Int16Builder);
 struct Int32ArrayBuilder(Int32Builder);
 struct Int64ArrayBuilder(Int64Builder);
+struct UInt8ArrayBuilder(UInt8Builder);
+struct UInt16ArrayBuilder(UInt16Builder);
+struct UInt32ArrayBuilder(UInt32Builder);
+struct UInt64ArrayBuilder(UInt64Builder);
+struct Float32ArrayBuilder(Float32Builder);
 struct Float64ArrayBuilder(Float64Builder);
 struct StringArrayBuilder(StringBuilder);
+struct LargeStringArrayBuilder(LargeStringBuilder);
 struct BinaryArrayBuilder(BinaryBuilder);
-struct TimestampArrayBuilder(TimestampMillisecondBuilder);
+struct LargeBinaryArrayBuilder(LargeBinaryBuilder);
 struct Date32ArrayBuilder(Date32Builder);
+struct Date64ArrayBuilder(Date64Builder);
 pub struct Decimal128ArrayBuilder {
     builder: Decimal128Builder,
     scale: i8,
 }
 struct ListArrayBuilder(ListBuilder<StringBuilder>);
 struct NullArrayBuilder(NullBuilder);
+
+/// Timestamp builder that supports all time units (Second, Millisecond, Microsecond, Nanosecond).
+enum TimestampArrayBuilder {
+    Second(TimestampSecondBuilder),
+    Millisecond(TimestampMillisecondBuilder),
+    Microsecond(TimestampMicrosecondBuilder),
+    Nanosecond(TimestampNanosecondBuilder),
+}
 
 impl BooleanArrayBuilder {
     fn new(capacity: usize) -> Self {
@@ -187,6 +241,50 @@ impl ArrayBuilderTrait for BooleanArrayBuilder {
 impl Int32ArrayBuilder {
     fn new(capacity: usize) -> Self {
         Self(Int32Builder::with_capacity(capacity))
+    }
+}
+
+impl Int8ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(Int8Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for Int8ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= i8::MIN as i32 && *i <= i8::MAX as i32 => {
+                self.0.append_value(*i as i8)
+            }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl Int16ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(Int16Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for Int16ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= i16::MIN as i32 && *i <= i16::MAX as i32 => {
+                self.0.append_value(*i as i16)
+            }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
     }
 }
 
@@ -225,6 +323,115 @@ impl ArrayBuilderTrait for Int64ArrayBuilder {
         Ok(())
     }
 
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl UInt8ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(UInt8Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for UInt8ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= 0 && *i <= u8::MAX as i32 => {
+                self.0.append_value(*i as u8)
+            }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl UInt16ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(UInt16Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for UInt16ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= 0 && *i <= u16::MAX as i32 => {
+                self.0.append_value(*i as u16)
+            }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl UInt32ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(UInt32Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for UInt32ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= 0 => self.0.append_value(*i as u32),
+            Some(Bson::Int64(i)) if *i >= 0 && *i <= u32::MAX as i64 => {
+                self.0.append_value(*i as u32)
+            }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl UInt64ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(UInt64Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for UInt64ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Int32(i)) if *i >= 0 => self.0.append_value(*i as u64),
+            Some(Bson::Int64(i)) if *i >= 0 => self.0.append_value(*i as u64),
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl Float32ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(Float32Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for Float32ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Double(d)) => self.0.append_value(*d as f32),
+            Some(Bson::Int32(i)) => self.0.append_value(*i as f32),
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
     fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
         Ok(Arc::new(self.0.finish()))
     }
@@ -306,17 +513,47 @@ impl ArrayBuilderTrait for BinaryArrayBuilder {
     }
 }
 
-impl TimestampArrayBuilder {
-    fn new(capacity: usize, tz: Option<Arc<str>>) -> Self {
-        Self(TimestampMillisecondBuilder::with_capacity(capacity).with_timezone_opt(tz))
+impl LargeStringArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(LargeStringBuilder::with_capacity(capacity, 1024))
     }
 }
 
-impl ArrayBuilderTrait for TimestampArrayBuilder {
+impl ArrayBuilderTrait for LargeStringArrayBuilder {
     fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
         match value {
-            Some(Bson::DateTime(dt)) => self.0.append_value(dt.timestamp_millis()),
-            Some(Bson::Timestamp(ts)) => self.0.append_value((ts.time as i64) * 1000),
+            Some(Bson::String(s)) => self.0.append_value(s),
+            Some(Bson::ObjectId(oid)) => self.0.append_value(oid.to_hex()),
+            Some(Bson::Document(doc)) => {
+                let json_str = serde_json::to_string(doc).map_err(|e| Error::ConversionError {
+                    source: Box::new(e),
+                })?;
+                self.0.append_value(&json_str);
+            }
+            Some(Bson::Null) => self.0.append_null(),
+            Some(other) => {
+                self.0.append_value(format!("{other}"));
+            }
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl LargeBinaryArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(LargeBinaryBuilder::with_capacity(capacity, 1024))
+    }
+}
+
+impl ArrayBuilderTrait for LargeBinaryArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            Some(Bson::Binary(binary)) => self.0.append_value(&binary.bytes),
             Some(_) => self.0.append_null(),
             None => self.0.append_null(),
         }
@@ -325,6 +562,65 @@ impl ArrayBuilderTrait for TimestampArrayBuilder {
 
     fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
         Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl TimestampArrayBuilder {
+    fn new(capacity: usize, unit: TimeUnit, tz: Option<Arc<str>>) -> Self {
+        match unit {
+            TimeUnit::Second => TimestampArrayBuilder::Second(
+                TimestampSecondBuilder::with_capacity(capacity).with_timezone_opt(tz),
+            ),
+            TimeUnit::Millisecond => TimestampArrayBuilder::Millisecond(
+                TimestampMillisecondBuilder::with_capacity(capacity).with_timezone_opt(tz),
+            ),
+            TimeUnit::Microsecond => TimestampArrayBuilder::Microsecond(
+                TimestampMicrosecondBuilder::with_capacity(capacity).with_timezone_opt(tz),
+            ),
+            TimeUnit::Nanosecond => TimestampArrayBuilder::Nanosecond(
+                TimestampNanosecondBuilder::with_capacity(capacity).with_timezone_opt(tz),
+            ),
+        }
+    }
+}
+
+impl ArrayBuilderTrait for TimestampArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        // Extract millisecond timestamp from BSON
+        let millis = match value {
+            Some(Bson::DateTime(dt)) => Some(dt.timestamp_millis()),
+            Some(Bson::Timestamp(ts)) => Some((ts.time as i64) * 1000),
+            _ => None,
+        };
+
+        match self {
+            TimestampArrayBuilder::Second(b) => match millis {
+                Some(ms) => b.append_value(ms / 1000),
+                None => b.append_null(),
+            },
+            TimestampArrayBuilder::Millisecond(b) => match millis {
+                Some(ms) => b.append_value(ms),
+                None => b.append_null(),
+            },
+            TimestampArrayBuilder::Microsecond(b) => match millis {
+                Some(ms) => b.append_value(ms * 1000),
+                None => b.append_null(),
+            },
+            TimestampArrayBuilder::Nanosecond(b) => match millis {
+                Some(ms) => b.append_value(ms * 1_000_000),
+                None => b.append_null(),
+            },
+        }
+        Ok(())
+    }
+
+    fn finish_builder(self: Box<Self>) -> Result<ArrayRef, Error> {
+        match *self {
+            TimestampArrayBuilder::Second(mut b) => Ok(Arc::new(b.finish())),
+            TimestampArrayBuilder::Millisecond(mut b) => Ok(Arc::new(b.finish())),
+            TimestampArrayBuilder::Microsecond(mut b) => Ok(Arc::new(b.finish())),
+            TimestampArrayBuilder::Nanosecond(mut b) => Ok(Arc::new(b.finish())),
+        }
     }
 }
 
@@ -350,6 +646,29 @@ impl ArrayBuilderTrait for Date32ArrayBuilder {
                     _ => self.0.append_null(),
                 }
             }
+            Some(_) => self.0.append_null(),
+            None => self.0.append_null(),
+        }
+        Ok(())
+    }
+
+    fn finish_builder(mut self: Box<Self>) -> Result<ArrayRef, Error> {
+        Ok(Arc::new(self.0.finish()))
+    }
+}
+
+impl Date64ArrayBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(Date64Builder::with_capacity(capacity))
+    }
+}
+
+impl ArrayBuilderTrait for Date64ArrayBuilder {
+    fn append_bson(&mut self, value: Option<&Bson>) -> Result<(), Error> {
+        match value {
+            // Arrow Date64 is milliseconds since Unix epoch
+            Some(Bson::DateTime(dt)) => self.0.append_value(dt.timestamp_millis()),
+            Some(Bson::Timestamp(ts)) => self.0.append_value((ts.time as i64) * 1000),
             Some(_) => self.0.append_null(),
             None => self.0.append_null(),
         }
@@ -1199,6 +1518,308 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(z_array.value(0), "last");
+    }
+
+    // --- Tests for new builder types ---
+
+    #[test]
+    fn test_int8_builder() {
+        let docs = vec![
+            doc! { "val": 42_i32 },
+            doc! { "val": -128_i32 },
+            doc! { "val": 127_i32 },
+            doc! { "val": 200_i32 }, // out of i8 range → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::Int8, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 42);
+        assert_eq!(arr.value(1), -128);
+        assert_eq!(arr.value(2), 127);
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_int16_builder() {
+        let docs = vec![
+            doc! { "val": 1000_i32 },
+            doc! { "val": -32768_i32 },
+            doc! { "val": 32767_i32 },
+            doc! { "val": 40000_i32 }, // out of i16 range → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::Int16, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int16Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 1000);
+        assert_eq!(arr.value(1), -32768);
+        assert_eq!(arr.value(2), 32767);
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_uint8_builder() {
+        let docs = vec![
+            doc! { "val": 0_i32 },
+            doc! { "val": 255_i32 },
+            doc! { "val": -1_i32 },  // negative → null
+            doc! { "val": 256_i32 }, // too large → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::UInt8, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 255);
+        assert!(arr.is_null(2));
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_uint16_builder() {
+        let docs = vec![
+            doc! { "val": 0_i32 },
+            doc! { "val": 65535_i32 },
+            doc! { "val": -1_i32 },    // negative → null
+            doc! { "val": 65536_i32 }, // too large → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::UInt16, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 65535);
+        assert!(arr.is_null(2));
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_uint32_builder() {
+        let docs = vec![
+            doc! { "val": 0_i32 },
+            doc! { "val": 100_i64 },
+            doc! { "val": (u32::MAX as i64) },
+            doc! { "val": -1_i32 }, // negative → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::UInt32, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 100);
+        assert_eq!(arr.value(2), u32::MAX);
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_uint64_builder() {
+        let docs = vec![
+            doc! { "val": 0_i32 },
+            doc! { "val": 100_i64 },
+            doc! { "val": -1_i32 }, // negative → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::UInt64, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 100);
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_float32_builder() {
+        let docs = vec![
+            doc! { "val": 3.14_f64 },
+            doc! { "val": 42_i32 },
+            doc! { "val": "not_a_number" }, // wrong type → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::Float32,
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        assert!((arr.value(0) - 3.14_f32).abs() < 0.001);
+        assert_eq!(arr.value(1), 42.0_f32);
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_large_utf8_builder() {
+        let oid = ObjectId::new();
+        let docs = vec![
+            doc! { "val": "hello" },
+            doc! { "val": oid },
+            doc! { "val": { "nested": true } },
+            doc! { "val": Bson::Null },
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::LargeUtf8,
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap();
+        assert_eq!(arr.value(0), "hello");
+        assert_eq!(arr.value(1), oid.to_hex());
+        let parsed: serde_json::Value = serde_json::from_str(arr.value(2)).unwrap();
+        assert_eq!(parsed["nested"], true);
+        assert!(arr.is_null(3));
+    }
+
+    #[test]
+    fn test_large_binary_builder() {
+        let data = vec![1u8, 2, 3, 4, 5];
+        let docs = vec![
+            doc! { "val": Binary { subtype: BinarySubtype::Generic, bytes: data.clone() } },
+            doc! { "val": Bson::Null },
+            doc! { "val": "not_binary" }, // wrong type → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::LargeBinary,
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+        assert_eq!(arr.value(0), data);
+        assert!(arr.is_null(1));
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_date64_builder() {
+        let dt = DateTime::from_millis(1_700_000_000_000);
+        let ts = Timestamp {
+            time: 1_700_000_000,
+            increment: 1,
+        };
+        let docs = vec![
+            doc! { "val": dt },
+            doc! { "val": ts },
+            doc! { "val": "not_a_date" }, // wrong type → null
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new("val", DataType::Date64, true)]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Date64Array>()
+            .unwrap();
+        assert_eq!(arr.value(0), 1_700_000_000_000);
+        assert_eq!(arr.value(1), 1_700_000_000_000);
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn test_timestamp_second_builder() {
+        let dt = DateTime::from_millis(1_700_000_000_000);
+        let docs = vec![doc! { "val": dt }];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::Timestamp(TimeUnit::Second, None),
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampSecondArray>()
+            .unwrap();
+        assert_eq!(arr.value(0), 1_700_000_000);
+    }
+
+    #[test]
+    fn test_timestamp_microsecond_builder() {
+        let dt = DateTime::from_millis(1_700_000_000_000);
+        let docs = vec![doc! { "val": dt }];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(arr.value(0), 1_700_000_000_000_000);
+    }
+
+    #[test]
+    fn test_timestamp_nanosecond_builder() {
+        let dt = DateTime::from_millis(1_700_000_000_000);
+        let docs = vec![doc! { "val": dt }];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "val",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+        let result = mongo_docs_to_arrow(&docs, schema).unwrap();
+        let arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(arr.value(0), 1_700_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_empty_batch_new_types() {
+        let docs: Vec<Document> = vec![];
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int8, true),
+            Field::new("b", DataType::Int16, true),
+            Field::new("c", DataType::UInt8, true),
+            Field::new("d", DataType::UInt16, true),
+            Field::new("e", DataType::UInt32, true),
+            Field::new("f", DataType::UInt64, true),
+            Field::new("g", DataType::Float32, true),
+            Field::new("h", DataType::LargeUtf8, true),
+            Field::new("i", DataType::LargeBinary, true),
+            Field::new("j", DataType::Date64, true),
+            Field::new("k", DataType::Timestamp(TimeUnit::Second, None), true),
+            Field::new("l", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new("m", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let result = mongo_docs_to_arrow(&docs, schema.clone()).unwrap();
+        assert_eq!(result.num_rows(), 0);
+        assert_eq!(result.num_columns(), 13);
+        assert_eq!(result.schema(), schema);
     }
 }
 
