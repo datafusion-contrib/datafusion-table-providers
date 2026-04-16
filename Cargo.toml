@@ -41,7 +41,7 @@ arrow-json = "57.1.0"
 arrow-odbc = { version = "23.1" }
 datafusion = { version = "52", default-features = false }
 datafusion-expr = { version = "52" }
-datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "bda2122883a184ab8e23b2af2728fefc6631f21a" }
+datafusion-federation = { git = "https://github.com/spiceai/datafusion-federation.git", rev = "f7fd1d68f3411f369f10b1be86808cbcb634f5db" }
 datafusion-ffi = { version = "52" }
 datafusion-proto = { version = "52" }
 datafusion-physical-expr = { version = "52" }
