@@ -867,8 +867,7 @@ mod tests {
             let pool = Arc::new(MockDBPool {})
                 as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
             let table_ref = TableReference::parse_str("zz_users");
-            let sql_table =
-                SqlTable::new_with_schema("users", &pool, schema, table_ref, None);
+            let sql_table = SqlTable::new_with_schema("users", &pool, schema, table_ref, None);
 
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
             assert_eq!(result, "SELECT zz_safe_identifier FROM zz_users");
