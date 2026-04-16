@@ -789,7 +789,10 @@ mod test {
     use super::*;
     use crate::{
         duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
-        util::{column_reference::ColumnReference, indexes::IndexType},
+        util::{
+            column_reference::ColumnReference, constraints::tests::get_pk_constraints,
+            indexes::IndexType,
+        },
     };
 
     #[tokio::test]
@@ -1386,5 +1389,119 @@ mod test {
         assert_eq!(rows, 1);
 
         tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_skips_pk_constraint_validation_with_duplicate_pks() {
+        // Test scenario: Overwrite a table whose definition has a PRIMARY KEY constraint,
+        // using incoming data that contains duplicate primary-key values.
+        // Expected behavior: Overwrite succeeds because constraint validation is skipped
+        // for Overwrite (and the staging table is created without constraints).
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_constraints(get_pk_constraints(&["id"], Arc::clone(&schema))),
+        );
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Overwrite,
+            None,
+            Arc::clone(&schema),
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        // Duplicate primary keys in incoming batch.
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, Arc::clone(&schema), None).expect("to get stream"),
+        );
+
+        data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await
+            .expect("overwrite should succeed despite duplicate primary keys");
+
+        let mut conn = pool.connect_sync().expect("to connect");
+        let duckdb = DuckDB::duckdb_conn(&mut conn).expect("to get duckdb conn");
+        let tx = duckdb.conn.transaction().expect("to begin transaction");
+
+        let view_rows = tx
+            .query_row(
+                &format!(
+                    "SELECT COUNT(1) FROM {view_name}",
+                    view_name = table_definition.name()
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("to get count");
+        assert_eq!(view_rows, 3);
+
+        tx.rollback().expect("to rollback");
+    }
+
+    #[tokio::test]
+    async fn test_append_still_enforces_pk_constraint_validation() {
+        // Test scenario: Append mode should still enforce constraint validation.
+        // Expected behavior: Appending a batch with duplicate primary keys fails
+        // (regression guard ensuring the Overwrite-only skip didn't regress Append).
+        let _guard = init_tracing(None);
+        let pool = get_mem_duckdb();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        ]));
+        let table_definition = Arc::new(
+            TableDefinition::new(RelationName::new("test_table"), Arc::clone(&schema))
+                .with_constraints(get_pk_constraints(&["id"], Arc::clone(&schema))),
+        );
+
+        let duckdb_sink = DuckDBDataSink::new(
+            Arc::clone(&pool),
+            Arc::clone(&table_definition),
+            InsertOp::Append,
+            None,
+            Arc::clone(&schema),
+        );
+        let data_sink: Arc<dyn DataSink> = Arc::new(duckdb_sink);
+
+        let batches = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(1)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .expect("should create a record batch")];
+
+        let stream = Box::pin(
+            MemoryStream::try_new(batches, Arc::clone(&schema), None).expect("to get stream"),
+        );
+
+        let result = data_sink
+            .write_all(stream, &Arc::new(TaskContext::default()))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Append with duplicate primary keys should fail constraint validation"
+        );
     }
 }
