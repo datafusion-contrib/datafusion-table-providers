@@ -120,3 +120,114 @@ async fn test_arrow_duckdb_roundtrip(
     )
     .await;
 }
+
+mod sort_limit_pushdown {
+    use super::*;
+    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    async fn setup_table(ctx: &SessionContext, name: &str) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+
+        // 20 rows: id = 1..=20
+        let ids: Vec<i32> = (1..=20).collect();
+        let labels: Vec<String> = ids.iter().map(|i| format!("row-{i:02}")).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(StringArray::from(labels)),
+            ],
+        )
+        .unwrap();
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let cmd = CreateExternalTable {
+            schema: Arc::new(batch.schema().to_dfschema().unwrap()),
+            name: name.into(),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+        let table = factory.create(&ctx.state(), &cmd).await.unwrap();
+        let mem =
+            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)
+                .unwrap();
+        let insert = table
+            .insert_into(&ctx.state(), mem, InsertOp::Append)
+            .await
+            .unwrap();
+        let _ = collect(insert, ctx.task_ctx()).await.unwrap();
+        ctx.register_table(name, table).unwrap();
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_returns_exactly_n_rows() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![20, 19, 18, 17, 16], "top-5 DESC rows");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_with_filter() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_filter_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_filter_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 3);
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![11, 12, 13]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn limit_without_order_by() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "limit_only_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM limit_only_test LIMIT 7")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 7, "LIMIT without ORDER BY must still cap rows");
+    }
+}

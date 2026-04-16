@@ -289,12 +289,9 @@ impl ExecutionPlan for MongoDBExec {
         // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
         // above us. Exact would replace the SortExec with `inner`, which loses the
         // SortExec's embedded fetch (`ORDER BY ... LIMIT N` is represented as a
-        // single SortExec with fetch=N). Keeping the SortExec preserves the fetch
-        // as a TopK applied to our already-sorted MongoDB output — correct, though
-        // currently missing the ability to push the fetch all the way down into the
-        // MongoDB query itself. DataFusion 52 does not pass the fetch to
-        // try_pushdown_sort; once that's fixed upstream, we can switch to Exact and
-        // absorb the limit directly.
+        // single SortExec with fetch=N in DF 52). Keeping the SortExec preserves the
+        // fetch as a TopK applied to our already-sorted SQL output.
+        // We can use Exact once we use DF version which includes PR https://github.com/apache/datafusion/pull/21182
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_exec),
         })
@@ -918,4 +915,5 @@ mod tests {
             "Limit exceeding i32::MAX should return None"
         );
     }
+
 }

@@ -198,6 +198,92 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_json_type(container_manager.port).await;
     test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
     test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
+    test_postgres_sort_limit(container_manager.port).await;
+}
+
+async fn test_postgres_sort_limit(port: usize) {
+    let ctx = SessionContext::new();
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    // Prepare table: 20 rows with id = 1..=20.
+    let _ = db_conn
+        .conn
+        .execute("DROP TABLE IF EXISTS sort_limit_test", &[])
+        .await
+        .expect("table should be droppable");
+    let _ = db_conn
+        .conn
+        .execute(
+            "CREATE TABLE sort_limit_test (id INT NOT NULL, label TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+    let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
+    let insert_stmt = format!(
+        "INSERT INTO sort_limit_test (id, label) VALUES {}",
+        values.join(",")
+    );
+    let _ = db_conn
+        .conn
+        .execute(&insert_stmt, &[])
+        .await
+        .expect("INSERT should succeed");
+
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, "sort_limit_test", None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table("sort_limit_test", Arc::new(table))
+        .expect("Table should be registered");
+
+    // 1. ORDER BY DESC + LIMIT 5 must return exactly 5 rows, top-down.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("id column is Int32");
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![20, 19, 18, 17, 16]);
+
+    // 2. ORDER BY + LIMIT with WHERE.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3);
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![11, 12, 13]);
+
+    // 3. Bare LIMIT (no ORDER BY) must still cap rows.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test LIMIT 7")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 7);
 }
 
 async fn test_postgres_enum_type(port: usize) {
