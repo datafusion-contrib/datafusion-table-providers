@@ -228,6 +228,31 @@ impl ExecutionPlan for MongoDBExec {
         Ok(self)
     }
 
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.limit.and_then(|l| usize::try_from(l).ok())
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_limit = match limit {
+            Some(u) => Some(i32::try_from(u).ok()?),
+            None => None,
+        };
+
+        Some(Arc::new(MongoDBExec {
+            table_reference: Arc::clone(&self.table_reference),
+            pool: Arc::clone(&self.pool),
+            projected_schema: Arc::clone(&self.projected_schema),
+            filters_doc: self.filters_doc.clone(),
+            sort_doc: self.sort_doc.clone(),
+            limit: new_limit,
+            properties: self.properties.clone(),
+        }))
+    }
+
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
@@ -261,7 +286,16 @@ impl ExecutionPlan for MongoDBExec {
         );
         new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
 
-        Ok(SortOrderPushdownResult::Exact {
+        // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
+        // above us. Exact would replace the SortExec with `inner`, which loses the
+        // SortExec's embedded fetch (`ORDER BY ... LIMIT N` is represented as a
+        // single SortExec with fetch=N). Keeping the SortExec preserves the fetch
+        // as a TopK applied to our already-sorted MongoDB output — correct, though
+        // currently missing the ability to push the fetch all the way down into the
+        // MongoDB query itself. DataFusion 52 does not pass the fetch to
+        // try_pushdown_sort; once that's fixed upstream, we can switch to Exact and
+        // absorb the limit directly.
+        Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_exec),
         })
     }
@@ -659,7 +693,7 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
                 let display = format_exec(mongo_exec);
@@ -668,7 +702,7 @@ mod tests {
                     "Display should show sort: {display}"
                 );
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -690,11 +724,11 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "age": -1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -725,11 +759,11 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1, "age": -1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -771,7 +805,7 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     !mongo_exec.filters_doc.is_empty(),
@@ -780,7 +814,7 @@ mod tests {
                 assert_eq!(mongo_exec.limit, Some(10), "Limit should be preserved");
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -792,14 +826,96 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&[]).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     mongo_exec.sort_doc.is_empty(),
                     "Empty sort should produce empty doc"
                 );
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
+    }
+
+    // --- Limit pushdown (with_fetch) ---
+
+    #[tokio::test]
+    async fn test_supports_limit_pushdown() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+        assert!(
+            exec.supports_limit_pushdown(),
+            "MongoDBExec should declare limit pushdown support"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_reports_current_limit() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec_unlimited =
+            MongoDBExec::new(Arc::clone(&table_ref), stub_pool(), Arc::clone(&schema), None, &[], None).unwrap();
+        assert_eq!(exec_unlimited.fetch(), None);
+
+        let exec_limited =
+            MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], Some(42)).unwrap();
+        assert_eq!(exec_limited.fetch(), Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_with_fetch_sets_limit() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        let with_fetch = exec.with_fetch(Some(5)).expect("should produce new plan");
+        let mongo_exec = with_fetch.as_any().downcast_ref::<MongoDBExec>().unwrap();
+        assert_eq!(mongo_exec.limit, Some(5));
+        let display = format_exec(mongo_exec);
+        assert!(
+            display.contains("limit=[5]"),
+            "Display should show pushed-down limit: {display}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_fetch_clears_limit() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], Some(100)).unwrap();
+
+        let with_fetch = exec.with_fetch(None).expect("should produce new plan");
+        let mongo_exec = with_fetch.as_any().downcast_ref::<MongoDBExec>().unwrap();
+        assert_eq!(mongo_exec.limit, None);
+    }
+
+    #[tokio::test]
+    async fn test_with_fetch_preserves_sort_and_filters() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let filters = vec![col("age").gt(lit(21))];
+        let mut exec =
+            MongoDBExec::new(table_ref, stub_pool(), schema, None, &filters, None).unwrap();
+        exec.sort_doc = doc! { "name": 1 };
+
+        let with_fetch = exec.with_fetch(Some(10)).expect("should produce new plan");
+        let mongo_exec = with_fetch.as_any().downcast_ref::<MongoDBExec>().unwrap();
+        assert_eq!(mongo_exec.limit, Some(10));
+        assert!(!mongo_exec.filters_doc.is_empty(), "filters preserved");
+        assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 }, "sort preserved");
+    }
+
+    #[tokio::test]
+    async fn test_with_fetch_too_large_returns_none() {
+        let schema = test_schema();
+        let table_ref = Arc::new(TableReference::bare("users"));
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, None, &[], None).unwrap();
+
+        // usize::MAX won't fit in i32
+        assert!(
+            exec.with_fetch(Some(usize::MAX)).is_none(),
+            "Limit exceeding i32::MAX should return None"
+        );
     }
 }

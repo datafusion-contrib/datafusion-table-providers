@@ -1,5 +1,6 @@
 use datafusion::{
     logical_expr::{Expr, Operator},
+    logical_expr::expr::{Cast, TryCast},
     scalar::ScalarValue,
 };
 use mongodb::bson::{doc, Bson, Document, Regex as BsonRegex};
@@ -243,6 +244,9 @@ fn extract_string_literal(expr: &Expr) -> Option<String> {
 fn extract_column_name(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Column(col) => Some(col.name.clone()),
+        // Unwrap casts around columns (e.g., type coercion in comparisons)
+        Expr::Cast(cast) => extract_column_name(&cast.expr),
+        Expr::TryCast(cast) => extract_column_name(&cast.expr),
         _ => None,
     }
 }
@@ -250,6 +254,26 @@ fn extract_column_name(expr: &Expr) -> Option<String> {
 fn extract_literal_value(expr: &Expr) -> Option<Bson> {
     match expr {
         Expr::Literal(scalar, _) => scalar_to_bson(scalar),
+        // Handle Cast(Literal(...), target_type) by evaluating the cast and converting the result.
+        // Critical for timestamp/date filters: TIMESTAMP '2024-01-01' is parsed as
+        // TimestampNanosecond but columns are often Timestamp(Millisecond, Some("UTC")),
+        // and DataFusion wraps the literal in a Cast to reconcile.
+        Expr::Cast(Cast { expr, data_type }) => {
+            if let Expr::Literal(scalar, _) = expr.as_ref() {
+                let casted = scalar.cast_to(data_type).ok()?;
+                scalar_to_bson(&casted)
+            } else {
+                None
+            }
+        }
+        Expr::TryCast(TryCast { expr, data_type }) => {
+            if let Expr::Literal(scalar, _) = expr.as_ref() {
+                let casted = scalar.cast_to(data_type).ok()?;
+                scalar_to_bson(&casted)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -1485,5 +1509,176 @@ mod tests {
     fn test_sql_like_to_regex_multiple_underscores() {
         let regex = sql_like_to_regex("A___Z", None);
         assert_eq!(regex, "^A...Z$");
+    }
+
+    // --- Cast / TryCast handling ---
+
+    #[test]
+    fn test_cast_timestamp_literal_pushdown() {
+        use datafusion::arrow::datatypes::{DataType, TimeUnit};
+
+        // Simulates DataFusion's output for:
+        //   created_at >= TIMESTAMP '2024-06-01 00:00:00'
+        // when the column is Timestamp(Millisecond, Some("UTC")) but the SQL literal
+        // is parsed as Timestamp(Nanosecond, None) — DataFusion wraps the literal in a Cast.
+        let ns_value = 1_717_200_000_000_000_000_i64; // 2024-06-01T00:00:00Z
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(Expr::Literal(
+                ScalarValue::TimestampNanosecond(Some(ns_value), None),
+                None,
+            )),
+            data_type: DataType::Timestamp(
+                TimeUnit::Millisecond,
+                Some(std::sync::Arc::from("UTC")),
+            ),
+        });
+
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("created_at")),
+            op: Operator::GtEq,
+            right: Box::new(cast_expr),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected = doc! { "created_at": { "$gte": mongodb::bson::DateTime::from_millis(1_717_200_000_000) } };
+        assert_eq!(filter, expected);
+    }
+
+    #[test]
+    fn test_cast_int_literal_pushdown() {
+        use datafusion::arrow::datatypes::DataType;
+
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(lit(42_i32)),
+            data_type: DataType::Int64,
+        });
+
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("count")),
+            op: Operator::Gt,
+            right: Box::new(cast_expr),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected = doc! { "count": { "$gt": 42_i64 } };
+        assert_eq!(filter, expected);
+    }
+
+    #[test]
+    fn test_try_cast_literal_pushdown() {
+        use datafusion::arrow::datatypes::DataType;
+
+        let try_cast_expr = Expr::TryCast(TryCast {
+            expr: Box::new(lit(100_i32)),
+            data_type: DataType::Int64,
+        });
+
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(col("value")),
+            op: Operator::Eq,
+            right: Box::new(try_cast_expr),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected = doc! { "value": 100_i64 };
+        assert_eq!(filter, expected);
+    }
+
+    #[test]
+    fn test_cast_column_with_literal_pushdown() {
+        use datafusion::arrow::datatypes::DataType;
+
+        // Cast(col("age"), Int64) >= lit(30_i64) — column side wrapped in Cast
+        let cast_col = Expr::Cast(Cast {
+            expr: Box::new(col("age")),
+            data_type: DataType::Int64,
+        });
+
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(cast_col),
+            op: Operator::GtEq,
+            right: Box::new(lit(30_i64)),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected = doc! { "age": { "$gte": 30_i64 } };
+        assert_eq!(filter, expected);
+    }
+
+    #[test]
+    fn test_cast_timestamp_between_pushdown() {
+        use datafusion::arrow::datatypes::{DataType, TimeUnit};
+
+        let target_type =
+            DataType::Timestamp(TimeUnit::Millisecond, Some(std::sync::Arc::from("UTC")));
+        let low = Expr::Cast(Cast {
+            expr: Box::new(Expr::Literal(
+                ScalarValue::TimestampNanosecond(Some(1_704_067_200_000_000_000), None),
+                None,
+            )),
+            data_type: target_type.clone(),
+        });
+        let high = Expr::Cast(Cast {
+            expr: Box::new(Expr::Literal(
+                ScalarValue::TimestampNanosecond(Some(1_735_689_600_000_000_000), None),
+                None,
+            )),
+            data_type: target_type,
+        });
+
+        let expr = Expr::Between(datafusion::logical_expr::expr::Between {
+            expr: Box::new(col("created_at")),
+            negated: false,
+            low: Box::new(low),
+            high: Box::new(high),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected = doc! {
+            "created_at": {
+                "$gte": mongodb::bson::DateTime::from_millis(1_704_067_200_000),
+                "$lte": mongodb::bson::DateTime::from_millis(1_735_689_600_000),
+            }
+        };
+        assert_eq!(filter, expected);
+    }
+
+    #[test]
+    fn test_cast_unsupported_target_type_returns_none() {
+        use datafusion::arrow::datatypes::DataType;
+
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(lit("hello")),
+            data_type: DataType::Binary,
+        });
+        assert!(extract_literal_value(&cast_expr).is_none());
+    }
+
+    #[test]
+    fn test_cast_in_reversed_operand_order() {
+        use datafusion::arrow::datatypes::{DataType, TimeUnit};
+
+        let cast_expr = Expr::Cast(Cast {
+            expr: Box::new(Expr::Literal(
+                ScalarValue::TimestampNanosecond(Some(1_717_200_000_000_000_000), None),
+                None,
+            )),
+            data_type: DataType::Timestamp(
+                TimeUnit::Millisecond,
+                Some(std::sync::Arc::from("UTC")),
+            ),
+        });
+
+        // Cast(lit) > col  →  col < Cast(lit)
+        let expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(cast_expr),
+            op: Operator::Gt,
+            right: Box::new(col("created_at")),
+        });
+
+        let filter = expr_to_mongo_filter(&expr).unwrap();
+        let expected =
+            doc! { "created_at": { "$lt": mongodb::bson::DateTime::from_millis(1_717_200_000_000) } };
+        assert_eq!(filter, expected);
     }
 }
