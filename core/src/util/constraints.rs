@@ -102,6 +102,20 @@ impl TryFrom<&str> for UpsertOptions {
     }
 }
 
+/// Filters out `Unique` constraints, keeping only `PrimaryKey` constraints.
+/// This is useful for overwrite operations where we want to validate primary key
+/// uniqueness in the incoming data, but don't need to enforce additional unique constraints
+/// since we're replacing all data anyway.
+#[must_use]
+pub fn filter_unique_constraints(constraints: &Constraints) -> Constraints {
+    let filtered: Vec<Constraint> = constraints
+        .iter()
+        .filter(|c| matches!(c, Constraint::PrimaryKey(_)))
+        .cloned()
+        .collect();
+    Constraints::new_unverified(filtered)
+}
+
 /// The goal for this function is to determine if all of the data described in `batches` conforms to the constraints described in `constraints`.
 ///
 /// It does this by creating a memory table from the record batches and then running a query against the table to validate the constraints.

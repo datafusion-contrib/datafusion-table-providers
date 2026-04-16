@@ -158,6 +158,7 @@ impl DataSink for SqliteDataSink {
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
+        let overwrite_for_task = self.overwrite;
         let task = tokio::spawn(async move {
             let mut num_rows: u64 = 0;
             while let Some(data_batch) = data.next().await {
@@ -166,14 +167,18 @@ impl DataSink for SqliteDataSink {
                     DataFusionError::Execution(format!("Unable to convert num_rows() to u64: {e}"))
                 })?;
 
-                constraints::validate_batch_with_constraints(
-                    vec![data_batch.clone()],
-                    &constraints,
-                    &crate::util::constraints::UpsertOptions::default(),
-                )
-                .await
-                .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?;
+                // Skip constraint validation for Overwrite operations since we're replacing all data
+                // and uniqueness constraints don't apply to the incoming data in isolation.
+                if overwrite_for_task != InsertOp::Overwrite {
+                    constraints::validate_batch_with_constraints(
+                        vec![data_batch.clone()],
+                        &constraints,
+                        &crate::util::constraints::UpsertOptions::default(),
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+                }
 
                 batch_tx.send(data_batch).await.map_err(|err| {
                     DataFusionError::Execution(format!("Error sending data batch: {err}"))
@@ -213,10 +218,16 @@ impl DataSink for SqliteDataSink {
                                 &transaction,
                                 data_batch,
                                 on_conflict.as_ref(),
+                                overwrite,
                             )?;
                         } else {
                             #[allow(deprecated)]
-                            sqlite.insert_batch(&transaction, data_batch, on_conflict.as_ref())?;
+                            sqlite.insert_batch(
+                                &transaction,
+                                data_batch,
+                                on_conflict.as_ref(),
+                                overwrite,
+                            )?;
                         }
                     }
                 }
@@ -871,5 +882,126 @@ mod tests {
         assert!(!batches.is_empty(), "Should have results");
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2, "Should have 2 rows with id > 1");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_skips_pk_constraint_validation_with_duplicate_pks() {
+        // Test scenario: Overwrite a SQLite table with a PRIMARY KEY constraint using
+        // incoming data that contains duplicate primary-key values.
+        // Expected behavior: Overwrite succeeds because constraint validation is
+        // skipped for Overwrite and the final REPLACE INTO resolves duplicates.
+        use crate::util::constraints::tests::get_pk_constraints;
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("overwrite_dup_pk"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: get_pk_constraints(&["id"], Arc::clone(&schema)),
+            column_defaults: HashMap::default(),
+            temporary: false,
+            or_replace: false,
+        };
+
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let ids = Int64Array::from(vec![1, 1, 2]);
+        let names = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
+        let data = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids), Arc::new(names)])
+            .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Overwrite)
+            .await
+            .expect("insert_into should be built");
+
+        collect(insertion, ctx.task_ctx())
+            .await
+            .expect("overwrite with duplicate PKs should succeed");
+
+        // REPLACE INTO with duplicates in a single batch collapses to the final
+        // value per PK, leaving a single row per distinct id.
+        let scan = table
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .expect("scan should succeed");
+        let batches = collect(scan, ctx.task_ctx())
+            .await
+            .expect("collect should succeed");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2, "Should have 2 rows after overwrite");
+    }
+
+    #[tokio::test]
+    async fn test_append_still_enforces_pk_constraint_validation() {
+        // Test scenario: Append mode must still validate PK constraints.
+        // Expected behavior: Appending a batch with duplicate primary keys fails
+        // (regression guard ensuring the Overwrite-only skip didn't regress Append).
+        use crate::util::constraints::tests::get_pk_constraints;
+
+        let schema = Arc::new(Schema::new(vec![
+            datafusion::arrow::datatypes::Field::new("id", DataType::Int64, false),
+            datafusion::arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]));
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("append_dup_pk"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: get_pk_constraints(&["id"], Arc::clone(&schema)),
+            column_defaults: HashMap::default(),
+            temporary: false,
+            or_replace: false,
+        };
+
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let ids = Int64Array::from(vec![1, 1]);
+        let names = StringArray::from(vec![Some("a"), Some("b")]);
+        let data = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids), Arc::new(names)])
+            .expect("data should be created");
+
+        let exec = MockExec::new(vec![Ok(data)], Arc::clone(&schema));
+
+        let insertion = table
+            .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+            .await
+            .expect("insert_into should be built");
+
+        let result = collect(insertion, ctx.task_ctx()).await;
+        assert!(
+            result.is_err(),
+            "Append with duplicate primary keys should fail constraint validation"
+        );
     }
 }
