@@ -640,7 +640,13 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         );
         new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
 
-        Ok(SortOrderPushdownResult::Exact {
+        // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
+        // above us. Exact would replace the SortExec with `inner`, which loses the
+        // SortExec's embedded fetch (`ORDER BY ... LIMIT N` is represented as a
+        // single SortExec with fetch=N in DF 52). Keeping the SortExec preserves the
+        // fetch as a TopK applied to our already-sorted SQL output.
+        // We can use Exact once we use DF version which includes PR https://github.com/apache/datafusion/pull/21182
+        Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_exec),
         })
     }
@@ -965,7 +971,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -975,7 +981,7 @@ mod tests {
                         "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST"
                     );
                 }
-                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+                other => panic!("Expected Inexact, got {:?}", sort_result_name(&other)),
             }
         }
 
@@ -991,7 +997,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1001,7 +1007,7 @@ mod tests {
                         "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS LAST"
                     );
                 }
-                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+                other => panic!("Expected Inexact, got {:?}", sort_result_name(&other)),
             }
         }
 
@@ -1026,7 +1032,7 @@ mod tests {
             ];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1036,7 +1042,7 @@ mod tests {
                         "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS FIRST, \"name\" ASC NULLS LAST"
                     );
                 }
-                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+                other => panic!("Expected Inexact, got {:?}", sort_result_name(&other)),
             }
         }
 
@@ -1053,7 +1059,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1063,7 +1069,7 @@ mod tests {
                         "SELECT \"name\", \"age\" FROM \"users\" WHERE \"age\" > 30 ORDER BY \"name\" ASC NULLS FIRST LIMIT 10"
                     );
                 }
-                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+                other => panic!("Expected Inexact, got {:?}", sort_result_name(&other)),
             }
         }
 
@@ -1088,13 +1094,13 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let orderings = inner.properties().output_ordering();
                     assert!(orderings.is_some(), "Output ordering should be set");
                     let output_order = orderings.unwrap();
                     assert_eq!(output_order.len(), 1);
                 }
-                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+                other => panic!("Expected Inexact, got {:?}", sort_result_name(&other)),
             }
         }
 

@@ -1046,6 +1046,97 @@ INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
     assert_eq!(batch.schema().field(2).name(), "a");
 }
 
+async fn test_mysql_sort_limit(port: usize) {
+    let ctx = SessionContext::new();
+    let pool = common::get_mysql_connection_pool(port, None)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    // Prepare table: 20 rows with id = 1..=20.
+    let _ = db_conn
+        .execute("DROP TABLE IF EXISTS sort_limit_test", &[])
+        .await
+        .expect("table should be droppable");
+    let _ = db_conn
+        .execute(
+            "CREATE TABLE sort_limit_test (id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+            &[],
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+    let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
+    let insert_stmt = format!(
+        "INSERT INTO sort_limit_test (id, label) VALUES {}",
+        values.join(",")
+    );
+    let _ = db_conn
+        .execute(&insert_stmt, &[])
+        .await
+        .expect("INSERT should succeed");
+
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(
+        common::get_mysql_connection_pool(port, None)
+            .await
+            .expect("pool"),
+    );
+    let table = SqlTable::new("mysql", &sqltable_pool, "sort_limit_test", None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table("sort_limit_test", Arc::new(table))
+        .expect("Table should be registered");
+
+    // 1. ORDER BY DESC + LIMIT 5 must return exactly 5 rows, top-down.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("id column is Int32");
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![20, 19, 18, 17, 16]);
+
+    // 2. ORDER BY + LIMIT with WHERE.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3);
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![11, 12, 13]);
+
+    // 3. Bare LIMIT (no ORDER BY) must still cap rows.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test LIMIT 7")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 7);
+}
+
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {
@@ -1064,6 +1155,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_zero_date_type(port).await;
     test_mysql_nullability_constraints(port).await;
     test_mysql_projected_schema_column_reorder(port).await;
+    test_mysql_sort_limit(port).await;
 
     mysql_container.remove().await.expect("container to stop");
 }
