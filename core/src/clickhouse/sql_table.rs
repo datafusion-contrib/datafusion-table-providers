@@ -29,7 +29,8 @@ impl ClickHouseTable {
 
         let dialect: &dyn Dialect = &*self.dialect;
 
-        let quote_identifier = |identifier: &str| match dialect.identifier_quote_style(identifier) {
+        let quote_identifier = |identifier: &str| match dialect.identifier_quote_style(identifier)
+        {
             Some(quote) => format!("{quote}{identifier}{quote}"),
             None => identifier.to_string(),
         };
@@ -124,7 +125,9 @@ impl Display for ClickHouseTable {
 mod tests {
     use super::*;
     use crate::clickhouse::Arg;
-    use crate::sql::db_connection_pool::{clickhousepool::ClickHouseConnectionPool, JoinPushDown};
+    use crate::sql::db_connection_pool::{
+        clickhousepool::ClickHouseConnectionPool, JoinPushDown,
+    };
     use clickhouse::Client;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Constraints;
