@@ -32,33 +32,33 @@ mod common;
 async fn test_mysql_timestamp_types(port: usize) {
     let create_table_stmt = "
         CREATE TABLE timestamp_table (
-    timestamp_no_fraction TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP, 
-    timestamp_one_fraction TIMESTAMP(1),  
-    timestamp_two_fraction TIMESTAMP(2), 
-    timestamp_three_fraction TIMESTAMP(3),                   
+    timestamp_no_fraction TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
+    timestamp_one_fraction TIMESTAMP(1),
+    timestamp_two_fraction TIMESTAMP(2),
+    timestamp_three_fraction TIMESTAMP(3),
     timestamp_four_fraction TIMESTAMP(4),
     timestamp_five_fraction TIMESTAMP(5),
-    timestamp_six_fraction TIMESTAMP(6) 
+    timestamp_six_fraction TIMESTAMP(6)
 );
         ";
     let insert_table_stmt = "
 INSERT INTO timestamp_table (
-    timestamp_no_fraction, 
-    timestamp_one_fraction, 
-    timestamp_two_fraction, 
-    timestamp_three_fraction, 
-    timestamp_four_fraction, 
-    timestamp_five_fraction, 
+    timestamp_no_fraction,
+    timestamp_one_fraction,
+    timestamp_two_fraction,
+    timestamp_three_fraction,
+    timestamp_four_fraction,
+    timestamp_five_fraction,
     timestamp_six_fraction
-) 
-VALUES 
+)
+VALUES
 (
-    '2024-09-12 10:00:00',             
+    '2024-09-12 10:00:00',
     '2024-09-12 10:00:00.1',
     '2024-09-12 10:00:00.12',
     '2024-09-12 10:00:00.123',
-    '2024-09-12 10:00:00.1234',        
-    '2024-09-12 10:00:00.12345',       
+    '2024-09-12 10:00:00.1234',
+    '2024-09-12 10:00:00.12345',
     '2024-09-12 10:00:00.123456'
 );
         ";
@@ -197,13 +197,13 @@ async fn test_mysql_timestamp_tz_override(port: usize) {
 async fn test_mysql_datetime_types(port: usize) {
     let create_table_stmt = "
 CREATE TABLE datetime_table (
-    dt0 DATETIME(0),  
-    dt1 DATETIME(1), 
-    dt2 DATETIME(2), 
-    dt3 DATETIME(3), 
-    dt4 DATETIME(4), 
-    dt5 DATETIME(5), 
-    dt6 DATETIME(6)  
+    dt0 DATETIME(0),
+    dt1 DATETIME(1),
+    dt2 DATETIME(2),
+    dt3 DATETIME(3),
+    dt4 DATETIME(4),
+    dt5 DATETIME(5),
+    dt6 DATETIME(6)
 );
 
         ";
@@ -286,24 +286,24 @@ VALUES (
 async fn test_mysql_time_types(port: usize) {
     let create_table_stmt = "
 CREATE TABLE time_table (
-    t0 TIME(0),  
-    t1 TIME(1), 
-    t2 TIME(2), 
-    t3 TIME(3), 
-    t4 TIME(4), 
-    t5 TIME(5), 
+    t0 TIME(0),
+    t1 TIME(1),
+    t2 TIME(2),
+    t3 TIME(3),
+    t4 TIME(4),
+    t5 TIME(5),
     t6 TIME(6)
 );
         ";
     let insert_table_stmt = "
 INSERT INTO time_table (t0, t1, t2, t3, t4, t5, t6)
-VALUES 
-    ('12:30:00', 
-     '12:30:00.1', 
-     '12:30:00.12', 
-     '12:30:00.123', 
-     '12:30:00.1234', 
-     '12:30:00.12345', 
+VALUES
+    ('12:30:00',
+     '12:30:00.1',
+     '12:30:00.12',
+     '12:30:00.123',
+     '12:30:00.1234',
+     '12:30:00.12345',
      '12:30:00.123456');
         ";
 
@@ -477,7 +477,7 @@ CREATE TABLE string_table (
         ";
     let insert_table_stmt = "
 INSERT INTO string_table (name, data, fixed_name, fixed_data)
-VALUES 
+VALUES
 ('Alice', 'Alice', 'ALICE', 'abc'),
 ('Bob', 'Bob', 'BOB', 'bob1234567'),
 ('Charlie', 'Charlie', 'CHARLIE', '0123456789'),
@@ -588,8 +588,8 @@ async fn test_mysql_zero_date_type(port: usize) {
     let insert_table_stmt = "
         INSERT INTO zero_datetime_test_table (
             col_date, col_time, col_datetime, col_timestamp
-        ) 
-        VALUES 
+        )
+        VALUES
         -- Real Values
         ('2023-05-15', '10:00:00', '2024-09-12 10:00:00', '2024-09-12 10:00:00'),
         -- Null Values
@@ -968,6 +968,175 @@ async fn test_arrow_mysql_roundtrip(
     .await;
 }
 
+/// When SqlTable is created with new_with_schema, the projected schema may
+/// differ from MySQL's physical column order and may contain fewer columns.
+/// rows_to_arrow must reorder and filter the result columns to match the
+/// projected schema. This covers both the reordering fix (c26c407) and the
+/// column count mismatch fix (43ec55a) that caused BatchCoalescer to panic.
+async fn test_mysql_projected_schema_column_reorder(port: usize) {
+    let create_table_stmt = "
+CREATE TABLE reorder_table (
+    a INT,
+    b VARCHAR(50),
+    c DOUBLE,
+    d BOOLEAN
+);
+        ";
+    let insert_table_stmt = "
+INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
+        ";
+
+    // Projected schema has fewer columns than MySQL, in a different order
+    let reordered_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Float64, true),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("a", DataType::Int32, true),
+    ]));
+
+    let ctx = SessionContext::new();
+    let pool = common::get_mysql_connection_pool(port)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let _ = db_conn
+        .execute(create_table_stmt, &[])
+        .await
+        .expect("MySQL table should be created");
+
+    let _ = db_conn
+        .execute(insert_table_stmt, &[])
+        .await
+        .expect("MySQL table data should be inserted");
+
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(pool);
+
+    let table = SqlTable::new_with_schema(
+        "mysql",
+        &sqltable_pool,
+        reordered_schema.clone(),
+        "reorder_table",
+    );
+
+    ctx.register_table("reorder_table", Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql("SELECT * FROM reorder_table")
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+
+    let batch = &record_batch[0];
+    // Verify only projected columns are present, in the projected order (c, b, a)
+    assert_eq!(batch.num_columns(), 3);
+    assert_eq!(batch.schema().field(0).name(), "c");
+    assert_eq!(batch.schema().field(1).name(), "b");
+    assert_eq!(batch.schema().field(2).name(), "a");
+}
+
+async fn test_mysql_sort_limit(port: usize) {
+    let ctx = SessionContext::new();
+    let pool = common::get_mysql_connection_pool(port, None)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    // Prepare table: 20 rows with id = 1..=20.
+    let _ = db_conn
+        .execute("DROP TABLE IF EXISTS sort_limit_test", &[])
+        .await
+        .expect("table should be droppable");
+    let _ = db_conn
+        .execute(
+            "CREATE TABLE sort_limit_test (id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+            &[],
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+    let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
+    let insert_stmt = format!(
+        "INSERT INTO sort_limit_test (id, label) VALUES {}",
+        values.join(",")
+    );
+    let _ = db_conn
+        .execute(&insert_stmt, &[])
+        .await
+        .expect("INSERT should succeed");
+
+    let sqltable_pool: Arc<
+        dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
+            + Send
+            + Sync
+            + 'static,
+    > = Arc::new(
+        common::get_mysql_connection_pool(port, None)
+            .await
+            .expect("pool"),
+    );
+    let table = SqlTable::new("mysql", &sqltable_pool, "sort_limit_test", None)
+        .await
+        .expect("Table should be created");
+    ctx.register_table("sort_limit_test", Arc::new(table))
+        .expect("Table should be registered");
+
+    // 1. ORDER BY DESC + LIMIT 5 must return exactly 5 rows, top-down.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("id column is Int32");
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![20, 19, 18, 17, 16]);
+
+    // 2. ORDER BY + LIMIT with WHERE.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3);
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![11, 12, 13]);
+
+    // 3. Bare LIMIT (no ORDER BY) must still cap rows.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test LIMIT 7")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 7);
+}
+
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {
@@ -985,6 +1154,7 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_decimal_types_to_decimal256(port).await;
     test_mysql_zero_date_type(port).await;
     test_mysql_nullability_constraints(port).await;
+    test_mysql_projected_schema_column_reorder(port).await;
     test_mysql_sort_limit(port).await;
 
     mysql_container.remove().await.expect("container to stop");
