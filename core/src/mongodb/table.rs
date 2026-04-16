@@ -808,5 +808,4 @@ mod tests {
             other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
-
 }
