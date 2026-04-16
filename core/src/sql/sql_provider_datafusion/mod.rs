@@ -858,9 +858,20 @@ mod tests {
         #[tokio::test]
         async fn test_sql_to_string_default_dialect_has_no_nul(
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
-            let sql_table = new_sql_table("users", None)?;
+            // Pick identifiers that should never be quoted by `DefaultDialect`.
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "zz_safe_identifier",
+                DataType::Utf8,
+                false,
+            )]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            let table_ref = TableReference::parse_str("zz_users");
+            let sql_table =
+                SqlTable::new_with_schema("users", &pool, schema, table_ref, None);
+
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
-            assert_eq!(result, "SELECT name FROM users");
+            assert_eq!(result, "SELECT zz_safe_identifier FROM zz_users");
             assert!(!result.contains('\0'));
             Ok(())
         }
