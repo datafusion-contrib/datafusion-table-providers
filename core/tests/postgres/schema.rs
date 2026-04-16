@@ -66,6 +66,7 @@ async fn test_postgres_schema_inference() {
         constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
+        or_replace: false,
     };
     let _ = factory
         .create(&ctx.state(), &cmd)

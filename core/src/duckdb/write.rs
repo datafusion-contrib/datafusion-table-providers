@@ -327,17 +327,17 @@ impl DataSink for DuckDBDataSink {
 
             // Skip constraint validation for Overwrite operations since we're replacing all data
             // and uniqueness constraints don't apply to the incoming data in isolation.
-            let batches = if self.overwrite == InsertOp::Overwrite {
-                vec![batch]
-            } else if let Some(constraints) = self.table_definition.constraints() {
-                constraints::validate_batch_with_constraints(
-                    vec![batch.clone()],
-                    constraints,
-                    &crate::util::constraints::UpsertOptions::default(),
-                )
-                .await
-                .context(super::ConstraintViolationSnafu)
-                .map_err(to_datafusion_error)?;
+            if self.overwrite != InsertOp::Overwrite {
+                if let Some(constraints) = self.table_definition.constraints() {
+                    constraints::validate_batch_with_constraints(
+                        vec![batch.clone()],
+                        constraints,
+                        &crate::util::constraints::UpsertOptions::default(),
+                    )
+                    .await
+                    .context(super::ConstraintViolationSnafu)
+                    .map_err(to_datafusion_error)?;
+                }
             }
 
             if let Err(send_error) = batch_tx.send(batch).await {

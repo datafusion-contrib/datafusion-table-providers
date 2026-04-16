@@ -17,8 +17,8 @@ use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
 use dyn_clone::DynClone;
-use rand::distr::{Alphanumeric, SampleString};
 use once_cell::sync::OnceCell;
+use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
@@ -233,9 +233,9 @@ impl DuckDBAttachments {
     ///
     /// Returns an error if attachment or search_path setting fails.
     pub fn attach_once(&self, conn: &Connection) -> Result<()> {
-        let search_path = self.search_path_cache.get_or_try_init(|| {
-            self.attach(conn)
-        })?;
+        let search_path = self
+            .search_path_cache
+            .get_or_try_init(|| self.attach(conn))?;
 
         conn.execute(&format!("SET search_path = '{}'", search_path), [])
             .context(DuckDBConnectionSnafu)?;
@@ -295,7 +295,7 @@ impl DuckDbConnection {
     ) -> &mut r2d2::PooledConnection<DuckdbConnectionManager> {
         &mut self.conn
     }
- 
+
     #[must_use]
     pub fn with_unsupported_type_action(
         mut self,

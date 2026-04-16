@@ -22,11 +22,11 @@ use datafusion::{
     },
     sql::{unparser::dialect::DuckDBDialect, TableReference},
 };
+use datafusion_physical_expr::EquivalenceProperties;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
-use datafusion_physical_expr::EquivalenceProperties;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -77,6 +77,12 @@ impl<T, P> DuckDBTable<T, P> {
             function_support,
             indexes,
         }
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
+        self
     }
 
     fn create_physical_plan(
@@ -194,7 +200,9 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
             optimized_sql_properties: None,
         })
     }
+}
 
+impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
     /// The SQL expression for this execution node. This may differ from `DuckSqlExec::base_sql`
     /// if rewritten by an optimization step.
     pub fn sql(&self) -> SqlResult<String> {
@@ -211,8 +219,9 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
     }
 
     /// Indexes that may be bound for the SQL expression in this execution node
-    pub fn indexes(&self) -> &Vec<(ColumnReference, IndexType)> {
-        self.indexes.as_ref()
+    #[must_use]
+    pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
+        &self.indexes
     }
 
     /// The unoptimized SQL expression for this execution node
@@ -222,6 +231,7 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
 
     /// Use this method to bind an optimized SQL expression from a `PhysicalOptimizerRule`. Provide
     /// a `new_schema` if changing the output schema of this node.
+    #[must_use]
     pub fn with_optimized_sql(
         mut self,
         sql: impl Into<String>,
@@ -267,12 +277,14 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
     fn schema(&self) -> SchemaRef {
         self.optimized_sql_schema
             .as_ref()
-            .map(Arc::clone)
-            .unwrap_or(self.base_exec.schema())
+            .cloned()
+            .unwrap_or_else(|| self.base_exec.schema())
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.optimized_sql_properties.as_ref().unwrap_or(self.base_exec.properties())
+        self.optimized_sql_properties
+            .as_ref()
+            .unwrap_or_else(|| self.base_exec.properties())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

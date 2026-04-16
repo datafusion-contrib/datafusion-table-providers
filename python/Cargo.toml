@@ -19,7 +19,7 @@ arrow-flight = { workspace = true, optional = true }
 datafusion = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true }
-pyo3 = { version = "0.25" }
+pyo3 = { version = "0.26.0" }
 tokio = { version = "1.46", features = [
     "macros",
     "rt",
@@ -36,7 +36,8 @@ default = [
     "mysql",
     "postgres",
     "odbc",
-    "flight",    
+    "flight",
+    "mongodb",
 ]
 clickhouse = ["datafusion-table-providers/clickhouse-federation"]
 duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]
@@ -45,3 +46,4 @@ mysql = ["datafusion-table-providers/mysql-federation"]
 postgres = ["datafusion-table-providers/postgres-federation"]
 odbc = ["datafusion-table-providers/odbc-federation"]
 flight = ["dep:arrow-flight", "datafusion-table-providers/flight"]
+mongodb = ["datafusion-table-providers/mongodb"]

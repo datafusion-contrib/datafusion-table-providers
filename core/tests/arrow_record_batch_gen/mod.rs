@@ -395,21 +395,30 @@ pub(crate) fn get_arrow_struct_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
-// Decimal128/Decimal256
 pub(crate) fn get_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
+    let decimal32_array = Decimal32Array::from(vec![123, 222, 321]);
+    let decimal64_array =
+        Decimal64Array::from(vec![i64::from(123), i64::from(222), i64::from(321)]);
     let decimal128_array =
         Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)]);
     let decimal256_array =
         Decimal256Array::from(vec![i256::from(-123), i256::from(222), i256::from(0)]);
 
     let schema = Arc::new(Schema::new(vec![
+        Field::new("decimal32", DataType::Decimal32(9, 2), false),
+        Field::new("decimal64", DataType::Decimal64(18, 6), false),
         Field::new("decimal128", DataType::Decimal128(38, 10), false),
         Field::new("decimal256", DataType::Decimal256(76, 10), false),
     ]));
 
     let record_batch = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(decimal128_array), Arc::new(decimal256_array)],
+        vec![
+            Arc::new(decimal32_array),
+            Arc::new(decimal64_array),
+            Arc::new(decimal128_array),
+            Arc::new(decimal256_array),
+        ],
     )
     .expect("Failed to created arrow decimal record batch");
 
@@ -417,6 +426,9 @@ pub(crate) fn get_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
 }
 
 pub(crate) fn get_mysql_arrow_decimal_record() -> (RecordBatch, SchemaRef) {
+    let decimal32_array = Decimal32Array::from(vec![123, 222, 321]);
+    let decimal64_array =
+        Decimal64Array::from(vec![i64::from(123), i64::from(222), i64::from(321)]);
     let decimal128_array =
         Decimal128Array::from(vec![i128::from(123), i128::from(222), i128::from(321)]);
     let decimal256_array =
@@ -425,13 +437,20 @@ pub(crate) fn get_mysql_arrow_decimal_record() -> (RecordBatch, SchemaRef) {
             .expect("Fail to create Decimal256(65, 10) array");
 
     let schema = Arc::new(Schema::new(vec![
+        Field::new("decimal32", DataType::Decimal32(9, 2), false),
+        Field::new("decimal64", DataType::Decimal64(18, 6), false),
         Field::new("decimal128", DataType::Decimal128(38, 10), false),
         Field::new("decimal256", DataType::Decimal256(65, 10), false), // Maximum is 65.
     ]));
 
     let record_batch = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(decimal128_array), Arc::new(decimal256_array)],
+        vec![
+            Arc::new(decimal32_array),
+            Arc::new(decimal64_array),
+            Arc::new(decimal128_array),
+            Arc::new(decimal256_array),
+        ],
     )
     .expect("Failed to created arrow decimal record batch");
 

@@ -11,7 +11,7 @@ where
     F: Future + Send,
     F::Output: Send,
 {
-    py.allow_threads(|| execute_in_tokio(|| f))
+    py.detach(|| execute_in_tokio(|| f))
 }
 
 pub fn to_pyerr<T: ToString>(err: T) -> PyErr {

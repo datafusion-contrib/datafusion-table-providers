@@ -93,6 +93,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
         let rule = Box::new(sqlite_ast_analyzer(self.decimal_between));
         Some(AstAnalyzer::new(vec![rule]))
     }
+
     fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
         // Default to not federate if [`Self::function_support`] provided, otherwise true.
         self.function_support.as_ref().is_none_or(|func_supp| {

@@ -1,5 +1,5 @@
 ---
-source: src/duckdb/creator.rs
+source: core/src/duckdb/creator.rs
 expression: explain_result
 ---
 ┌─────────────────────────────────────┐
@@ -19,7 +19,7 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE id = 1
 ┌─────────────┴─────────────┐
 │      EXPLAIN_ANALYZE      │
 │    ────────────────────   │
-│           0 Rows          │
+│           0 rows          │
 │          (0.00s)          │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
@@ -33,6 +33,6 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE id = 1
 │     Projections: name     │
 │       Filters: id=1       │
 │                           │
-│           1 Rows          │
+│           1 row           │
 │          (0.00s)          │
 └───────────────────────────┘

@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::flight::exec::{FlightConfig, FlightExec};
 use crate::flight::to_df_err;
 use datafusion::common::DataFusionError;
-use datafusion::logical_expr::registry::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
@@ -35,7 +35,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _registry: &TaskContext,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if inputs.is_empty() {
             let config: FlightConfig = serde_json::from_slice(buf).map_err(to_df_err)?;

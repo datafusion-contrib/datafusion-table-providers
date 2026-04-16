@@ -158,12 +158,6 @@ impl DataSink for SqliteDataSink {
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;
-        let upsert_options = self
-            .on_conflict
-            .as_ref()
-            .map_or_else(UpsertOptions::default, |conflict| {
-                conflict.get_upsert_options()
-            });
         let overwrite_for_task = self.overwrite;
         let task = tokio::spawn(async move {
             let mut num_rows: u64 = 0;
@@ -175,18 +169,16 @@ impl DataSink for SqliteDataSink {
 
                 // Skip constraint validation for Overwrite operations since we're replacing all data
                 // and uniqueness constraints don't apply to the incoming data in isolation.
-                let batches = if overwrite_for_task == InsertOp::Overwrite {
-                    vec![data_batch]
-                } else {
+                if overwrite_for_task != InsertOp::Overwrite {
                     constraints::validate_batch_with_constraints(
-                        vec![data_batch],
+                        vec![data_batch.clone()],
                         &constraints,
-                        &upsert_options,
+                        &crate::util::constraints::UpsertOptions::default(),
                     )
                     .await
                     .context(super::ConstraintViolationSnafu)
-                    .map_err(to_datafusion_error)?
-                };
+                    .map_err(to_datafusion_error)?;
+                }
 
                 batch_tx.send(data_batch).await.map_err(|err| {
                     DataFusionError::Execution(format!("Error sending data batch: {err}"))
@@ -252,13 +244,14 @@ impl DataSink for SqliteDataSink {
             .context(super::UnableToInsertIntoTableAsyncSnafu)
             .map_err(|e| {
                 if let super::Error::UnableToInsertIntoTableAsync {
-                    source: tokio_rusqlite::Error::Error(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error {
-                            code: rusqlite::ffi::ErrorCode::DiskFull,
-                            ..
-                        },
-                        _,
-                    )),
+                    source:
+                        tokio_rusqlite::Error::Error(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error {
+                                code: rusqlite::ffi::ErrorCode::DiskFull,
+                                ..
+                            },
+                            _,
+                        )),
                 } = e
                 {
                     DataFusionError::External(super::Error::DiskFull {}.into())
@@ -344,6 +337,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -486,6 +480,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
 
         let ctx = SessionContext::new();
@@ -792,6 +787,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()
@@ -836,6 +832,7 @@ mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::default(),
             temporary: false,
+            or_replace: false,
         };
 
         let ctx = SessionContext::new();
