@@ -18,9 +18,7 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
     physical_expr::PhysicalSortExpr,
     physical_plan::{
-        filter_pushdown::{
-            ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
-        },
+        filter_pushdown::{ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation},
         sort_pushdown::SortOrderPushdownResult,
         stream::RecordBatchStreamAdapter,
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
@@ -233,11 +231,9 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        let result = self.base_exec.handle_child_pushdown_result(
-            phase,
-            child_pushdown_result,
-            config,
-        )?;
+        let result =
+            self.base_exec
+                .handle_child_pushdown_result(phase, child_pushdown_result, config)?;
         let updated_node = result
             .updated_node
             .map(|node| {
@@ -250,7 +246,9 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
                         )
                     })?
                     .clone();
-                Ok::<_, DataFusionError>(Arc::new(SQLiteSqlExec { base_exec }) as Arc<dyn ExecutionPlan>)
+                Ok::<_, DataFusionError>(
+                    Arc::new(SQLiteSqlExec { base_exec }) as Arc<dyn ExecutionPlan>
+                )
             })
             .transpose()?;
         Ok(FilterPushdownPropagation {

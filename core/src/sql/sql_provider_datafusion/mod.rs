@@ -1302,10 +1302,10 @@ mod tests {
 
     mod physical_expr_to_sql_tests {
         use super::super::*;
+        use datafusion::logical_expr::Operator;
         use datafusion::physical_expr::expressions::{
             BinaryExpr, Column, IsNotNullExpr, IsNullExpr, Literal, NotExpr,
         };
-        use datafusion::logical_expr::Operator;
         use datafusion::scalar::ScalarValue;
         use datafusion::sql::unparser::dialect::DefaultDialect;
 
@@ -1359,28 +1359,22 @@ mod tests {
 
         #[test]
         fn test_binary_eq() {
-            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> = Arc::new(
-                BinaryExpr::new(col("age"), Operator::Gt, lit_i32(30)),
-            );
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("age"), Operator::Gt, lit_i32(30)));
             let result = physical_expr_to_sql(&expr, default_dialect());
             assert_eq!(result, Some("(age > 30)".to_string()));
         }
 
         #[test]
         fn test_and_expression() {
-            let left: Arc<dyn datafusion::physical_plan::PhysicalExpr> = Arc::new(
-                BinaryExpr::new(col("a"), Operator::Gt, lit_i32(1)),
-            );
-            let right: Arc<dyn datafusion::physical_plan::PhysicalExpr> = Arc::new(
-                BinaryExpr::new(col("b"), Operator::Eq, lit_str("x")),
-            );
+            let left: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("a"), Operator::Gt, lit_i32(1)));
+            let right: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("b"), Operator::Eq, lit_str("x")));
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(BinaryExpr::new(left, Operator::And, right));
             let result = physical_expr_to_sql(&expr, default_dialect());
-            assert_eq!(
-                result,
-                Some("((a > 1) AND (b = 'x'))".to_string())
-            );
+            assert_eq!(result, Some("((a > 1) AND (b = 'x'))".to_string()));
         }
 
         #[test]
@@ -1401,9 +1395,8 @@ mod tests {
 
         #[test]
         fn test_not() {
-            let inner: Arc<dyn datafusion::physical_plan::PhysicalExpr> = Arc::new(
-                BinaryExpr::new(col("active"), Operator::Eq, lit_i32(1)),
-            );
+            let inner: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("active"), Operator::Eq, lit_i32(1)));
             let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
                 Arc::new(NotExpr::new(inner));
             let result = physical_expr_to_sql(&expr, default_dialect());
@@ -1464,10 +1457,7 @@ mod tests {
         fn test_no_where_with_order_by_and_limit() {
             let sql = "SELECT * FROM t ORDER BY b LIMIT 5";
             let result = insert_where_clause(sql, "\"c\" > 3");
-            assert_eq!(
-                result,
-                "SELECT * FROM t WHERE \"c\" > 3 ORDER BY b LIMIT 5"
-            );
+            assert_eq!(result, "SELECT * FROM t WHERE \"c\" > 3 ORDER BY b LIMIT 5");
         }
     }
 }
