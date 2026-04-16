@@ -851,8 +851,15 @@ mod tests {
     async fn test_fetch_reports_current_limit() {
         let schema = test_schema();
         let table_ref = Arc::new(TableReference::bare("users"));
-        let exec_unlimited =
-            MongoDBExec::new(Arc::clone(&table_ref), stub_pool(), Arc::clone(&schema), None, &[], None).unwrap();
+        let exec_unlimited = MongoDBExec::new(
+            Arc::clone(&table_ref),
+            stub_pool(),
+            Arc::clone(&schema),
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(exec_unlimited.fetch(), None);
 
         let exec_limited =
@@ -915,5 +922,4 @@ mod tests {
             "Limit exceeding i32::MAX should return None"
         );
     }
-
 }

@@ -115,9 +115,7 @@ fn unify_types(type1: &DataType, type2: &DataType) -> DataType {
             DataType::Float64
         }
         (DataType::Date32, DataType::Timestamp(tu, tz))
-        | (DataType::Timestamp(tu, tz), DataType::Date32) => {
-            DataType::Timestamp(*tu, tz.clone())
-        }
+        | (DataType::Timestamp(tu, tz), DataType::Date32) => DataType::Timestamp(*tu, tz.clone()),
 
         // Otherwise use string
         _ => DataType::Utf8,

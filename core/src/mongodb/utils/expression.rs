@@ -1,6 +1,6 @@
 use datafusion::{
-    logical_expr::{Expr, Operator},
     logical_expr::expr::{Cast, TryCast},
+    logical_expr::{Expr, Operator},
     scalar::ScalarValue,
 };
 use mongodb::bson::{doc, Bson, Document, Regex as BsonRegex};
@@ -1677,8 +1677,7 @@ mod tests {
         });
 
         let filter = expr_to_mongo_filter(&expr).unwrap();
-        let expected =
-            doc! { "created_at": { "$lt": mongodb::bson::DateTime::from_millis(1_717_200_000_000) } };
+        let expected = doc! { "created_at": { "$lt": mongodb::bson::DateTime::from_millis(1_717_200_000_000) } };
         assert_eq!(filter, expected);
     }
 }

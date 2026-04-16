@@ -923,7 +923,10 @@ async fn test_mysql_sort_limit(port: usize) {
         .await
         .expect("CREATE TABLE should succeed");
     let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
-    let insert_stmt = format!("INSERT INTO sort_limit_test (id, label) VALUES {}", values.join(","));
+    let insert_stmt = format!(
+        "INSERT INTO sort_limit_test (id, label) VALUES {}",
+        values.join(",")
+    );
     let _ = db_conn
         .execute(&insert_stmt, &[])
         .await
@@ -931,9 +934,9 @@ async fn test_mysql_sort_limit(port: usize) {
 
     let sqltable_pool: Arc<
         dyn DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)>
-        + Send
-        + Sync
-        + 'static,
+            + Send
+            + Sync
+            + 'static,
     > = Arc::new(
         common::get_mysql_connection_pool(port, None)
             .await
@@ -986,7 +989,6 @@ async fn test_mysql_sort_limit(port: usize) {
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total, 7);
 }
-
 
 #[rstest]
 #[test_log::test(tokio::test)]

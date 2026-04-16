@@ -163,8 +163,7 @@ mod sort_limit_pushdown {
         };
         let table = factory.create(&ctx.state(), &cmd).await.unwrap();
         let mem =
-            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)
-                .unwrap();
+            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None).unwrap();
         let insert = table
             .insert_into(&ctx.state(), mem, InsertOp::Append)
             .await
