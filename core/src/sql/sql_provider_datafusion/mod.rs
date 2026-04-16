@@ -284,7 +284,6 @@ pub struct SqlExec<T, P> {
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
     properties: Arc<PlanProperties>,
-    properties: PlanProperties,
     dialect: Arc<dyn Dialect + Send + Sync>,
 }
 
@@ -320,7 +319,6 @@ impl<T, P> SqlExec<T, P> {
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             )),
-            ),
             dialect,
         })
     }
@@ -580,7 +578,8 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             Arc::clone(&self.projected_schema),
             vec![order.to_vec()],
         );
-        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+        new_exec.properties =
+            Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
         Ok(SortOrderPushdownResult::Exact {
             inner: Arc::new(new_exec),
