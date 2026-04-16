@@ -1,6 +1,6 @@
-//! # SQL DataFusion `TableProvider`
+//! # SQL DataFusion TableProvider
 //!
-//! This module implements a SQL `TableProvider` for DataFusion.
+//! This module implements a SQL TableProvider for DataFusion.
 //!
 //! This is used as a fallback if the `datafusion-federation` optimizer is not enabled.
 
@@ -29,13 +29,18 @@ use std::{any::Any, fmt, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
+    config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
-    physical_expr::EquivalenceProperties,
+    physical_expr::{EquivalenceProperties, PhysicalSortExpr},
     physical_plan::{
         execution_plan::{Boundedness, EmissionType},
+        filter_pushdown::{
+            ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
+        },
+        sort_pushdown::SortOrderPushdownResult,
         stream::RecordBatchStreamAdapter,
         DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream,
@@ -62,6 +67,12 @@ pub enum Error {
 
     #[snafu(display("Unable to generate SQL: {source}"))]
     UnableToGenerateSQLDataFusion { source: DataFusionError },
+}
+
+impl From<Error> for DataFusionError {
+    fn from(e: Error) -> Self {
+        DataFusionError::External(Box::new(e))
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -162,34 +173,87 @@ impl<T, P> SqlTable<T, P> {
         self
     }
 
+    pub fn scan_to_sql(
+        &self,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<String> {
+        let projected_schema = project_schema_safe(&self.schema, projection)
+            .context(UnableToGenerateSQLDataFusionSnafu)?;
+
+        let dialect = self.dialect_arc();
+
+        let columns = projected_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let quote = dialect
+                    .identifier_quote_style(f.name())
+                    .unwrap_or_default()
+                    .to_string();
+                format!("{quote}{}{quote}", f.name())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let limit_expr = match limit {
+            Some(limit) => format!("LIMIT {limit}"),
+            None => String::new(),
+        };
+
+        let where_expr = if filters.is_empty() {
+            String::new()
+        } else {
+            let unparser = Unparser::new(dialect.as_ref());
+            let filter_expr = filters
+                .iter()
+                .map(|f| unparser.expr_to_sql(f).map(|s| s.to_string()))
+                .collect::<std::result::Result<Vec<String>, DataFusionError>>()
+                .context(UnableToGenerateSQLDataFusionSnafu)?;
+            format!("WHERE {}", filter_expr.join(" AND "))
+        };
+
+        let table_name = self.table_reference.table();
+        let table_quote = dialect
+            .identifier_quote_style(table_name)
+            .unwrap_or_default()
+            .to_string();
+        let table_expr = format!("{table_quote}{table_name}{table_quote}");
+
+        let mut sql = format!("SELECT {columns} FROM {table_expr}");
+        if !where_expr.is_empty() {
+            sql.push(' ');
+            sql.push_str(&where_expr);
+        }
+        if !limit_expr.is_empty() {
+            sql.push(' ');
+            sql.push_str(&limit_expr);
+        }
+
+        Ok(sql)
+    }
+
+    fn create_physical_plan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        sql: String,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(SqlExec::new(
+            projection,
+            &self.schema(),
+            Arc::clone(&self.pool),
+            sql,
+            self.dialect_arc(),
+        )?))
+    }
+
     #[must_use]
     pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         Self {
             dialect: Some(dialect),
             ..self
         }
-    }
-
-    fn create_physical_plan(
-        &self,
-        projections: Option<&Vec<usize>>,
-        schema: &SchemaRef,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let mut exec = SqlExec::new(
-            projections,
-            schema,
-            &self.table_reference,
-            Arc::clone(&self.pool),
-            filters,
-            limit,
-            self.engine,
-        )?;
-        if let Some(dialect) = &self.dialect {
-            exec = exec.with_dialect(Arc::clone(dialect));
-        }
-        Ok(Arc::new(exec))
     }
 
     #[must_use]
@@ -200,6 +264,14 @@ impl<T, P> SqlTable<T, P> {
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
+    }
+
+    /// Returns a cloneable Arc of the dialect for passing to SqlExec.
+    pub fn dialect_arc(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
     }
 }
 
@@ -243,7 +315,8 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, &self.schema(), filters, limit);
+        let sql = self.scan_to_sql(projection, filters, limit)?;
+        return self.create_physical_plan(projection, sql);
     }
 }
 
@@ -253,41 +326,6 @@ impl<T, P> Display for SqlTable<T, P> {
     }
 }
 
-pub struct SqlExec<T, P> {
-    projected_schema: SchemaRef,
-    table_reference: TableReference,
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-    filters: Vec<Expr>,
-    limit: Option<usize>,
-    properties: PlanProperties,
-    engine: Option<Engine>,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
-    /// Custom table expression to use instead of quoted table_reference
-    /// Useful for database-specific syntax like ClickHouse parameterized views
-    custom_table_expr: Option<String>,
-}
-
-impl<T, P> Clone for SqlExec<T, P> {
-    fn clone(&self) -> Self {
-        SqlExec {
-            projected_schema: Arc::clone(&self.projected_schema),
-            table_reference: self.table_reference.clone(),
-            pool: Arc::clone(&self.pool),
-            filters: self.filters.clone(),
-            limit: self.limit,
-            properties: self.properties.clone(),
-            engine: self.engine,
-            dialect: self.dialect.clone(),
-            custom_table_expr: self.custom_table_expr.clone(),
-        }
-    }
-}
-
-/// Projects a schema to include only the specified columns.
-///
-/// # Errors
-///
-/// Returns an error if the projection fails.
 pub fn project_schema_safe(
     schema: &SchemaRef,
     projection: Option<&Vec<usize>>,
@@ -305,55 +343,48 @@ pub fn project_schema_safe(
     Ok(schema)
 }
 
+pub struct SqlExec<T, P> {
+    projected_schema: SchemaRef,
+    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    sql: String,
+    properties: PlanProperties,
+    dialect: Arc<dyn Dialect + Send + Sync>,
+}
+
+impl<T, P> Clone for SqlExec<T, P> {
+    fn clone(&self) -> Self {
+        Self {
+            projected_schema: Arc::clone(&self.projected_schema),
+            pool: Arc::clone(&self.pool),
+            sql: self.sql.clone(),
+            properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
+        }
+    }
+}
+
 impl<T, P> SqlExec<T, P> {
-    /// Creates a new SQL execution plan.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the schema projection fails.
     pub fn new(
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        filters: &[Expr],
-        limit: Option<usize>,
-        engine: Option<Engine>,
+        sql: String,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let projected_schema = project_schema_safe(schema, projections)?;
+        let projected_schema = project_schema_safe(schema, projection)?;
 
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
-            table_reference: table_reference.clone(),
             pool,
-            filters: filters.to_vec(),
-            limit,
+            sql,
             properties: PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ),
-            engine,
-            dialect: None,
-            custom_table_expr: None,
+            dialect,
         })
-    }
-
-    #[must_use]
-    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
-        Self {
-            dialect: Some(dialect),
-            ..self
-        }
-    }
-
-    #[must_use]
-    pub fn with_custom_table_expr(self, custom_table_expr: String) -> Self {
-        Self {
-            custom_table_expr: Some(custom_table_expr),
-            ..self
-        }
     }
 
     #[must_use]
@@ -361,65 +392,12 @@ impl<T, P> SqlExec<T, P> {
         Arc::clone(&self.pool)
     }
 
-    /// Generates the SQL query string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if SQL generation fails.
     pub fn sql(&self) -> Result<String> {
-        let columns = self
-            .projected_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                // To ensure backwards compatibility, dialect only used when explicitly set
-                // (i.e. Don't use `DefaultDialect`, don't derive from `self.engine`).
-                let quote = if let Some(dialect) = &self.dialect {
-                    dialect
-                        .identifier_quote_style(f.name())
-                        .unwrap_or_default()
-                        .to_string()
-                } else if matches!(self.engine, Some(Engine::ODBC)) {
-                    String::new()
-                } else {
-                    '"'.to_string()
-                };
-                format!("{quote}{}{quote}", f.name())
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        Ok(self.sql.clone())
+    }
 
-        let limit_expr = match self.limit {
-            Some(limit) => format!("LIMIT {limit}"),
-            None => String::new(),
-        };
-
-        let where_expr = if self.filters.is_empty() {
-            String::new()
-        } else {
-            let dialect = self.dialect.clone().unwrap_or(self.engine.map_or(
-                Arc::new(DefaultDialect {}) as Arc<dyn Dialect + Send + Sync>,
-                |e| e.dialect(),
-            ));
-            let unparser = Unparser::new(dialect.as_ref());
-
-            let filter_expr = self
-                .filters
-                .iter()
-                .map(|f| unparser.expr_to_sql(f).map(|s| s.to_string()))
-                .collect::<Result<Vec<String>, DataFusionError>>()
-                .context(UnableToGenerateSQLDataFusionSnafu)?;
-            format!("WHERE {}", filter_expr.join(" AND "))
-        };
-
-        let table_expr = match &self.custom_table_expr {
-            Some(expr) => expr.clone(),
-            None => self.table_reference.to_quoted_string(),
-        };
-
-        Ok(format!(
-            "SELECT {columns} FROM {table_expr} {where_expr} {limit_expr}"
-        ))
+    fn dialect(&self) -> &(dyn Dialect + Send + Sync) {
+        self.dialect.as_ref()
     }
 }
 
@@ -434,6 +412,137 @@ impl<T, P> DisplayAs for SqlExec<T, P> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "SqlExec sql={sql}")
+    }
+}
+
+/// Convert a `PhysicalExpr` to a logical `Expr` for use with the Unparser.
+/// Returns `None` if the expression cannot be safely converted.
+fn physical_expr_to_logical_expr(
+    expr: &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+) -> Option<Expr> {
+    use datafusion::physical_expr::expressions::{
+        BinaryExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, NegativeExpr,
+        NotExpr,
+    };
+
+    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        return Some(Expr::Column(datafusion::common::Column::new_unqualified(
+            col.name(),
+        )));
+    }
+
+    if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        return Some(Expr::Literal(lit.value().clone(), None));
+    }
+
+    if let Some(bin) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        let left = physical_expr_to_logical_expr(bin.left())?;
+        let right = physical_expr_to_logical_expr(bin.right())?;
+        return Some(Expr::BinaryExpr(datafusion::logical_expr::BinaryExpr::new(
+            Box::new(left),
+            *bin.op(),
+            Box::new(right),
+        )));
+    }
+
+    if let Some(not) = expr.as_any().downcast_ref::<NotExpr>() {
+        let inner = physical_expr_to_logical_expr(not.arg())?;
+        return Some(Expr::Not(Box::new(inner)));
+    }
+
+    if let Some(is_null) = expr.as_any().downcast_ref::<IsNullExpr>() {
+        let inner = physical_expr_to_logical_expr(is_null.arg())?;
+        return Some(Expr::IsNull(Box::new(inner)));
+    }
+
+    if let Some(is_not_null) = expr.as_any().downcast_ref::<IsNotNullExpr>() {
+        let inner = physical_expr_to_logical_expr(is_not_null.arg())?;
+        return Some(Expr::IsNotNull(Box::new(inner)));
+    }
+
+    if let Some(neg) = expr.as_any().downcast_ref::<NegativeExpr>() {
+        let inner = physical_expr_to_logical_expr(neg.arg())?;
+        return Some(Expr::Negative(Box::new(inner)));
+    }
+
+    if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+        let inner = physical_expr_to_logical_expr(cast.expr())?;
+        return Some(Expr::Cast(datafusion::logical_expr::Cast::new(
+            Box::new(inner),
+            cast.cast_type().clone(),
+        )));
+    }
+
+    if let Some(in_list) = expr.as_any().downcast_ref::<InListExpr>() {
+        let value = physical_expr_to_logical_expr(in_list.expr())?;
+        let list: Option<Vec<Expr>> = in_list
+            .list()
+            .iter()
+            .map(physical_expr_to_logical_expr)
+            .collect();
+        let list = list?;
+        return Some(Expr::InList(datafusion::logical_expr::expr::InList::new(
+            Box::new(value),
+            list,
+            in_list.negated(),
+        )));
+    }
+
+    None
+}
+
+/// Convert a `PhysicalExpr` to a SQL string fragment for filter pushdown,
+/// using the Unparser with the given dialect for correct identifier quoting
+/// and operator support.
+/// Returns `None` if the expression cannot be safely converted.
+fn physical_expr_to_sql(
+    expr: &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+    dialect: &dyn Dialect,
+) -> Option<String> {
+    let logical_expr = physical_expr_to_logical_expr(expr)?;
+    let unparser = Unparser::new(dialect);
+    unparser
+        .expr_to_sql(&logical_expr)
+        .ok()
+        .map(|e| e.to_string())
+}
+
+/// Insert additional WHERE conditions into a SQL string.
+/// Handles the case where a WHERE clause already exists (appends with AND)
+/// and where it doesn't (inserts WHERE before ORDER BY / LIMIT / end).
+fn insert_where_clause(sql: &str, conditions: &str) -> String {
+    let upper = sql.to_uppercase();
+
+    // Find existing WHERE clause
+    if let Some(where_pos) = upper.find(" WHERE ") {
+        // Find the end of the WHERE clause (before ORDER BY, LIMIT, GROUP BY, HAVING)
+        let after_where = where_pos + 7; // skip " WHERE "
+
+        // Find the position of the next major clause
+        let next_clause_pos = [" ORDER BY ", " LIMIT ", " GROUP BY ", " HAVING "]
+            .iter()
+            .filter_map(|kw| upper[after_where..].find(kw).map(|p| after_where + p))
+            .min()
+            .unwrap_or(sql.len());
+
+        format!(
+            "{} AND ({conditions}){}",
+            &sql[..next_clause_pos],
+            &sql[next_clause_pos..]
+        )
+    } else {
+        // No WHERE clause — insert before ORDER BY / LIMIT or at end
+        let insert_pos = [" ORDER BY ", " LIMIT ", " GROUP BY ", " HAVING "]
+            .iter()
+            .filter_map(|kw| upper.find(kw))
+            .min()
+            .unwrap_or(sql.len());
+
+        format!(
+            "{} WHERE {conditions}{}",
+            &sql[..insert_pos],
+            &sql[insert_pos..]
+        )
     }
 }
 
@@ -465,6 +574,151 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         Ok(self)
     }
 
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        let upper = self.sql.to_uppercase();
+        let limit_pos = upper.rfind(" LIMIT ")?;
+        let after_limit = &self.sql[limit_pos + 7..]; // skip " LIMIT "
+        after_limit.trim().parse::<usize>().ok()
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        use datafusion::logical_expr::expr::Sort;
+        use datafusion::physical_expr::expressions::Column;
+
+        if order.is_empty() {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        let unparser = Unparser::new(self.dialect());
+
+        // Build ORDER BY clause from physical sort expressions using the Unparser
+        let mut order_by_parts = Vec::with_capacity(order.len());
+        for sort_expr in order {
+            let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            let logical_sort = Sort::new(
+                Expr::Column(datafusion::common::Column::new_unqualified(col.name())),
+                !sort_expr.options.descending,
+                sort_expr.options.nulls_first,
+            );
+            let order_by_expr = unparser.sort_to_sql(&logical_sort).map_err(|e| {
+                DataFusionError::Internal(format!("Failed to unparse sort expression: {e}"))
+            })?;
+            order_by_parts.push(order_by_expr.to_string());
+        }
+
+        let order_by_clause = format!("ORDER BY {}", order_by_parts.join(", "));
+
+        // Insert ORDER BY before LIMIT (if present) or at the end
+        let sql = &self.sql;
+        let new_sql = if let Some(limit_pos) = sql.to_uppercase().rfind(" LIMIT ") {
+            format!(
+                "{} {order_by_clause}{}",
+                &sql[..limit_pos],
+                &sql[limit_pos..]
+            )
+        } else {
+            format!("{sql} {order_by_clause}")
+        };
+
+        let mut new_exec = Self {
+            projected_schema: Arc::clone(&self.projected_schema),
+            pool: Arc::clone(&self.pool),
+            sql: new_sql,
+            properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
+        };
+
+        // Update equivalence properties to reflect the output ordering
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&self.projected_schema),
+            vec![order.to_vec()],
+        );
+        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+
+        Ok(SortOrderPushdownResult::Exact {
+            inner: Arc::new(new_exec),
+        })
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let limit = limit?;
+
+        let sql = &self.sql;
+        let upper = sql.to_uppercase();
+
+        // Replace existing LIMIT or append one
+        let new_sql = if let Some(limit_pos) = upper.rfind(" LIMIT ") {
+            format!("{} LIMIT {limit}", &sql[..limit_pos])
+        } else {
+            format!("{sql} LIMIT {limit}")
+        };
+
+        Some(Arc::new(Self {
+            projected_schema: Arc::clone(&self.projected_schema),
+            pool: Arc::clone(&self.pool),
+            sql: new_sql,
+            properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
+        }))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let mut accepted_filters = Vec::new();
+        let mut filter_results = Vec::with_capacity(child_pushdown_result.parent_filters.len());
+        let mut any_accepted = false;
+
+        for parent_filter in &child_pushdown_result.parent_filters {
+            match physical_expr_to_sql(&parent_filter.filter, self.dialect()) {
+                Some(sql_fragment) => {
+                    accepted_filters.push(sql_fragment);
+                    filter_results.push(PushedDown::Yes);
+                    any_accepted = true;
+                }
+                None => {
+                    filter_results.push(PushedDown::No);
+                }
+            }
+        }
+
+        if !any_accepted {
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                filter_results,
+            ));
+        }
+
+        let where_clause = accepted_filters.join(" AND ");
+
+        // Insert WHERE conditions into the SQL
+        let new_sql = insert_where_clause(&self.sql, &where_clause);
+
+        let new_exec = Self {
+            projected_schema: Arc::clone(&self.projected_schema),
+            pool: Arc::clone(&self.pool),
+            sql: new_sql,
+            properties: self.properties.clone(),
+            dialect: Arc::clone(&self.dialect),
+        };
+
+        Ok(
+            FilterPushdownPropagation::with_parent_pushdown_result(filter_results)
+                .with_updated_node(Arc::new(new_exec) as Arc<dyn ExecutionPlan>),
+        )
+    }
+
     fn execute(
         &self,
         _partition: usize,
@@ -482,11 +736,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
     }
 }
 
-/// Executes a SQL query and returns a stream of record batches.
-///
-/// # Errors
-///
-/// Returns an error if the connection fails or the query execution fails.
 pub async fn get_stream<T: 'static, P: 'static>(
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
@@ -525,12 +774,441 @@ mod tests {
         tracing::dispatcher::set_default(&dispatch)
     }
 
+    mod sql_table_plan_to_sql_tests {
+        use std::any::Any;
+
+        use async_trait::async_trait;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+        use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
+        use datafusion::{
+            logical_expr::{col, lit},
+            sql::TableReference,
+        };
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        use super::*;
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn new_sql_table(
+            table_reference: &'static str,
+            dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+        ) -> Result<SqlTable<(), &'static dyn ToString>, Box<dyn Error + Send + Sync>> {
+            let fields = vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+                Field::new(
+                    "createdDate",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+                Field::new("userId", DataType::LargeUtf8, false),
+                Field::new("active", DataType::Boolean, false),
+                Field::new("5e48", DataType::LargeUtf8, false),
+            ];
+            let schema = Arc::new(Schema::new(fields));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            let table_ref = TableReference::parse_str(table_reference);
+
+            let sql_table =
+                SqlTable::new_with_schema(table_reference, &pool, schema, table_ref, None);
+            if let Some(dialect) = dialect {
+                Ok(sql_table.with_dialect(dialect))
+            } else {
+                Ok(sql_table)
+            }
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
+            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
+            assert_eq!(result, "SELECT `name` FROM `users`");
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_with_filters_and_limit(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
+            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
+            let result = sql_table
+                .scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))
+                .unwrap();
+            assert_eq!(
+                result,
+                "SELECT `name`, `age` FROM `users` WHERE ((`age` >= 30) AND (`name` = 'x')) LIMIT 3"
+            );
+            Ok(())
+        }
+    }
+
+    mod sort_pushdown_tests {
+        use crate::sql::sql_provider_datafusion::SqlExec;
+        use arrow::compute::SortOptions;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::PhysicalSortExpr;
+        use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn test_sort_pushdown_single_column_asc() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_desc_nulls_last() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("age", 1)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS LAST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_multiple_columns() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("age", 1)),
+                    options: SortOptions {
+                        descending: true,
+                        nulls_first: true,
+                    },
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("name", 0)),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                },
+            ];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS FIRST, \"name\" ASC NULLS LAST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_with_limit() {
+            let exec =
+                make_exec("SELECT \"name\", \"age\" FROM \"users\" WHERE \"age\" > 30 LIMIT 10");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" WHERE \"age\" > 30 ORDER BY \"name\" ASC NULLS FIRST LIMIT 10"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_empty_order_returns_unsupported() {
+            let exec = make_exec("SELECT \"name\" FROM \"users\"");
+            match exec.try_pushdown_sort(&[]).unwrap() {
+                SortOrderPushdownResult::Unsupported => {}
+                other => panic!("Expected Unsupported, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_updates_output_ordering() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let orderings = inner.properties().output_ordering();
+                    assert!(orderings.is_some(), "Output ordering should be set");
+                    let output_order = orderings.unwrap();
+                    assert_eq!(output_order.len(), 1);
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        fn sort_result_name(
+            result: &SortOrderPushdownResult<Arc<dyn ExecutionPlan>>,
+        ) -> &'static str {
+            match result {
+                SortOrderPushdownResult::Exact { .. } => "Exact",
+                SortOrderPushdownResult::Inexact { .. } => "Inexact",
+                SortOrderPushdownResult::Unsupported => "Unsupported",
+            }
+        }
+    }
+
+    mod with_fetch_tests {
+        use crate::sql::sql_provider_datafusion::SqlExec;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn test_with_fetch_appends_limit() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let result = exec.with_fetch(Some(10)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" LIMIT 10"
+            );
+        }
+
+        #[test]
+        fn test_with_fetch_replaces_existing_limit() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\" LIMIT 100");
+            let result = exec.with_fetch(Some(5)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" LIMIT 5"
+            );
+        }
+
+        #[test]
+        fn test_with_fetch_none_returns_none() {
+            let exec = make_exec("SELECT \"name\" FROM \"users\"");
+            assert!(exec.with_fetch(None).is_none());
+        }
+
+        #[test]
+        fn test_with_fetch_preserves_order_by() {
+            let exec = make_exec(
+                "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST LIMIT 50",
+            );
+            let result = exec.with_fetch(Some(10)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST LIMIT 10"
+            );
+        }
+    }
+
     #[test]
     fn test_references() {
         let table_ref = TableReference::bare("test");
         assert_eq!(format!("{table_ref}"), "test");
     }
 
+    // XXX move this to duckdb mod??
     #[cfg(feature = "duckdb")]
     mod duckdb_tests {
         use super::*;
@@ -559,7 +1237,6 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
-            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()
@@ -595,7 +1272,6 @@ mod tests {
                         + Sync,
                 >;
             let conn = pool.connect().await?;
-            #[allow(clippy::expect_used)]
             let db_conn = conn
                 .as_any()
                 .downcast_ref::<DuckDbConnection>()
@@ -610,6 +1286,245 @@ mod tests {
             df.show().await?;
             drop(t);
             Ok(())
+        }
+    }
+
+    mod fetch_tests {
+        use crate::sql::sql_provider_datafusion::SqlExec;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        struct MockConn {}
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+        struct MockDBPool {}
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn test_fetch_returns_none_when_no_limit() {
+            let exec = make_exec("SELECT * FROM t");
+            assert_eq!(exec.fetch(), None);
+        }
+
+        #[test]
+        fn test_fetch_returns_limit_value() {
+            let exec = make_exec("SELECT * FROM t LIMIT 42");
+            assert_eq!(exec.fetch(), Some(42));
+        }
+
+        #[test]
+        fn test_fetch_with_order_by_and_limit() {
+            let exec = make_exec("SELECT * FROM t ORDER BY a LIMIT 10");
+            assert_eq!(exec.fetch(), Some(10));
+        }
+
+        #[test]
+        fn test_supports_limit_pushdown() {
+            let exec = make_exec("SELECT * FROM t");
+            assert!(exec.supports_limit_pushdown());
+        }
+    }
+
+    mod physical_expr_to_sql_tests {
+        use super::super::*;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{
+            BinaryExpr, Column, IsNotNullExpr, IsNullExpr, Literal, NotExpr,
+        };
+        use datafusion::scalar::ScalarValue;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+
+        fn col(name: &str) -> Arc<dyn datafusion::physical_plan::PhysicalExpr> {
+            Arc::new(Column::new(name, 0))
+        }
+
+        fn lit_i32(v: i32) -> Arc<dyn datafusion::physical_plan::PhysicalExpr> {
+            Arc::new(Literal::new(ScalarValue::Int32(Some(v))))
+        }
+
+        fn lit_str(s: &str) -> Arc<dyn datafusion::physical_plan::PhysicalExpr> {
+            Arc::new(Literal::new(ScalarValue::Utf8(Some(s.to_string()))))
+        }
+
+        fn default_dialect() -> &'static dyn Dialect {
+            &DefaultDialect {}
+        }
+
+        #[test]
+        fn test_column() {
+            let result = physical_expr_to_sql(&col("name"), default_dialect());
+            assert_eq!(result, Some("\"name\"".to_string()));
+        }
+
+        #[test]
+        fn test_literal_int() {
+            let result = physical_expr_to_sql(&lit_i32(42), default_dialect());
+            assert_eq!(result, Some("42".to_string()));
+        }
+
+        #[test]
+        fn test_literal_string() {
+            let result = physical_expr_to_sql(&lit_str("hello"), default_dialect());
+            assert_eq!(result, Some("'hello'".to_string()));
+        }
+
+        #[test]
+        fn test_literal_string_with_quote() {
+            let result = physical_expr_to_sql(&lit_str("it's"), default_dialect());
+            assert_eq!(result, Some("'it''s'".to_string()));
+        }
+
+        #[test]
+        fn test_literal_null() {
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(Literal::new(ScalarValue::Null));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("NULL".to_string()));
+        }
+
+        #[test]
+        fn test_binary_eq() {
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("age"), Operator::Gt, lit_i32(30)));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("(age > 30)".to_string()));
+        }
+
+        #[test]
+        fn test_and_expression() {
+            let left: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("a"), Operator::Gt, lit_i32(1)));
+            let right: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("b"), Operator::Eq, lit_str("x")));
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(left, Operator::And, right));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("((a > 1) AND (b = 'x'))".to_string()));
+        }
+
+        #[test]
+        fn test_is_null() {
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(IsNullExpr::new(col("x")));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("x IS NULL".to_string()));
+        }
+
+        #[test]
+        fn test_is_not_null() {
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(IsNotNullExpr::new(col("x")));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("x IS NOT NULL".to_string()));
+        }
+
+        #[test]
+        fn test_not() {
+            let inner: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(BinaryExpr::new(col("active"), Operator::Eq, lit_i32(1)));
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(NotExpr::new(inner));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("NOT (active = 1)".to_string()));
+        }
+
+        #[test]
+        fn test_literal_bool() {
+            let expr: Arc<dyn datafusion::physical_plan::PhysicalExpr> =
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+            let result = physical_expr_to_sql(&expr, default_dialect());
+            assert_eq!(result, Some("true".to_string()));
+        }
+    }
+
+    mod insert_where_clause_tests {
+        use super::super::insert_where_clause;
+
+        #[test]
+        fn test_no_existing_where() {
+            let sql = "SELECT * FROM t";
+            let result = insert_where_clause(sql, "\"a\" > 1");
+            assert_eq!(result, "SELECT * FROM t WHERE \"a\" > 1");
+        }
+
+        #[test]
+        fn test_existing_where() {
+            let sql = "SELECT * FROM t WHERE \"b\" = 2";
+            let result = insert_where_clause(sql, "\"a\" > 1");
+            assert_eq!(result, "SELECT * FROM t WHERE \"b\" = 2 AND (\"a\" > 1)");
+        }
+
+        #[test]
+        fn test_no_where_with_order_by() {
+            let sql = "SELECT * FROM t ORDER BY a";
+            let result = insert_where_clause(sql, "\"x\" = 1");
+            assert_eq!(result, "SELECT * FROM t WHERE \"x\" = 1 ORDER BY a");
+        }
+
+        #[test]
+        fn test_no_where_with_limit() {
+            let sql = "SELECT * FROM t LIMIT 10";
+            let result = insert_where_clause(sql, "\"x\" = 1");
+            assert_eq!(result, "SELECT * FROM t WHERE \"x\" = 1 LIMIT 10");
+        }
+
+        #[test]
+        fn test_existing_where_with_order_by_and_limit() {
+            let sql = "SELECT * FROM t WHERE \"a\" = 1 ORDER BY b LIMIT 5";
+            let result = insert_where_clause(sql, "\"c\" > 3");
+            assert_eq!(
+                result,
+                "SELECT * FROM t WHERE \"a\" = 1 AND (\"c\" > 3) ORDER BY b LIMIT 5"
+            );
+        }
+
+        #[test]
+        fn test_no_where_with_order_by_and_limit() {
+            let sql = "SELECT * FROM t ORDER BY b LIMIT 5";
+            let result = insert_where_clause(sql, "\"c\" > 3");
+            assert_eq!(result, "SELECT * FROM t WHERE \"c\" > 3 ORDER BY b LIMIT 5");
         }
     }
 }

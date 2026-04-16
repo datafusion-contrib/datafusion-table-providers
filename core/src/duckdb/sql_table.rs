@@ -10,23 +10,28 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Constraints;
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion::{
-    arrow::datatypes::SchemaRef,
-    datasource::TableProvider,
-    error::Result as DataFusionResult,
-    execution::TaskContext,
-    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
-    physical_plan::{
-        stream::RecordBatchStreamAdapter, DisplayAs, DisplayFormatType, ExecutionPlan,
-        PlanProperties, SendableRecordBatchStream,
-    },
-    sql::{unparser::dialect::DuckDBDialect, TableReference},
-};
-use datafusion_physical_expr::EquivalenceProperties;
 use futures::TryStreamExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
+
+use datafusion::{
+    arrow::datatypes::SchemaRef,
+    config::ConfigOptions,
+    datasource::TableProvider,
+    error::{DataFusionError, Result as DataFusionResult},
+    execution::TaskContext,
+    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    physical_expr::PhysicalSortExpr,
+    physical_plan::{
+        filter_pushdown::{ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation},
+        sort_pushdown::SortOrderPushdownResult,
+        stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+    },
+    sql::{unparser::dialect::DuckDBDialect, TableReference},
+};
+use datafusion_physical_expr::EquivalenceProperties;
 
 pub struct DuckDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
@@ -87,20 +92,17 @@ impl<T, P> DuckDBTable<T, P> {
 
     fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DuckSqlExec::new(
-            projections,
+            projection,
             schema,
-            &self.base_table.table_reference,
             self.base_table.clone_pool(),
-            filters,
-            limit,
+            sql,
             self.table_functions.clone(),
-            self.indexes.clone(),
+            self.base_table.dialect_arc(),
         )?))
     }
 }
@@ -137,7 +139,8 @@ impl<T, P> TableProvider for DuckDBTable<T, P> {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, &self.schema(), filters, limit);
+        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
+        return self.create_physical_plan(projection, &self.schema(), sql);
     }
 }
 
@@ -172,29 +175,19 @@ impl<T, P> Clone for DuckSqlExec<T, P> {
 impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        projections: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        table_reference: &TableReference,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        sql: String,
         table_functions: Option<HashMap<String, String>>,
-        indexes: Vec<(ColumnReference, IndexType)>,
+        dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let base_exec = SqlExec::new(
-            projections,
-            schema,
-            table_reference,
-            pool,
-            filters,
-            limit,
-            Some(Engine::DuckDB),
-        )?;
+        let base_exec = SqlExec::new(projection, schema, pool, sql, dialect)?;
 
         Ok(Self {
             base_exec,
             table_functions,
-            indexes,
+            indexes: Vec::new(),
             optimized_sql: None,
             optimized_sql_schema: None,
             optimized_sql_properties: None,
@@ -296,6 +289,119 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        match self.base_exec.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let base_exec = inner
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(DuckSqlExec {
+                        base_exec,
+                        table_functions: self.table_functions.clone(),
+                        indexes: self.indexes.clone(),
+                        optimized_sql: None,
+                        optimized_sql_schema: None,
+                        optimized_sql_properties: None,
+                    }),
+                })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let base_exec = inner
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: Arc::new(DuckSqlExec {
+                        base_exec,
+                        table_functions: self.table_functions.clone(),
+                        indexes: self.indexes.clone(),
+                        optimized_sql: None,
+                        optimized_sql_schema: None,
+                        optimized_sql_properties: None,
+                    }),
+                })
+            }
+            SortOrderPushdownResult::Unsupported => Ok(SortOrderPushdownResult::Unsupported),
+        }
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_exec.fetch()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let base_exec = self
+            .base_exec
+            .with_fetch(limit)?
+            .as_any()
+            .downcast_ref::<SqlExec<T, P>>()?
+            .clone();
+        Some(Arc::new(DuckSqlExec {
+            base_exec,
+            table_functions: self.table_functions.clone(),
+            indexes: self.indexes.clone(),
+            optimized_sql: None,
+            optimized_sql_schema: None,
+            optimized_sql_properties: None,
+        }))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        config: &ConfigOptions,
+    ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let result =
+            self.base_exec
+                .handle_child_pushdown_result(phase, child_pushdown_result, config)?;
+        let updated_node = result
+            .updated_node
+            .map(|node| {
+                let base_exec = node
+                    .as_any()
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in filter pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok::<_, DataFusionError>(Arc::new(DuckSqlExec {
+                    base_exec,
+                    table_functions: self.table_functions.clone(),
+                    indexes: self.indexes.clone(),
+                    optimized_sql: None,
+                    optimized_sql_schema: None,
+                    optimized_sql_properties: None,
+                }) as Arc<dyn ExecutionPlan>)
+            })
+            .transpose()?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node,
+        })
     }
 
     fn execute(

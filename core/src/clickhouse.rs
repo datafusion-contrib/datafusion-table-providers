@@ -110,7 +110,7 @@ pub struct ClickHouseTable {
     schema: SchemaRef,
     constraints: Constraints,
     #[allow(dead_code)] // Used by federation feature
-    dialect: Arc<dyn unparser::dialect::Dialect>,
+    dialect: Arc<dyn unparser::dialect::Dialect + Send + Sync>,
 }
 
 impl std::fmt::Debug for ClickHouseTable {
