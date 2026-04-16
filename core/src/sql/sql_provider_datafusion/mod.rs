@@ -184,16 +184,16 @@ impl<T, P> SqlTable<T, P> {
 
         let dialect = self.dialect_arc();
 
+        // Only quote when dialect has identifier. Note: `char::default()` is '\0' (which we don't want).
+        let quote_identifier = |identifier: &str| match dialect.identifier_quote_style(identifier) {
+            Some(quote) => format!("{quote}{identifier}{quote}"),
+            None => identifier.to_string(),
+        };
+
         let columns = projected_schema
             .fields()
             .iter()
-            .map(|f| {
-                let quote = dialect
-                    .identifier_quote_style(f.name())
-                    .unwrap_or_default()
-                    .to_string();
-                format!("{quote}{}{quote}", f.name())
-            })
+            .map(|f| quote_identifier(f.name()))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -215,11 +215,7 @@ impl<T, P> SqlTable<T, P> {
         };
 
         let table_name = self.table_reference.table();
-        let table_quote = dialect
-            .identifier_quote_style(table_name)
-            .unwrap_or_default()
-            .to_string();
-        let table_expr = format!("{table_quote}{table_name}{table_quote}");
+        let table_expr = quote_identifier(table_name);
 
         let mut sql = format!("SELECT {columns} FROM {table_expr}");
         if !where_expr.is_empty() {
@@ -856,6 +852,16 @@ mod tests {
             let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
             assert_eq!(result, "SELECT `name` FROM `users`");
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sql_to_string_default_dialect_has_no_nul(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let sql_table = new_sql_table("users", None)?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
+            assert_eq!(result, "SELECT name FROM users");
+            assert!(!result.contains('\0'));
             Ok(())
         }
 
