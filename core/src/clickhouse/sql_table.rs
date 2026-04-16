@@ -29,16 +29,16 @@ impl ClickHouseTable {
 
         let dialect: &dyn Dialect = &*self.dialect;
 
+        let quote_identifier = |identifier: &str| match dialect.identifier_quote_style(identifier)
+        {
+            Some(quote) => format!("{quote}{identifier}{quote}"),
+            None => identifier.to_string(),
+        };
+
         let columns = projected_schema
             .fields()
             .iter()
-            .map(|f| {
-                let quote = dialect
-                    .identifier_quote_style(f.name())
-                    .unwrap_or_default()
-                    .to_string();
-                format!("{quote}{}{quote}", f.name())
-            })
+            .map(|f| quote_identifier(f.name()))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -118,5 +118,78 @@ impl TableProvider for ClickHouseTable {
 impl Display for ClickHouseTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ClickHouseTable {}", self.table_reference)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clickhouse::Arg;
+    use crate::sql::db_connection_pool::{
+        clickhousepool::ClickHouseConnectionPool, JoinPushDown,
+    };
+    use clickhouse::Client;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::Constraints;
+    use datafusion::sql::TableReference;
+
+    fn new_clickhouse_table(args: Option<Vec<(String, Arg)>>) -> ClickHouseTable {
+        let pool = Arc::new(ClickHouseConnectionPool {
+            client: Client::default(),
+            join_push_down: JoinPushDown::AllowedFor("test".to_string()),
+        });
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("revenue", DataType::Decimal128(18, 2), false),
+        ]));
+
+        ClickHouseTable::new(
+            TableReference::parse_str("companies_param_view"),
+            args,
+            pool,
+            schema,
+            Constraints::default(),
+        )
+    }
+
+    #[test]
+    fn test_build_sql_for_parameterized_view_has_no_nul_bytes() {
+        let table = new_clickhouse_table(Some(vec![(
+            "name".to_string(),
+            Arg::String("Gizmo Corp.".to_string()),
+        )]));
+
+        let sql = table
+            .build_sql(Some(&vec![0, 1, 2]), &[], None)
+            .expect("build sql for parameterized view");
+
+        assert!(
+            !sql.contains('\0'),
+            "ClickHouse SQL should not contain NUL bytes: {sql:?}"
+        );
+        assert!(
+            sql.contains("FROM companies_param_view(name='Gizmo Corp.')"),
+            "expected parameterized view expression in SQL: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_build_sql_for_regular_table_has_no_nul_bytes() {
+        let table = new_clickhouse_table(None);
+
+        let sql = table
+            .build_sql(Some(&vec![0, 2]), &[], Some(10))
+            .expect("build sql for regular table");
+
+        assert!(
+            !sql.contains('\0'),
+            "ClickHouse SQL should not contain NUL bytes: {sql:?}"
+        );
+        assert!(
+            sql.contains("SELECT id") && sql.contains("revenue"),
+            "expected projected columns in SQL: {sql}"
+        );
     }
 }
