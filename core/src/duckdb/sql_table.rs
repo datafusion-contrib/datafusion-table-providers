@@ -236,7 +236,8 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
         if let Some(schema) = self.optimized_sql_schema.as_ref() {
             let eq_properties = EquivalenceProperties::new(Arc::clone(schema));
             self.optimized_sql_properties = Some(Arc::new(
-                PlanProperties::clone(self.base_exec.properties()).with_eq_properties(eq_properties),
+                PlanProperties::clone(self.base_exec.properties())
+                    .with_eq_properties(eq_properties),
             ));
         }
 

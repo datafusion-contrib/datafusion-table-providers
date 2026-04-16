@@ -28,12 +28,15 @@ use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::{DataType, Field, Schema, SchemaRef},
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
-    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    logical_expr::{
+        logical_plan::builder::LogicalTableSource, Expr, LogicalPlan, LogicalPlanBuilder,
+        TableProviderFilterPushDown, TableType,
+    },
     physical_expr::{EquivalenceProperties, PhysicalSortExpr},
     physical_plan::{
         execution_plan::{Boundedness, EmissionType},
@@ -291,6 +294,14 @@ impl<T, P> SqlTable<T, P> {
     #[must_use]
     pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
         Arc::clone(&self.pool)
+    }
+
+    /// Returns a cloneable Arc of the dialect for passing to SqlExec.
+    pub fn dialect_arc(&self) -> Arc<dyn Dialect + Send + Sync> {
+        match &self.dialect {
+            Some(dialect) => Arc::clone(dialect),
+            None => Arc::new(DefaultDialect {}),
+        }
     }
 
     /// Returns a cloneable Arc of the dialect for passing to SqlExec.
@@ -1005,6 +1016,333 @@ mod tests {
             let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
             assert_eq!(result, "SELECT `name` FROM `users`");
             Ok(())
+        }
+    }
+
+    mod sort_pushdown_tests {
+        use crate::sql::sql_provider_datafusion::SqlExec;
+        use arrow::compute::SortOptions;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::PhysicalSortExpr;
+        use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn test_sort_pushdown_single_column_asc() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_desc_nulls_last() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("age", 1)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS LAST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_multiple_columns() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("age", 1)),
+                    options: SortOptions {
+                        descending: true,
+                        nulls_first: true,
+                    },
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("name", 0)),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                },
+            ];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" ORDER BY age DESC NULLS FIRST, \"name\" ASC NULLS LAST"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_with_limit() {
+            let exec =
+                make_exec("SELECT \"name\", \"age\" FROM \"users\" WHERE \"age\" > 30 LIMIT 10");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let sql_exec = inner
+                        .as_any()
+                        .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                        .unwrap();
+                    assert_eq!(
+                        sql_exec.sql().unwrap(),
+                        "SELECT \"name\", \"age\" FROM \"users\" WHERE \"age\" > 30 ORDER BY \"name\" ASC NULLS FIRST LIMIT 10"
+                    );
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_empty_order_returns_unsupported() {
+            let exec = make_exec("SELECT \"name\" FROM \"users\"");
+            match exec.try_pushdown_sort(&[]).unwrap() {
+                SortOrderPushdownResult::Unsupported => {}
+                other => panic!("Expected Unsupported, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        #[test]
+        fn test_sort_pushdown_updates_output_ordering() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let order = vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("name", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }];
+
+            match exec.try_pushdown_sort(&order).unwrap() {
+                SortOrderPushdownResult::Exact { inner } => {
+                    let orderings = inner.properties().output_ordering();
+                    assert!(orderings.is_some(), "Output ordering should be set");
+                    let output_order = orderings.unwrap();
+                    assert_eq!(output_order.len(), 1);
+                }
+                other => panic!("Expected Exact, got {:?}", sort_result_name(&other)),
+            }
+        }
+
+        fn sort_result_name(
+            result: &SortOrderPushdownResult<Arc<dyn ExecutionPlan>>,
+        ) -> &'static str {
+            match result {
+                SortOrderPushdownResult::Exact { .. } => "Exact",
+                SortOrderPushdownResult::Inexact { .. } => "Inexact",
+                SortOrderPushdownResult::Unsupported => "Unsupported",
+            }
+        }
+    }
+
+    mod with_fetch_tests {
+        use crate::sql::sql_provider_datafusion::SqlExec;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::sql::unparser::dialect::DefaultDialect;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("age", DataType::Int16, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlExec::new(
+                None,
+                &schema,
+                pool,
+                sql.to_string(),
+                Arc::new(DefaultDialect {}),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn test_with_fetch_appends_limit() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
+            let result = exec.with_fetch(Some(10)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" LIMIT 10"
+            );
+        }
+
+        #[test]
+        fn test_with_fetch_replaces_existing_limit() {
+            let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\" LIMIT 100");
+            let result = exec.with_fetch(Some(5)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" LIMIT 5"
+            );
+        }
+
+        #[test]
+        fn test_with_fetch_none_returns_none() {
+            let exec = make_exec("SELECT \"name\" FROM \"users\"");
+            assert!(exec.with_fetch(None).is_none());
+        }
+
+        #[test]
+        fn test_with_fetch_preserves_order_by() {
+            let exec = make_exec(
+                "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST LIMIT 50",
+            );
+            let result = exec.with_fetch(Some(10)).unwrap();
+            let sql_exec = result
+                .as_any()
+                .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
+                .unwrap();
+            assert_eq!(
+                sql_exec.sql().unwrap(),
+                "SELECT \"name\", \"age\" FROM \"users\" ORDER BY \"name\" ASC NULLS FIRST LIMIT 10"
+            );
         }
     }
 
