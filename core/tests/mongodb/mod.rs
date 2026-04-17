@@ -812,6 +812,81 @@ async fn test_mongodb_arrow_oneway() {
     test_mongodb_nested_object_types(port).await;
     test_mongodb_null_and_missing_fields(port).await;
     test_mongodb_unnesting_depth_1(port).await;
+    test_mongodb_sort_limit(port).await;
 
     mongodb_container.remove().await.expect("container to stop");
+}
+
+/// Regression tests for `ORDER BY ... LIMIT N`.
+///
+/// DataFusion 52/53's `PushdownSort` optimizer fuses `ORDER BY x LIMIT N`
+/// into `SortExec { fetch: N }`, then drops the whole `SortExec` when
+/// `MongoDBExec::try_pushdown_sort` returns `Exact` — silently losing the N.
+/// These tests verify end-to-end that `SELECT ... ORDER BY ... LIMIT N`
+/// returns exactly N rows.
+async fn test_mongodb_sort_limit(port: usize) {
+    let ctx = SessionContext::new();
+    let client = common::get_mongodb_client(port)
+        .await
+        .expect("MongoDB client should be created");
+    let db = client.database("testdb");
+    let collection = db.collection::<Document>("sort_limit_test");
+    let _ = collection.drop().await;
+
+    // Insert 20 documents with id = 1..=20.
+    let docs: Vec<Document> = (1..=20).map(|i| doc! { "id": i as i32 }).collect();
+    collection
+        .insert_many(docs)
+        .await
+        .expect("MongoDB documents should be inserted");
+
+    let pool = common::get_mongodb_connection_pool(port, None)
+        .await
+        .expect("MongoDB connection pool should be created");
+    let table = MongoDBTable::new(&Arc::new(pool), "sort_limit_test")
+        .await
+        .expect("Table should be created");
+    ctx.register_table("sort_limit_test", Arc::new(table))
+        .expect("Table should be registered");
+
+    // 1. ORDER BY + LIMIT must return exactly N rows in the correct order.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("id column is Int32");
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![20, 19, 18, 17, 16], "top-5 DESC rows");
+
+    // 2. ORDER BY + LIMIT with a WHERE filter.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3);
+    let col = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(got, vec![11, 12, 13]);
+
+    // 3. Bare LIMIT (no ORDER BY) must still cap rows.
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test LIMIT 7")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 7);
 }
