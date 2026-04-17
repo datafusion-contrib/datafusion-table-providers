@@ -262,7 +262,13 @@ impl ExecutionPlan for MongoDBExec {
         new_exec.properties =
             Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
-        Ok(SortOrderPushdownResult::Exact {
+        // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
+        // above us. Exact would replace the SortExec with `inner`, which loses the
+        // SortExec's embedded fetch (`ORDER BY ... LIMIT N` is represented as a
+        // single SortExec with fetch=N in DF 52). Keeping the SortExec preserves the
+        // fetch as a TopK applied to our already-sorted SQL output.
+        // We can use Exact once we use DF version which includes PR https://github.com/apache/datafusion/pull/21182
+        Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_exec),
         })
     }
@@ -660,7 +666,7 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
                 let display = format_exec(mongo_exec);
@@ -669,7 +675,7 @@ mod tests {
                     "Display should show sort: {display}"
                 );
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -691,11 +697,11 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "age": -1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -726,11 +732,11 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1, "age": -1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -772,7 +778,7 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     !mongo_exec.filters_doc.is_empty(),
@@ -781,7 +787,7 @@ mod tests {
                 assert_eq!(mongo_exec.limit, Some(10), "Limit should be preserved");
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 
@@ -793,14 +799,14 @@ mod tests {
 
         let result = exec.try_pushdown_sort(&[]).unwrap();
         match result {
-            SortOrderPushdownResult::Exact { inner } => {
+            SortOrderPushdownResult::Inexact { inner } => {
                 let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     mongo_exec.sort_doc.is_empty(),
                     "Empty sort should produce empty doc"
                 );
             }
-            other => panic!("Expected Exact, got: {other:?}"),
+            other => panic!("Expected Inexact, got: {other:?}"),
         }
     }
 }
