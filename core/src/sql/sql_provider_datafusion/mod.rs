@@ -283,7 +283,7 @@ pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     dialect: Arc<dyn Dialect + Send + Sync>,
 }
 
@@ -313,12 +313,12 @@ impl<T, P> SqlExec<T, P> {
             projected_schema: Arc::clone(&projected_schema),
             pool,
             sql,
-            properties: PlanProperties::new(
+            properties: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )),
             dialect,
         })
     }
@@ -495,7 +495,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         Arc::clone(&self.projected_schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -578,7 +578,8 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             Arc::clone(&self.projected_schema),
             vec![order.to_vec()],
         );
-        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+        new_exec.properties =
+            Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
         // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
         // above us. Exact would replace the SortExec with `inner`, which loses the
