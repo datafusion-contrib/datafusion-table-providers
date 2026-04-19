@@ -36,7 +36,7 @@ pub fn make_count_exec(count: u64) -> datafusion::error::Result<Arc<dyn Executio
 /// A minimal `ExecutionPlan` that yields a single pre-computed `RecordBatch`.
 pub struct CountExec {
     batch: RecordBatch,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl CountExec {
@@ -47,7 +47,10 @@ impl CountExec {
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
         );
-        Self { batch, properties }
+        Self {
+            batch,
+            properties: Arc::new(properties),
+        }
     }
 
     /// Creates a `CountExec` that produces a single row with the given count value.
@@ -88,7 +91,7 @@ impl ExecutionPlan for CountExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

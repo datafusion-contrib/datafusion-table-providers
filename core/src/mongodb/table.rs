@@ -111,7 +111,7 @@ struct MongoDBExec {
     filters_doc: Document,
     sort_doc: Document,
     limit: Option<i32>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl MongoDBExec {
@@ -164,12 +164,12 @@ impl MongoDBExec {
             filters_doc: mongo_filters_doc,
             sort_doc: Document::new(),
             limit,
-            properties: PlanProperties::new(
+            properties: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(projected_schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            ),
+            )),
         })
     }
 }
@@ -218,7 +218,7 @@ impl ExecutionPlan for MongoDBExec {
         Arc::clone(&self.projected_schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -264,7 +264,8 @@ impl ExecutionPlan for MongoDBExec {
             Arc::clone(&self.projected_schema),
             vec![order.to_vec()],
         );
-        new_exec.properties = new_exec.properties.with_eq_properties(eq_properties);
+        new_exec.properties =
+            Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
         Ok(SortOrderPushdownResult::Exact {
             inner: Arc::new(new_exec),

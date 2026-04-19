@@ -51,7 +51,7 @@ pub trait DeletionSink: Send + Sync {
 
 pub struct DeletionExec {
     deletion_sink: Arc<dyn DeletionSink + 'static>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DeletionExec {
@@ -64,7 +64,7 @@ impl DeletionExec {
         );
         Self {
             deletion_sink,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -90,7 +90,7 @@ impl ExecutionPlan for DeletionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -132,7 +132,7 @@ pub trait UpdateSink: Send + Sync {
 
 pub struct UpdateExec {
     update_sink: Arc<dyn UpdateSink + 'static>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl UpdateExec {
@@ -145,7 +145,7 @@ impl UpdateExec {
         );
         Self {
             update_sink,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -171,7 +171,7 @@ impl ExecutionPlan for UpdateExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

@@ -63,7 +63,7 @@ impl RawClickHouseTableFactory {
         args: Option<Py<PyAny>>,
     ) -> PyResult<RawTableProvider> {
         let args_vec = if let Some(args) = args {
-            let seq = args.downcast_bound::<PyList>(py).map_err(|_| {
+            let seq = args.cast_bound::<PyList>(py).map_err(|_| {
                 PyTypeError::new_err("Argument must be list of int (signed/unsigned) or string")
             })?;
 

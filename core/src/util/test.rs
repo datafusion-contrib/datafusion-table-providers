@@ -24,7 +24,7 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl MockExec {
@@ -36,7 +36,7 @@ impl MockExec {
     /// ensure any poll loops are correct. This behavior can be
     /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&schema));
+        let cache = Arc::new(Self::compute_properties(Arc::clone(&schema)));
         Self {
             data,
             schema,
@@ -87,7 +87,7 @@ impl ExecutionPlan for MockExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -149,7 +149,7 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn statistics(&self) -> Result<Statistics> {
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         let data: Result<Vec<_>> = self
             .data
             .iter()

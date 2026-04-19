@@ -3,6 +3,7 @@ use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use crate::util::supported_functions::contains_unsupported_functions;
 use arrow::datatypes::SchemaRef;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
@@ -66,7 +67,7 @@ impl<T, P> SQLExecutor for DuckDBTable<T, P> {
         &self,
         query: &str,
         schema: SchemaRef,
-        _filters: &[Arc<dyn datafusion::physical_plan::PhysicalExpr>],
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
             self.base_table.clone_pool(),

@@ -48,7 +48,7 @@ use tonic::metadata::{AsciiMetadataKey, MetadataMap};
 #[derive(Clone, Debug)]
 pub(crate) struct FlightExec {
     config: FlightConfig,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
     metadata_map: Arc<MetadataMap>,
 }
 
@@ -90,12 +90,12 @@ impl From<FlightConfig> for FlightExec {
         } else {
             Boundedness::Bounded
         };
-        let plan_properties = PlanProperties::new(
+        let plan_properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(config.schema.clone()),
             Partitioning::UnknownPartitioning(config.partitions.len()),
             EmissionType::Incremental,
             exec_mode,
-        );
+        ));
         let mut mm = MetadataMap::new();
         for (k, v) in config.properties.grpc_headers.iter() {
             let key = AsciiMetadataKey::from_str(k.as_str()).expect("invalid header name");
@@ -292,7 +292,7 @@ impl ExecutionPlan for FlightExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 

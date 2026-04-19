@@ -156,7 +156,7 @@ pub struct DuckSqlExec<T, P> {
     indexes: Vec<(ColumnReference, IndexType)>,
     optimized_sql: Option<String>,
     optimized_sql_schema: Option<SchemaRef>,
-    optimized_sql_properties: Option<PlanProperties>,
+    optimized_sql_properties: Option<Arc<PlanProperties>>,
 }
 
 impl<T, P> Clone for DuckSqlExec<T, P> {
@@ -234,10 +234,10 @@ impl<T: 'static, P: 'static> DuckSqlExec<T, P> {
         self.optimized_sql_schema = new_schema;
 
         if let Some(schema) = self.optimized_sql_schema.as_ref() {
-            let mut properties = self.base_exec.properties().clone();
             let eq_properties = EquivalenceProperties::new(Arc::clone(schema));
-            properties.eq_properties = eq_properties;
-            self.optimized_sql_properties = Some(properties);
+            self.optimized_sql_properties = Some(Arc::new(
+                PlanProperties::clone(self.base_exec.properties()).with_eq_properties(eq_properties),
+            ));
         }
 
         self
@@ -274,7 +274,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
             .unwrap_or_else(|| self.base_exec.schema())
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.optimized_sql_properties
             .as_ref()
             .unwrap_or_else(|| self.base_exec.properties())
