@@ -1,6 +1,5 @@
 use std::{any::Any, fmt, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::{
     error::DataFusionError,
@@ -56,9 +55,9 @@ pub struct DeletionExec {
 }
 
 impl DeletionExec {
-    pub fn new(deletion_sink: Arc<dyn DeletionSink>, schema: &SchemaRef) -> Self {
+    pub fn new(deletion_sink: Arc<dyn DeletionSink>) -> Self {
         let properties = PlanProperties::new(
-            datafusion::physical_expr::EquivalenceProperties::new(Arc::clone(schema)),
+            datafusion::physical_expr::EquivalenceProperties::new(count_schema()),
             datafusion::physical_plan::Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
@@ -137,9 +136,9 @@ pub struct UpdateExec {
 }
 
 impl UpdateExec {
-    pub fn new(update_sink: Arc<dyn UpdateSink>, schema: &SchemaRef) -> Self {
+    pub fn new(update_sink: Arc<dyn UpdateSink>) -> Self {
         let properties = PlanProperties::new(
-            datafusion::physical_expr::EquivalenceProperties::new(Arc::clone(schema)),
+            datafusion::physical_expr::EquivalenceProperties::new(count_schema()),
             datafusion::physical_plan::Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
