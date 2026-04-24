@@ -513,7 +513,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "log",
- "odbc-api",
+ "odbc-api 24.1.1",
  "simdutf8",
  "thiserror 2.0.18",
 ]
@@ -2515,7 +2515,7 @@ dependencies = [
  "native-tls",
  "num-bigint",
  "num-traits",
- "odbc-api",
+ "odbc-api 25.0.0",
  "pem",
  "postgres-native-tls",
  "prost",
@@ -4836,6 +4836,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "odbc-api"
+version = "25.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9144219b357fb103b928a1ef1b4e466a84b8f52aa9f5d5e538c409e1ffb9d26"
+dependencies = [
+ "atoi",
+ "log",
+ "odbc-sys",
+ "thiserror 2.0.18",
+ "widestring",
+ "winit",
+]
+
+[[package]]
 name = "odbc-sys"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6446,7 +6460,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54254b8531cafa275c5e096f62d48c81435d1015405a91198ddb11e967301d40"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
