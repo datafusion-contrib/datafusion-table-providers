@@ -130,16 +130,12 @@ impl TableProvider for SqliteTableWriter {
         };
         let table_name = self.sqlite().table_name().to_string();
         let sqlite = self.sqlite();
-        let schema = self.schema();
 
-        Ok(Arc::new(DeletionExec::new(
-            Arc::new(SqliteDeletionSink {
-                sqlite,
-                table_name,
-                sql_where,
-            }),
-            &schema,
-        )))
+        Ok(Arc::new(DeletionExec::new(Arc::new(SqliteDeletionSink {
+            sqlite,
+            table_name,
+            sql_where,
+        }))))
     }
 
     async fn update(
@@ -155,7 +151,6 @@ impl TableProvider for SqliteTableWriter {
         let set_clause = assignments_to_sql(&assignments, Some(expr::Engine::SQLite))?;
         let table_name = self.sqlite().table_name().to_string();
         let sqlite = self.sqlite();
-        let schema = self.schema();
 
         let sql = if filters.is_empty() {
             format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
@@ -164,10 +159,10 @@ impl TableProvider for SqliteTableWriter {
             format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
         };
 
-        Ok(Arc::new(UpdateExec::new(
-            Arc::new(SqliteUpdateSink { sqlite, sql }),
-            &schema,
-        )))
+        Ok(Arc::new(UpdateExec::new(Arc::new(SqliteUpdateSink {
+            sqlite,
+            sql,
+        }))))
     }
 }
 

@@ -114,16 +114,14 @@ impl TableProvider for PostgresTableWriter {
         };
         let table_name = self.postgres.table_name().to_string();
         let postgres = self.postgres();
-        let schema = self.schema();
 
-        Ok(Arc::new(DeletionExec::new(
-            Arc::new(PostgresDeletionSink {
+        Ok(Arc::new(DeletionExec::new(Arc::new(
+            PostgresDeletionSink {
                 postgres,
                 table_name,
                 sql_where,
-            }),
-            &schema,
-        )))
+            },
+        ))))
     }
 
     async fn update(
@@ -139,7 +137,6 @@ impl TableProvider for PostgresTableWriter {
         let set_clause = assignments_to_sql(&assignments, None)?;
         let table_name = self.postgres.table_name().to_string();
         let postgres = self.postgres();
-        let schema = self.schema();
 
         let sql = if filters.is_empty() {
             format!(r#"UPDATE "{table_name}" SET {set_clause}"#)
@@ -148,10 +145,10 @@ impl TableProvider for PostgresTableWriter {
             format!(r#"UPDATE "{table_name}" SET {set_clause} WHERE {sql_where}"#)
         };
 
-        Ok(Arc::new(UpdateExec::new(
-            Arc::new(PostgresUpdateSink { postgres, sql }),
-            &schema,
-        )))
+        Ok(Arc::new(UpdateExec::new(Arc::new(PostgresUpdateSink {
+            postgres,
+            sql,
+        }))))
     }
 }
 
