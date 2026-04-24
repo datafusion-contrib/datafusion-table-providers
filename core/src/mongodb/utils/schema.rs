@@ -114,7 +114,8 @@ fn unify_types(type1: &DataType, type2: &DataType) -> DataType {
         (DataType::Int64, DataType::Float64) | (DataType::Float64, DataType::Int64) => {
             DataType::Float64
         }
-        (DataType::Date32, DataType::Timestamp(tu, tz)) => DataType::Timestamp(*tu, tz.clone()),
+        (DataType::Date32, DataType::Timestamp(tu, tz))
+        | (DataType::Timestamp(tu, tz), DataType::Date32) => DataType::Timestamp(*tu, tz.clone()),
 
         // Otherwise use string
         _ => DataType::Utf8,
@@ -225,6 +226,49 @@ mod tests {
                 TimeUnit::Millisecond,
                 Some("+02:00".into())
             ))
+        );
+    }
+
+    #[test]
+    fn test_unify_timestamp_and_date32_both_orders() {
+        // Regression: when a collection has both midnight DateTimes (inferred as Date32)
+        // and non-midnight DateTimes (inferred as Timestamp) for the same field, the
+        // unified type must be Timestamp regardless of which one is seen first.
+        // HashMap iteration order is non-deterministic, so both directions must work.
+        let midnight = mongodb::bson::DateTime::builder()
+            .year(2024)
+            .month(1)
+            .day(1)
+            .build()
+            .unwrap();
+        let non_midnight = mongodb::bson::DateTime::builder()
+            .year(2024)
+            .month(6)
+            .day(15)
+            .hour(12)
+            .build()
+            .unwrap();
+
+        // Order A: midnight first, then non-midnight
+        let docs = vec![
+            doc! { "created_at": midnight },
+            doc! { "created_at": non_midnight },
+        ];
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
+        assert_eq!(
+            schema.field_with_name("created_at").unwrap().data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
+        );
+
+        // Order B: non-midnight first, then midnight — previously fell through to Utf8
+        let docs = vec![
+            doc! { "created_at": non_midnight },
+            doc! { "created_at": midnight },
+        ];
+        let schema = infer_arrow_schema_from_documents(&docs, None).unwrap();
+        assert_eq!(
+            schema.field_with_name("created_at").unwrap().data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
     }
 

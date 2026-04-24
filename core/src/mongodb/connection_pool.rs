@@ -85,6 +85,27 @@ impl MongoDBConnectionPool {
             self.num_documents_to_infer_schema,
         )))
     }
+
+    /// Create a stub pool for unit tests that don't require a real connection.
+    #[cfg(test)]
+    pub(crate) fn new_stub() -> Self {
+        let mut opts = ClientOptions::default();
+        opts.hosts = vec![mongodb::options::ServerAddress::Tcp {
+            host: "localhost".to_string(),
+            port: Some(27017),
+        }];
+        let client = Client::with_options(opts).expect("stub options should work");
+        Self {
+            client: Arc::new(client),
+            db_name: "test".to_string(),
+            tz: None,
+            unnest_parameters: UnnestParameters {
+                behavior: UnnestBehavior::Depth(0),
+                duplicate_behavior: DuplicateBehavior::Error,
+            },
+            num_documents_to_infer_schema: 100,
+        }
+    }
 }
 
 fn build_connection_uri(

@@ -150,3 +150,263 @@ async fn test_arrow_adbc_roundtrip(
     )
     .await;
 }
+
+/// Tests for ADBC pushdown optimizations: projection, filter, limit, sort
+mod pushdown_tests {
+    use super::*;
+    use datafusion::prelude::SessionContext;
+
+    fn try_get_db(driver_name: &str) -> Option<ManagedDatabase> {
+        let mut driver = ManagedDriver::load_from_name(
+            driver_name,
+            None,
+            AdbcVersion::V110,
+            LOAD_FLAG_DEFAULT,
+            None,
+        )
+        .ok()?;
+
+        driver
+            .new_database_with_opts([(
+                OptionDatabase::Uri,
+                OptionValue::String(":memory:".to_string()),
+            )])
+            .ok()
+    }
+
+    /// Helper: create an ADBC-backed table with test data.
+    /// Returns None if the ADBC driver is not available.
+    async fn setup_adbc_table(
+        ctx: &SessionContext,
+        table_name: &str,
+    ) -> Option<Arc<dyn datafusion::datasource::TableProvider>> {
+        let db = try_get_db("sqlite")?;
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("age", arrow::datatypes::DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "Alice", "Bob", "Charlie", "Diana", "Eve",
+                ])),
+                Arc::new(arrow::array::Int32Array::from(vec![30, 25, 35, 28, 22])),
+            ],
+        )
+        .unwrap();
+
+        let adbc_pool = Arc::new(ADBCPool::new(db, None).expect("Failed to create ADBC pool"));
+        let table_factory = AdbcTableFactory::new(adbc_pool);
+
+        let mem_exec = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+            .expect("Failed to create memory source execution plan");
+
+        let create_plan = table_factory
+            .create_from(&ctx.state(), mem_exec, table_name.into())
+            .await
+            .expect("Failed to create table");
+
+        let _ = collect(create_plan, ctx.task_ctx())
+            .await
+            .expect("Table creation failed");
+
+        let table_provider = table_factory
+            .table_provider(table_name.into(), None)
+            .await
+            .expect("Failed to get table provider");
+
+        ctx.register_table(table_name, Arc::clone(&table_provider))
+            .expect("Failed to register table");
+
+        Some(table_provider)
+    }
+
+    macro_rules! adbc_test {
+        ($ctx:ident, $table:literal) => {
+            let $ctx = SessionContext::new();
+            if setup_adbc_table(&$ctx, $table).await.is_none() {
+                eprintln!("Skipping test: ADBC SQLite driver not found");
+                return;
+            }
+        };
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_projection_pushdown() {
+        adbc_test!(ctx, "proj_test");
+
+        let df = ctx
+            .sql("SELECT name FROM proj_test")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        assert_eq!(batches[0].num_columns(), 1);
+        assert_eq!(batches[0].num_rows(), 5);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_filter_pushdown() {
+        adbc_test!(ctx, "filter_test");
+
+        let df = ctx
+            .sql("SELECT * FROM filter_test WHERE age > 27")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3); // Alice(30), Charlie(35), Diana(28)
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_limit_pushdown() {
+        adbc_test!(ctx, "limit_test");
+
+        let df = ctx
+            .sql("SELECT * FROM limit_test LIMIT 2")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_filter_and_limit_pushdown() {
+        adbc_test!(ctx, "filter_limit_test");
+
+        let df = ctx
+            .sql("SELECT * FROM filter_limit_test WHERE age >= 28 LIMIT 2")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert!(total_rows <= 2);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_projection_and_filter_pushdown() {
+        adbc_test!(ctx, "proj_filter_test");
+
+        let df = ctx
+            .sql("SELECT name, age FROM proj_filter_test WHERE age < 30")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        assert_eq!(batches[0].num_columns(), 2);
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3); // Bob(25), Diana(28), Eve(22)
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_sort_pushdown() {
+        adbc_test!(ctx, "sort_test");
+
+        let df = ctx
+            .sql("SELECT name, age FROM sort_test ORDER BY age ASC")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let age_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+
+        let ages: Vec<i32> = (0..age_col.len()).map(|i| age_col.value(i)).collect();
+        assert_eq!(ages, vec![22, 25, 28, 30, 35]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_sort_desc_pushdown() {
+        adbc_test!(ctx, "sort_desc_test");
+
+        let df = ctx
+            .sql("SELECT name, age FROM sort_desc_test ORDER BY age DESC")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let age_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+
+        let ages: Vec<i32> = (0..age_col.len()).map(|i| age_col.value(i)).collect();
+        assert_eq!(ages, vec![35, 30, 28, 25, 22]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_sort_with_limit_pushdown() {
+        adbc_test!(ctx, "sort_limit_test");
+
+        // TopK pattern: ORDER BY + LIMIT
+        let df = ctx
+            .sql("SELECT name, age FROM sort_limit_test ORDER BY age DESC LIMIT 3")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+
+        let age_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+
+        let ages: Vec<i32> = (0..age_col.len()).map(|i| age_col.value(i)).collect();
+        assert_eq!(ages, vec![35, 30, 28]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_multi_column_sort_pushdown() {
+        adbc_test!(ctx, "multi_sort_test");
+
+        let df = ctx
+            .sql("SELECT * FROM multi_sort_test ORDER BY age ASC, name DESC")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_all_pushdowns_combined() {
+        adbc_test!(ctx, "combined_test");
+
+        // projection + filter + sort + limit all at once
+        let df = ctx
+            .sql("SELECT name, age FROM combined_test WHERE age >= 25 ORDER BY age ASC LIMIT 3")
+            .await
+            .expect("Query should succeed");
+        let batches = df.collect().await.expect("Should collect results");
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+        assert_eq!(batches[0].num_columns(), 2);
+
+        let age_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+
+        let ages: Vec<i32> = (0..age_col.len()).map(|i| age_col.value(i)).collect();
+        assert_eq!(ages, vec![25, 28, 30]);
+    }
+}

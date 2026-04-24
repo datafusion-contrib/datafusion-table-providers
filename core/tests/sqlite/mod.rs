@@ -366,3 +366,236 @@ async fn test_sqlite_table_provider_roundtrip(
         "Round-tripped data should match original"
     );
 }
+
+/// Test List(Utf8) round-trip through SqliteTableProviderFactory with federation enabled
+/// This test uses the factory which wraps the table with federation support when the feature is enabled
+#[cfg(feature = "sqlite-federation")]
+#[tokio::test]
+async fn test_sqlite_list_utf8_federation_roundtrip() {
+    let ctx = SessionContext::new();
+    let (record_batch, schema) = get_arrow_list_utf8_record_batch();
+    let table_name = "list_utf8_federation_test";
+
+    let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+
+    // Create external table using SqliteTableProviderFactory (enables federation)
+    let external_table = CreateExternalTable {
+        schema: df_schema,
+        name: TableReference::bare(table_name),
+        location: String::new(),
+        file_type: String::new(),
+        table_partition_cols: vec![],
+        if_not_exists: true,
+        or_replace: false,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Constraints::new_unverified(vec![]),
+        column_defaults: HashMap::default(),
+        temporary: false,
+    };
+
+    let factory = SqliteTableProviderFactory::default();
+    let table = factory
+        .create(&ctx.state(), &external_table)
+        .await
+        .expect("table should be created");
+
+    // Insert data using TableProvider's insert_into method
+    let exec = MockExec::new(vec![Ok(record_batch.clone())], Arc::clone(&schema));
+    let insertion = table
+        .insert_into(&ctx.state(), Arc::new(exec), InsertOp::Append)
+        .await
+        .expect("insertion should be successful");
+
+    collect(insertion, ctx.task_ctx())
+        .await
+        .expect("insert should complete");
+
+    // Register the table to query it back
+    ctx.register_table(table_name, Arc::clone(&table))
+        .expect("table should be registered");
+
+    // Query the data back
+    let query_sql = format!("SELECT * FROM {table_name}");
+    let df = ctx.sql(&query_sql).await.expect("query should succeed");
+
+    let result_batches = df.collect().await.expect("should collect results");
+
+    // Verify results
+    assert_eq!(result_batches.len(), 1, "Should have one result batch");
+    let result_batch = &result_batches[0];
+
+    assert_eq!(
+        result_batch.num_rows(),
+        record_batch.num_rows(),
+        "Should have same number of rows"
+    );
+    assert_eq!(
+        result_batch.num_columns(),
+        record_batch.num_columns(),
+        "Should have same number of columns"
+    );
+
+    // Cast the result back to the original schema for comparison
+    let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
+        .expect("should cast result to original schema");
+
+    // Verify the data matches
+    assert_eq!(
+        casted_result, record_batch,
+        "Round-tripped data should match original"
+    );
+}
+
+#[allow(dead_code)]
+fn downcast_decimal_array(array: &ArrayRef) -> &Decimal128Array {
+    match array.as_any().downcast_ref::<Decimal128Array>() {
+        Some(array) => array,
+        None => panic!("Expected decimal array"),
+    }
+}
+
+#[allow(dead_code)]
+async fn download_parquet_as_record_batch(url: &str) -> anyhow::Result<RecordBatch> {
+    // Download the parquet file
+    let response = reqwest::get(url).await?;
+    let parquet_bytes = response.bytes().await?;
+
+    // Write to a temporary file
+    let temp_dir = tempfile::tempdir()?;
+    let temp_path = temp_dir.path().join("downloaded.parquet");
+    std::fs::write(&temp_path, &parquet_bytes)?;
+
+    // Read the parquet file using DataFusion
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "parquet_data",
+        temp_path.to_str().unwrap(),
+        Default::default(),
+    )
+    .await?;
+
+    let df = ctx.sql("SELECT * FROM parquet_data").await?;
+
+    let batches = df.collect().await?;
+    let record_batch = batches
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No record batches found in parquet file"))?;
+
+    Ok(record_batch)
+}
+
+#[cfg(feature = "sqlite-federation")]
+mod sort_limit_pushdown {
+    use super::*;
+
+    async fn setup_table(ctx: &SessionContext, name: &str) {
+        let factory = SqliteTableProviderFactory::default();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+
+        let ids: Vec<i32> = (1..=20).collect();
+        let labels: Vec<String> = ids.iter().map(|i| format!("row-{i:02}")).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(StringArray::from(labels)),
+            ],
+        )
+        .unwrap();
+
+        let cmd = CreateExternalTable {
+            schema: Arc::new(batch.schema().to_dfschema().unwrap()),
+            name: name.into(),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::from([("mode".to_string(), "memory".to_string())]),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+        let table = factory.create(&ctx.state(), &cmd).await.unwrap();
+        let mem = datafusion::datasource::memory::MemorySourceConfig::try_new_exec(
+            &[vec![batch.clone()]],
+            batch.schema(),
+            None,
+        )
+        .unwrap();
+        let insert = table
+            .insert_into(&ctx.state(), mem, InsertOp::Append)
+            .await
+            .unwrap();
+        let _ = collect(insert, ctx.task_ctx()).await.unwrap();
+        ctx.register_table(name, table).unwrap();
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_returns_exactly_n_rows() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![20, 19, 18, 17, 16], "top-5 DESC rows");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_with_filter() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_filter_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_filter_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 3);
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![11, 12, 13]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn limit_without_order_by() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "limit_only_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM limit_only_test LIMIT 7")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 7, "LIMIT without ORDER BY must still cap rows");
+    }
+}
