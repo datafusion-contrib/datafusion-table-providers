@@ -10,9 +10,12 @@ use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
-    sql::db_connection_pool::{
-        dbconnection::{mysqlconn::MySQLConnection, AsyncDbConnection, DbConnection},
-        JoinPushDown,
+    sql::{
+        arrow_sql_gen::mysql::MysqlZeroDateBehavior,
+        db_connection_pool::{
+            dbconnection::{mysqlconn::MySQLConnection, AsyncDbConnection, DbConnection},
+            JoinPushDown,
+        },
     },
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
 };
@@ -55,6 +58,7 @@ pub enum Error {
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
     join_push_down: JoinPushDown,
+    zero_date_behavior: MysqlZeroDateBehavior,
 }
 
 #[allow(dead_code)]
@@ -223,7 +227,23 @@ impl MySQLConnectionPool {
         Ok(Self {
             pool: Arc::new(pool),
             join_push_down,
+            zero_date_behavior: MysqlZeroDateBehavior::default(),
         })
+    }
+
+    /// Override the [`MysqlZeroDateBehavior`] used by connections created from this pool.
+    /// Connections created before this call are unaffected.
+    #[must_use]
+    pub fn with_zero_date_behavior(mut self, behavior: MysqlZeroDateBehavior) -> Self {
+        self.zero_date_behavior = behavior;
+        self
+    }
+
+    /// Returns the [`MysqlZeroDateBehavior`] that will be applied to connections created from
+    /// this pool.
+    #[must_use]
+    pub fn zero_date_behavior(&self) -> MysqlZeroDateBehavior {
+        self.zero_date_behavior
     }
 
     /// Returns a direct connection to the underlying database.
@@ -235,7 +255,7 @@ impl MySQLConnectionPool {
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
-        Ok(MySQLConnection::new(conn))
+        Ok(MySQLConnection::new(conn).with_zero_date_behavior(self.zero_date_behavior))
     }
 
     pub fn metrics(&self) -> Arc<Metrics> {
@@ -299,7 +319,9 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
-        Ok(Box::new(MySQLConnection::new(conn)))
+        Ok(Box::new(
+            MySQLConnection::new(conn).with_zero_date_behavior(self.zero_date_behavior),
+        ))
     }
 
     fn join_push_down(&self) -> JoinPushDown {

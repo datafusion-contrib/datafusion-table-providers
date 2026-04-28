@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 use crate::mysql::write::MySQLTableWriter;
+use crate::sql::arrow_sql_gen::mysql::MysqlZeroDateBehavior;
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::sql::db_connection_pool::dbconnection::mysqlconn::MySQLConnection;
 use crate::sql::db_connection_pool::dbconnection::DbConnection;
@@ -128,6 +129,19 @@ impl MySQLTableFactory {
     pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
         self.function_support = Some(function_support);
         self
+    }
+
+    /// Override the [`MysqlZeroDateBehavior`] applied to connections obtained from this
+    /// factory's pool. This is a convenience setter equivalent to constructing the pool with
+    /// [`MySQLConnectionPool::with_zero_date_behavior`]. Note that the underlying pool is
+    /// shared, so this affects all consumers of the pool.
+    #[must_use]
+    pub fn with_zero_date_behavior(self, behavior: MysqlZeroDateBehavior) -> Self {
+        let pool = (*self.pool).clone().with_zero_date_behavior(behavior);
+        Self {
+            pool: Arc::new(pool),
+            function_support: self.function_support,
+        }
     }
 
     pub async fn table_provider(
