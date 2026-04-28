@@ -246,6 +246,33 @@ impl SqliteTableProviderFactory {
 
         Ok(pool)
     }
+
+    /// Drop the cached pool entry for `key` if any, returning the previously
+    /// cached pool. Subsequent calls to [`Self::get_or_init_instance`] for
+    /// the same key will build a fresh pool.
+    ///
+    /// This is intended for callers that replace the underlying database file
+    /// out-of-band (for example, after restoring it from a snapshot in object
+    /// storage). See [`crate::duckdb::DuckDBTableProviderFactory::invalidate_instance`]
+    /// for the semantics around in-flight connections.
+    pub async fn invalidate_instance(
+        &self,
+        key: &DbInstanceKey,
+    ) -> Option<SqliteConnectionPool> {
+        self.instances.lock().await.remove(key)
+    }
+
+    /// Drop the cached pool entry for the file at `db_path` if any.
+    ///
+    /// Convenience wrapper over [`Self::invalidate_instance`] for the common
+    /// file-mode case.
+    pub async fn invalidate_file_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+    ) -> Option<SqliteConnectionPool> {
+        self.invalidate_instance(&DbInstanceKey::file(db_path.into()))
+            .await
+    }
 }
 
 impl Default for SqliteTableProviderFactory {
@@ -1510,6 +1537,54 @@ pub(crate) mod tests {
     };
 
     use super::*;
+
+    #[tokio::test]
+    async fn invalidate_instance_drops_cached_pool() {
+        let factory = SqliteTableProviderFactory::new();
+        let path: Arc<str> = Arc::from("/tmp/spice-tp-invalidate-test.db");
+        // Best-effort cleanup of leftover files from prior runs.
+        let _ = std::fs::remove_file(path.as_ref());
+
+        let _pool = factory
+            .get_or_init_instance(
+                Arc::clone(&path),
+                Mode::File,
+                std::time::Duration::from_millis(5_000),
+            )
+            .await
+            .expect("init file pool");
+        assert_eq!(factory.instances.lock().await.len(), 1);
+
+        let evicted = factory
+            .invalidate_instance(&DbInstanceKey::file(Arc::clone(&path)))
+            .await;
+        assert!(evicted.is_some(), "invalidate returns evicted pool");
+        assert_eq!(factory.instances.lock().await.len(), 0);
+
+        // Convenience wrapper: re-init then invalidate via path.
+        let _pool2 = factory
+            .get_or_init_instance(
+                Arc::clone(&path),
+                Mode::File,
+                std::time::Duration::from_millis(5_000),
+            )
+            .await
+            .expect("reinit file pool");
+        assert_eq!(factory.instances.lock().await.len(), 1);
+        let evicted2 = factory.invalidate_file_instance(Arc::clone(&path)).await;
+        assert!(evicted2.is_some());
+        assert_eq!(factory.instances.lock().await.len(), 0);
+
+        // Missing key is a no-op.
+        assert!(
+            factory
+                .invalidate_instance(&DbInstanceKey::file("never-cached".into()))
+                .await
+                .is_none()
+        );
+
+        let _ = std::fs::remove_file(path.as_ref());
+    }
 
     #[tokio::test]
     async fn test_sqlite_table_creation_with_indexes() {
