@@ -58,9 +58,33 @@ pub enum Error {
 
     #[snafu(display("No column name for index: {index}"))]
     NoColumnNameForIndex { index: usize },
+
+    #[snafu(display(
+        "Encountered MySQL zero date '0000-00-00' in column '{column}' but mysql_zero_date_behavior is set to 'error'. Set mysql_zero_date_behavior to 'null' to coerce zero dates to NULL, or fix the source data."
+    ))]
+    ZeroDateEncountered { column: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Controls how the MySQL connector handles the `0000-00-00` / `0000-00-00 00:00:00` zero-date
+/// sentinel produced by MySQL for `DATE`, `DATETIME`, and `TIMESTAMP` columns.
+///
+/// Arrow has no representation for the zero-date sentinel (`year=0, month=0, day=0` is not a
+/// valid date in any calendar), so it must either be coerced to Arrow `NULL` or raised as an
+/// error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MysqlZeroDateBehavior {
+    /// Silently coerce zero-dates to Arrow `NULL`. When this mode is in effect, the schema
+    /// reported for `DATE`/`DATETIME`/`TIMESTAMP` columns is widened to `nullable=true`
+    /// regardless of the column's `NOT NULL` constraint, since a zero-date row would otherwise
+    /// fail Arrow's `RecordBatch` validation.
+    #[default]
+    Null,
+    /// Return an error when a zero-date is encountered. The reported schema honors the source
+    /// column's `NOT NULL` constraint exactly.
+    Error,
+}
 
 macro_rules! handle_primitive_type {
     ($builder:expr, $type:expr, $builder_ty:ty, $value_ty:ty, $row:expr, $index:expr, $column_name:expr) => {{
@@ -94,7 +118,11 @@ macro_rules! handle_primitive_type {
 ///
 /// Returns an error if there is a failure in converting the rows to a `RecordBatch`.
 #[allow(clippy::too_many_lines)]
-pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Result<RecordBatch> {
+pub fn rows_to_arrow(
+    rows: &[Row],
+    projected_schema: &Option<SchemaRef>,
+    zero_date_behavior: MysqlZeroDateBehavior,
+) -> Result<RecordBatch> {
     let mut arrow_fields: Vec<Option<Field>> = Vec::new();
     let mut arrow_columns_builders: Vec<Option<Box<dyn ArrayBuilder>>> = Vec::new();
     let mut mysql_types: Vec<ColumnType> = Vec::new();
@@ -136,12 +164,28 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 decimal_scale,
             );
 
-            // Determine nullability from projected_schema if available, otherwise default to true
-            let nullable = projected_schema
-                .as_ref()
-                .and_then(|schema| schema.field_with_name(&column_name).ok())
-                .map(|field| field.is_nullable())
-                .unwrap_or(true);
+            // Determine nullability from projected_schema if available, otherwise default to true.
+            // For date/time column types, widen to nullable when zero_date_behavior is Null,
+            // because the row decoder may emit Arrow NULLs for the MySQL zero-date sentinel
+            // ('0000-00-00' / '0000-00-00 00:00:00') even on `NOT NULL` columns.
+            let is_temporal = matches!(
+                column_type,
+                ColumnType::MYSQL_TYPE_DATE
+                    | ColumnType::MYSQL_TYPE_DATETIME
+                    | ColumnType::MYSQL_TYPE_TIMESTAMP
+                    | ColumnType::MYSQL_TYPE_TIMESTAMP2
+                    | ColumnType::MYSQL_TYPE_DATETIME2
+                    | ColumnType::MYSQL_TYPE_NEWDATE
+            );
+            let nullable = if is_temporal && zero_date_behavior == MysqlZeroDateBehavior::Null {
+                true
+            } else {
+                projected_schema
+                    .as_ref()
+                    .and_then(|schema| schema.field_with_name(&column_name).ok())
+                    .map(|field| field.is_nullable())
+                    .unwrap_or(true)
+            };
 
             arrow_fields.push(
                 data_type
@@ -474,7 +518,15 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Err(err) => {
                             // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
                             if matches!(err, FromValueError(Value::Date(0, 0, 0, 0, 0, 0, 0))) {
-                                None
+                                match zero_date_behavior {
+                                    MysqlZeroDateBehavior::Null => None,
+                                    MysqlZeroDateBehavior::Error => {
+                                        return ZeroDateEncounteredSnafu {
+                                            column: column_name,
+                                        }
+                                        .fail();
+                                    }
+                                }
                             } else {
                                 return Err(Error::FailedToGetRowValue {
                                     column: column_name,
@@ -542,7 +594,15 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         Err(err) => {
                             // Handle '0000-00-00', that can't be parsed automatically. For more details: https://dev.mysql.com/doc/refman/8.4/en/using-date.html
                             if matches!(err, FromValueError(Value::Date(0, 0, 0, 0, 0, 0, 0))) {
-                                None
+                                match zero_date_behavior {
+                                    MysqlZeroDateBehavior::Null => None,
+                                    MysqlZeroDateBehavior::Error => {
+                                        return ZeroDateEncounteredSnafu {
+                                            column: column_name,
+                                        }
+                                        .fail();
+                                    }
+                                }
                             } else {
                                 return Err(Error::FailedToGetRowValue {
                                     column: column_name,

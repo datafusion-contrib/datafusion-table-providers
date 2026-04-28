@@ -1,6 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use crate::sql::arrow_sql_gen::mysql::map_column_to_data_type;
+use crate::sql::arrow_sql_gen::mysql::MysqlZeroDateBehavior;
 use crate::sql::arrow_sql_gen::{self, mysql::rows_to_arrow};
 use async_stream::stream;
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
@@ -45,9 +46,18 @@ pub enum Error {
 
 pub struct MySQLConnection {
     pub conn: Arc<Mutex<Conn>>,
+    pub zero_date_behavior: MysqlZeroDateBehavior,
 }
 
 impl MySQLConnection {
+    /// Set the zero-date handling behavior for this connection. Affects both schema inference
+    /// (`get_schema`) and row decoding (`query_arrow`). See [`MysqlZeroDateBehavior`].
+    #[must_use]
+    pub fn with_zero_date_behavior(mut self, behavior: MysqlZeroDateBehavior) -> Self {
+        self.zero_date_behavior = behavior;
+        self
+    }
+
     /// Create a [`TableReference`] in a manner that properly handles the unique quote style of MySQL.
     ///
     /// [`TableReference::from`] uses `DefaultDialect` and therefore gets quoting incorrect.
@@ -90,6 +100,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     fn new(conn: Conn) -> Self {
         MySQLConnection {
             conn: Arc::new(Mutex::new(conn)),
+            zero_date_behavior: MysqlZeroDateBehavior::default(),
         }
     }
 
@@ -175,7 +186,10 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
             },
         };
 
-        Ok(columns_meta_to_schema(columns_meta).context(super::UnableToGetSchemaSnafu)?)
+        Ok(
+            columns_meta_to_schema(columns_meta, self.zero_date_behavior)
+                .context(super::UnableToGetSchemaSnafu)?,
+        )
     }
 
     async fn query_arrow(
@@ -188,6 +202,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         let sql = sql.replace('"', "");
 
         let conn = Arc::clone(&self.conn);
+        let zero_date_behavior = self.zero_date_behavior;
 
         let mut stream = Box::pin(stream! {
             let mut conn = conn.lock().await;
@@ -209,7 +224,7 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
                     .collect::<Result<Vec<_>, _>>()
                     .context(QuerySnafu)?;
 
-                let rec = rows_to_arrow(&rows, &projected_schema).context(ConversionSnafu)?;
+                let rec = rows_to_arrow(&rows, &projected_schema, zero_date_behavior).context(ConversionSnafu)?;
                 yield Ok::<_, Error>(rec)
             }
         });
@@ -247,7 +262,10 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     }
 }
 
-fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
+fn columns_meta_to_schema(
+    columns_meta: Vec<Row>,
+    zero_date_behavior: MysqlZeroDateBehavior,
+) -> Result<SchemaRef> {
     let mut fields = Vec::new();
 
     for row in columns_meta.iter() {
@@ -263,8 +281,26 @@ fn columns_meta_to_schema(columns_meta: Vec<Row>) -> Result<SchemaRef> {
             field: "Null".to_string(),
         })?;
 
-        let nullable = nullable_str == "YES";
         let column_type = map_str_type_to_column_type(&column_name, &data_type)?;
+
+        // For date/time columns, force nullable=true when zero_date_behavior is Null because
+        // MySQL's '0000-00-00' / '0000-00-00 00:00:00' sentinel cannot be represented in Arrow
+        // and is coerced to NULL by the row decoder. Honoring `NOT NULL` on such columns would
+        // cause Arrow's RecordBatch validation to fail at scan time.
+        let is_temporal = matches!(
+            column_type,
+            ColumnType::MYSQL_TYPE_DATE
+                | ColumnType::MYSQL_TYPE_DATETIME
+                | ColumnType::MYSQL_TYPE_TIMESTAMP
+                | ColumnType::MYSQL_TYPE_TIMESTAMP2
+                | ColumnType::MYSQL_TYPE_DATETIME2
+                | ColumnType::MYSQL_TYPE_NEWDATE
+        );
+        let nullable = if is_temporal && zero_date_behavior == MysqlZeroDateBehavior::Null {
+            true
+        } else {
+            nullable_str == "YES"
+        };
         let column_is_binary = map_str_type_to_is_binary(&data_type);
         let column_is_enum = map_str_type_to_is_enum(&data_type);
         let column_use_large_str_or_blob = map_str_type_to_use_large_str_or_blob(&data_type);
