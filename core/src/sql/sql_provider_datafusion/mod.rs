@@ -702,11 +702,17 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
             let fut = async move {
                 let stream = get_stream(pool, sql, sql_schema).await?;
-                // Map each batch to an empty batch (0 columns, same row count)
-                let empty_stream = stream.map_ok(move |_b| {
-                    datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::clone(
-                        &empty_schema,
-                    ))
+                // Strip columns but preserve row count.
+                // RecordBatch::new_empty() hardcodes row_count to 0, which would
+                // break count(*) queries. Use try_new_with_options instead.
+                let empty_stream = stream.map_ok(move |b| {
+                    datafusion::arrow::record_batch::RecordBatch::try_new_with_options(
+                        Arc::clone(&empty_schema),
+                        vec![],
+                        &datafusion::arrow::record_batch::RecordBatchOptions::new()
+                            .with_row_count(Some(b.num_rows())),
+                    )
+                    .expect("empty schema with valid row_count should never fail")
                 });
                 let result: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
                     Arc::clone(&empty_schema_for_stream),
