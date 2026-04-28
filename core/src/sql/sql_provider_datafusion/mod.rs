@@ -266,10 +266,12 @@ pub fn project_schema_safe(
     let schema = match projection {
         Some(columns) => {
             if columns.is_empty() {
-                // If the projection is Some([]) then it gets unparsed as `SELECT 1`, so return a schema with a single Int64 column.
-                //
-                // See: <https://github.com/apache/datafusion/blob/83ce79c39412a4f150167d00e40ea05948c4870f/datafusion/sql/src/unparser/plan.rs#L998>
-                Arc::clone(&ONE_COLUMN_SCHEMA)
+                // Empty projection: return empty schema (0 columns).
+                // The SQL will still be `SELECT 1` (SQL syntax requires at least one column),
+                // but the physical output schema must match the logical schema (0 columns)
+                // to satisfy DataFusion's schema consistency check.
+                // The execute() method handles stripping the extra column from the result.
+                Arc::new(Schema::empty())
             } else {
                 Arc::new(schema.project(columns)?)
             }
@@ -281,6 +283,10 @@ pub fn project_schema_safe(
 
 pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
+    /// Schema of the actual SQL result. When projection is empty, SQL returns
+    /// `SELECT 1` (1 column) but projected_schema is empty (0 columns).
+    /// This field is used to parse the SQL result correctly.
+    sql_schema: SchemaRef,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
     properties: Arc<PlanProperties>,
@@ -291,6 +297,7 @@ impl<T, P> Clone for SqlExec<T, P> {
     fn clone(&self) -> Self {
         Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            sql_schema: Arc::clone(&self.sql_schema),
             pool: Arc::clone(&self.pool),
             sql: self.sql.clone(),
             properties: self.properties.clone(),
@@ -309,8 +316,17 @@ impl<T, P> SqlExec<T, P> {
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projection)?;
 
+        // When projection is empty, SQL returns `SELECT 1` (1 column) but
+        // projected_schema is empty (0 columns). We need sql_schema to parse
+        // the actual SQL result.
+        let sql_schema = match projection {
+            Some(columns) if columns.is_empty() => Arc::clone(&ONE_COLUMN_SCHEMA),
+            _ => Arc::clone(&projected_schema),
+        };
+
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
+            sql_schema,
             pool,
             sql,
             properties: Arc::new(PlanProperties::new(
@@ -567,6 +583,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         let mut new_exec = Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            sql_schema: Arc::clone(&self.sql_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -607,6 +624,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         Some(Arc::new(Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            sql_schema: Arc::clone(&self.sql_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -650,6 +668,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         let new_exec = Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            sql_schema: Arc::clone(&self.sql_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -670,12 +689,40 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         let sql = self.sql().map_err(to_execution_error)?;
         tracing::debug!("SqlExec sql: {sql}");
 
-        let schema = self.schema();
+        let projected_schema = self.schema();
 
-        let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&schema));
+        // When projection is empty (0 columns), SQL still returns 1 column (`SELECT 1`)
+        // but we need to return 0-column batches to match the logical schema.
+        // We execute with sql_schema (1 column) and strip the result to 0 columns.
+        if projected_schema.fields().is_empty() {
+            let sql_schema = Arc::clone(&self.sql_schema);
+            let pool = Arc::clone(&self.pool);
+            let empty_schema = Arc::clone(&projected_schema);
+            let empty_schema_for_stream = Arc::clone(&empty_schema);
+
+            let fut = async move {
+                let stream = get_stream(pool, sql, sql_schema).await?;
+                // Map each batch to an empty batch (0 columns, same row count)
+                let empty_stream = stream.map_ok(move |_b| {
+                    datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::clone(
+                        &empty_schema,
+                    ))
+                });
+                let result: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&empty_schema_for_stream),
+                    empty_stream,
+                ));
+                Ok::<SendableRecordBatchStream, DataFusionError>(result)
+            };
+
+            let stream = futures::stream::once(fut).try_flatten();
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(projected_schema, stream)));
+        }
+
+        let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&projected_schema));
 
         let stream = futures::stream::once(fut).try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(projected_schema, stream)))
     }
 }
 
