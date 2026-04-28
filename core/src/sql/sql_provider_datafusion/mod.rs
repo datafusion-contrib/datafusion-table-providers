@@ -716,13 +716,19 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             };
 
             let stream = futures::stream::once(fut).try_flatten();
-            return Ok(Box::pin(RecordBatchStreamAdapter::new(projected_schema, stream)));
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                projected_schema,
+                stream,
+            )));
         }
 
         let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&projected_schema));
 
         let stream = futures::stream::once(fut).try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(projected_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            projected_schema,
+            stream,
+        )))
     }
 }
 
