@@ -293,11 +293,27 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        let dialect = self.dialect_arc();
+        let unparser = Unparser::new(dialect.as_ref());
+
         let filter_push_down: Vec<TableProviderFilterPushDown> = filters
             .iter()
-            .map(|f| match expr::to_sql_with_engine(f, self.engine) {
-                Ok(_) => TableProviderFilterPushDown::Exact,
-                Err(_) => TableProviderFilterPushDown::Unsupported,
+            .map(|f| {
+                // Expressions containing subqueries or outer references must not be
+                // pushed down. Subqueries are handled at the plan level and may
+                // reference tables in other databases not accessible from this
+                // connection. Outer references refer to columns from an enclosing
+                // query that the table provider cannot resolve.
+                if expr::expr_contains_subquery_or_outer_ref(f).unwrap_or(true) {
+                    return TableProviderFilterPushDown::Unsupported;
+                }
+                // Use the same Unparser that scan_to_sql() uses for actual SQL
+                // generation, so the capability check matches what can really
+                // be converted to SQL for the target dialect.
+                match unparser.expr_to_sql(f) {
+                    Ok(_) => TableProviderFilterPushDown::Exact,
+                    Err(_) => TableProviderFilterPushDown::Unsupported,
+                }
             })
             .collect();
 
