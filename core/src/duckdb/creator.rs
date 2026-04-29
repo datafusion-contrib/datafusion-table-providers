@@ -15,7 +15,7 @@ use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::DuckDB;
 use crate::util::{
@@ -57,7 +57,8 @@ pub struct TableDefinition {
     /// Index name prefixes that are managed externally to the write pipeline.
     /// Indexes whose names start with any of these prefixes are excluded from
     /// the drift-check comparison in [`TableManager::verify_indexes_match`].
-    ignored_index_prefixes: Vec<String>,
+    /// Uses interior mutability so callers can register prefixes after construction.
+    ignored_index_prefixes: Mutex<Vec<String>>,
 }
 
 impl TableDefinition {
@@ -68,7 +69,7 @@ impl TableDefinition {
             schema,
             constraints: None,
             indexes: Vec::new(),
-            ignored_index_prefixes: Vec::new(),
+            ignored_index_prefixes: Mutex::new(Vec::new()),
         }
     }
 
@@ -84,28 +85,27 @@ impl TableDefinition {
         self
     }
 
-    /// Register index name prefixes that are managed outside the write pipeline
-    /// (e.g. by the application layer). Indexes matching these prefixes are
-    /// excluded from the index drift check so that externally-managed indexes do
-    /// not cause refresh failures.
-    #[must_use]
-    pub fn with_ignored_index_prefixes(mut self, prefixes: Vec<String>) -> Self {
-        self.ignored_index_prefixes = prefixes;
-        self
-    }
-
-    pub fn ignored_index_prefixes(&self) -> &[String] {
-        &self.ignored_index_prefixes
+    /// Register an index name prefix whose indexes are managed outside the write pipeline.
+    /// Indexes whose names start with this prefix are excluded from the drift-check
+    /// comparison so that externally-managed indexes do not cause refresh failures.
+    ///
+    /// May be called after construction (e.g. after the vector engine is configured).
+    pub fn add_ignored_index_prefix(&self, prefix: impl Into<String>) {
+        self.ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(prefix.into());
     }
 
     #[must_use]
     pub fn with_name(self, name: RelationName) -> Self {
+        let prefixes = self.ignored_index_prefixes.into_inner().unwrap_or_default();
         Self {
             name,
             schema: self.schema,
             constraints: self.constraints,
             indexes: self.indexes,
-            ignored_index_prefixes: self.ignored_index_prefixes,
+            ignored_index_prefixes: Mutex::new(prefixes),
         }
     }
 
@@ -657,7 +657,9 @@ impl TableManager {
             .map(|index| index.replace(&self.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
-        let ignored_prefixes = self.table_definition.ignored_index_prefixes();
+        let ignored_prefixes = self.table_definition.ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let actual_indexes_str_map = actual_indexes_str_map
             .iter()
             .filter(|index| !ignored_prefixes.iter().any(|prefix| index.starts_with(prefix.as_str())))
