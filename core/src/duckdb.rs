@@ -356,6 +356,36 @@ impl DuckDBTableProviderFactory {
 
         Ok(pool)
     }
+
+    /// Drop the cached pool entry for `key` if any, returning the previously
+    /// cached pool. Subsequent calls to `get_or_init_*` for the same key will
+    /// build a fresh pool.
+    ///
+    /// This is intended for callers that replace the underlying database file
+    /// out-of-band (for example, after restoring it from a snapshot in object
+    /// storage). Existing connections held by other clones of the previously
+    /// returned pool keep operating against the file descriptor they opened;
+    /// once they are dropped the OS releases the prior inode. New providers
+    /// built after invalidation will open the file fresh and observe the
+    /// replacement contents.
+    pub async fn invalidate_instance(
+        &self,
+        key: &DbInstanceKey,
+    ) -> Option<DuckDbConnectionPool> {
+        self.instances.lock().await.remove(key)
+    }
+
+    /// Drop the cached pool entry for the file at `path` if any.
+    ///
+    /// Convenience wrapper over [`Self::invalidate_instance`] for the common
+    /// file-mode case.
+    pub async fn invalidate_file_instance(
+        &self,
+        path: impl Into<Arc<str>>,
+    ) -> Option<DuckDbConnectionPool> {
+        self.invalidate_instance(&DbInstanceKey::file(path.into()))
+            .await
+    }
 }
 
 type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
@@ -778,6 +808,49 @@ pub(crate) mod tests {
     use datafusion::sql::TableReference;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn invalidate_instance_drops_cached_pool() {
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let options = HashMap::new();
+
+        // First call populates the cache.
+        let _pool1 = factory
+            .get_or_init_memory_instance(&options)
+            .await
+            .expect("first init");
+        assert_eq!(factory.instances.lock().await.len(), 1);
+
+        // Second call (without invalidation) returns the cached pool clone
+        // without growing the registry.
+        let _pool2 = factory
+            .get_or_init_memory_instance(&options)
+            .await
+            .expect("cached init");
+        assert_eq!(factory.instances.lock().await.len(), 1);
+
+        // Invalidate; entry is evicted and returned.
+        let evicted = factory
+            .invalidate_instance(&DbInstanceKey::memory())
+            .await;
+        assert!(evicted.is_some(), "invalidate returns evicted pool");
+        assert_eq!(factory.instances.lock().await.len(), 0);
+
+        // Re-invalidating a missing key is a no-op.
+        assert!(
+            factory
+                .invalidate_instance(&DbInstanceKey::file("never-cached".into()))
+                .await
+                .is_none()
+        );
+
+        // Next get_or_init repopulates the cache.
+        let _pool3 = factory
+            .get_or_init_memory_instance(&options)
+            .await
+            .expect("reinit after invalidate");
+        assert_eq!(factory.instances.lock().await.len(), 1);
+    }
 
     #[tokio::test]
     async fn test_create_with_memory_limit() {
