@@ -267,20 +267,22 @@ fn handle_cast(cast: &Cast, engine: Option<Engine>, expr: &Expr) -> Result<Strin
     }
 }
 
-// Helper function to check if expression contains subquery
+// Helper function to check if expression contains subquery or outer reference
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 
-#[allow(dead_code)]
-pub(super) fn expr_contains_subquery(expr: &Expr) -> datafusion::error::Result<bool> {
-    let mut contains_subquery = false;
+pub(super) fn expr_contains_subquery_or_outer_ref(expr: &Expr) -> datafusion::error::Result<bool> {
+    let mut found = false;
     expr.apply(|expr| match expr {
-        Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_) => {
-            contains_subquery = true;
+        Expr::ScalarSubquery(_)
+        | Expr::InSubquery(_)
+        | Expr::Exists(_)
+        | Expr::OuterReferenceColumn(_, _) => {
+            found = true;
             Ok(TreeNodeRecursion::Stop)
         }
         _ => Ok(TreeNodeRecursion::Continue),
     })?;
-    Ok(contains_subquery)
+    Ok(found)
 }
 
 #[cfg(test)]
