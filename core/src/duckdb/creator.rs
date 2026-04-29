@@ -54,6 +54,10 @@ pub struct TableDefinition {
     schema: SchemaRef,
     constraints: Option<Constraints>,
     indexes: Vec<(ColumnReference, IndexType)>,
+    /// Index name prefixes that are managed externally to the write pipeline.
+    /// Indexes whose names start with any of these prefixes are excluded from
+    /// the drift-check comparison in [`TableManager::verify_indexes_match`].
+    ignored_index_prefixes: Vec<String>,
 }
 
 impl TableDefinition {
@@ -64,6 +68,7 @@ impl TableDefinition {
             schema,
             constraints: None,
             indexes: Vec::new(),
+            ignored_index_prefixes: Vec::new(),
         }
     }
 
@@ -79,6 +84,20 @@ impl TableDefinition {
         self
     }
 
+    /// Register index name prefixes that are managed outside the write pipeline
+    /// (e.g. by the application layer). Indexes matching these prefixes are
+    /// excluded from the index drift check so that externally-managed indexes do
+    /// not cause refresh failures.
+    #[must_use]
+    pub fn with_ignored_index_prefixes(mut self, prefixes: Vec<String>) -> Self {
+        self.ignored_index_prefixes = prefixes;
+        self
+    }
+
+    pub fn ignored_index_prefixes(&self) -> &[String] {
+        &self.ignored_index_prefixes
+    }
+
     #[must_use]
     pub fn with_name(self, name: RelationName) -> Self {
         Self {
@@ -86,6 +105,7 @@ impl TableDefinition {
             schema: self.schema,
             constraints: self.constraints,
             indexes: self.indexes,
+            ignored_index_prefixes: self.ignored_index_prefixes,
         }
     }
 
@@ -637,9 +657,10 @@ impl TableManager {
             .map(|index| index.replace(&self.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
+        let ignored_prefixes = self.table_definition.ignored_index_prefixes();
         let actual_indexes_str_map = actual_indexes_str_map
             .iter()
-            .filter(|index| !index.starts_with("__spice_vss_"))
+            .filter(|index| !ignored_prefixes.iter().any(|prefix| index.starts_with(prefix.as_str())))
             .map(|index| index.replace(&other_table.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
