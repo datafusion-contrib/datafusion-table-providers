@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use crate::{
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
@@ -53,7 +53,7 @@ pub enum Error {
     },
 
     #[snafu(display(
-        "Invalid root certificate path: {path}. Ensure it points to a valid root certificate."
+        "Invalid root certificate path: {path}. Ensure it points to a valid root certificate, or provide inline PEM content."
     ))]
     InvalidRootCertPathError { path: String },
 
@@ -63,7 +63,7 @@ pub enum Error {
     FailedToReadCertError { source: std::io::Error },
 
     #[snafu(display(
-        "Certificate loading failed.\n{source}\nEnsure the root certificate path points to a valid certificate."
+        "Certificate loading failed.\n{source}\nEnsure the root certificate path points to a valid certificate, or provide valid inline PEM content."
     ))]
     FailedToLoadCertError { source: native_tls::Error },
 
@@ -233,7 +233,7 @@ impl PostgresConnectionPool {
 
         let mut connection_string = String::new();
         let mut ssl_mode = "verify-full".to_string();
-        let mut ssl_rootcert_path: Option<PathBuf> = None;
+        let mut ssl_rootcert: Option<String> = None;
         let mut static_password: Option<SecretString> = None;
 
         if let Some(pg_connection_string) = params
@@ -247,12 +247,13 @@ impl PostgresConnectionPool {
                 static_password = password.map(SecretString::from);
             }
             if let Some(cert_path) = cert_path {
-                let sslrootcert = cert_path.as_str();
                 ensure!(
-                    std::path::Path::new(sslrootcert).exists(),
-                    InvalidRootCertPathSnafu { path: cert_path }
+                    Path::new(cert_path.as_str()).exists(),
+                    InvalidRootCertPathSnafu {
+                        path: cert_path.clone()
+                    }
                 );
-                ssl_rootcert_path = Some(PathBuf::from(sslrootcert));
+                ssl_rootcert = Some(cert_path);
             }
         } else {
             if let Some(pg_host) = params.get("host").map(SecretBox::expose_secret) {
@@ -289,13 +290,13 @@ impl PostgresConnectionPool {
         }
         if let Some(pg_sslrootcert) = params.get("sslrootcert").map(SecretBox::expose_secret) {
             ensure!(
-                std::path::Path::new(pg_sslrootcert).exists(),
+                is_inline_pem(pg_sslrootcert) || Path::new(pg_sslrootcert).exists(),
                 InvalidRootCertPathSnafu {
                     path: pg_sslrootcert,
                 }
             );
 
-            ssl_rootcert_path = Some(PathBuf::from(pg_sslrootcert));
+            ssl_rootcert = Some(pg_sslrootcert.to_string());
         }
 
         let mode = match ssl_mode.as_str() {
@@ -320,9 +321,8 @@ impl PostgresConnectionPool {
 
         let mut certs: Option<Vec<Certificate>> = None;
 
-        if let Some(path) = ssl_rootcert_path {
-            let buf = tokio::fs::read(path).await.context(FailedToReadCertSnafu)?;
-            certs = Some(parse_certs(&buf)?);
+        if let Some(rootcert) = ssl_rootcert {
+            certs = Some(load_root_certs(&rootcert).await?);
         }
 
         let tls_connector = get_tls_connector(ssl_mode.as_str(), certs)?;
@@ -545,6 +545,22 @@ async fn verify_postgres_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
+async fn load_root_certs(sslrootcert: &str) -> Result<Vec<Certificate>> {
+    if is_inline_pem(sslrootcert) {
+        let normalized = sslrootcert.replace("\\n", "\n");
+        return parse_certs(normalized.as_bytes());
+    }
+
+    let buf = tokio::fs::read(sslrootcert)
+        .await
+        .context(FailedToReadCertSnafu)?;
+    parse_certs(&buf)
+}
+
+fn is_inline_pem(value: &str) -> bool {
+    value.contains("-----BEGIN CERTIFICATE-----")
+}
+
 fn get_tls_connector(ssl_mode: &str, rootcerts: Option<Vec<Certificate>>) -> Result<TlsConnector> {
     let mut builder = TlsConnector::builder();
 
@@ -643,6 +659,23 @@ mod tests {
     use super::*;
     use secrecy::ExposeSecret;
 
+    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIICmjCCAYICCQDlGISlKYLQgzANBgkqhkiG9w0BAQsFADAPMQ0wCwYDVQQDDAR0\n\
+ZXN0MB4XDTI2MDQyODA2NDY0OVoXDTI2MDQyOTA2NDY0OVowDzENMAsGA1UEAwwE\n\
+dGVzdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAO8GS0kkbI5emI3k\n\
+FMBO69SjL2dDtJWRC9e/m/Ff1z5dPndt/KUnHMb4kEkzzwwdd4j51RnhbyAIyv4b\n\
+SuWr8N7QxmV9MA7y5QxlTVCHmQn+ckKTwlrL4tRr9qtWDWeShJt5ApxGccBVO5jb\n\
+z4nPVjRTsNoEEkbZ8kncdvxJalcf6EIpczWC+HofP5sfcAhSGYqw3mQpnrKjUzAH\n\
+EsuxUf7Fh4au9k5cifJlqSm7nsSS2+PKJvFuRZcIhnO0LCYZ9TlItt4P0UA35SRM\n\
+Hod0zkUtgZgxXI6jdsViKNw+bcMyXgWZqX0OSCjwUfbgla1nikfyiwp6CBZaJCjE\n\
+jmMNn7cCAwEAATANBgkqhkiG9w0BAQsFAAOCAQEAv7mRdXBRnL5zFClhAHDV+71t\n\
+tGw2zdjbDUTp/DVMOr1IhzdwXUQclLY5Pk0WouFk81XJHgFMuawQjC72Nmk5OVlF\n\
+J/5W68kpUKStjQXN0pNo13dAKc1TKexbIueRkLVZmnrO70R1RNm5N4RykrJKHJBU\n\
+JzMbcibPAbMxf4ZFFH1t/UN6bq0jXv5ZYsDXlMRufl5jG4uRuvZySDZ+SUoF9/+9\n\
+WQv8WtDc2vDqM4Bu7eHKNwMLyNzHnH/rW9g7QGLGfpq/4MPtiNzzvRop8hQx3tfA\n\
+9oJWeNeiWokJZhAP39NQAl1cmHltn5VmAB6u+P6wH8Cod/Tsd6eu3D4Ms5zUkA==\n\
+-----END CERTIFICATE-----\n";
+
     #[tokio::test]
     async fn static_password_provider_returns_password() {
         let provider = StaticPasswordProvider::new(SecretString::from("hunter2".to_string()));
@@ -661,6 +694,19 @@ mod tests {
         let err: Box<dyn std::error::Error> =
             Box::new(ConnectionManagerError::PasswordProvider("fail".into()));
         assert!(err.source().is_some());
+    }
+
+    #[tokio::test]
+    async fn load_root_certs_accepts_inline_pem() {
+        let certs = load_root_certs(TEST_CERT_PEM).await.unwrap();
+        assert_eq!(certs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn load_root_certs_accepts_escaped_newline_inline_pem() {
+        let escaped = TEST_CERT_PEM.replace('\n', "\\n");
+        let certs = load_root_certs(&escaped).await.unwrap();
+        assert_eq!(certs.len(), 1);
     }
 
     #[test]
