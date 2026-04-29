@@ -639,6 +639,7 @@ impl TableManager {
 
         let actual_indexes_str_map = actual_indexes_str_map
             .iter()
+            .filter(|index| !index.starts_with("__spice_vss_"))
             .map(|index| index.replace(&other_table.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
