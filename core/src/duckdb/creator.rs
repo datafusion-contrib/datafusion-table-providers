@@ -118,9 +118,19 @@ impl TableDefinition {
     }
 }
 
+impl PartialEq for TableDefinition {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.schema == other.schema
+            && self.constraints == other.constraints
+            && self.indexes == other.indexes
+    }
+}
+
 impl Clone for TableDefinition {
     fn clone(&self) -> Self {
-        let prefixes = self.ignored_index_prefixes
+        let prefixes = self
+            .ignored_index_prefixes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
@@ -135,7 +145,6 @@ impl Clone for TableDefinition {
 }
 
 impl TableDefinition {
-
     pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
         &self.indexes
     }
@@ -676,12 +685,18 @@ impl TableManager {
             .map(|index| index.replace(&self.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
-        let ignored_prefixes = self.table_definition.ignored_index_prefixes
+        let ignored_prefixes = self
+            .table_definition
+            .ignored_index_prefixes
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let actual_indexes_str_map = actual_indexes_str_map
             .iter()
-            .filter(|index| !ignored_prefixes.iter().any(|prefix| index.starts_with(prefix.as_str())))
+            .filter(|index| {
+                !ignored_prefixes
+                    .iter()
+                    .any(|prefix| index.starts_with(prefix.as_str()))
+            })
             .map(|index| index.replace(&other_table.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
