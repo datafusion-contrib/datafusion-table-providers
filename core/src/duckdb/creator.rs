@@ -48,7 +48,7 @@ impl From<TableReference> for RelationName {
 
 /// A table definition, which includes the table name, schema, constraints, and indexes.
 /// This is used to store the definition of a table for a dataset, and can be re-used to create one or more tables (like internal data tables).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct TableDefinition {
     name: RelationName,
     schema: SchemaRef,
@@ -116,6 +116,25 @@ impl TableDefinition {
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
+}
+
+impl Clone for TableDefinition {
+    fn clone(&self) -> Self {
+        let prefixes = self.ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        Self {
+            name: self.name.clone(),
+            schema: Arc::clone(&self.schema),
+            constraints: self.constraints.clone(),
+            indexes: self.indexes.clone(),
+            ignored_index_prefixes: Mutex::new(prefixes),
+        }
+    }
+}
+
+impl TableDefinition {
 
     pub fn indexes(&self) -> &[(ColumnReference, IndexType)] {
         &self.indexes
