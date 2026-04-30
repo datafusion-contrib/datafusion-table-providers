@@ -5,7 +5,7 @@ use arrow::{
         Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder,
         LargeBinaryBuilder, LargeStringBuilder, NullBuilder, RecordBatch, RecordBatchOptions,
         StringBuilder, StringDictionaryBuilder, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, UInt64Builder,
+        TimestampMicrosecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
     },
     datatypes::{i256, DataType, Date32Type, Field, Schema, SchemaRef, TimeUnit, UInt16Type},
 };
@@ -104,6 +104,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     let mut column_names: Vec<String> = Vec::new();
     let mut column_is_binary_stats: Vec<bool> = Vec::new();
     let mut column_is_enum_stats: Vec<bool> = Vec::new();
+    let mut column_is_unsigned_stats: Vec<bool> = Vec::new();
     let mut column_use_large_str_or_blob_stats: Vec<bool> = Vec::new();
 
     if !rows.is_empty() {
@@ -113,6 +114,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             let column_type = column.column_type();
             let column_is_binary = is_column_binary(column, projected_schema);
             let column_is_enum = column.flags().contains(ColumnFlags::ENUM_FLAG);
+            let column_is_unsigned = column.flags().contains(ColumnFlags::UNSIGNED_FLAG);
             let column_use_large_str_or_blob = column.column_length() > 2_u32.pow(31) - 1;
 
             let (decimal_precision, decimal_scale) = match column_type {
@@ -134,6 +136,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                 column_type,
                 column_is_binary,
                 column_is_enum,
+                column_is_unsigned,
                 column_use_large_str_or_blob,
                 decimal_precision,
                 decimal_scale,
@@ -150,6 +153,7 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
             column_names.push(column_name.to_string());
             column_is_binary_stats.push(column_is_binary);
             column_is_enum_stats.push(column_is_enum);
+            column_is_unsigned_stats.push(column_is_unsigned);
             column_use_large_str_or_blob_stats.push(column_use_large_str_or_blob);
         }
     }
@@ -204,48 +208,96 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     }
                 }
                 ColumnType::MYSQL_TYPE_TINY => {
-                    handle_primitive_type!(
-                        builder,
-                        ColumnType::MYSQL_TYPE_TINY,
-                        Int8Builder,
-                        i8,
-                        row,
-                        i,
-                        column_name
-                    );
+                    if column_is_unsigned_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_TINY,
+                            UInt8Builder,
+                            u8,
+                            row,
+                            i,
+                            column_name
+                        );
+                    } else {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_TINY,
+                            Int8Builder,
+                            i8,
+                            row,
+                            i,
+                            column_name
+                        );
+                    }
                 }
-                column_type @ (ColumnType::MYSQL_TYPE_SHORT | ColumnType::MYSQL_TYPE_YEAR) => {
-                    handle_primitive_type!(
-                        builder,
-                        column_type,
-                        Int16Builder,
-                        i16,
-                        row,
-                        i,
-                        column_name
-                    );
+                ColumnType::MYSQL_TYPE_SHORT => {
+                    if column_is_unsigned_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_SHORT,
+                            UInt16Builder,
+                            u16,
+                            row,
+                            i,
+                            column_name
+                        );
+                    } else {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_SHORT,
+                            Int16Builder,
+                            i16,
+                            row,
+                            i,
+                            column_name
+                        );
+                    }
                 }
                 column_type @ (ColumnType::MYSQL_TYPE_INT24 | ColumnType::MYSQL_TYPE_LONG) => {
-                    handle_primitive_type!(
-                        builder,
-                        column_type,
-                        Int32Builder,
-                        i32,
-                        row,
-                        i,
-                        column_name
-                    );
+                    if column_is_unsigned_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            UInt32Builder,
+                            u32,
+                            row,
+                            i,
+                            column_name
+                        );
+                    } else {
+                        handle_primitive_type!(
+                            builder,
+                            column_type,
+                            Int32Builder,
+                            i32,
+                            row,
+                            i,
+                            column_name
+                        );
+                    }
                 }
                 ColumnType::MYSQL_TYPE_LONGLONG => {
-                    handle_primitive_type!(
-                        builder,
-                        ColumnType::MYSQL_TYPE_LONGLONG,
-                        Int64Builder,
-                        i64,
-                        row,
-                        i,
-                        column_name
-                    );
+                    if column_is_unsigned_stats[i] {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_LONGLONG,
+                            UInt64Builder,
+                            u64,
+                            row,
+                            i,
+                            column_name
+                        );
+                    } else {
+                        handle_primitive_type!(
+                            builder,
+                            ColumnType::MYSQL_TYPE_LONGLONG,
+                            Int64Builder,
+                            i64,
+                            row,
+                            i,
+                            column_name
+                        );
+                    }
                 }
                 ColumnType::MYSQL_TYPE_FLOAT => {
                     handle_primitive_type!(
@@ -453,6 +505,17 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         );
                     }
                 }
+                ColumnType::MYSQL_TYPE_YEAR => {
+                    handle_primitive_type!(
+                        builder,
+                        ColumnType::MYSQL_TYPE_YEAR,
+                        Int16Builder,
+                        i16,
+                        row,
+                        i,
+                        column_name
+                    );
+                }
                 ColumnType::MYSQL_TYPE_DATE => {
                     let Some(builder) = builder else {
                         return NoBuilderForIndexSnafu { index: i }.fail();
@@ -619,10 +682,12 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
 }
 
 #[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn map_column_to_data_type(
     column_type: ColumnType,
     column_is_binary: bool,
     column_is_enum: bool,
+    column_is_unsigned: bool,
     column_use_large_str_or_blob: bool,
     column_decimal_precision: Option<u8>,
     column_decimal_scale: Option<i8>,
@@ -630,10 +695,26 @@ pub fn map_column_to_data_type(
     match column_type {
         ColumnType::MYSQL_TYPE_NULL => Some(DataType::Null),
         ColumnType::MYSQL_TYPE_BIT => Some(DataType::UInt64),
-        ColumnType::MYSQL_TYPE_TINY => Some(DataType::Int8),
-        ColumnType::MYSQL_TYPE_YEAR | ColumnType::MYSQL_TYPE_SHORT => Some(DataType::Int16),
-        ColumnType::MYSQL_TYPE_INT24 | ColumnType::MYSQL_TYPE_LONG => Some(DataType::Int32),
-        ColumnType::MYSQL_TYPE_LONGLONG => Some(DataType::Int64),
+        ColumnType::MYSQL_TYPE_TINY => if column_is_unsigned {
+            Some(DataType::UInt8)
+        } else {
+            Some(DataType::Int8)
+        },
+        ColumnType::MYSQL_TYPE_SHORT => if column_is_unsigned {
+            Some(DataType::UInt16)
+        } else {
+            Some(DataType::Int16)
+        },
+        ColumnType::MYSQL_TYPE_INT24 | ColumnType::MYSQL_TYPE_LONG => if column_is_unsigned {
+            Some(DataType::UInt32)
+        } else {
+            Some(DataType::Int32)
+        },
+        ColumnType::MYSQL_TYPE_LONGLONG => if column_is_unsigned {
+            Some(DataType::UInt64)
+        } else {
+            Some(DataType::Int64)
+        },
         ColumnType::MYSQL_TYPE_FLOAT => Some(DataType::Float32),
         ColumnType::MYSQL_TYPE_DOUBLE => Some(DataType::Float64),
         // Decimal precision must be a value between 0x00 - 0x51, so it's safe to unwrap_or_default here
@@ -643,6 +724,7 @@ pub fn map_column_to_data_type(
             }
             Some(DataType::Decimal128(column_decimal_precision.unwrap_or_default(), column_decimal_scale.unwrap_or_default()))
         },
+        ColumnType::MYSQL_TYPE_YEAR => Some(DataType::Int16),
         ColumnType::MYSQL_TYPE_TIMESTAMP | ColumnType::MYSQL_TYPE_DATETIME => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, None))
         },
