@@ -232,6 +232,24 @@ impl TableDefinition {
             .map(|(name, time_created)| (RelationName(name), time_created))
             .collect())
     }
+
+    /// Resolve the actual table name for DML operations (DELETE, UPDATE).
+    ///
+    /// If the table is backed by a view over an internal
+    /// `__data_*` table, returns the latest internal table name.
+    /// Otherwise returns the base table definition name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal tables cannot be listed.
+    pub fn resolve_dml_table_name(&self, tx: &Transaction<'_>) -> super::Result<String> {
+        let internal_tables = self.list_internal_tables(tx)?;
+        if let Some((latest_internal_table_name, _)) = internal_tables.last() {
+            Ok(latest_internal_table_name.to_string())
+        } else {
+            Ok(self.name.to_string())
+        }
+    }
 }
 
 /// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
