@@ -214,8 +214,22 @@ impl<T, P> SqlTable<T, P> {
             format!("WHERE {}", filter_expr.join(" AND "))
         };
 
-        let table_name = self.table_reference.table();
-        let table_expr = quote_identifier(table_name);
+        let table_expr = match &self.table_reference {
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!(
+                "{}.{}.{}",
+                quote_identifier(catalog),
+                quote_identifier(schema),
+                quote_identifier(table)
+            ),
+            TableReference::Partial { schema, table } => {
+                format!("{}.{}", quote_identifier(schema), quote_identifier(table))
+            }
+            TableReference::Bare { table } => quote_identifier(table),
+        };
 
         let mut sql = format!("SELECT {columns} FROM {table_expr}");
         if !where_expr.is_empty() {
@@ -903,6 +917,39 @@ mod tests {
                 result,
                 "SELECT `name`, `age` FROM `users` WHERE ((`age` >= 30) AND (`name` = 'x')) LIMIT 3"
             );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_scan_to_sql_full_table_reference() -> Result<(), Box<dyn Error + Send + Sync>>
+        {
+            let sql_table = new_sql_table(
+                "my_catalog.my_schema.users",
+                Some(Arc::new(SqliteDialect {})),
+            )?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
+            assert_eq!(
+                result,
+                "SELECT `name` FROM `my_catalog`.`my_schema`.`users`"
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_scan_to_sql_partial_table_reference(
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            let sql_table = new_sql_table("my_schema.users", Some(Arc::new(SqliteDialect {})))?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
+            assert_eq!(result, "SELECT `name` FROM `my_schema`.`users`");
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_scan_to_sql_bare_table_reference() -> Result<(), Box<dyn Error + Send + Sync>>
+        {
+            let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
+            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None).unwrap();
+            assert_eq!(result, "SELECT `name` FROM `users`");
             Ok(())
         }
     }
