@@ -231,3 +231,131 @@ mod sort_limit_pushdown {
         assert_eq!(total, 7, "LIMIT without ORDER BY must still cap rows");
     }
 }
+
+mod multipart_table_reference {
+    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::execution::context::SessionContext;
+    use datafusion::sql::TableReference;
+    use datafusion_table_providers::duckdb::DuckDBTableFactory;
+    use datafusion_table_providers::sql::db_connection_pool::dbconnection::duckdbconn::DuckDbConnection;
+    use datafusion_table_providers::sql::db_connection_pool::dbconnection::DbConnection;
+    use datafusion_table_providers::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+    use std::sync::Arc;
+
+    /// Tests that a `DuckDBTable` created with a full (catalog.schema.table) reference
+    /// generates correct SQL that DuckDB can execute through the non-federated scan path.
+    #[test_log::test(tokio::test)]
+    async fn scan_with_full_table_reference() {
+        let pool = Arc::new(DuckDbConnectionPool::new_memory().expect("pool created"));
+
+        // Create a schema and table in DuckDB directly
+        {
+            let mut conn = Arc::clone(&pool).connect_sync().expect("connection");
+            let duckdb_conn = conn
+                .as_any_mut()
+                .downcast_mut::<DuckDbConnection>()
+                .expect("downcast to DuckDbConnection");
+            duckdb_conn
+                .conn
+                .execute_batch(
+                    "CREATE SCHEMA test_schema;
+                     CREATE TABLE test_schema.numbers (id INTEGER, label VARCHAR);
+                     INSERT INTO test_schema.numbers VALUES (1, 'one'), (2, 'two'), (3, 'three');",
+                )
+                .expect("setup SQL");
+        }
+
+        // Create table provider with a full reference: memory.test_schema.numbers
+        let factory = DuckDBTableFactory::new(Arc::clone(&pool));
+        // DuckDB's in-memory database has the default catalog name "memory".
+        let table_ref = TableReference::full("memory", "test_schema", "numbers");
+        let provider = factory
+            .table_provider(table_ref)
+            .await
+            .expect("table_provider with full ref");
+
+        // Register in DataFusion and query
+        let ctx = SessionContext::new();
+        ctx.register_table("numbers", provider)
+            .expect("register table");
+
+        let batches = ctx
+            .sql("SELECT id, label FROM numbers ORDER BY id")
+            .await
+            .expect("query")
+            .collect()
+            .await
+            .expect("collect");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
+
+        let ids = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        assert_eq!(ids.values().to_vec(), vec![1, 2, 3]);
+
+        let labels = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("label column");
+        assert_eq!(labels.value(0), "one");
+        assert_eq!(labels.value(1), "two");
+        assert_eq!(labels.value(2), "three");
+    }
+
+    /// Tests that a `DuckDBTable` created with a partial (schema.table) reference
+    /// generates correct SQL through the non-federated scan path.
+    #[test_log::test(tokio::test)]
+    async fn scan_with_partial_table_reference() {
+        let pool = Arc::new(DuckDbConnectionPool::new_memory().expect("pool created"));
+
+        {
+            let mut conn = Arc::clone(&pool).connect_sync().expect("connection");
+            let duckdb_conn = conn
+                .as_any_mut()
+                .downcast_mut::<DuckDbConnection>()
+                .expect("downcast to DuckDbConnection");
+            duckdb_conn
+                .conn
+                .execute_batch(
+                    "CREATE SCHEMA another_schema;
+                     CREATE TABLE another_schema.items (val INTEGER);
+                     INSERT INTO another_schema.items VALUES (10), (20);",
+                )
+                .expect("setup SQL");
+        }
+
+        let factory = DuckDBTableFactory::new(Arc::clone(&pool));
+        let table_ref = TableReference::partial("another_schema", "items");
+        let provider = factory
+            .table_provider(table_ref)
+            .await
+            .expect("table_provider with partial ref");
+
+        let ctx = SessionContext::new();
+        ctx.register_table("items", provider)
+            .expect("register table");
+
+        let batches = ctx
+            .sql("SELECT val FROM items ORDER BY val")
+            .await
+            .expect("query")
+            .collect()
+            .await
+            .expect("collect");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+
+        let vals = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("val column");
+        assert_eq!(vals.values().to_vec(), vec![10, 20]);
+    }
+}
