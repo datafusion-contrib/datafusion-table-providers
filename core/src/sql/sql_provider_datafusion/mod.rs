@@ -86,6 +86,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     pub(crate) dialect: Option<Arc<dyn Dialect + Send + Sync>>,
     constraints: Option<Constraints>,
     pub(crate) function_support: Option<FunctionSupport>,
+    allow_physical_filter_pushdown: bool,
 }
 
 impl<T, P> std::fmt::Debug for SqlTable<T, P> {
@@ -133,6 +134,7 @@ impl<T, P> SqlTable<T, P> {
             dialect: None,
             constraints: None,
             function_support: None,
+            allow_physical_filter_pushdown: true,
         })
     }
 
@@ -152,6 +154,7 @@ impl<T, P> SqlTable<T, P> {
             dialect: None,
             constraints: None,
             function_support: None,
+            allow_physical_filter_pushdown: true,
         }
     }
 
@@ -170,6 +173,18 @@ impl<T, P> SqlTable<T, P> {
     #[must_use]
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
+        self
+    }
+
+    /// Disables physical-level filter pushdown on the underlying `SqlExec`.
+    ///
+    /// When set to `false`, physical filters (`FilterExec` predicates) will NOT
+    /// be absorbed into the generated SQL. This is required for databases with
+    /// limited query-language support (e.g. ScyllaDB/CQL) where the logical-level
+    /// `TableProvider::supports_filters_pushdown` intentionally rejects filters.
+    #[must_use]
+    pub fn with_allow_physical_filter_pushdown(mut self, allow: bool) -> Self {
+        self.allow_physical_filter_pushdown = allow;
         self
     }
 
@@ -249,13 +264,15 @@ impl<T, P> SqlTable<T, P> {
         projection: Option<&Vec<usize>>,
         sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SqlExec::new(
+        let exec = SqlExec::new(
             projection,
             &self.schema(),
             Arc::clone(&self.pool),
             sql,
             self.dialect_arc(),
-        )?))
+        )?
+        .with_allow_physical_filter_pushdown(self.allow_physical_filter_pushdown);
+        Ok(Arc::new(exec))
     }
 
     #[must_use]
@@ -375,6 +392,7 @@ pub struct SqlExec<T, P> {
     sql: String,
     properties: PlanProperties,
     dialect: Arc<dyn Dialect + Send + Sync>,
+    allow_physical_filter_pushdown: bool,
 }
 
 impl<T, P> Clone for SqlExec<T, P> {
@@ -385,6 +403,7 @@ impl<T, P> Clone for SqlExec<T, P> {
             sql: self.sql.clone(),
             properties: self.properties.clone(),
             dialect: Arc::clone(&self.dialect),
+            allow_physical_filter_pushdown: self.allow_physical_filter_pushdown,
         }
     }
 }
@@ -410,7 +429,27 @@ impl<T, P> SqlExec<T, P> {
                 Boundedness::Bounded,
             ),
             dialect,
+            allow_physical_filter_pushdown: true,
         })
+    }
+
+    /// Disables physical-level filter pushdown (`handle_child_pushdown_result`).
+    ///
+    /// When set to `false`, this `SqlExec` will reject all physical filter
+    /// pushdown requests, keeping filters as `FilterExec` nodes above the scan.
+    /// This is required for databases with limited SQL/query-language support
+    /// (e.g. ScyllaDB/CQL) where the logical-level `TableProvider::supports_filters_pushdown`
+    /// intentionally rejects certain filters.
+    #[must_use]
+    pub fn with_allow_physical_filter_pushdown(mut self, allow: bool) -> Self {
+        self.allow_physical_filter_pushdown = allow;
+        self
+    }
+
+    /// Returns whether physical-level filter pushdown is enabled.
+    #[must_use]
+    pub fn allow_physical_filter_pushdown(&self) -> bool {
+        self.allow_physical_filter_pushdown
     }
 
     #[must_use]
@@ -661,6 +700,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             sql: new_sql,
             properties: self.properties.clone(),
             dialect: Arc::clone(&self.dialect),
+            allow_physical_filter_pushdown: self.allow_physical_filter_pushdown,
         };
 
         // Update equivalence properties to reflect the output ordering
@@ -694,6 +734,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             sql: new_sql,
             properties: self.properties.clone(),
             dialect: Arc::clone(&self.dialect),
+            allow_physical_filter_pushdown: self.allow_physical_filter_pushdown,
         }))
     }
 
@@ -703,6 +744,17 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if !self.allow_physical_filter_pushdown {
+            let filter_results = child_pushdown_result
+                .parent_filters
+                .iter()
+                .map(|_| PushedDown::No)
+                .collect::<Vec<_>>();
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                filter_results,
+            ));
+        }
+
         let mut accepted_filters = Vec::new();
         let mut filter_results = Vec::with_capacity(child_pushdown_result.parent_filters.len());
         let mut any_accepted = false;
@@ -737,6 +789,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
             sql: new_sql,
             properties: self.properties.clone(),
             dialect: Arc::clone(&self.dialect),
+            allow_physical_filter_pushdown: self.allow_physical_filter_pushdown,
         };
 
         Ok(
