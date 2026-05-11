@@ -19,8 +19,9 @@ EXPLAIN ANALYZE SELECT id, age FROM test_table WHERE status = 'active'
 ┌─────────────┴─────────────┐
 │      EXPLAIN_ANALYZE      │
 │    ────────────────────   │
+│                           │
 │           0 rows          │
-│          (0.00s)          │
+│           0.00s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         TABLE_SCAN        │
@@ -38,6 +39,8 @@ EXPLAIN ANALYZE SELECT id, age FROM test_table WHERE status = 'active'
 │          Filters:         │
 │      status='active'      │
 │                           │
+│                           │
+│                           │
 │           3 rows          │
-│          (0.00s)          │
+│           0.00s           │
 └───────────────────────────┘

@@ -19,8 +19,9 @@ EXPLAIN ANALYZE SELECT id, status FROM test_table WHERE name = 'Bob'
 ┌─────────────┴─────────────┐
 │      EXPLAIN_ANALYZE      │
 │    ────────────────────   │
+│                           │
 │           0 rows          │
-│          (0.00s)          │
+│           0.00s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         TABLE_SCAN        │
@@ -37,6 +38,8 @@ EXPLAIN ANALYZE SELECT id, status FROM test_table WHERE name = 'Bob'
 │                           │
 │    Filters: name='Bob'    │
 │                           │
+│                           │
+│                           │
 │           1 row           │
-│          (0.00s)          │
+│           0.00s           │
 └───────────────────────────┘
