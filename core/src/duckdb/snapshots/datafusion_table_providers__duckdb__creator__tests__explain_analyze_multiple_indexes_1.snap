@@ -19,8 +19,9 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE id = 1
 ┌─────────────┴─────────────┐
 │      EXPLAIN_ANALYZE      │
 │    ────────────────────   │
+│                           │
 │           0 rows          │
-│          (0.00s)          │
+│           0.00s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         TABLE_SCAN        │
@@ -33,6 +34,8 @@ EXPLAIN ANALYZE SELECT name FROM test_table WHERE id = 1
 │     Projections: name     │
 │       Filters: id=1       │
 │                           │
+│                           │
+│                           │
 │           1 row           │
-│          (0.00s)          │
+│           0.00s           │
 └───────────────────────────┘

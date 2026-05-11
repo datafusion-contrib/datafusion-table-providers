@@ -848,9 +848,9 @@ pub(crate) mod tests {
         datasource::sink::DataSink,
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
-        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
         physical_plan::memory::MemoryStream,
     };
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
@@ -1818,8 +1818,8 @@ pub(crate) mod tests {
             insta::with_settings!({
                 filters => vec![
                     (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
-                    (r"\(\d+\.\d+s\)", "(0.00s)"),
-                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                    (r"\(?\d+\.\d+s\)?", "0.00s"),
+                    (r"(│\s+memory\.main\s+│\n)?│\.?__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
                 ],
             }, {
                 insta::assert_snapshot!(format!("explain_analyze_{idx}"), explain_result);
@@ -1954,8 +1954,8 @@ pub(crate) mod tests {
             insta::with_settings!({
                 filters => vec![
                     (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
-                    (r"\(\d+\.\d+s\)", "(0.00s)"),
-                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                    (r"\(?\d+\.\d+s\)?", "0.00s"),
+                    (r"(│\s+memory\.main\s+│\n)?│\.?__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
                 ],
             }, {
                 insta::assert_snapshot!(format!("explain_analyze_multiple_indexes_{idx}"), explain_result);
@@ -2064,8 +2064,8 @@ pub(crate) mod tests {
             insta::with_settings!({
                 filters => vec![
                     (r"Total Time: \d+\.\d+s", "Total Time: replaced"),
-                    (r"\(\d+\.\d+s\)", "(0.00s)"),
-                    (r"│__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
+                    (r"\(?\d+\.\d+s\)?", "0.00s"),
+                    (r"(│\s+memory\.main\s+│\n)?│\.?__data_test_table_\d+│\n│\s+\d+\s+│", "│__data_test_table_redacted│\n│     redacted     │"),
                 ],
             }, {
                 insta::assert_snapshot!(format!("explain_analyze_primary_key_and_index_{idx}"), explain_result);
