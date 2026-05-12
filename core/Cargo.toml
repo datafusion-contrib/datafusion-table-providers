@@ -102,7 +102,7 @@ tonic = { version = "0.14", optional = true, features = [
   "tls-webpki-roots",
 ] }
 tracing = "0.1"
-hickory-resolver = "0.25.2"
+hickory-resolver = "0.26"
 url = "2.5"
 uuid = { version = "1.18", optional = true }
 rust_decimal = { version = "1.38", features = ["db-postgres"], optional = true }
