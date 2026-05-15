@@ -2,9 +2,11 @@ pub mod connection;
 pub mod connection_pool;
 pub mod table;
 pub mod utils;
+pub mod write;
 
 use crate::mongodb::connection_pool::MongoDBConnectionPool;
 use crate::mongodb::table::MongoDBTable;
+use crate::mongodb::write::MongoDBTableWriter;
 use arrow_schema::ArrowError;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::TableReference;
@@ -84,5 +86,17 @@ impl MongoDBTableFactory {
         );
 
         Ok(table_provider)
+    }
+
+    pub async fn read_write_table_provider(
+        &self,
+        table_reference: TableReference,
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
+        let read_provider = self.table_provider(table_reference.clone()).await?;
+        Ok(MongoDBTableWriter::create(
+            read_provider,
+            Arc::clone(&self.pool),
+            table_reference,
+        ))
     }
 }

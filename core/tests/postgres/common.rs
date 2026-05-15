@@ -1,4 +1,4 @@
-use bollard::secret::HealthConfig;
+use bollard::models::HealthConfig;
 #[cfg(feature = "postgres")]
 use datafusion_table_providers::sql::db_connection_pool::{
     postgrespool::PostgresConnectionPool, StaticPasswordProvider,

@@ -1,4 +1,4 @@
-use bollard::secret::HealthConfig;
+use bollard::models::HealthConfig;
 use datafusion_table_providers::mongodb::connection_pool::MongoDBConnectionPool;
 use mongodb::{options::ClientOptions, Client};
 use secrecy::SecretString;
@@ -97,10 +97,10 @@ pub async fn start_mongodb_docker_container(
                 "--eval".to_string(),
                 "db.runCommand({ ping: 1 }).ok".to_string(),
             ]),
-            interval: Some(500_000_000),
-            timeout: Some(500_000_000),
-            retries: Some(10),
-            start_period: Some(3_000_000_000),
+            interval: Some(1_000_000_000),
+            timeout: Some(2_000_000_000),
+            retries: Some(30),
+            start_period: Some(10_000_000_000),
             start_interval: None,
         })
         .build()?

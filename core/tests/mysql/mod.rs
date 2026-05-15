@@ -968,6 +968,72 @@ async fn test_arrow_mysql_roundtrip(
     .await;
 }
 
+async fn test_mysql_sort_limit(port: usize) {
+    let ctx = SessionContext::new();
+    let pool = common::get_mysql_connection_pool(port, None)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let _ = db_conn
+        .execute("DROP TABLE IF EXISTS sort_limit_test", &[])
+        .await
+        .expect("table should be dropped if exists");
+    let _ = db_conn
+        .execute("CREATE TABLE sort_limit_test (id INT NOT NULL)", &[])
+        .await
+        .expect("table should be created");
+
+    let values: Vec<String> = (1..=20).map(|i| format!("({i})")).collect();
+    let insert_sql = format!(
+        "INSERT INTO sort_limit_test (id) VALUES {}",
+        values.join(",")
+    );
+    let _ = db_conn
+        .execute(&insert_sql, &[])
+        .await
+        .expect("rows should be inserted");
+
+    let sqltable_pool: Arc<
+        dyn datafusion_table_providers::sql::db_connection_pool::DbConnectionPool<
+                mysql_async::Conn,
+                &'static (dyn mysql_async::prelude::ToValue + Sync),
+            > + Send
+            + Sync
+            + 'static,
+    > = Arc::new(pool);
+    let table = datafusion_table_providers::sql::sql_provider_datafusion::SqlTable::new(
+        "mysql",
+        &sqltable_pool,
+        "sort_limit_test",
+        None,
+    )
+    .await
+    .expect("table provider should be created");
+    ctx.register_table("sort_limit_test", Arc::new(table))
+        .expect("table should be registered");
+
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+
+    let df = ctx
+        .sql("SELECT id FROM sort_limit_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+        .await
+        .expect("SQL should parse");
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3, "filtered LIMIT 3 must return exactly 3 rows");
+}
+
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {

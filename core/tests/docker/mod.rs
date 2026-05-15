@@ -1,18 +1,13 @@
-#![allow(deprecated)]
-
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
-#[allow(deprecated)]
 use bollard::{
-    container::{
-        Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,
-        StartContainerOptions, StopContainerOptions,
+    models::{
+        ContainerCreateBody, ContainerState, ContainerStateStatusEnum, Health, HealthConfig,
+        HealthStatusEnum, HostConfig, PortBinding,
     },
-    image::CreateImageOptions,
-    query_parameters::{ListContainersOptions, ListImagesOptions},
-    secret::{
-        ContainerState, ContainerStateStatusEnum, Health, HealthConfig, HealthStatusEnum,
-        HostConfig, PortBinding,
+    query_parameters::{
+        CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
+        ListImagesOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
     },
     Docker,
 };
@@ -39,7 +34,8 @@ pub async fn remove(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
             name,
             Some(RemoveContainerOptions {
                 force: true,
-                ..Default::default()
+                v: false,
+                link: false,
             }),
         )
         .await?)
@@ -123,8 +119,8 @@ impl ContainerRunner<'_> {
         self.pull_image().await?;
 
         let options = CreateContainerOptions {
-            name: self.name.as_ref(),
-            platform: None,
+            name: Some(self.name.to_string()),
+            platform: String::new(),
         };
 
         let mut port_bindings_map = HashMap::new();
@@ -133,7 +129,7 @@ impl ContainerRunner<'_> {
                 format!("{container_port}/tcp"),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(format!("{host_port}/tcp")),
+                    host_port: Some(format!("{host_port}")),
                 }]),
             );
         }
@@ -155,11 +151,10 @@ impl ContainerRunner<'_> {
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
-        let env_vars_str = env_vars.iter().map(String::as_str).collect::<Vec<&str>>();
 
-        let config = Config::<&str> {
-            image: Some(&self.image),
-            env: Some(env_vars_str),
+        let config = ContainerCreateBody {
+            image: Some(self.image.clone()),
+            env: Some(env_vars),
             host_config,
             healthcheck: self.healthcheck,
             ..Default::default()
@@ -168,7 +163,7 @@ impl ContainerRunner<'_> {
         let _ = self.docker.create_container(Some(options), config).await?;
 
         self.docker
-            .start_container(&self.name, None::<StartContainerOptions<String>>)
+            .start_container(&self.name, None::<StartContainerOptions>)
             .await?;
 
         let start_time = std::time::Instant::now();
@@ -193,7 +188,7 @@ impl ContainerRunner<'_> {
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 30 {
+            if start_time.elapsed().as_secs() > 90 {
                 return Err(anyhow::anyhow!("Container failed to start"));
             }
 
@@ -219,8 +214,8 @@ impl ContainerRunner<'_> {
             }
         }
 
-        let options = Some(CreateImageOptions::<&str> {
-            from_image: &self.image,
+        let options = Some(CreateImageOptions {
+            from_image: Some(self.image.clone()),
             ..Default::default()
         });
 

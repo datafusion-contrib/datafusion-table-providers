@@ -1,4 +1,4 @@
-use bollard::secret::HealthConfig;
+use bollard::models::HealthConfig;
 use datafusion_table_providers::sql::db_connection_pool::mysqlpool::MySQLConnectionPool;
 use secrecy::SecretString;
 use std::collections::HashMap;
