@@ -41,7 +41,6 @@ pub struct MongoDBTable {
     pool: Arc<MongoDBConnectionPool>,
     schema: SchemaRef,
     table_reference: Arc<TableReference>,
-    writeable: bool,
 }
 
 impl MongoDBTable {
@@ -56,17 +55,6 @@ impl MongoDBTable {
             pool: Arc::clone(pool),
             schema,
             table_reference: Arc::new(table_reference),
-            writeable: false,
-        })
-    }
-
-    pub async fn new_writeable(
-        pool: &Arc<MongoDBConnectionPool>,
-        table_reference: impl Into<TableReference>,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            writeable: true,
-            ..Self::new(pool, table_reference).await?
         })
     }
 }
@@ -106,22 +94,7 @@ impl TableProvider for MongoDBTable {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let pushdowns = supports_filters_pushdown(filters)?;
-        if self.writeable {
-            // In write mode, downgrade Exact → Inexact so DataFusion keeps the Filter
-            // node in DML logical plans. Without this, the optimizer removes the Filter
-            // node and extract_dml_filters finds no filters, causing unfiltered deletes/updates.
-            // Read-only mode keeps Exact so that limit pushdown is preserved.
-            Ok(pushdowns
-                .into_iter()
-                .map(|p| match p {
-                    TableProviderFilterPushDown::Exact => TableProviderFilterPushDown::Inexact,
-                    other => other,
-                })
-                .collect())
-        } else {
-            Ok(pushdowns)
-        }
+        supports_filters_pushdown(filters)
     }
 
     async fn insert_into(

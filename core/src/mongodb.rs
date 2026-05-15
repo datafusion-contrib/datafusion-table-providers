@@ -90,12 +90,6 @@ impl MongoDBTableFactory {
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = Arc::clone(&self.pool);
-        let table_provider = Arc::new(
-            MongoDBTable::new_writeable(&pool, table_reference)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
-        );
-        Ok(table_provider)
+        self.table_provider(table_reference).await
     }
 }
