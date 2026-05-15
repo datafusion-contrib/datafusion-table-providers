@@ -2,11 +2,9 @@ pub mod connection;
 pub mod connection_pool;
 pub mod table;
 pub mod utils;
-pub mod write;
 
 use crate::mongodb::connection_pool::MongoDBConnectionPool;
 use crate::mongodb::table::MongoDBTable;
-use crate::mongodb::write::MongoDBTableWriter;
 use arrow_schema::ArrowError;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::TableReference;
@@ -92,11 +90,12 @@ impl MongoDBTableFactory {
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        let read_provider = self.table_provider(table_reference.clone()).await?;
-        Ok(MongoDBTableWriter::create(
-            read_provider,
-            Arc::clone(&self.pool),
-            table_reference,
-        ))
+        let pool = Arc::clone(&self.pool);
+        let table_provider = Arc::new(
+            MongoDBTable::new_writeable(&pool, table_reference)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+        );
+        Ok(table_provider)
     }
 }
