@@ -510,9 +510,15 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         self.settings_registry
             .apply_settings(conn, &options, DuckDBSettingScope::Global)?;
 
+        // Use actual DuckDB storage schema for the read provider (may differ from cmd.schema).
+        let schema_conn = dyn_pool.connect().await?;
+        let read_schema = get_schema(schema_conn, &TableReference::bare(name.clone()))
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
-            Arc::clone(&schema),
+            read_schema,
             TableReference::bare(name.clone()),
             None,
             Some(self.dialect.clone()),
@@ -798,7 +804,7 @@ pub(crate) mod tests {
     use crate::duckdb::write::DuckDBTableWriter;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::{Constraints, ToDFSchema};
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::prelude::SessionContext;
@@ -1115,6 +1121,61 @@ pub(crate) mod tests {
         );
         if let Err(e) = result {
             assert_eq!(e.to_string(), "External error: Query execution failed.\nInvalid Input Error: Failed to cast value: Could not convert string 'invalid' to BOOL\nFor details, refer to the DuckDB manual: https://duckdb.org/docs/");
+        }
+    }
+
+    /// Verifies the read provider advertises actual DuckDB storage types,
+    /// not the requested cmd.schema types.
+    #[tokio::test]
+    async fn test_read_provider_schema_reflects_actual_duckdb_types() {
+        let table_name = TableReference::bare("test_timestamp_schema");
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                false,
+            ),
+        ]);
+
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), "memory".to_string());
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let ctx = SessionContext::new();
+        let cmd = CreateExternalTable {
+            schema: Arc::new(schema.to_dfschema().expect("to df schema")),
+            name: table_name,
+            location: "".to_string(),
+            file_type: "".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+            or_replace: false,
+        };
+
+        let table_provider = factory
+            .create(&ctx.state(), &cmd)
+            .await
+            .expect("table provider created");
+
+        let read_schema = table_provider.schema();
+        let ts_field = read_schema
+            .field_with_name("created_at")
+            .expect("created_at field exists");
+
+        // DuckDB stores TIMESTAMPTZ as Microsecond regardless of requested precision.
+        match ts_field.data_type() {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {}
+            other => panic!(
+                "Expected Timestamp(Microsecond, _), got {other:?}"
+            ),
         }
     }
 }
