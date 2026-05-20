@@ -1178,9 +1178,7 @@ pub(crate) mod tests {
         // DuckDB stores TIMESTAMPTZ as Microsecond regardless of requested precision.
         match ts_field.data_type() {
             DataType::Timestamp(TimeUnit::Microsecond, _) => {}
-            other => panic!(
-                "Expected Timestamp(Microsecond, _), got {other:?}"
-            ),
+            other => panic!("Expected Timestamp(Microsecond, _), got {other:?}"),
         }
     }
 }
