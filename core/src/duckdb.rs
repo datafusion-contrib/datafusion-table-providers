@@ -485,15 +485,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 .with_indexes(indexes.clone());
 
         let pool = Arc::new(pool);
-        make_initial_table(Arc::new(table_definition.clone()), &pool)?;
-
-        let write_settings = DuckDBWriteSettings::from_params(&options);
-
-        let table_writer_builder = DuckDBTableWriterBuilder::new()
-            .with_table_definition(table_definition)
-            .with_pool(pool)
-            .set_on_conflict(on_conflict)
-            .with_write_settings(write_settings);
+        make_initial_table(Arc::new(table_definition), &pool)?;
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
@@ -510,15 +502,28 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         self.settings_registry
             .apply_settings(conn, &options, DuckDBSettingScope::Global)?;
 
-        // Use actual DuckDB storage schema for the read provider (may differ from cmd.schema).
+        // Read actual DuckDB schema after table creation (may differ from cmd.schema).
         let schema_conn = dyn_pool.connect().await?;
-        let read_schema = get_schema(schema_conn, &TableReference::bare(name.clone()))
+        let schema = get_schema(schema_conn, &TableReference::bare(name.clone()))
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+        let table_definition =
+            TableDefinition::new(RelationName::new(name.clone()), Arc::clone(&schema))
+                .with_constraints(cmd.constraints.clone())
+                .with_indexes(indexes.clone());
+
+        let write_settings = DuckDBWriteSettings::from_params(&options);
+
+        let table_writer_builder = DuckDBTableWriterBuilder::new()
+            .with_table_definition(table_definition)
+            .with_pool(pool)
+            .set_on_conflict(on_conflict)
+            .with_write_settings(write_settings);
+
         let read_provider = Arc::new(DuckDBTable::new_with_schema(
             &dyn_pool,
-            read_schema,
+            schema,
             TableReference::bare(name.clone()),
             None,
             Some(self.dialect.clone()),
