@@ -23,7 +23,7 @@ datafusion-table-providers = { workspace = true }
 duckdb = { workspace = true, optional = true }
 
 pyo3 = { version = "0.28" }
-tokio = { version = "1.51", features = [
+tokio = { version = "1.52", features = [
     "macros",
     "rt",
     "rt-multi-thread",
