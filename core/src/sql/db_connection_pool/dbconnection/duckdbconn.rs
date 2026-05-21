@@ -23,7 +23,6 @@ use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
 use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
-use crate::util::arrow::cast_batch_to_schema;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 
@@ -507,9 +506,11 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             let output_stream = stream! {
                 while let Some(batch) = batch_rx.recv().await {
                     if let Some(ref target_schema) = projected_schema {
-                        match cast_batch_to_schema(&batch, target_schema) {
+                        match datafusion_federation::schema_cast::record_convert::try_cast_to(batch, Arc::clone(target_schema)) {
                             Ok(casted) => yield Ok(casted),
-                            Err(e) => yield Err(e),
+                            Err(e) => yield Err(DataFusionError::Execution(format!(
+                                "Failed to cast DuckDB result batch to projected schema: {e}"
+                            ))),
                         }
                     } else {
                         yield Ok(batch);
