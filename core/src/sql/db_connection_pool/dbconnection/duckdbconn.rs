@@ -23,6 +23,7 @@ use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
 use crate::sql::db_connection_pool::runtime::run_sync_with_tokio;
+use crate::util::arrow::cast_batch_to_schema;
 use crate::util::schema::SchemaValidator;
 use crate::UnsupportedTypeAction;
 
@@ -453,7 +454,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         &self,
         sql: &str,
         params: &[DuckDBParameter],
-        _projected_schema: Option<SchemaRef>,
+        projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
@@ -501,9 +502,18 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
 
+            let stream_schema = projected_schema.clone().unwrap_or(schema);
+
             let output_stream = stream! {
                 while let Some(batch) = batch_rx.recv().await {
-                    yield Ok(batch);
+                    if let Some(ref target_schema) = projected_schema {
+                        match cast_batch_to_schema(&batch, target_schema) {
+                            Ok(casted) => yield Ok(casted),
+                            Err(e) => yield Err(e),
+                        }
+                    } else {
+                        yield Ok(batch);
+                    }
                 }
 
                 match join_handle.await {
@@ -522,7 +532,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             };
 
             Ok(Box::pin(RecordBatchStreamAdapter::new(
-                schema,
+                stream_schema,
                 output_stream,
             )))
         };
@@ -944,5 +954,71 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_query_arrow_casts_to_projected_schema() {
+        use arrow::datatypes::{Schema, TimeUnit};
+        use futures::StreamExt;
+
+        use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
+        use crate::sql::db_connection_pool::DbConnectionPool;
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        rt.block_on(async {
+            let pool = DuckDbConnectionPool::new_memory().expect("pool created");
+
+            // Create table with TIMESTAMPTZ (DuckDB stores as Microsecond)
+            let conn = pool.connect().await.expect("connection");
+            let conn = conn.as_sync().expect("sync connection");
+            conn.execute(
+                "CREATE TABLE test_ts (id INTEGER, created_at TIMESTAMPTZ)",
+                &[],
+            )
+            .expect("table created");
+            conn.execute(
+                "INSERT INTO test_ts VALUES (1, '2023-01-01T00:00:00Z')",
+                &[],
+            )
+            .expect("data inserted");
+
+            // Request Nanosecond via projected_schema
+            let projected_schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new(
+                    "created_at",
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                    true,
+                ),
+            ]));
+
+            let stream = conn
+                .query_arrow(
+                    "SELECT id, created_at FROM test_ts",
+                    &[],
+                    Some(projected_schema.clone()),
+                )
+                .expect("query_arrow should succeed");
+
+            // Verify stream schema matches projected_schema
+            assert_eq!(stream.schema(), projected_schema);
+
+            let mut batches = vec![];
+            let mut stream = stream;
+            while let Some(batch) = stream.next().await {
+                batches.push(batch.expect("batch should be Ok"));
+            }
+
+            assert_eq!(batches.len(), 1);
+            let batch = &batches[0];
+            assert_eq!(batch.schema(), projected_schema);
+
+            // Verify the timestamp column is Nanosecond
+            let ts_col = batch.column(1);
+            assert_eq!(
+                ts_col.data_type(),
+                &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+            );
+        });
     }
 }

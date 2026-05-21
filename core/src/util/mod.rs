@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::UnsupportedTypeAction;
 
+pub mod arrow;
 pub mod column_reference;
 pub mod constraints;
 pub mod count_exec;
