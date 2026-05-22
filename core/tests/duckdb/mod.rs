@@ -359,3 +359,108 @@ mod multipart_table_reference {
         assert_eq!(vals.values().to_vec(), vec![10, 20]);
     }
 }
+
+/// Tests that `to_sql_with_engine` emits a parenthesized WHERE clause for composite-key
+/// deletes, preventing a stack overflow in DuckDB's optimizer on the 512 KiB worker thread.
+///
+/// Without the fix, `to_sql_with_engine` emits a flat unparenthesized OR chain:
+///   `"k1" = 1 AND "k2" = 2 OR "k1" = 2 AND "k2" = 4 OR … OR "k1" = N AND "k2" = 2N`
+///
+/// DuckDB's parser reconstructs this as a left-recursive tree of depth N.
+/// ExpressionRewriter / DistributivityRule recurse N levels deep → stack overflow.
+///
+/// With the fix, AND/OR operands are wrapped in parentheses, so the depth stays O(log N).
+mod composite_delete_stack_overflow {
+    use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
+    use datafusion::prelude::col;
+    use datafusion::scalar::ScalarValue;
+    use datafusion_table_providers::sql::sql_provider_datafusion::expr::{
+        to_sql_with_engine, Engine,
+    };
+    use duckdb::Connection;
+
+    const N: usize = 100;
+
+    fn setup(conn: &Connection) {
+        conn.execute_batch("CREATE TABLE test (k1 INTEGER, k2 INTEGER, val INTEGER);")
+            .unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO test SELECT i, i*2, i FROM generate_series(1, {N}) t(i);"
+        ))
+        .unwrap();
+    }
+
+    fn binary(left: Expr, op: Operator, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        })
+    }
+
+    fn int32(v: i32) -> Expr {
+        Expr::Literal(ScalarValue::Int32(Some(v)), None)
+    }
+
+    fn reduce_or(conds: &[Expr]) -> Expr {
+        if conds.len() == 1 {
+            return conds[0].clone();
+        }
+        let mid = conds.len() / 2;
+        binary(
+            reduce_or(&conds[..mid]),
+            Operator::Or,
+            reduce_or(&conds[mid..]),
+        )
+    }
+
+    /// Verifies that `to_sql_with_engine` emits a parenthesized WHERE clause that DuckDB
+    /// can execute on a 512 KiB worker thread stack.
+    ///
+    /// Failure modes:
+    ///   - Without the parenthesization fix: the assertion on SQL structure fails
+    ///     immediately (clean test failure, no process crash).
+    ///   - With correct SQL but a DuckDB regression: `execute_batch` panics inside the
+    ///     spawned thread, which surfaces as a `join` error.
+    #[test]
+    fn composite_delete_via_to_sql_with_engine() {
+        let conds: Vec<Expr> = (1..=N)
+            .map(|i| {
+                binary(
+                    binary(col("k1"), Operator::Eq, int32(i as i32)),
+                    Operator::And,
+                    binary(col("k2"), Operator::Eq, int32((i * 2) as i32)),
+                )
+            })
+            .collect();
+
+        let where_clause = to_sql_with_engine(&reduce_or(&conds), Some(Engine::DuckDB))
+            .expect("to_sql_with_engine failed");
+
+        // Without the fix: `"k1" = 1 AND "k2" = 2 OR …`  — no parens, fails here.
+        // With the fix:    `(("k1" = 1) AND ("k2" = 2)) OR …`
+        assert!(
+            where_clause.starts_with('('),
+            "WHERE clause must be parenthesized to avoid DuckDB stack overflow:\n{where_clause}"
+        );
+
+        let sql = format!("DELETE FROM test WHERE {where_clause}");
+
+        let handle = std::thread::Builder::new()
+            .stack_size(512 * 1024) // 512 KiB — matches production refresh-worker stack
+            .name("refresh-worker".to_string())
+            .spawn(move || {
+                let conn = Connection::open_in_memory().unwrap();
+                setup(&conn);
+                conn.execute_batch(&sql).unwrap();
+
+                let remaining: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM test", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(remaining, 0, "all {N} rows should be deleted");
+            })
+            .unwrap();
+
+        handle.join().unwrap();
+    }
+}
