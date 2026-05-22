@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bigdecimal::{num_bigint::BigInt, BigDecimal};
 use datafusion::{
-    logical_expr::{Cast, Expr},
+    logical_expr::{Cast, Expr, Operator},
     scalar::ScalarValue,
     sql::unparser::dialect::{
         DefaultDialect, Dialect, DuckDBDialect, MySqlDialect, PostgreSqlDialect, SqliteDialect,
@@ -64,7 +64,12 @@ pub fn to_sql_with_engine(expr: &Expr, engine: Option<Engine>) -> Result<String>
                 }
             }
 
-            Ok(format!("{} {} {}", left, binary_expr.op, right))
+            match binary_expr.op {
+                Operator::And | Operator::Or => {
+                    Ok(format!("({}) {} ({})", left, binary_expr.op, right))
+                }
+                _ => Ok(format!("{} {} {}", left, binary_expr.op, right)),
+            }
         }
         Expr::Column(name) => match engine {
             Some(Engine::Spark | Engine::ODBC) => Ok(format!("{name}")),
@@ -531,6 +536,74 @@ mod tests {
         assert_eq!(
             to_sql_with_engine(&expr, None)?,
             "substring('hello world', 1, 5)"
+        );
+
+        Ok(())
+    }
+
+    fn binary(left: Expr, op: Operator, right: Expr) -> Expr {
+        Expr::BinaryExpr(datafusion::logical_expr::BinaryExpr {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        })
+    }
+
+    fn int(v: i32) -> Expr {
+        Expr::Literal(ScalarValue::Int32(Some(v)), None)
+    }
+
+    #[test]
+    fn test_and_or_binary_exprs_are_parenthesized() -> Result<()> {
+        // AND operands are wrapped so the tree shape is preserved in SQL
+        let and_expr = binary(col("a"), Operator::And, col("b"));
+        assert_eq!(to_sql(&and_expr)?, "(\"a\") AND (\"b\")");
+
+        // OR operands are wrapped for the same reason
+        let or_expr = binary(col("a"), Operator::Or, col("b"));
+        assert_eq!(to_sql(&or_expr)?, "(\"a\") OR (\"b\")");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_boolean_binary_exprs_not_parenthesized() -> Result<()> {
+        // Comparison and arithmetic operators must NOT add extra parens
+        let eq_expr = binary(col("k1"), Operator::Eq, int(1));
+        assert_eq!(to_sql(&eq_expr)?, "\"k1\" = 1");
+
+        let lt_expr = binary(col("v"), Operator::Lt, int(42));
+        assert_eq!(to_sql(&lt_expr)?, "\"v\" < 42");
+
+        let plus_expr = binary(col("x"), Operator::Plus, int(5));
+        assert_eq!(to_sql(&plus_expr)?, "\"x\" + 5");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_composite_key_or_chain_parenthesized() -> Result<()> {
+        // Simulates a two-row composite-key DELETE:
+        //   (k1 = 1 AND k2 = 2) OR (k1 = 2 AND k2 = 4)
+        //
+        // Without parens this serialises as a flat chain that DuckDB's optimizer
+        // reconstructs as a left-recursive tree of depth N, causing a stack overflow
+        // for large N. With parens the structure is explicit.
+        let row1 = binary(
+            binary(col("k1"), Operator::Eq, int(1)),
+            Operator::And,
+            binary(col("k2"), Operator::Eq, int(2)),
+        );
+        let row2 = binary(
+            binary(col("k1"), Operator::Eq, int(2)),
+            Operator::And,
+            binary(col("k2"), Operator::Eq, int(4)),
+        );
+        let or_chain = binary(row1, Operator::Or, row2);
+
+        assert_eq!(
+            to_sql(&or_chain)?,
+            "((\"k1\" = 1) AND (\"k2\" = 2)) OR ((\"k1\" = 2) AND (\"k2\" = 4))"
         );
 
         Ok(())
