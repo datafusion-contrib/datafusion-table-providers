@@ -8,7 +8,6 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::duckdb::DuckDBTableProviderFactory;
 use rstest::rstest;
 use std::collections::HashMap;
@@ -16,7 +15,7 @@ use std::sync::Arc;
 
 async fn arrow_duckdb_round_trip(
     arrow_record: RecordBatch,
-    source_schema: SchemaRef,
+    _source_schema: SchemaRef,
     table_name: &str,
 ) {
     let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
@@ -68,7 +67,6 @@ async fn arrow_duckdb_round_trip(
         .expect("DataFrame should be created from query");
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
-    let casted_record = try_cast_to(record_batch[0].clone(), source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
     tracing::debug!(
@@ -80,7 +78,7 @@ async fn arrow_duckdb_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-    assert_eq!(casted_record, arrow_record);
+    assert_eq!(record_batch[0], arrow_record);
 }
 
 #[rstest]
