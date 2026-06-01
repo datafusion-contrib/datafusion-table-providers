@@ -105,7 +105,10 @@ mod tests {
 /// only appear in the inferred schema are kept; fields that only appear in
 /// the declared schema are appended after the inferred ones.
 #[must_use]
-pub fn merge_inferred_and_declared_schemas(inferred: SchemaRef, declared: Option<&SchemaRef>) -> SchemaRef {
+pub fn merge_inferred_and_declared_schemas(
+    inferred: SchemaRef,
+    declared: Option<&SchemaRef>,
+) -> SchemaRef {
     let Some(declared) = declared else {
         return inferred;
     };

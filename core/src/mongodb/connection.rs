@@ -108,7 +108,10 @@ impl MongoDBConnection {
         .boxed()
         .context(UnableToGetSchemaSnafu)?;
 
-        Ok(merge_inferred_and_declared_schemas(inferred, declared_schema.as_ref()))
+        Ok(merge_inferred_and_declared_schemas(
+            inferred,
+            declared_schema.as_ref(),
+        ))
     }
 
     pub async fn query_arrow(
