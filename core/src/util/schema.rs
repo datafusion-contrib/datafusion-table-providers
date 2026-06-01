@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use super::handle_unsupported_type_error;
 use crate::UnsupportedTypeAction;
-use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T, E = GenericError> = std::result::Result<T, E>;
@@ -12,7 +11,7 @@ type Result<T, E = GenericError> = std::result::Result<T, E>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
     fn schema(fields: Vec<(&str, DataType, bool)>) -> SchemaRef {
         Arc::new(Schema::new(
