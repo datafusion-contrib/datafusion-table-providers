@@ -35,6 +35,11 @@ pub enum Error {
         source: Box<dyn std::error::Error + std::marker::Send + Sync>,
     },
 
+    #[snafu(display(
+        "Unable to infer schema. Collection empty or non-existent: {collection_name}"
+    ))]
+    EmptyCollection { collection_name: String },
+
     #[snafu(display("Unable to get schemas: {source}"))]
     UnableToGetSchemas {
         source: Box<dyn std::error::Error + std::marker::Send + Sync>,

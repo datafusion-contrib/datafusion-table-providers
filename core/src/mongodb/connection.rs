@@ -77,9 +77,13 @@ impl MongoDBConnection {
             _ => unnest_bson_documents(docs, &self.unnest_parameters)?,
         };
 
-        infer_arrow_schema_from_documents(&unnested_docs, self.tz.clone().as_deref())
-            .boxed()
-            .context(UnableToGetSchemaSnafu)
+        infer_arrow_schema_from_documents(
+            collection_name,
+            &unnested_docs,
+            self.tz.clone().as_deref(),
+        )
+        .boxed()
+        .context(UnableToGetSchemaSnafu)
     }
 
     pub async fn query_arrow(
