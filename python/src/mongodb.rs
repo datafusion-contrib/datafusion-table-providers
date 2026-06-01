@@ -41,8 +41,11 @@ impl RawMongoDBTableFactory {
     }
 
     pub fn get_table(&self, py: Python, table_reference: &str) -> PyResult<RawTableProvider> {
-        let table = wait_for_future(py, self.factory.table_provider(table_reference.into()))
-            .map_err(to_pyerr)?;
+        let table = wait_for_future(
+            py,
+            self.factory.table_provider(table_reference.into(), None),
+        )
+        .map_err(to_pyerr)?;
 
         Ok(RawTableProvider {
             table,

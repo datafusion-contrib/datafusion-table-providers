@@ -78,21 +78,12 @@ impl MongoDBTableFactory {
         Self { pool }
     }
 
-    pub async fn table_provider(
-        &self,
-        table_reference: TableReference,
-    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
-        self.table_provider_with_schema(table_reference, None).await
-    }
-
-    /// Like [`table_provider`] but accepts an optional declared schema.
-    ///
     /// When the collection is empty and `declared_schema` is `Some`, the
     /// declared schema is used directly so the dataset can register without
     /// any documents being present.  When the collection has documents, the
     /// inferred schema is merged with the declared schema (declared fields
     /// take precedence).
-    pub async fn table_provider_with_schema(
+    pub async fn table_provider(
         &self,
         table_reference: TableReference,
         declared_schema: Option<SchemaRef>,
