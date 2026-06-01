@@ -155,7 +155,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
 
         // Check field count
         assert_eq!(schema.fields().len(), 4);
@@ -185,11 +185,11 @@ mod tests {
             "created_at": mongodb::bson::DateTime::now(),
             "timestamp": mongodb::bson::Timestamp { time: 1234567890, increment: 1 },
             "binary_data": mongodb::bson::Binary { subtype: mongodb::bson::spec::BinarySubtype::Generic, bytes: vec![1, 2, 3] },
-            "decimal": mongodb::bson::Decimal128::from_str("123.456").unwrap(),
+            "decimal": mongodb::bson::Decimal128::from_str("123.456").expect("valid decimal"),
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -223,7 +223,7 @@ mod tests {
         let docs = vec![doc];
 
         let schema =
-            infer_arrow_schema_from_documents("test_collection", &docs, Some("+02:00")).unwrap();
+            infer_arrow_schema_from_documents("test_collection", &docs, Some("+02:00")).expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -250,23 +250,23 @@ mod tests {
             .month(1)
             .day(1)
             .build()
-            .unwrap();
+            .expect("valid datetime");
         let non_midnight = mongodb::bson::DateTime::builder()
             .year(2024)
             .month(6)
             .day(15)
             .hour(12)
             .build()
-            .unwrap();
+            .expect("valid datetime");
 
         // Order A: midnight first, then non-midnight
         let docs = vec![
             doc! { "created_at": midnight },
             doc! { "created_at": non_midnight },
         ];
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         assert_eq!(
-            schema.field_with_name("created_at").unwrap().data_type(),
+            schema.field_with_name("created_at").expect("field exists").data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
 
@@ -275,9 +275,9 @@ mod tests {
             doc! { "created_at": non_midnight },
             doc! { "created_at": midnight },
         ];
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         assert_eq!(
-            schema.field_with_name("created_at").unwrap().data_type(),
+            schema.field_with_name("created_at").expect("field exists").data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
     }
@@ -285,11 +285,11 @@ mod tests {
     #[test]
     fn test_date32_detection() {
         let doc = doc! {
-            "created_date": mongodb::bson::DateTime::builder().year(2021).month(1).day(1).build().unwrap(),
+            "created_date": mongodb::bson::DateTime::builder().year(2021).month(1).day(1).build().expect("valid datetime"),
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -310,7 +310,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -358,7 +358,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -377,8 +377,8 @@ mod tests {
             doc! { "value": 20_i64 }, // Int64 -> should promote to Int64
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
-        let field = schema.field_with_name("value").unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Int64);
     }
 
@@ -390,8 +390,8 @@ mod tests {
             doc! { "value": 3.14_f64 }, // Float64 -> should promote to Float64
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
-        let field = schema.field_with_name("value").unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Float64);
     }
 
@@ -402,8 +402,8 @@ mod tests {
             doc! { "value": "text" }, // String -> should fallback to String
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
-        let field = schema.field_with_name("value").unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
 
@@ -414,8 +414,8 @@ mod tests {
             doc! { "value": "text" },     // String -> should be String
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
-        let field = schema.field_with_name("value").unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
 
@@ -423,8 +423,8 @@ mod tests {
     fn test_only_null_values() {
         let docs = vec![doc! { "value": Bson::Null }, doc! { "value": Bson::Null }];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
-        let field = schema.field_with_name("value").unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Null);
     }
 
@@ -436,7 +436,7 @@ mod tests {
             doc! { "age": 25_i32, "country": "US" },
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
 
         // Should have all unique fields
         assert_eq!(schema.fields().len(), 4);
@@ -465,7 +465,7 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
 
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(field_names, vec!["apple", "banana", "monkey", "zebra"]);
@@ -495,7 +495,7 @@ mod tests {
             docs.push(doc);
         }
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
 
         // Should have all the fields
         let field_names: std::collections::HashSet<&str> =
