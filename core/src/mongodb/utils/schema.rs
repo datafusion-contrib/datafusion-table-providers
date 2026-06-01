@@ -155,7 +155,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
 
         // Check field count
         assert_eq!(schema.fields().len(), 4);
@@ -189,7 +190,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -222,8 +224,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema =
-            infer_arrow_schema_from_documents("test_collection", &docs, Some("+02:00")).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, Some("+02:00"))
+            .expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -264,9 +266,13 @@ mod tests {
             doc! { "created_at": midnight },
             doc! { "created_at": non_midnight },
         ];
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         assert_eq!(
-            schema.field_with_name("created_at").expect("field exists").data_type(),
+            schema
+                .field_with_name("created_at")
+                .expect("field exists")
+                .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
 
@@ -275,9 +281,13 @@ mod tests {
             doc! { "created_at": non_midnight },
             doc! { "created_at": midnight },
         ];
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         assert_eq!(
-            schema.field_with_name("created_at").expect("field exists").data_type(),
+            schema
+                .field_with_name("created_at")
+                .expect("field exists")
+                .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
     }
@@ -289,7 +299,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -310,7 +321,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -358,7 +370,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field_map: HashMap<String, &DataType> = schema
             .fields()
             .iter()
@@ -377,7 +390,8 @@ mod tests {
             doc! { "value": 20_i64 }, // Int64 -> should promote to Int64
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Int64);
     }
@@ -390,7 +404,8 @@ mod tests {
             doc! { "value": 3.14_f64 }, // Float64 -> should promote to Float64
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Float64);
     }
@@ -402,7 +417,8 @@ mod tests {
             doc! { "value": "text" }, // String -> should fallback to String
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
@@ -414,7 +430,8 @@ mod tests {
             doc! { "value": "text" },     // String -> should be String
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Utf8);
     }
@@ -423,7 +440,8 @@ mod tests {
     fn test_only_null_values() {
         let docs = vec![doc! { "value": Bson::Null }, doc! { "value": Bson::Null }];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
         let field = schema.field_with_name("value").expect("field exists");
         assert_eq!(field.data_type(), &DataType::Null);
     }
@@ -436,7 +454,8 @@ mod tests {
             doc! { "age": 25_i32, "country": "US" },
         ];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
 
         // Should have all unique fields
         assert_eq!(schema.fields().len(), 4);
@@ -465,7 +484,8 @@ mod tests {
         };
         let docs = vec![doc];
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
 
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(field_names, vec!["apple", "banana", "monkey", "zebra"]);
@@ -495,7 +515,8 @@ mod tests {
             docs.push(doc);
         }
 
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
+            .expect("schema inference failed");
 
         // Should have all the fields
         let field_names: std::collections::HashSet<&str> =
