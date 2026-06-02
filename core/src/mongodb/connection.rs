@@ -15,6 +15,7 @@ use crate::mongodb::utils::arrow::mongo_docs_to_arrow;
 use crate::mongodb::utils::schema::infer_arrow_schema_from_documents;
 use crate::mongodb::utils::unnest::{unnest_bson_documents, UnnestBehavior, UnnestParameters};
 use crate::mongodb::{Error, QuerySnafu, Result, UnableToGetSchemaSnafu, UnableToGetTablesSnafu};
+use crate::util::schema::merge_inferred_and_declared_schemas;
 
 pub struct MongoDBConnection {
     pub client: Arc<Client>,
@@ -55,7 +56,20 @@ impl MongoDBConnection {
         Ok(collections)
     }
 
-    pub async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error> {
+    /// Get the schema for a collection, optionally merging with a declared schema.
+    ///
+    /// * If the collection has documents, the inferred schema is merged with
+    ///   the declared schema (declared fields take precedence over inferred ones
+    ///   with the same name; extra declared fields are appended).
+    /// * If the collection is empty and a declared schema is provided, the
+    ///   declared schema is returned directly — no error, no retry needed.
+    /// * If the collection is empty and no declared schema is provided, the
+    ///   `EmptyCollection` error is returned.
+    pub async fn get_schema(
+        &self,
+        table_reference: &TableReference,
+        declared_schema: Option<SchemaRef>,
+    ) -> Result<SchemaRef, Error> {
         let collection_name = table_reference.table();
         let coll = self.get_collection(collection_name);
 
@@ -77,9 +91,27 @@ impl MongoDBConnection {
             _ => unnest_bson_documents(docs, &self.unnest_parameters)?,
         };
 
-        infer_arrow_schema_from_documents(&unnested_docs, self.tz.clone().as_deref())
-            .boxed()
-            .context(UnableToGetSchemaSnafu)
+        if unnested_docs.is_empty() {
+            return match declared_schema {
+                Some(schema) => Ok(schema),
+                None => Err(Error::EmptyCollection {
+                    collection_name: collection_name.to_string(),
+                }),
+            };
+        }
+
+        let inferred = infer_arrow_schema_from_documents(
+            collection_name,
+            &unnested_docs,
+            self.tz.clone().as_deref(),
+        )
+        .boxed()
+        .context(UnableToGetSchemaSnafu)?;
+
+        Ok(merge_inferred_and_declared_schemas(
+            inferred,
+            declared_schema.as_ref(),
+        ))
     }
 
     pub async fn query_arrow(

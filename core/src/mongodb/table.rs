@@ -33,9 +33,14 @@ impl MongoDBTable {
     pub async fn new(
         pool: &Arc<MongoDBConnectionPool>,
         table_reference: impl Into<TableReference>,
+        declared_schema: Option<SchemaRef>,
     ) -> Result<Self, Error> {
         let table_reference = table_reference.into();
-        let schema = pool.connect().await?.get_schema(&table_reference).await?;
+        let schema = pool
+            .connect()
+            .await?
+            .get_schema(&table_reference, declared_schema)
+            .await?;
 
         Ok(Self {
             pool: Arc::clone(pool),

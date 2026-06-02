@@ -14,7 +14,6 @@ pub mod indexes;
 pub mod ns_lookup;
 pub mod on_conflict;
 pub mod retriable_error;
-#[cfg(any(feature = "sqlite", feature = "duckdb", feature = "postgres"))]
 pub mod schema;
 pub mod secrets;
 pub mod supported_functions;
