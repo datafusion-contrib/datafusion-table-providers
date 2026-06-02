@@ -47,7 +47,7 @@ datafusion-proto = { version = "52" }
 datafusion-physical-expr = { version = "52" }
 datafusion-physical-plan = { version = "52" }
 datafusion-table-providers = { path = "core" }
-duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "a33cc3c30b4b24b1fce702ae6f8e052232915c0a" } # spiceai duckdb-rs fork: duckdb_scan_arrow (pending https://github.com/duckdb/duckdb-rs/pull/488) + statically-linked VSS (HNSW)
+duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "b1cf1723252204caf6262865255cd47e7435cbbe" } # spiceai duckdb-rs fork: duckdb_scan_arrow (pending https://github.com/duckdb/duckdb-rs/pull/488) + statically-linked VSS (HNSW), DuckDB version pinned to v1.5.3
 adbc_core = { version = "0.23" }
 adbc_driver_manager = { version = "0.23" }
 parquet = "57"
