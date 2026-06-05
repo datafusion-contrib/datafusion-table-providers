@@ -84,7 +84,7 @@ fallible-iterator = "0.3.0"
 fundu = "2.0.1"
 geo-types = "0.7.13"
 sha2 = "0.10"
-hickory-resolver = "0.25.2"
+hickory-resolver = "0.26"
 sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876068f58159ebdd5852604a021afaebf9", features = [
   "backend-sqlite",
   "backend-postgres",
