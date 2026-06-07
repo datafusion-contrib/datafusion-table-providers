@@ -458,6 +458,51 @@ pub struct Sqlite {
     batch_insert_use_prepared_statements: bool,
 }
 
+/// Serialize a single complex/nested Arrow cell (`List`, `LargeList`,
+/// `FixedSizeList`, `Struct`, `Map`, `Dictionary`, etc.) to a JSON `String`.
+///
+/// SQLite has no native array/struct storage class, so these columns are
+/// persisted as TEXT. The accelerated read path (`rows_to_arrow` ->
+/// federation's `SchemaCastScanExec`) reads the cell back as `Utf8` and then
+/// JSON-parses it into the declared `List`/`Struct` type, hard-failing on any
+/// non-JSON text. The `arrow::util::display::ArrayFormatter` renders a
+/// `List<Utf8>` as `[expired, active]` (bare, unquoted tokens) which is *not*
+/// valid JSON, so the cast aborts with e.g. `Json error: Encountered
+/// unexpected 'e' whilst parsing value`.
+///
+/// Use the `arrow-json` writer's per-cell encoder, which emits proper JSON
+/// (`["expired","active"]`, `{"name":"alice"}`) with correct quoting/escaping
+/// for strings, nested structs and arbitrarily nested combinations. The
+/// `field` must describe `column`'s data type so the encoder picks the right
+/// representation.
+fn serialize_complex_cell_to_json(
+    field: &arrow::datatypes::FieldRef,
+    column: &arrow::array::ArrayRef,
+    row_idx: usize,
+) -> Result<String, arrow::error::ArrowError> {
+    use arrow_json::writer::{make_encoder, EncoderOptions};
+
+    // `explicit_nulls(true)` keeps null struct fields present as `"k": null`
+    // instead of eliding them, which keeps the serialized shape stable for the
+    // read-back cast.
+    let options = EncoderOptions::default().with_explicit_nulls(true);
+    let mut encoder = make_encoder(field, column.as_ref(), &options)?;
+
+    let mut out: Vec<u8> = Vec::new();
+    if encoder.is_null(row_idx) {
+        // Caller handles SQL NULL separately; this is a defensive fallback.
+        out.extend_from_slice(b"null");
+    } else {
+        encoder.encode(row_idx, &mut out);
+    }
+
+    String::from_utf8(out).map_err(|e| {
+        arrow::error::ArrowError::JsonError(format!(
+            "complex column JSON serialization produced invalid UTF-8: {e}"
+        ))
+    })
+}
+
 impl std::fmt::Debug for Sqlite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sqlite")
@@ -1029,19 +1074,43 @@ impl Sqlite {
                             params.push(Box::new(decimal.to_string()));
                         }
                     }
-                    DataType::Decimal32(_, _)
-                    | DataType::Decimal64(_, _)
-                    | DataType::List(_)
+                    DataType::List(_)
                     | DataType::LargeList(_)
-                    | DataType::ListView(_)
-                    | DataType::LargeListView(_)
                     | DataType::FixedSizeList(_, _)
                     | DataType::Struct(_)
                     | DataType::Map(_, _)
-                    | DataType::Union(_, _)
                     | DataType::Dictionary(_, _)
                     | DataType::RunEndEncoded(_, _) => {
-                        // For complex nested types, use JSON serialization
+                        // Nested/complex columns have no SQLite storage class, so
+                        // they are persisted as TEXT and read back as `Utf8`, then
+                        // JSON-parsed into the declared `List`/`Struct` type by the
+                        // accelerated read path. That cast hard-fails on non-JSON
+                        // text, so the cell MUST be encoded as valid JSON here.
+                        // `ArrayFormatter` renders a `List<Utf8>` as bare
+                        // `[expired, active]` (invalid JSON) — use the `arrow-json`
+                        // per-cell encoder, which quotes/escapes strings and nests
+                        // structs correctly (`["expired","active"]`).
+                        if column.is_null(row_idx) {
+                            params.push(Box::new(rusqlite::types::Null));
+                        } else {
+                            // `&Fields` derefs to `&[FieldRef]`, so this is the
+                            // column's existing `Arc<Field>` — no clone needed.
+                            let field = &schema.fields()[col_idx];
+                            let json_str =
+                                serialize_complex_cell_to_json(field, column, row_idx).map_err(
+                                    |e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
+                                )?;
+                            params.push(Box::new(json_str));
+                        }
+                    }
+                    DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::ListView(_)
+                    | DataType::LargeListView(_)
+                    | DataType::Union(_, _) => {
+                        // Types not (yet) supported by the JSON cell encoder.
+                        // These are not part of the accelerated JSON read-back
+                        // contract, so preserve the prior textual rendering.
                         use arrow::util::display::{ArrayFormatter, FormatOptions};
                         let formatter =
                             ArrayFormatter::try_new(column.as_ref(), &FormatOptions::default())
@@ -1349,6 +1418,216 @@ pub(crate) mod tests {
             vec!["id".to_string()]
                 .into_iter()
                 .collect::<HashSet<String>>()
+        );
+    }
+
+    /// Round-trips a `List<Utf8>`, a `Struct` and a `Decimal128` column together
+    /// through the SQLite write path (`insert_batch_prepared`) and asserts that:
+    ///
+    /// 1. The TEXT cells persisted for the nested columns are *valid JSON*
+    ///    (the read-back cast `Utf8 -> List/Struct` JSON-parses each cell and
+    ///    hard-fails on non-JSON text such as `[expired, active]`).
+    /// 2. The list string elements with spaces and embedded quotes are
+    ///    preserved exactly through the JSON encode/parse round-trip.
+    /// 3. The `Decimal128` column still round-trips losslessly as text.
+    #[tokio::test]
+    async fn test_sqlite_complex_and_decimal_round_trip() {
+        use arrow::array::{
+            ArrayRef, Decimal128Array, Int32Array, ListBuilder, RecordBatch, StringArray,
+            StringBuilder, StructArray,
+        };
+        use crate::sql::arrow_sql_gen::sqlite::rows_to_arrow;
+        use arrow::datatypes::{Field, Fields};
+        use rusqlite::types::ValueRef;
+
+        // `tags: List<Utf8>`, `person: Struct<name: Utf8, age: Int32>`,
+        // `price: Decimal128(10, 2)`.
+        let tags_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let struct_fields = Fields::from(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("tags", DataType::List(Arc::clone(&tags_field)), true),
+            Field::new("person", DataType::Struct(struct_fields.clone()), true),
+            Field::new("price", DataType::Decimal128(10, 2), true),
+        ]));
+
+        // ---- Build the RecordBatch -------------------------------------
+        let ids = Int32Array::from(vec![1, 2]); // built as Int64 below
+        let ids: ArrayRef = Arc::new(arrow::array::Int64Array::from(vec![
+            i64::from(ids.value(0)),
+            i64::from(ids.value(1)),
+        ]));
+
+        // List<Utf8> with strings containing spaces AND quotes — exactly the
+        // shape that the buggy `ArrayFormatter` path renders as invalid JSON.
+        let mut list_builder = ListBuilder::new(StringBuilder::new());
+        list_builder.values().append_value("expired");
+        list_builder.values().append_value("active");
+        list_builder.append(true);
+        list_builder.values().append_value("needs \"quote\"");
+        list_builder.values().append_value("has space");
+        list_builder.append(true);
+        let tags: ArrayRef = Arc::new(list_builder.finish());
+
+        let names = StringArray::from(vec![Some("alice \"a\""), Some("bob b")]);
+        let ages = Int32Array::from(vec![Some(30), Some(41)]);
+        let person: ArrayRef = Arc::new(StructArray::new(
+            struct_fields,
+            vec![Arc::new(names) as ArrayRef, Arc::new(ages) as ArrayRef],
+            None,
+        ));
+
+        // Decimal128(10, 2): 1234.56 and 0.07 (raw i128 with scale 2).
+        let price: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![123_456_i128, 7_i128])
+                .with_precision_and_scale(10, 2)
+                .expect("decimal precision/scale"),
+        );
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![ids, tags, person, price],
+        )
+        .expect("record batch");
+
+        // ---- Create the table via the factory --------------------------
+        let df_schema = ToDFSchema::to_dfschema_ref(Arc::clone(&schema)).expect("df schema");
+        let external_table = CreateExternalTable {
+            schema: df_schema,
+            name: TableReference::bare("complex_round_trip"),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::default(),
+            temporary: false,
+            or_replace: false,
+        };
+        let ctx = SessionContext::new();
+        let table = SqliteTableProviderFactory::default()
+            .create(&ctx.state(), &external_table)
+            .await
+            .expect("table should be created");
+
+        let sqlite = table
+            .as_any()
+            .downcast_ref::<SqliteTableWriter>()
+            .expect("downcast to SqliteTableWriter")
+            .sqlite();
+
+        let mut db_conn = sqlite.connect().await.expect("should connect to db");
+        let sqlite_conn =
+            Sqlite::sqlite_conn(&mut db_conn).expect("should create sqlite connection");
+
+        // ---- Insert via the prepared write path ------------------------
+        let sqlite_for_insert = Arc::clone(&sqlite);
+        sqlite_conn
+            .conn
+            .call(move |conn| {
+                let transaction = conn.transaction()?;
+                sqlite_for_insert.insert_batch_prepared(&transaction, batch, None)?;
+                transaction.commit()?;
+                Ok::<(), rusqlite::Error>(())
+            })
+            .await
+            .expect("insert_batch_prepared should succeed");
+
+        // ---- Assert the raw TEXT cells are valid JSON ------------------
+        sqlite_conn
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT tags, person, price FROM complex_round_trip ORDER BY id")?;
+                let mut rows = stmt.query([])?;
+
+                // Row 1: ["expired","active"] / {"name":"alice \"a\"","age":30}
+                let row = rows.next()?.expect("row 1");
+                let tags_text = match row.get_ref(0)? {
+                    ValueRef::Text(t) => String::from_utf8_lossy(t).to_string(),
+                    other => panic!("tags cell is not TEXT: {other:?}"),
+                };
+                let person_text = match row.get_ref(1)? {
+                    ValueRef::Text(t) => String::from_utf8_lossy(t).to_string(),
+                    other => panic!("person cell is not TEXT: {other:?}"),
+                };
+
+                // The crux: these MUST parse as JSON. The pre-fix ArrayFormatter
+                // path produced `[expired, active]`, which fails here.
+                let tags_json: serde_json::Value = serde_json::from_str(&tags_text)
+                    .unwrap_or_else(|e| panic!("tags cell is not valid JSON ({tags_text:?}): {e}"));
+                let person_json: serde_json::Value = serde_json::from_str(&person_text)
+                    .unwrap_or_else(|e| {
+                        panic!("person cell is not valid JSON ({person_text:?}): {e}")
+                    });
+
+                assert_eq!(
+                    tags_json,
+                    serde_json::json!(["expired", "active"]),
+                    "list element values must survive JSON round-trip"
+                );
+                assert_eq!(person_json["name"], serde_json::json!("alice \"a\""));
+                assert_eq!(person_json["age"], serde_json::json!(30));
+
+                // Row 2: strings with spaces and embedded quotes round-trip.
+                let row = rows.next()?.expect("row 2");
+                let tags_text = match row.get_ref(0)? {
+                    ValueRef::Text(t) => String::from_utf8_lossy(t).to_string(),
+                    other => panic!("tags cell is not TEXT: {other:?}"),
+                };
+                let tags_json: serde_json::Value = serde_json::from_str(&tags_text)
+                    .unwrap_or_else(|e| panic!("tags cell is not valid JSON ({tags_text:?}): {e}"));
+                assert_eq!(
+                    tags_json,
+                    serde_json::json!(["needs \"quote\"", "has space"]),
+                    "quoted/spaced list elements must survive JSON round-trip"
+                );
+
+                Ok::<(), rusqlite::Error>(())
+            })
+            .await
+            .expect("raw JSON assertions should pass");
+
+        // ---- Assert Decimal round-trips via rows_to_arrow --------------
+        let projected_schema = Arc::clone(&schema);
+        let decimals = sqlite_conn
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, tags, person, price FROM complex_round_trip ORDER BY id",
+                )?;
+                let rows = stmt.query([])?;
+                let batch = rows_to_arrow(rows, 4, Some(projected_schema))
+                    .expect("rows_to_arrow should succeed");
+
+                // The `price` column is decoded as Utf8 text (NUMERIC affinity),
+                // then the downstream cast turns it into Decimal128. Assert the
+                // textual values are exactly the decimals we inserted.
+                let price_idx = batch.schema().index_of("price").expect("price column");
+                let price_col = batch
+                    .column(price_idx)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("price decoded as Utf8");
+                Ok::<Vec<String>, rusqlite::Error>(vec![
+                    price_col.value(0).to_string(),
+                    price_col.value(1).to_string(),
+                ])
+            })
+            .await
+            .expect("decimal read-back should succeed");
+
+        assert_eq!(
+            decimals,
+            vec!["1234.56".to_string(), "0.07".to_string()],
+            "Decimal128 must round-trip losslessly as text"
         );
     }
 }
