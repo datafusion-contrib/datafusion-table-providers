@@ -108,6 +108,27 @@ impl CreateTableBuilder {
                 return ColumnType::JsonBinary;
             }
 
+            // SQLite-specific Decimal handling.
+            //
+            // sea-query's `SqliteQueryBuilder` renders `ColumnType::Decimal` as
+            // `real(p, s)` (REAL type affinity) and additionally `panic!`s when
+            // the precision exceeds 16 digits. REAL affinity coerces inserted
+            // decimal text to a 64-bit float, which silently loses precision for
+            // wide decimals and produces an inconsistent storage class across a
+            // column. Emit `decimal(p, s)` instead (NUMERIC affinity): values are
+            // stored in their native storage class, decimal text is preserved
+            // losslessly, and the >16-digit precision panic is avoided. This also
+            // matches the column type the row-to-Arrow reader expects.
+            match f.data_type() {
+                DataType::Decimal32(p, s)
+                | DataType::Decimal64(p, s)
+                | DataType::Decimal128(p, s)
+                | DataType::Decimal256(p, s) => {
+                    return ColumnType::custom(format!("decimal({p}, {s})"));
+                }
+                _ => {}
+            }
+
             map_data_type_to_column_type(f.data_type())
         })
     }
@@ -1485,6 +1506,25 @@ mod tests {
         let sql = CreateTableBuilder::new(SchemaRef::new(schema), "users").build_sqlite();
 
         assert_eq!(sql, "CREATE TABLE IF NOT EXISTS \"users\" ( \"id\" integer NOT NULL, \"name\" text NOT NULL, \"age\" integer )");
+    }
+
+    #[test]
+    fn test_sqlite_decimal_column_type() {
+        // SQLite Decimal columns must be emitted as `decimal(p, s)` (NUMERIC
+        // affinity), not sea-query's default `real(p, s)` (REAL affinity), so
+        // decimal values are stored losslessly and read back consistently.
+        // High-precision (> 16 digit) decimals must NOT panic.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Decimal256(40, 4), true),
+            Field::new("c", DataType::Decimal64(18, 6), false),
+        ]);
+        let sql = CreateTableBuilder::new(SchemaRef::new(schema), "amounts").build_sqlite();
+
+        assert_eq!(
+            sql,
+            "CREATE TABLE IF NOT EXISTS \"amounts\" ( \"a\" decimal(10, 2), \"b\" decimal(40, 4), \"c\" decimal(18, 6) NOT NULL )"
+        );
     }
 
     #[test]
