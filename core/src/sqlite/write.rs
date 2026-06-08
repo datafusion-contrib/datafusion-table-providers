@@ -190,9 +190,10 @@ impl DeletionSink for SqliteDeletionSink {
                     format!(r#"DELETE FROM "{table_name}""#)
                 };
                 tx.execute(&delete_sql, [])?;
-                let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
+                // rusqlite 0.40 removed FromSql for u64; changes() is always non-negative.
+                let count: i64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
                 tx.commit()?;
-                Ok(count)
+                Ok(count as u64)
             })
             .await?;
 
@@ -217,9 +218,10 @@ impl UpdateSink for SqliteUpdateSink {
             .call(move |conn| -> Result<u64, rusqlite::Error> {
                 let tx = conn.transaction()?;
                 tx.execute(&sql, [])?;
-                let count: u64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
+                // rusqlite 0.40 removed FromSql for u64; changes() is always non-negative.
+                let count: i64 = tx.query_row("SELECT changes()", [], |row| row.get(0))?;
                 tx.commit()?;
-                Ok(count)
+                Ok(count as u64)
             })
             .await?;
 

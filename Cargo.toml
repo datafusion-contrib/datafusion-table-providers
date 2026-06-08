@@ -52,7 +52,7 @@ duckdb = { git = "https://github.com/spiceai/duckdb-rs.git", rev = "4387e69564d8
 adbc_core = { version = "0.23" }
 adbc_driver_manager = { version = "0.23" }
 parquet = "58"
-rusqlite = "0.37"
+rusqlite = "0.40"
 tokio-rusqlite = "0.7.0"
 async-stream = "0.3.5"
 async-trait = "0.1.80"
@@ -97,7 +97,8 @@ sea-query = { git = "https://github.com/spiceai/sea-query.git", rev = "213b6b876
 ] }
 
 [patch.crates-io]
-rusqlite = { git = "https://github.com/spiceai/rusqlite.git", rev = "3d1f5f6f6d6d062676210d095df45eafa6e19fd8" } # spiceai-v0.37.0
+rusqlite = { git = "https://github.com/spiceai/rusqlite.git", rev = "3f98225d35735a61a5875d356774d246a8b0c037" } # spiceai-v0.40.0
+tokio-rusqlite = { git = "https://github.com/spiceai/tokio-rusqlite.git", rev = "b10df82e3bbc4f4700562a14a3a00714cbc2f0c7" } # rusqlite 0.40-compatible (matches spiceai/spiceai)
 
 # arrow-rs 58 with spice patches (ObjectVersionType + new_with_meta for Azure compatibility) — branch: spiceai-58
 arrow = { git = "https://github.com/spiceai/arrow-rs.git", rev = "18a40370d014a0f8eed12ee0d5a914e8cb2070d8" }

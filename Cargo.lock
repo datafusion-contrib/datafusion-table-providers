@@ -2503,7 +2503,7 @@ dependencies = [
  "comfy-table",
  "fallible-iterator 0.3.0",
  "fallible-streaming-iterator",
- "hashlink",
+ "hashlink 0.10.0",
  "libduckdb-sys 1.10503.1",
  "num",
  "num-integer",
@@ -3025,6 +3025,9 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+dependencies = [
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -3033,6 +3036,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5081f264ed7adee96ea4b4778b6bb9da0a7228b084587aa3bd3ff05da7c5a3b"
+dependencies = [
+ "hashbrown 0.17.0",
 ]
 
 [[package]]
@@ -3870,8 +3882,8 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.35.0"
-source = "git+https://github.com/spiceai/rusqlite.git?rev=3d1f5f6f6d6d062676210d095df45eafa6e19fd8#3d1f5f6f6d6d062676210d095df45eafa6e19fd8"
+version = "0.38.1"
+source = "git+https://github.com/spiceai/rusqlite.git?rev=3f98225d35735a61a5875d356774d246a8b0c037#3f98225d35735a61a5875d356774d246a8b0c037"
 dependencies = [
  "cc",
  "pkg-config",
@@ -5627,6 +5639,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rstest"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5657,15 +5679,16 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.37.0"
-source = "git+https://github.com/spiceai/rusqlite.git?rev=3d1f5f6f6d6d062676210d095df45eafa6e19fd8#3d1f5f6f6d6d062676210d095df45eafa6e19fd8"
+version = "0.40.1"
+source = "git+https://github.com/spiceai/rusqlite.git?rev=3f98225d35735a61a5875d356774d246a8b0c037#3f98225d35735a61a5875d356774d246a8b0c037"
 dependencies = [
  "bitflags 2.11.1",
  "fallible-iterator 0.3.0",
  "fallible-streaming-iterator",
- "hashlink",
+ "hashlink 0.12.0",
  "libsqlite3-sys",
  "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -6220,6 +6243,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "sqlparser"
 version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6655,8 +6690,7 @@ dependencies = [
 [[package]]
 name = "tokio-rusqlite"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "302563ae4a2127f3d2c105f4f2f0bd7cae3609371755600ebc148e0ccd8510d6"
+source = "git+https://github.com/spiceai/tokio-rusqlite.git?rev=b10df82e3bbc4f4700562a14a3a00714cbc2f0c7#b10df82e3bbc4f4700562a14a3a00714cbc2f0c7"
 dependencies = [
  "crossbeam-channel",
  "rusqlite",
