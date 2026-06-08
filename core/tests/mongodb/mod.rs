@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use datafusion::{error::DataFusionError, execution::context::SessionContext};
-use datafusion_table_providers::mongodb::table::MongoDBTable;
+use datafusion_table_providers::mongodb::{table::MongoDBTable, MongoDBTableFactory};
 use mongodb::bson::{doc, Bson, DateTime as BsonDateTime, Decimal128, Document};
 use rstest::rstest;
 use std::str::FromStr;
@@ -817,6 +817,21 @@ async fn test_mongodb_arrow_oneway() {
     mongodb_container.remove().await.expect("container to stop");
 }
 
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_mongodb_dml() {
+    let port = crate::get_random_port();
+    let mongodb_container = start_mongodb_container(port).await;
+
+    test_mongodb_dml_insert(port).await;
+    test_mongodb_dml_insert_overwrite(port).await;
+    test_mongodb_dml_delete(port).await;
+    test_mongodb_dml_delete_all(port).await;
+    test_mongodb_dml_update(port).await;
+
+    mongodb_container.remove().await.expect("container to stop");
+}
+
 /// Regression tests for `ORDER BY ... LIMIT N`.
 ///
 /// DataFusion 52/53's `PushdownSort` optimizer fuses `ORDER BY x LIMIT N`
@@ -889,4 +904,236 @@ async fn test_mongodb_sort_limit(port: usize) {
     let batches = df.collect().await.expect("query should succeed");
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total, 7);
+}
+
+// -- DML helpers --
+
+/// Creates a SessionContext with the named collection registered as a read-write table.
+/// The collection must already have documents so that schema can be inferred.
+async fn register_rw_table(ctx: &SessionContext, port: usize, collection_name: &str) {
+    let pool = common::get_mongodb_connection_pool(port, None)
+        .await
+        .expect("MongoDB connection pool should be created");
+    let factory = MongoDBTableFactory::new(Arc::new(pool));
+    let table = factory
+        .read_write_table_provider(collection_name.into())
+        .await
+        .expect("read-write table provider should be created");
+    ctx.register_table(collection_name, table)
+        .expect("table should be registered");
+}
+
+// -- DML tests --
+
+async fn test_mongodb_dml_insert(port: usize) {
+    let client = common::get_mongodb_client(port).await.unwrap();
+    let coll = client
+        .database("testdb")
+        .collection::<Document>("dml_insert");
+    let _ = coll.drop().await;
+
+    // Seed two rows to establish the schema.
+    coll.insert_many(vec![
+        doc! { "name": "Alice", "age": 30i32 },
+        doc! { "name": "Bob",   "age": 25i32 },
+    ])
+    .await
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    register_rw_table(&ctx, port, "dml_insert").await;
+
+    // Insert a third row via DataFusion SQL.
+    ctx.sql("INSERT INTO dml_insert (name, age) SELECT 'Charlie' AS name, CAST(28 AS INT) AS age")
+        .await
+        .expect("INSERT SQL should parse")
+        .collect()
+        .await
+        .expect("INSERT should execute");
+
+    // Verify via MongoDB client: three documents, including the new one.
+    let total = coll.count_documents(doc! {}).await.unwrap();
+    assert_eq!(total, 3, "Expected 3 documents after INSERT");
+
+    let charlie = coll.find_one(doc! { "name": "Charlie" }).await.unwrap();
+    assert!(charlie.is_some(), "Charlie should exist after INSERT");
+    let age = charlie
+        .unwrap()
+        .get_i32("age")
+        .expect("age should be Int32");
+    assert_eq!(age, 28);
+}
+
+async fn test_mongodb_dml_insert_overwrite(port: usize) {
+    let client = common::get_mongodb_client(port).await.unwrap();
+    let coll = client
+        .database("testdb")
+        .collection::<Document>("dml_insert_overwrite");
+    let _ = coll.drop().await;
+
+    coll.insert_many(vec![
+        doc! { "name": "Alice", "age": 30i32 },
+        doc! { "name": "Bob",   "age": 25i32 },
+    ])
+    .await
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    register_rw_table(&ctx, port, "dml_insert_overwrite").await;
+
+    // INSERT OVERWRITE replaces all existing documents.
+    ctx.sql("INSERT OVERWRITE dml_insert_overwrite (name, age) SELECT 'Dave' AS name, CAST(22 AS INT) AS age")
+        .await
+        .expect("INSERT OVERWRITE SQL should parse")
+        .collect()
+        .await
+        .expect("INSERT OVERWRITE should execute");
+
+    let total = coll.count_documents(doc! {}).await.unwrap();
+    assert_eq!(total, 1, "Expected 1 document after INSERT OVERWRITE");
+
+    let dave = coll.find_one(doc! { "name": "Dave" }).await.unwrap();
+    assert!(
+        dave.is_some(),
+        "Dave should be the only document after INSERT OVERWRITE"
+    );
+    assert!(
+        coll.find_one(doc! { "name": "Alice" })
+            .await
+            .unwrap()
+            .is_none(),
+        "Alice should be gone after INSERT OVERWRITE"
+    );
+}
+
+async fn test_mongodb_dml_delete(port: usize) {
+    let client = common::get_mongodb_client(port).await.unwrap();
+    let coll = client
+        .database("testdb")
+        .collection::<Document>("dml_delete");
+    let _ = coll.drop().await;
+
+    coll.insert_many(vec![
+        doc! { "name": "Alice", "age": 30i32 },
+        doc! { "name": "Bob",   "age": 25i32 },
+        doc! { "name": "Carol", "age": 28i32 },
+    ])
+    .await
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    register_rw_table(&ctx, port, "dml_delete").await;
+
+    // Delete a single row.
+    ctx.sql("DELETE FROM dml_delete WHERE name = 'Bob'")
+        .await
+        .expect("DELETE SQL should parse")
+        .collect()
+        .await
+        .expect("DELETE should execute");
+
+    let total = coll.count_documents(doc! {}).await.unwrap();
+    assert_eq!(total, 2, "Expected 2 documents after DELETE");
+
+    assert!(
+        coll.find_one(doc! { "name": "Bob" })
+            .await
+            .unwrap()
+            .is_none(),
+        "Bob should be gone after DELETE"
+    );
+    assert!(
+        coll.find_one(doc! { "name": "Alice" })
+            .await
+            .unwrap()
+            .is_some(),
+        "Alice should still exist after DELETE"
+    );
+}
+
+async fn test_mongodb_dml_delete_all(port: usize) {
+    let client = common::get_mongodb_client(port).await.unwrap();
+    let coll = client
+        .database("testdb")
+        .collection::<Document>("dml_delete_all");
+    let _ = coll.drop().await;
+
+    coll.insert_many(vec![
+        doc! { "name": "Alice", "age": 30i32 },
+        doc! { "name": "Bob",   "age": 25i32 },
+    ])
+    .await
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    register_rw_table(&ctx, port, "dml_delete_all").await;
+
+    // DELETE without WHERE removes all documents.
+    ctx.sql("DELETE FROM dml_delete_all")
+        .await
+        .expect("DELETE ALL SQL should parse")
+        .collect()
+        .await
+        .expect("DELETE ALL should execute");
+
+    let total = coll.count_documents(doc! {}).await.unwrap();
+    assert_eq!(
+        total, 0,
+        "Collection should be empty after DELETE without WHERE"
+    );
+}
+
+async fn test_mongodb_dml_update(port: usize) {
+    let client = common::get_mongodb_client(port).await.unwrap();
+    let coll = client
+        .database("testdb")
+        .collection::<Document>("dml_update");
+    let _ = coll.drop().await;
+
+    coll.insert_many(vec![
+        doc! { "name": "Alice", "age": 30i32 },
+        doc! { "name": "Bob",   "age": 25i32 },
+    ])
+    .await
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    register_rw_table(&ctx, port, "dml_update").await;
+
+    // Update Alice's age.
+    ctx.sql("UPDATE dml_update SET age = 31 WHERE name = 'Alice'")
+        .await
+        .expect("UPDATE SQL should parse")
+        .collect()
+        .await
+        .expect("UPDATE should execute");
+
+    let alice = coll
+        .find_one(doc! { "name": "Alice" })
+        .await
+        .unwrap()
+        .expect("Alice should still exist");
+    // age may be stored as Int32 or Int64 depending on the literal type
+    let age = alice
+        .get_i32("age")
+        .map(i64::from)
+        .or_else(|_| alice.get_i64("age"))
+        .expect("age field should be an integer");
+    assert_eq!(age, 31, "Alice's age should be 31 after UPDATE");
+
+    // Bob should be unchanged.
+    let bob = coll
+        .find_one(doc! { "name": "Bob" })
+        .await
+        .unwrap()
+        .expect("Bob should still exist");
+    let bob_age = bob
+        .get_i32("age")
+        .map(i64::from)
+        .or_else(|_| bob.get_i64("age"))
+        .expect("age field should be an integer");
+    assert_eq!(bob_age, 25, "Bob's age should be unchanged at 25");
+
+    let total = coll.count_documents(doc! {}).await.unwrap();
+    assert_eq!(total, 2, "Document count should be unchanged after UPDATE");
 }

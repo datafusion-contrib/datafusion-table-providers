@@ -97,4 +97,11 @@ impl MongoDBTableFactory {
 
         Ok(table_provider)
     }
+
+    pub async fn read_write_table_provider(
+        &self,
+        table_reference: TableReference,
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
+        self.table_provider(table_reference).await
+    }
 }
