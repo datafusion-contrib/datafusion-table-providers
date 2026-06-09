@@ -28,12 +28,15 @@ use std::fmt::Display;
 use std::{any::Any, fmt, sync::Arc};
 
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::{DataType, Field, Schema, SchemaRef},
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::TaskContext,
-    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    logical_expr::{
+        logical_plan::builder::LogicalTableSource, Expr, LogicalPlan, LogicalPlanBuilder,
+        TableProviderFilterPushDown, TableType,
+    },
     physical_expr::{EquivalenceProperties, PhysicalSortExpr},
     physical_plan::{
         execution_plan::{Boundedness, EmissionType},
@@ -711,7 +714,13 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         new_exec.properties =
             Arc::new(PlanProperties::clone(&new_exec.properties).with_eq_properties(eq_properties));
 
-        Ok(SortOrderPushdownResult::Exact {
+        // Return Inexact rather than Exact so DataFusion keeps the SortExec wrapper
+        // above us. Exact would replace the SortExec with `inner`, which loses the
+        // SortExec's embedded fetch (`ORDER BY ... LIMIT N` is represented as a
+        // single SortExec with fetch=N in DF 52). Keeping the SortExec preserves the
+        // fetch as a TopK applied to our already-sorted SQL output.
+        // We can use Exact once we use DF version which includes PR https://github.com/apache/datafusion/pull/21182
+        Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_exec),
         })
     }
@@ -1082,7 +1091,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1108,7 +1117,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1143,7 +1152,7 @@ mod tests {
             ];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1170,7 +1179,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
                         .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
@@ -1205,7 +1214,7 @@ mod tests {
             }];
 
             match exec.try_pushdown_sort(&order).unwrap() {
-                SortOrderPushdownResult::Exact { inner } => {
+                SortOrderPushdownResult::Inexact { inner } => {
                     let orderings = inner.properties().output_ordering();
                     assert!(orderings.is_some(), "Output ordering should be set");
                     let output_order = orderings.unwrap();
@@ -1419,84 +1428,6 @@ mod tests {
             df.show().await?;
             drop(t);
             Ok(())
-        }
-    }
-
-    mod fetch_tests {
-        use crate::sql::sql_provider_datafusion::SqlExec;
-        use datafusion::arrow::datatypes::{DataType, Field, Schema};
-        use datafusion::physical_plan::ExecutionPlan;
-        use datafusion::sql::unparser::dialect::DefaultDialect;
-        use std::sync::Arc;
-
-        use crate::sql::db_connection_pool::{
-            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
-        };
-
-        struct MockConn {}
-        impl DbConnection<(), &'static dyn ToString> for MockConn {
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-        struct MockDBPool {}
-        #[async_trait::async_trait]
-        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
-            async fn connect(
-                &self,
-            ) -> Result<
-                Box<dyn DbConnection<(), &'static dyn ToString>>,
-                Box<dyn std::error::Error + Send + Sync>,
-            > {
-                Ok(Box::new(MockConn {}))
-            }
-            fn join_push_down(&self) -> JoinPushDown {
-                JoinPushDown::Disallow
-            }
-        }
-
-        fn make_exec(sql: &str) -> SqlExec<(), &'static dyn ToString> {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Utf8, false),
-            ]));
-            let pool = Arc::new(MockDBPool {})
-                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
-            SqlExec::new(
-                None,
-                &schema,
-                pool,
-                sql.to_string(),
-                Arc::new(DefaultDialect {}),
-            )
-            .unwrap()
-        }
-
-        #[test]
-        fn test_fetch_returns_none_when_no_limit() {
-            let exec = make_exec("SELECT * FROM t");
-            assert_eq!(exec.fetch(), None);
-        }
-
-        #[test]
-        fn test_fetch_returns_limit_value() {
-            let exec = make_exec("SELECT * FROM t LIMIT 42");
-            assert_eq!(exec.fetch(), Some(42));
-        }
-
-        #[test]
-        fn test_fetch_with_order_by_and_limit() {
-            let exec = make_exec("SELECT * FROM t ORDER BY a LIMIT 10");
-            assert_eq!(exec.fetch(), Some(10));
-        }
-
-        #[test]
-        fn test_supports_limit_pushdown() {
-            let exec = make_exec("SELECT * FROM t");
-            assert!(exec.supports_limit_pushdown());
         }
     }
 

@@ -64,6 +64,20 @@ impl ClickHouseTable {
             "SELECT {columns} FROM {table_expr} {where_expr} {limit_expr}"
         ))
     }
+
+    fn create_physical_plan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        sql: String,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(SqlExec::new(
+            projection,
+            &self.schema(),
+            self.pool.clone(),
+            sql,
+            Arc::new(datafusion::sql::unparser::dialect::DefaultDialect {}),
+        )?))
+    }
 }
 
 #[async_trait]

@@ -266,13 +266,9 @@ mod tests {
             doc! { "created_at": midnight },
             doc! { "created_at": non_midnight },
         ];
-        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None)
-            .expect("schema inference failed");
+        let schema = infer_arrow_schema_from_documents("test_collection", &docs, None).unwrap();
         assert_eq!(
-            schema
-                .field_with_name("created_at")
-                .expect("field exists")
-                .data_type(),
+            schema.field_with_name("created_at").unwrap().data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
 
