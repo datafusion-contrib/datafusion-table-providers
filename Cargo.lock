@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-python"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "arrow",
  "arrow-flight",
