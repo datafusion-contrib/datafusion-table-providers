@@ -11,6 +11,8 @@
 // limitations under the License.
 
 use crate::sql::db_connection_pool::DbConnectionPool;
+#[cfg(feature = "adbc-federation")]
+use crate::util::supported_functions::FunctionSupport;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -41,6 +43,8 @@ use datafusion::{
 
 pub struct AdbcDBTable<T: 'static, P: 'static> {
     pub(crate) base_table: SqlTable<T, P>,
+    #[cfg(feature = "adbc-federation")]
+    pub(crate) function_support: Option<FunctionSupport>,
 }
 
 impl<T, P> std::fmt::Debug for AdbcDBTable<T, P> {
@@ -57,13 +61,18 @@ impl<T, P> AdbcDBTable<T, P> {
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
         dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+        #[cfg(feature = "adbc-federation")] function_support: Option<FunctionSupport>,
     ) -> Self {
         let mut base_table = SqlTable::new_with_schema("adbc", pool, schema, table_reference, None);
 
         if let Some(d) = dialect {
             base_table = base_table.with_dialect(d);
         }
-        Self { base_table }
+        Self {
+            base_table,
+            #[cfg(feature = "adbc-federation")]
+            function_support,
+        }
     }
 
     fn create_physical_plan(
@@ -100,7 +109,22 @@ impl<T, P> TableProvider for AdbcDBTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        self.base_table.supports_filters_pushdown(filters)
+        let base_results = self.base_table.supports_filters_pushdown(filters)?;
+        #[cfg(feature = "adbc-federation")]
+        if let Some(func_support) = &self.function_support {
+            return Ok(filters
+                .iter()
+                .zip(base_results)
+                .map(|(filter, base_result)| {
+                    if func_support.supports(filter) {
+                        base_result
+                    } else {
+                        TableProviderFilterPushDown::Unsupported
+                    }
+                })
+                .collect());
+        }
+        Ok(base_results)
     }
 
     async fn scan(

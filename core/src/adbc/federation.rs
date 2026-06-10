@@ -12,8 +12,10 @@
 
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
+use crate::util::supported_functions::contains_unsupported_functions;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
@@ -69,6 +71,12 @@ impl<T, P> SQLExecutor for AdbcDBTable<T, P> {
 
     fn dialect(&self) -> Arc<dyn Dialect> {
         self.base_table.dialect()
+    }
+
+    fn can_execute_plan(&self, plan: &LogicalPlan) -> bool {
+        self.function_support.as_ref().is_none_or(|func_supp| {
+            !contains_unsupported_functions(plan, func_supp).unwrap_or(false)
+        })
     }
 
     fn execute(
