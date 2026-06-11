@@ -22,6 +22,8 @@ use crate::{
 
 use adbc_core::{Connection, Database};
 use arrow::array::RecordBatch;
+#[cfg(feature = "adbc-federation")]
+use crate::util::supported_functions::FunctionSupport;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion::{
     catalog::Session,
@@ -78,6 +80,8 @@ where
     pool: Arc<ADBCPool<D>>,
     #[cfg(feature = "adbc-federation")]
     federation_enabled: bool,
+    #[cfg(feature = "adbc-federation")]
+    function_support: Option<FunctionSupport>,
 }
 
 impl<D> AdbcTableFactory<D>
@@ -91,6 +95,8 @@ where
             pool,
             #[cfg(feature = "adbc-federation")]
             federation_enabled: true, // enabled by default when the feature is available
+            #[cfg(feature = "adbc-federation")]
+            function_support: None,
         }
     }
 
@@ -98,6 +104,13 @@ where
     #[must_use]
     pub fn with_federation_enabled(mut self, enabled: bool) -> Self {
         self.federation_enabled = enabled;
+        self
+    }
+
+    #[cfg(feature = "adbc-federation")]
+    #[must_use]
+    pub fn with_function_support(mut self, function_support: FunctionSupport) -> Self {
+        self.function_support = Some(function_support);
         self
     }
 
@@ -135,6 +148,8 @@ where
             Arc::clone(&schema),
             table_reference.clone(),
             dialect,
+            #[cfg(feature = "adbc-federation")]
+            self.function_support.clone(),
         ));
 
         #[cfg(feature = "adbc-federation")]
