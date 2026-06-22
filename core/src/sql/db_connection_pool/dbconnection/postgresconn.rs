@@ -112,32 +112,50 @@ ORDER BY a.attnum;
 ";
 
 // Redshift does not materialize datashare objects into the local `pg_catalog`
-// (pg_class/pg_attribute return zero rows for tables consumed from a datashare),
-// so we read column metadata from `svv_redshift_columns`, which covers both local
-// and datashare tables. The view exposes no type OIDs, so the array/enum/composite
-// `type_details` path is unavailable — that is acceptable because Redshift has no
-// PostgreSQL arrays/enums/composites (semi-structured data uses SUPER).
+// (pg_class/pg_attribute return zero rows for tables consumed from a datashare), and
+// `CREATE EXTERNAL TABLE` objects (Redshift Spectrum tables backed by external
+// catalogs such as AWS Glue / Hive Metastore) are not in `pg_catalog` either.
+//
+// `svv_all_columns` is AWS's unified view: a union of `svv_redshift_columns` (local +
+// datashare/shared columns) and the external columns from all external tables, so a
+// single query covers local, datashare, and external tables. The view exposes no type
+// OIDs, so the array/enum/composite `type_details` path is unavailable — that is
+// acceptable because Redshift has no PostgreSQL arrays/enums/composites (semi-structured
+// data uses SUPER).
 //
 // Notes:
-// - `data_type` is already a formatted type string (e.g. `character varying(256)`,
-//   `numeric(10,2)`), matching what `format_type` produced before.
-// - `is_nullable` is normalized to the literal `YES`/`NO` expected by `get_schema`.
-// - `database_name = current_database()` scopes to the connected database (which is
-//   the datashare consumer DB) so a schema/table that exists in multiple accessible
-//   databases doesn't yield duplicated columns.
+// - `data_type` is the bare type name (e.g. `numeric`, `character varying`), NOT a
+//   formatted string — precision/scale/length live in separate columns. We rebuild the
+//   `numeric(p,s)` form from `numeric_precision`/`numeric_scale` so decimals keep their
+//   real precision instead of falling back to the default; character lengths are dropped
+//   because they don't affect the resulting Arrow `Utf8`/`LargeUtf8`. For external
+//   columns `data_type` is the catalog-reported type, which may use simplified Hive type
+//   names (e.g. `string`, `int`, `double`) — these are resolved leniently by
+//   `pg_data_type_to_arrow_type` when the variant is Redshift.
+// - `is_nullable` is normalized to the literal `YES`/`NO` expected by `get_schema`. It
+//   can be an empty string ("no information", common for external columns), which we
+//   treat as nullable — only an explicit `no`/`false` maps to `NO`.
+// - `database_name = current_database()` scopes to the connected database (the datashare
+//   consumer DB) so a schema/table that exists in multiple accessible databases doesn't
+//   yield duplicated columns.
 const REDSHIFT_SCHEMA_QUERY: &str = r#"
 SELECT
     column_name,
-    data_type,
-    CASE WHEN lower(is_nullable) IN ('yes', 'true') THEN 'YES' ELSE 'NO' END AS is_nullable,
+    CASE
+        WHEN lower(data_type) IN ('numeric', 'decimal') AND numeric_precision IS NOT NULL
+            THEN data_type || '(' || numeric_precision::varchar || ',' || COALESCE(numeric_scale, 0)::varchar || ')'
+        ELSE data_type
+    END AS data_type,
+    CASE WHEN lower(is_nullable) IN ('no', 'false') THEN 'NO' ELSE 'YES' END AS is_nullable,
     CAST(NULL AS VARCHAR) AS type_details
-FROM svv_redshift_columns
+FROM svv_all_columns
 WHERE schema_name = $1
     AND table_name = $2
     AND database_name = current_database()
 ORDER BY ordinal_position;
 "#;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostgresVariant {
     Default,
     Redshift,
@@ -156,13 +174,15 @@ FROM pg_tables
 WHERE schemaname = $1;
 ";
 
-// Like `REDSHIFT_SCHEMA_QUERY`, these read from the `svv_redshift_*` system views so
-// that schemas/tables consumed from a datashare (absent from the local `pg_catalog`)
-// are listed alongside the connected database's own schemas/tables. `current_database()`
+// Like `REDSHIFT_SCHEMA_QUERY`, these read from the unified `svv_all_*` system views so
+// that schemas/tables consumed from a datashare (absent from the local `pg_catalog`) and
+// external schemas/tables (Redshift Spectrum) are listed alongside the connected
+// database's own schemas/tables. `svv_all_schemas`/`svv_all_tables` are AWS's unions of
+// the `svv_redshift_*` views with the external schemas/tables. `current_database()`
 // scopes results to the connected (datashare consumer) database.
 const REDSHIFT_SCHEMAS_QUERY: &str = "
 SELECT schema_name
-FROM svv_redshift_schemas
+FROM svv_all_schemas
 WHERE database_name = current_database()
   AND schema_name NOT IN ('pg_catalog', 'information_schema')
   AND schema_name NOT LIKE 'pg_temp_%'
@@ -171,7 +191,7 @@ WHERE database_name = current_database()
 
 const REDSHIFT_TABLES_QUERY: &str = "
 SELECT table_name
-FROM svv_redshift_tables
+FROM svv_all_tables
 WHERE database_name = current_database()
   AND schema_name = $1;
 ";
@@ -334,7 +354,8 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
                 context = context.with_type_details(type_details);
             };
 
-            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context) else {
+            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context, Some(variant))
+            else {
                 handle_unsupported_type_error(
                     self.unsupported_type_action,
                     super::Error::UnsupportedDataType {

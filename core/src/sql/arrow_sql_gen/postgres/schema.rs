@@ -4,6 +4,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
 
+use crate::sql::db_connection_pool::dbconnection::postgresconn::PostgresVariant;
 use crate::UnsupportedTypeAction;
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ impl Default for ParseContext {
 pub(crate) fn pg_data_type_to_arrow_type(
     pg_type: &str,
     context: &ParseContext,
+    variant: Option<PostgresVariant>,
 ) -> Result<DataType, ArrowError> {
     let base_type = pg_type.split('(').next().unwrap_or(pg_type).trim();
 
@@ -86,7 +88,7 @@ pub(crate) fn pg_data_type_to_arrow_type(
         "tsvector" | "tsquery" => Ok(DataType::LargeUtf8),
         "xml" | "json" => Ok(DataType::Utf8),
         "aclitem" | "pg_node_tree" => Ok(DataType::Utf8),
-        "array" => parse_array_type(context),
+        "array" => parse_array_type(context, variant),
         "anyarray" => Ok(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Binary,
@@ -96,12 +98,19 @@ pub(crate) fn pg_data_type_to_arrow_type(
             Field::new("lower", DataType::Int32, true),
             Field::new("upper", DataType::Int32, true),
         ]))),
-        "composite" => parse_composite_type(context),
+        "composite" => parse_composite_type(context, variant),
         "geometry" | "geography" => Ok(DataType::Binary),
 
         // `jsonb` is currently not supported, but if the user has set the `UnsupportedTypeAction` to `String` we'll return `Utf8`.
         "jsonb" if context.unsupported_type_action == UnsupportedTypeAction::String => {
             Ok(DataType::Utf8)
+        }
+        // Redshift external tables (`CREATE EXTERNAL TABLE`, Redshift Spectrum) report
+        // column types from the backing catalog (e.g. AWS Glue / Hive Metastore), which
+        // use simplified Hive type names like `string`, `int`, or `double`. When the
+        // variant is Redshift, fall back to lenient Hive-type resolution before erroring.
+        _ if variant == Some(PostgresVariant::Redshift) => {
+            redshift_external_type_to_arrow_type(pg_type)
         }
         _ => Err(ArrowError::ParseError(format!(
             "Unsupported PostgreSQL type: {}",
@@ -110,7 +119,58 @@ pub(crate) fn pg_data_type_to_arrow_type(
     }
 }
 
-fn parse_array_type(context: &ParseContext) -> Result<DataType, ArrowError> {
+/// Lenient resolution of Redshift external-table column types into Arrow types.
+///
+/// External tables (Redshift Spectrum) surface column types via `external_type` in
+/// `svv_external_columns`. These originate from the external catalog (commonly AWS
+/// Glue, which is backed by Hive types), so they may use simplified Hive type names
+/// that the standard PostgreSQL type mapping does not recognise — most notably
+/// `string`, but also `tinyint`, bare `float`/`double`, and `binary`.
+///
+/// Matching is case-insensitive (catalogs are inconsistent about casing) and covers
+/// the basic Hive types: integers, floats, decimals, strings, booleans, and the
+/// common date/time/binary types. See
+/// <https://cwiki.apache.org/confluence/display/hive/languagemanual+types>.
+fn redshift_external_type_to_arrow_type(external_type: &str) -> Result<DataType, ArrowError> {
+    // Lowercase the full type so parameterised types (e.g. `DECIMAL(10,2)`,
+    // `VARCHAR(256)`) are handled consistently regardless of catalog casing.
+    let lowered = external_type.to_lowercase();
+    let base_type = lowered.split('(').next().unwrap_or(&lowered).trim();
+
+    match base_type {
+        // String types — Hive `string` is unbounded text; `varchar`/`char` carry an
+        // optional length that does not affect the Arrow type.
+        "string" | "varchar" | "char" | "character" | "character varying" => Ok(DataType::Utf8),
+        // Integer types.
+        "tinyint" => Ok(DataType::Int8),
+        "smallint" | "int2" => Ok(DataType::Int16),
+        "int" | "integer" | "int4" => Ok(DataType::Int32),
+        "bigint" | "int8" => Ok(DataType::Int64),
+        // Floating-point types — Hive `float` is single precision, `double` is double.
+        "float" | "real" | "float4" => Ok(DataType::Float32),
+        "double" | "double precision" | "float8" => Ok(DataType::Float64),
+        // Fixed-point decimal types.
+        "decimal" | "numeric" => {
+            let (precision, scale) = parse_numeric_type(&lowered)?;
+            Ok(DataType::Decimal128(precision, scale))
+        }
+        // Boolean type.
+        "boolean" | "bool" => Ok(DataType::Boolean),
+        // Binary type.
+        "binary" => Ok(DataType::Binary),
+        // Date/time types.
+        "date" => Ok(DataType::Date32),
+        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        _ => Err(ArrowError::ParseError(format!(
+            "Unsupported Redshift type: {external_type}"
+        ))),
+    }
+}
+
+fn parse_array_type(
+    context: &ParseContext,
+    variant: Option<PostgresVariant>,
+) -> Result<DataType, ArrowError> {
     let details = context
         .type_details
         .as_ref()
@@ -130,9 +190,9 @@ fn parse_array_type(context: &ParseContext) -> Result<DataType, ArrowError> {
             "type": "array",
             "element_type": element_type.trim_end_matches("[]"),
         }));
-        parse_array_type(&inner_context)?
+        parse_array_type(&inner_context, variant)?
     } else {
-        pg_data_type_to_arrow_type(element_type, context)?
+        pg_data_type_to_arrow_type(element_type, context, variant)?
     };
 
     Ok(DataType::List(Arc::new(Field::new(
@@ -140,7 +200,10 @@ fn parse_array_type(context: &ParseContext) -> Result<DataType, ArrowError> {
     ))))
 }
 
-fn parse_composite_type(context: &ParseContext) -> Result<DataType, ArrowError> {
+fn parse_composite_type(
+    context: &ParseContext,
+    variant: Option<PostgresVariant>,
+) -> Result<DataType, ArrowError> {
     let details = context.type_details.as_ref().ok_or_else(|| {
         ArrowError::ParseError("Missing type details for composite type".to_string())
     })?;
@@ -178,9 +241,9 @@ fn parse_composite_type(context: &ParseContext) -> Result<DataType, ArrowError> 
                 })?;
             let field_type = if attr_type == "composite" {
                 let inner_context = context.clone().with_type_details(attr.clone());
-                parse_composite_type(&inner_context)?
+                parse_composite_type(&inner_context, variant)?
             } else {
-                pg_data_type_to_arrow_type(attr_type, context)?
+                pg_data_type_to_arrow_type(attr_type, context, variant)?
             };
             Ok(Field::new(name, field_type, true))
         })
@@ -239,91 +302,98 @@ mod tests {
         let context = ParseContext::new();
         // Test basic types
         assert_eq!(
-            pg_data_type_to_arrow_type("smallint", &context).expect("Failed to convert smallint"),
+            pg_data_type_to_arrow_type("smallint", &context, None)
+                .expect("Failed to convert smallint"),
             DataType::Int16
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("integer", &context).expect("Failed to convert integer"),
+            pg_data_type_to_arrow_type("integer", &context, None)
+                .expect("Failed to convert integer"),
             DataType::Int32
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("bigint", &context).expect("Failed to convert bigint"),
+            pg_data_type_to_arrow_type("bigint", &context, None).expect("Failed to convert bigint"),
             DataType::Int64
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("real", &context).expect("Failed to convert real"),
+            pg_data_type_to_arrow_type("real", &context, None).expect("Failed to convert real"),
             DataType::Float32
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("double precision", &context)
+            pg_data_type_to_arrow_type("double precision", &context, None)
                 .expect("Failed to convert double precision"),
             DataType::Float64
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("boolean", &context).expect("Failed to convert boolean"),
+            pg_data_type_to_arrow_type("boolean", &context, None)
+                .expect("Failed to convert boolean"),
             DataType::Boolean
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("\"char\"", &context)
+            pg_data_type_to_arrow_type("\"char\"", &context, None)
                 .expect("Failed to convert single character"),
             DataType::Int8
         );
 
         // Test string types
         assert_eq!(
-            pg_data_type_to_arrow_type("character", &context).expect("Failed to convert character"),
+            pg_data_type_to_arrow_type("character", &context, None)
+                .expect("Failed to convert character"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("character varying", &context)
+            pg_data_type_to_arrow_type("character varying", &context, None)
                 .expect("Failed to convert character varying"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("name", &context).expect("Failed to convert name"),
+            pg_data_type_to_arrow_type("name", &context, None).expect("Failed to convert name"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("text", &context).expect("Failed to convert text"),
+            pg_data_type_to_arrow_type("text", &context, None).expect("Failed to convert text"),
             DataType::Utf8
         );
 
         // Test date/time types
         assert_eq!(
-            pg_data_type_to_arrow_type("date", &context).expect("Failed to convert date"),
+            pg_data_type_to_arrow_type("date", &context, None).expect("Failed to convert date"),
             DataType::Date32
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("time without time zone", &context)
+            pg_data_type_to_arrow_type("time without time zone", &context, None)
                 .expect("Failed to convert time without time zone"),
             DataType::Time64(TimeUnit::Nanosecond)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("timestamp without time zone", &context)
+            pg_data_type_to_arrow_type("timestamp without time zone", &context, None)
                 .expect("Failed to convert timestamp without time zone"),
             DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("timestamp with time zone", &context)
+            pg_data_type_to_arrow_type("timestamp with time zone", &context, None)
                 .expect("Failed to convert timestamp with time zone"),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("interval", &context).expect("Failed to convert interval"),
+            pg_data_type_to_arrow_type("interval", &context, None)
+                .expect("Failed to convert interval"),
             DataType::Interval(IntervalUnit::MonthDayNano)
         );
 
         // Test numeric types
         assert_eq!(
-            pg_data_type_to_arrow_type("numeric", &context).expect("Failed to convert numeric"),
+            pg_data_type_to_arrow_type("numeric", &context, None)
+                .expect("Failed to convert numeric"),
             DataType::Decimal128(38, 20)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("numeric()", &context).expect("Failed to convert numeric()"),
+            pg_data_type_to_arrow_type("numeric()", &context, None)
+                .expect("Failed to convert numeric()"),
             DataType::Decimal128(38, 20)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("numeric(10,2)", &context)
+            pg_data_type_to_arrow_type("numeric(10,2)", &context, None)
                 .expect("Failed to convert numeric(10,2)"),
             DataType::Decimal128(10, 2)
         );
@@ -334,7 +404,7 @@ mod tests {
             "element_type": "integer",
         }));
         assert_eq!(
-            pg_data_type_to_arrow_type("array", &array_type_context)
+            pg_data_type_to_arrow_type("array", &array_type_context, None)
                 .expect("Failed to convert array"),
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
         );
@@ -348,7 +418,7 @@ mod tests {
             ]
         }));
         assert_eq!(
-            pg_data_type_to_arrow_type("composite", &composite_type_context)
+            pg_data_type_to_arrow_type("composite", &composite_type_context, None)
                 .expect("Failed to convert composite"),
             DataType::Struct(Fields::from(vec![
                 Field::new("x", DataType::Int32, true),
@@ -357,7 +427,7 @@ mod tests {
         );
 
         // Test unsupported type
-        assert!(pg_data_type_to_arrow_type("unsupported_type", &context).is_err());
+        assert!(pg_data_type_to_arrow_type("unsupported_type", &context, None).is_err());
     }
 
     #[test]
@@ -405,26 +475,26 @@ mod tests {
     fn test_pg_data_type_to_arrow_type_with_size() {
         let context = ParseContext::new();
         assert_eq!(
-            pg_data_type_to_arrow_type("character(10)", &context)
+            pg_data_type_to_arrow_type("character(10)", &context, None)
                 .expect("Failed to convert character(10)"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("character varying(255)", &context)
+            pg_data_type_to_arrow_type("character varying(255)", &context, None)
                 .expect("Failed to convert character varying(255)"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("bit(8)", &context).expect("Failed to convert bit(8)"),
+            pg_data_type_to_arrow_type("bit(8)", &context, None).expect("Failed to convert bit(8)"),
             DataType::Binary
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("bit varying(64)", &context)
+            pg_data_type_to_arrow_type("bit varying(64)", &context, None)
                 .expect("Failed to convert bit varying(64)"),
             DataType::Binary
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("numeric(10,2)", &context)
+            pg_data_type_to_arrow_type("numeric(10,2)", &context, None)
                 .expect("Failed to convert numeric(10,2)"),
             DataType::Decimal128(10, 2)
         );
@@ -435,19 +505,19 @@ mod tests {
         let context = ParseContext::new();
         // Test additional numeric types
         assert_eq!(
-            pg_data_type_to_arrow_type("numeric(38,10)", &context)
+            pg_data_type_to_arrow_type("numeric(38,10)", &context, None)
                 .expect("Failed to convert numeric(38,10)"),
             DataType::Decimal128(38, 10)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("decimal(5,0)", &context)
+            pg_data_type_to_arrow_type("decimal(5,0)", &context, None)
                 .expect("Failed to convert decimal(5,0)"),
             DataType::Decimal128(5, 0)
         );
 
         // Test time types with precision
         assert_eq!(
-            pg_data_type_to_arrow_type("time(6) without time zone", &context)
+            pg_data_type_to_arrow_type("time(6) without time zone", &context, None)
                 .expect("Failed to convert time(6) without time zone"),
             DataType::Time64(TimeUnit::Nanosecond)
         );
@@ -458,7 +528,7 @@ mod tests {
             "element_type": "integer[]",
         }));
         assert_eq!(
-            pg_data_type_to_arrow_type("array", &nested_array_type_details)
+            pg_data_type_to_arrow_type("array", &nested_array_type_details, None)
                 .expect("Failed to convert nested array"),
             DataType::List(Arc::new(Field::new(
                 "item",
@@ -473,33 +543,35 @@ mod tests {
             "values": ["small", "medium", "large"]
         }));
         assert_eq!(
-            pg_data_type_to_arrow_type("enum", &enum_type_details).expect("Failed to convert enum"),
+            pg_data_type_to_arrow_type("enum", &enum_type_details, None)
+                .expect("Failed to convert enum"),
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8))
         );
 
         // Test geometric types
         assert_eq!(
-            pg_data_type_to_arrow_type("point", &context).expect("Failed to convert point"),
+            pg_data_type_to_arrow_type("point", &context, None).expect("Failed to convert point"),
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 2)
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("line", &context).expect("Failed to convert line"),
+            pg_data_type_to_arrow_type("line", &context, None).expect("Failed to convert line"),
             DataType::Binary
         );
 
         // Test network address types
         assert_eq!(
-            pg_data_type_to_arrow_type("inet", &context).expect("Failed to convert inet"),
+            pg_data_type_to_arrow_type("inet", &context, None).expect("Failed to convert inet"),
             DataType::Utf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("cidr", &context).expect("Failed to convert cidr"),
+            pg_data_type_to_arrow_type("cidr", &context, None).expect("Failed to convert cidr"),
             DataType::Utf8
         );
 
         // Test range types
         assert_eq!(
-            pg_data_type_to_arrow_type("int4range", &context).expect("Failed to convert int4range"),
+            pg_data_type_to_arrow_type("int4range", &context, None)
+                .expect("Failed to convert int4range"),
             DataType::Struct(Fields::from(vec![
                 Field::new("lower", DataType::Int32, true),
                 Field::new("upper", DataType::Int32, true),
@@ -508,7 +580,7 @@ mod tests {
 
         // Test JSON types
         assert_eq!(
-            pg_data_type_to_arrow_type("json", &context).expect("Failed to convert json"),
+            pg_data_type_to_arrow_type("json", &context, None).expect("Failed to convert json"),
             DataType::Utf8
         );
 
@@ -516,35 +588,38 @@ mod tests {
             .clone()
             .with_unsupported_type_action(UnsupportedTypeAction::String);
         assert_eq!(
-            pg_data_type_to_arrow_type("jsonb", &jsonb_context).expect("Failed to convert jsonb"),
+            pg_data_type_to_arrow_type("jsonb", &jsonb_context, None)
+                .expect("Failed to convert jsonb"),
             DataType::Utf8
         );
 
         // Test UUID type
         assert_eq!(
-            pg_data_type_to_arrow_type("uuid", &context).expect("Failed to convert uuid"),
+            pg_data_type_to_arrow_type("uuid", &context, None).expect("Failed to convert uuid"),
             DataType::Utf8
         );
 
         // Test text search types
         assert_eq!(
-            pg_data_type_to_arrow_type("tsvector", &context).expect("Failed to convert tsvector"),
+            pg_data_type_to_arrow_type("tsvector", &context, None)
+                .expect("Failed to convert tsvector"),
             DataType::LargeUtf8
         );
         assert_eq!(
-            pg_data_type_to_arrow_type("tsquery", &context).expect("Failed to convert tsquery"),
+            pg_data_type_to_arrow_type("tsquery", &context, None)
+                .expect("Failed to convert tsquery"),
             DataType::LargeUtf8
         );
 
         // Test bpchar type
         assert_eq!(
-            pg_data_type_to_arrow_type("bpchar", &context).expect("Failed to convert bpchar"),
+            pg_data_type_to_arrow_type("bpchar", &context, None).expect("Failed to convert bpchar"),
             DataType::Utf8
         );
 
         // Test bpchar with length specification
         assert_eq!(
-            pg_data_type_to_arrow_type("bpchar(10)", &context)
+            pg_data_type_to_arrow_type("bpchar(10)", &context, None)
                 .expect("Failed to convert bpchar(10)"),
             DataType::Utf8
         );
@@ -558,7 +633,8 @@ mod tests {
             "element_type": "integer",
         }));
         assert_eq!(
-            parse_array_type(&single_dim_array).expect("Failed to parse single dimension array"),
+            parse_array_type(&single_dim_array, None)
+                .expect("Failed to parse single dimension array"),
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
         );
 
@@ -567,7 +643,8 @@ mod tests {
             "element_type": "text[]",
         }));
         assert_eq!(
-            parse_array_type(&multi_dim_array).expect("Failed to parse multi-dimension array"),
+            parse_array_type(&multi_dim_array, None)
+                .expect("Failed to parse multi-dimension array"),
             DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
@@ -576,7 +653,7 @@ mod tests {
         );
 
         let invalid_array = context.clone().with_type_details(json!({"type": "array"}));
-        assert!(parse_array_type(&invalid_array).is_err());
+        assert!(parse_array_type(&invalid_array, None).is_err());
     }
 
     #[test]
@@ -591,7 +668,8 @@ mod tests {
             ]
         }));
         assert_eq!(
-            parse_composite_type(&simple_composite).expect("Failed to parse simple composite type"),
+            parse_composite_type(&simple_composite, None)
+                .expect("Failed to parse simple composite type"),
             DataType::Struct(Fields::from(vec![
                 Field::new("id", DataType::Int32, true),
                 Field::new("name", DataType::Utf8, true),
@@ -610,7 +688,8 @@ mod tests {
             ]
         }));
         assert_eq!(
-            parse_composite_type(&nested_composite).expect("Failed to parse nested composite type"),
+            parse_composite_type(&nested_composite, None)
+                .expect("Failed to parse nested composite type"),
             DataType::Struct(Fields::from(vec![
                 Field::new("id", DataType::Int32, true),
                 Field::new(
@@ -627,6 +706,135 @@ mod tests {
         let invalid_composite = context.clone().with_type_details(json!({
             "type": "composite",
         }));
-        assert!(parse_composite_type(&invalid_composite).is_err());
+        assert!(parse_composite_type(&invalid_composite, None).is_err());
+    }
+
+    /// Convenience wrapper that resolves a type as a Redshift column would.
+    fn redshift(pg_type: &str) -> Result<DataType, ArrowError> {
+        pg_data_type_to_arrow_type(
+            pg_type,
+            &ParseContext::new(),
+            Some(PostgresVariant::Redshift),
+        )
+    }
+
+    #[test]
+    fn test_redshift_external_simplified_hive_types() {
+        // The headline case from AWS Glue / Hive catalogs: `string` must map to Utf8.
+        assert_eq!(redshift("string").expect("string"), DataType::Utf8);
+
+        // Integer family, including Hive `tinyint` which has no PostgreSQL spelling.
+        assert_eq!(redshift("tinyint").expect("tinyint"), DataType::Int8);
+        assert_eq!(redshift("smallint").expect("smallint"), DataType::Int16);
+        assert_eq!(redshift("int").expect("int"), DataType::Int32);
+        assert_eq!(redshift("integer").expect("integer"), DataType::Int32);
+        assert_eq!(redshift("bigint").expect("bigint"), DataType::Int64);
+
+        // Floating-point: Hive `float` is single precision, `double` is double precision.
+        assert_eq!(redshift("float").expect("float"), DataType::Float32);
+        assert_eq!(redshift("double").expect("double"), DataType::Float64);
+        assert_eq!(
+            redshift("double precision").expect("double precision"),
+            DataType::Float64
+        );
+
+        // Booleans.
+        assert_eq!(redshift("boolean").expect("boolean"), DataType::Boolean);
+
+        // Binary.
+        assert_eq!(redshift("binary").expect("binary"), DataType::Binary);
+
+        // Date/time.
+        assert_eq!(redshift("date").expect("date"), DataType::Date32);
+        assert_eq!(
+            redshift("timestamp").expect("timestamp"),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+    }
+
+    #[test]
+    fn test_redshift_external_string_variants() {
+        // Hive `string` and the length-qualified character types all collapse to Utf8.
+        assert_eq!(redshift("string").expect("string"), DataType::Utf8);
+        assert_eq!(redshift("varchar").expect("varchar"), DataType::Utf8);
+        assert_eq!(
+            redshift("varchar(256)").expect("varchar(256)"),
+            DataType::Utf8
+        );
+        assert_eq!(redshift("char(10)").expect("char(10)"), DataType::Utf8);
+    }
+
+    #[test]
+    fn test_redshift_external_decimal_types() {
+        // Hive `decimal` carries precision/scale that must be parsed through.
+        assert_eq!(
+            redshift("decimal(10,2)").expect("decimal(10,2)"),
+            DataType::Decimal128(10, 2)
+        );
+        assert_eq!(
+            redshift("decimal(38,0)").expect("decimal(38,0)"),
+            DataType::Decimal128(38, 0)
+        );
+        // Bare `decimal` falls back to the default precision/scale.
+        assert_eq!(
+            redshift("decimal").expect("decimal"),
+            DataType::Decimal128(38, 20)
+        );
+    }
+
+    #[test]
+    fn test_redshift_external_types_are_case_insensitive() {
+        // External catalogs are inconsistent about casing, so resolution must not care.
+        assert_eq!(redshift("STRING").expect("STRING"), DataType::Utf8);
+        assert_eq!(redshift("Int").expect("Int"), DataType::Int32);
+        assert_eq!(redshift("BIGINT").expect("BIGINT"), DataType::Int64);
+        assert_eq!(redshift("Double").expect("Double"), DataType::Float64);
+        assert_eq!(
+            redshift("DECIMAL(12,4)").expect("DECIMAL(12,4)"),
+            DataType::Decimal128(12, 4)
+        );
+        assert_eq!(redshift("Boolean").expect("Boolean"), DataType::Boolean);
+    }
+
+    #[test]
+    fn test_redshift_variant_still_handles_native_pg_types() {
+        // Standard Redshift (svv_redshift_columns) emits formatted PostgreSQL type
+        // strings; the Redshift variant must keep resolving those unchanged.
+        assert_eq!(
+            redshift("character varying(256)").expect("character varying(256)"),
+            DataType::Utf8
+        );
+        assert_eq!(
+            redshift("numeric(10,2)").expect("numeric(10,2)"),
+            DataType::Decimal128(10, 2)
+        );
+        assert_eq!(
+            redshift("timestamp without time zone").expect("timestamp without time zone"),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+    }
+
+    #[test]
+    fn test_simplified_hive_types_require_redshift_variant() {
+        // The lenient Hive mapping is gated on the Redshift variant: `string` is not a
+        // PostgreSQL type, so it must error for the default variant and when unset.
+        let context = ParseContext::new();
+        assert!(pg_data_type_to_arrow_type("string", &context, None).is_err());
+        assert!(
+            pg_data_type_to_arrow_type("string", &context, Some(PostgresVariant::Default)).is_err()
+        );
+        // `tinyint` is likewise Hive-only.
+        assert!(pg_data_type_to_arrow_type("tinyint", &context, None).is_err());
+    }
+
+    #[test]
+    fn test_redshift_external_unsupported_type_errors() {
+        // Complex Hive types (and genuinely unknown types) are still unsupported even
+        // under the Redshift variant, so they surface as errors rather than silently
+        // mapping to the wrong Arrow type.
+        assert!(redshift("array<int>").is_err());
+        assert!(redshift("map<string,int>").is_err());
+        assert!(redshift("struct<a:int>").is_err());
+        assert!(redshift("totally_unknown_type").is_err());
     }
 }
