@@ -94,6 +94,30 @@ SELECT
             FROM pg_type t2
             JOIN pg_type et ON t2.typelem = et.oid
             WHERE t2.oid = a.atttypid
+        ),
+        -- When the array element is a composite type, carry its attributes so the
+        -- array can be resolved to a List<Struct>. Null for non-composite elements.
+        'element_details', (
+            SELECT jsonb_build_object(
+                'type', 'composite',
+                'attributes', (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'name', a2.attname,
+                            'type', pg_catalog.format_type(a2.atttypid, a2.atttypmod)
+                        )
+                        ORDER BY a2.attnum
+                    )
+                    FROM pg_attribute a2
+                    WHERE a2.attrelid = et.typrelid
+                    AND a2.attnum > 0
+                    AND NOT a2.attisdropped
+                )
+            )
+            FROM pg_type t2
+            JOIN pg_type et ON t2.typelem = et.oid
+            WHERE t2.oid = a.atttypid
+            AND et.typtype = 'c'
         )
         )
     ELSE custom.type_details

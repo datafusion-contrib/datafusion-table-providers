@@ -7,6 +7,9 @@ pub mod common;
 pub mod sql;
 pub mod util;
 
+/// Canonical Arrow metadata key for user-facing table and column descriptions.
+pub const DESCRIPTION_METADATA_KEY: &str = "description";
+
 #[cfg(feature = "adbc")]
 pub mod adbc;
 #[cfg(feature = "clickhouse")]

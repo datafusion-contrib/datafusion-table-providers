@@ -4,6 +4,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
 
+use super::hive_schema;
 use crate::sql::db_connection_pool::dbconnection::postgresconn::PostgresVariant;
 use crate::UnsupportedTypeAction;
 
@@ -107,8 +108,9 @@ pub(crate) fn pg_data_type_to_arrow_type(
         }
         // Redshift external tables (`CREATE EXTERNAL TABLE`, Redshift Spectrum) report
         // column types from the backing catalog (e.g. AWS Glue / Hive Metastore), which
-        // use simplified Hive type names like `string`, `int`, or `double`. When the
-        // variant is Redshift, fall back to lenient Hive-type resolution before erroring.
+        // use Hive type names — including complex types like `array<struct<...>>`,
+        // `map<...>`, and `struct<...>`. When the variant is Redshift, fall back to the
+        // shared Hive type-string parser before erroring.
         _ if variant == Some(PostgresVariant::Redshift) => {
             redshift_external_type_to_arrow_type(pg_type)
         }
@@ -119,52 +121,25 @@ pub(crate) fn pg_data_type_to_arrow_type(
     }
 }
 
-/// Lenient resolution of Redshift external-table column types into Arrow types.
+/// Resolves a Redshift external-table column type into an Arrow type.
 ///
-/// External tables (Redshift Spectrum) surface column types via `external_type` in
-/// `svv_external_columns`. These originate from the external catalog (commonly AWS
-/// Glue, which is backed by Hive types), so they may use simplified Hive type names
-/// that the standard PostgreSQL type mapping does not recognise — most notably
-/// `string`, but also `tinyint`, bare `float`/`double`, and `binary`.
+/// External tables (Redshift Spectrum) surface column types from the backing catalog
+/// (commonly AWS Glue, which is backed by Hive types). These use Hive type names that
+/// the standard PostgreSQL type mapping does not recognise — simple scalars like
+/// `string`, `tinyint`, or bare `float`/`double`, but also the complex types
+/// `array<...>`, `map<...>`, and `struct<...>` that Spectrum serializes to JSON text.
 ///
-/// Matching is case-insensitive (catalogs are inconsistent about casing) and covers
-/// the basic Hive types: integers, floats, decimals, strings, booleans, and the
-/// common date/time/binary types. See
+/// Resolution is delegated to the shared [`hive_schema::Parser`] so that Redshift and
+/// Databricks share one Hive type-string grammar. Parsing is case-insensitive (catalogs
+/// are inconsistent about casing) and handles parameterised types (e.g. `DECIMAL(10,2)`,
+/// `VARCHAR(256)`). See
 /// <https://cwiki.apache.org/confluence/display/hive/languagemanual+types>.
 fn redshift_external_type_to_arrow_type(external_type: &str) -> Result<DataType, ArrowError> {
-    // Lowercase the full type so parameterised types (e.g. `DECIMAL(10,2)`,
-    // `VARCHAR(256)`) are handled consistently regardless of catalog casing.
-    let lowered = external_type.to_lowercase();
-    let base_type = lowered.split('(').next().unwrap_or(&lowered).trim();
-
-    match base_type {
-        // String types — Hive `string` is unbounded text; `varchar`/`char` carry an
-        // optional length that does not affect the Arrow type.
-        "string" | "varchar" | "char" | "character" | "character varying" => Ok(DataType::Utf8),
-        // Integer types.
-        "tinyint" => Ok(DataType::Int8),
-        "smallint" | "int2" => Ok(DataType::Int16),
-        "int" | "integer" | "int4" => Ok(DataType::Int32),
-        "bigint" | "int8" => Ok(DataType::Int64),
-        // Floating-point types — Hive `float` is single precision, `double` is double.
-        "float" | "real" | "float4" => Ok(DataType::Float32),
-        "double" | "double precision" | "float8" => Ok(DataType::Float64),
-        // Fixed-point decimal types.
-        "decimal" | "numeric" => {
-            let (precision, scale) = parse_numeric_type(&lowered)?;
-            Ok(DataType::Decimal128(precision, scale))
-        }
-        // Boolean type.
-        "boolean" | "bool" => Ok(DataType::Boolean),
-        // Binary type.
-        "binary" => Ok(DataType::Binary),
-        // Date/time types.
-        "date" => Ok(DataType::Date32),
-        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        _ => Err(ArrowError::ParseError(format!(
-            "Unsupported Redshift type: {external_type}"
-        ))),
-    }
+    hive_schema::Parser::new(external_type)
+        .parse()
+        .map_err(|e| {
+            ArrowError::ParseError(format!("Unsupported Redshift type: {external_type} ({e})"))
+        })
 }
 
 fn parse_array_type(
@@ -178,6 +153,19 @@ fn parse_array_type(
     let details = details
         .as_object()
         .ok_or_else(|| ArrowError::ParseError("Invalid array type details format".to_string()))?;
+    // When the array element is a composite type (`my_struct[]`), the schema query
+    // emits the element's attribute details so we can build a `Struct` here, rather
+    // than trying to resolve the bare composite type name.
+    if let Some(element_details) = details.get("element_details") {
+        if element_details.get("type").and_then(Value::as_str) == Some("composite") {
+            let inner_context = context.clone().with_type_details(element_details.clone());
+            let inner_type = parse_composite_type(&inner_context, variant)?;
+            return Ok(DataType::List(Arc::new(Field::new(
+                "item", inner_type, true,
+            ))));
+        }
+    }
+
     let element_type = details
         .get("element_type")
         .and_then(Value::as_str)
@@ -657,6 +645,64 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_array_of_composite_type() {
+        // An array whose element is a composite type carries `element_details`
+        // describing the struct fields; the array resolves to List<Struct>.
+        let context = ParseContext::new();
+        let composite_array = context.clone().with_type_details(json!({
+            "type": "array",
+            "element_type": "line_item",
+            "element_details": {
+                "type": "composite",
+                "attributes": [
+                    {"name": "sku", "type": "text"},
+                    {"name": "qty", "type": "integer"},
+                    {"name": "price", "type": "double precision"},
+                ]
+            }
+        }));
+
+        let expected = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(Fields::from(vec![
+                Field::new("sku", DataType::Utf8, true),
+                Field::new("qty", DataType::Int32, true),
+                Field::new("price", DataType::Float64, true),
+            ])),
+            true,
+        )));
+
+        assert_eq!(
+            parse_array_type(&composite_array, None).expect("composite array parses"),
+            expected
+        );
+
+        // Resolving through the top-level entry point (data_type == "array") must
+        // yield the same List<Struct>.
+        assert_eq!(
+            pg_data_type_to_arrow_type("array", &composite_array, None)
+                .expect("array data_type resolves"),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_parse_array_with_null_element_details_falls_back() {
+        // Non-composite element arrays emit `element_details` as JSON null; resolution
+        // must fall through to the scalar `element_type` path.
+        let context = ParseContext::new();
+        let scalar_array = context.clone().with_type_details(json!({
+            "type": "array",
+            "element_type": "integer",
+            "element_details": serde_json::Value::Null,
+        }));
+        assert_eq!(
+            parse_array_type(&scalar_array, None).expect("scalar array parses"),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+        );
+    }
+
+    #[test]
     fn test_parse_composite_type_extended() {
         let context = ParseContext::new();
         let simple_composite = context.clone().with_type_details(json!({
@@ -828,13 +874,56 @@ mod tests {
     }
 
     #[test]
+    fn test_redshift_external_complex_types_resolve() {
+        // Complex Hive types from the external catalog now resolve through the shared
+        // Hive parser (Redshift Spectrum serializes their values to JSON text, which the
+        // row path decodes into these Arrow types).
+        assert_eq!(
+            redshift("array<int>").expect("array<int>"),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+        );
+
+        let map_entries = Arc::new(Field::new_struct(
+            "entries",
+            vec![
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new("value", DataType::Int32, true)),
+            ],
+            false,
+        ));
+        assert_eq!(
+            redshift("map<string,int>").expect("map<string,int>"),
+            DataType::Map(map_entries, false)
+        );
+
+        assert_eq!(
+            redshift("struct<a:int>").expect("struct<a:int>"),
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]))
+        );
+
+        // The headline case: an array of structs (e.g. Spectrum line-item collections).
+        assert_eq!(
+            redshift("array<struct<shipdate:timestamp,price:decimal(10,2)>>")
+                .expect("array<struct<...>>"),
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new(
+                        "shipdate",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                        true,
+                    ),
+                    Field::new("price", DataType::Decimal128(10, 2), true),
+                ])),
+                true,
+            )))
+        );
+    }
+
+    #[test]
     fn test_redshift_external_unsupported_type_errors() {
-        // Complex Hive types (and genuinely unknown types) are still unsupported even
-        // under the Redshift variant, so they surface as errors rather than silently
+        // Genuinely unknown type names still surface as errors rather than silently
         // mapping to the wrong Arrow type.
-        assert!(redshift("array<int>").is_err());
-        assert!(redshift("map<string,int>").is_err());
-        assert!(redshift("struct<a:int>").is_err());
         assert!(redshift("totally_unknown_type").is_err());
     }
 }
