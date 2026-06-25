@@ -8,6 +8,7 @@ use crate::sql::arrow_sql_gen::postgres::schema::ParseContext;
 use crate::sql::db_connection_pool::postgrespool::ConnectionManager;
 use crate::util::handle_unsupported_type_error;
 use crate::util::schema::SchemaValidator;
+use crate::UnsupportedTypeAction;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -30,8 +31,7 @@ use futures::stream;
 use futures::StreamExt;
 
 use snafu::prelude::*;
-
-use crate::UnsupportedTypeAction;
+use tokio_postgres::Row;
 
 use super::AsyncDbConnection;
 use super::DbConnection;
@@ -94,6 +94,30 @@ SELECT
             FROM pg_type t2
             JOIN pg_type et ON t2.typelem = et.oid
             WHERE t2.oid = a.atttypid
+        ),
+        -- When the array element is a composite type, carry its attributes so the
+        -- array can be resolved to a List<Struct>. Null for non-composite elements.
+        'element_details', (
+            SELECT jsonb_build_object(
+                'type', 'composite',
+                'attributes', (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'name', a2.attname,
+                            'type', pg_catalog.format_type(a2.atttypid, a2.atttypmod)
+                        )
+                        ORDER BY a2.attnum
+                    )
+                    FROM pg_attribute a2
+                    WHERE a2.attrelid = et.typrelid
+                    AND a2.attnum > 0
+                    AND NOT a2.attisdropped
+                )
+            )
+            FROM pg_type t2
+            JOIN pg_type et ON t2.typelem = et.oid
+            WHERE t2.oid = a.atttypid
+            AND et.typtype = 'c'
         )
         )
     ELSE custom.type_details
@@ -111,6 +135,56 @@ WHERE ns.nspname = $1
 ORDER BY a.attnum;
 ";
 
+// Redshift does not materialize datashare objects into the local `pg_catalog`
+// (pg_class/pg_attribute return zero rows for tables consumed from a datashare), and
+// `CREATE EXTERNAL TABLE` objects (Redshift Spectrum tables backed by external
+// catalogs such as AWS Glue / Hive Metastore) are not in `pg_catalog` either.
+//
+// `svv_all_columns` is AWS's unified view: a union of `svv_redshift_columns` (local +
+// datashare/shared columns) and the external columns from all external tables, so a
+// single query covers local, datashare, and external tables. The view exposes no type
+// OIDs, so the array/enum/composite `type_details` path is unavailable — that is
+// acceptable because Redshift has no PostgreSQL arrays/enums/composites (semi-structured
+// data uses SUPER).
+//
+// Notes:
+// - `data_type` is the bare type name (e.g. `numeric`, `character varying`), NOT a
+//   formatted string — precision/scale/length live in separate columns. We rebuild the
+//   `numeric(p,s)` form from `numeric_precision`/`numeric_scale` so decimals keep their
+//   real precision instead of falling back to the default; character lengths are dropped
+//   because they don't affect the resulting Arrow `Utf8`/`LargeUtf8`. For external
+//   columns `data_type` is the catalog-reported type, which may use simplified Hive type
+//   names (e.g. `string`, `int`, `double`) — these are resolved leniently by
+//   `pg_data_type_to_arrow_type` when the variant is Redshift.
+// - `is_nullable` is normalized to the literal `YES`/`NO` expected by `get_schema`. It
+//   can be an empty string ("no information", common for external columns), which we
+//   treat as nullable — only an explicit `no`/`false` maps to `NO`.
+// - `database_name = current_database()` scopes to the connected database (the datashare
+//   consumer DB) so a schema/table that exists in multiple accessible databases doesn't
+//   yield duplicated columns.
+const REDSHIFT_SCHEMA_QUERY: &str = r#"
+SELECT
+    column_name,
+    CASE
+        WHEN lower(data_type) IN ('numeric', 'decimal') AND numeric_precision IS NOT NULL
+            THEN data_type || '(' || numeric_precision::varchar || ',' || COALESCE(numeric_scale, 0)::varchar || ')'
+        ELSE data_type
+    END AS data_type,
+    CASE WHEN lower(is_nullable) IN ('no', 'false') THEN 'NO' ELSE 'YES' END AS is_nullable,
+    CAST(NULL AS VARCHAR) AS type_details
+FROM svv_all_columns
+WHERE schema_name = $1
+    AND table_name = $2
+    AND database_name = current_database()
+ORDER BY ordinal_position;
+"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostgresVariant {
+    Default,
+    Redshift,
+}
+
 const SCHEMAS_QUERY: &str = "
 SELECT nspname AS schema_name
 FROM pg_namespace
@@ -122,6 +196,28 @@ const TABLES_QUERY: &str = "
 SELECT tablename
 FROM pg_tables
 WHERE schemaname = $1;
+";
+
+// Like `REDSHIFT_SCHEMA_QUERY`, these read from the unified `svv_all_*` system views so
+// that schemas/tables consumed from a datashare (absent from the local `pg_catalog`) and
+// external schemas/tables (Redshift Spectrum) are listed alongside the connected
+// database's own schemas/tables. `svv_all_schemas`/`svv_all_tables` are AWS's unions of
+// the `svv_redshift_*` views with the external schemas/tables. `current_database()`
+// scopes results to the connected (datashare consumer) database.
+const REDSHIFT_SCHEMAS_QUERY: &str = "
+SELECT schema_name
+FROM svv_all_schemas
+WHERE database_name = current_database()
+  AND schema_name NOT IN ('pg_catalog', 'information_schema')
+  AND schema_name NOT LIKE 'pg_temp_%'
+  AND schema_name NOT LIKE 'pg_toast%';
+";
+
+const REDSHIFT_TABLES_QUERY: &str = "
+SELECT table_name
+FROM svv_all_tables
+WHERE database_name = current_database()
+  AND schema_name = $1;
 ";
 
 #[derive(Debug, Snafu)]
@@ -212,23 +308,33 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
     }
 
     async fn tables(&self, schema: &str) -> Result<Vec<String>, super::Error> {
-        let rows = self
-            .conn
-            .query(TABLES_QUERY, &[&schema])
-            .await
-            .map_err(|e| super::Error::UnableToGetTables {
+        let query = match self.get_variant().await? {
+            PostgresVariant::Default => TABLES_QUERY,
+            PostgresVariant::Redshift => REDSHIFT_TABLES_QUERY,
+        };
+
+        let rows = self.conn.query(query, &[&schema]).await.map_err(|e| {
+            super::Error::UnableToGetTables {
                 source: Box::new(e),
-            })?;
+            }
+        })?;
 
         Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
     }
 
     async fn schemas(&self) -> Result<Vec<String>, super::Error> {
-        let rows = self.conn.query(SCHEMAS_QUERY, &[]).await.map_err(|e| {
-            super::Error::UnableToGetSchemas {
-                source: Box::new(e),
-            }
-        })?;
+        let query = match self.get_variant().await? {
+            PostgresVariant::Default => SCHEMAS_QUERY,
+            PostgresVariant::Redshift => REDSHIFT_SCHEMAS_QUERY,
+        };
+
+        let rows =
+            self.conn
+                .query(query, &[])
+                .await
+                .map_err(|e| super::Error::UnableToGetSchemas {
+                    source: Box::new(e),
+                })?;
 
         Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
     }
@@ -237,33 +343,17 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let table_name = table_reference.table();
-        let schema_name = table_reference.schema().unwrap_or("public");
+        let (variant, rows) = self.query_variant_and_schema(table_reference).await?;
 
-        let rows = match self
-            .conn
-            .query(SCHEMA_QUERY, &[&schema_name, &table_name])
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                if let Some(error_source) = e.source() {
-                    if let Some(pg_error) =
-                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
-                    {
-                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
-                            return Err(super::Error::UndefinedTable {
-                                source: Box::new(pg_error.clone()),
-                                table_name: table_reference.to_string(),
-                            });
-                        }
-                    }
-                }
-                return Err(super::Error::UnableToGetSchema {
-                    source: Box::new(e),
-                });
-            }
-        };
+        // Native inference can return zero rows even though the table exists and is
+        // queryable — e.g. Redshift datashare objects that aren't represented in the
+        // catalog views we query. Fall back to inferring the schema from a sample row.
+        if rows.is_empty() {
+            tracing::warn!(
+                "Native PostgreSQL schema inference returned no data. Inferring schema from table data rows."
+            );
+            return self.infer_schema_from_data(table_reference).await;
+        }
 
         let mut fields = Vec::new();
         for row in rows {
@@ -271,7 +361,16 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
             let pg_type = row.get::<usize, String>(1);
             let nullable_str = row.get::<usize, String>(2);
             let nullable = nullable_str == "YES";
-            let type_details = row.get::<usize, Option<serde_json::Value>>(3);
+
+            let type_details = match variant {
+                PostgresVariant::Default => row.get::<usize, Option<serde_json::Value>>(3),
+                // Redshift has no json* functions, so we make and parse the same value struct
+                // from a text column instead.
+                PostgresVariant::Redshift => row
+                    .get::<usize, Option<&str>>(3)
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
+            };
+
             let mut context =
                 ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
 
@@ -279,7 +378,8 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
                 context = context.with_type_details(type_details);
             };
 
-            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context) else {
+            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context, Some(variant))
+            else {
                 handle_unsupported_type_error(
                     self.unsupported_type_action,
                     super::Error::UnsupportedDataType {
@@ -362,5 +462,115 @@ impl PostgresConnection {
     pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
         self.unsupported_type_action = action;
         self
+    }
+
+    pub async fn get_variant(&self) -> Result<PostgresVariant, super::Error> {
+        let row = self
+            .conn
+            .query_one("SELECT version()", &[])
+            .await
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
+
+        let version: String = row
+            .try_get(0)
+            .map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?;
+
+        let variant = if version.contains("Redshift") {
+            PostgresVariant::Redshift
+        } else {
+            PostgresVariant::Default
+        };
+
+        Ok(variant)
+    }
+
+    async fn query_variant_and_schema(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
+        let table_name = table_reference.table();
+        let schema_name = table_reference.schema().unwrap_or("public");
+
+        let variant = self.get_variant().await?;
+
+        let query = match variant {
+            PostgresVariant::Default => SCHEMA_QUERY,
+            PostgresVariant::Redshift => REDSHIFT_SCHEMA_QUERY,
+        };
+
+        let rows = self
+            .conn
+            .query(query, &[&schema_name, &table_name])
+            .await
+            .map_err(|e| {
+                if let Some(error_source) = e.source() {
+                    if let Some(pg_error) =
+                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
+                    {
+                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
+                            return super::Error::UndefinedTable {
+                                source: Box::new(pg_error.clone()),
+                                table_name: table_reference.to_string(),
+                            };
+                        }
+                    }
+                }
+                super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                }
+            });
+
+        Ok((variant, rows?))
+    }
+
+    /// Fallback schema inference used when native (catalog-based) inference returns no
+    /// rows for a table that is nonetheless queryable. Reads a single row and derives the
+    /// Arrow schema from its column metadata via `rows_to_arrow`.
+    ///
+    /// Note: an empty table yields an empty schema, since `rows_to_arrow` reads column
+    /// types from the first returned row.
+    async fn infer_schema_from_data(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<SchemaRef, super::Error> {
+        let rows = self
+            .conn
+            .query(&format!("SELECT * FROM {table_reference} LIMIT 1"), &[])
+            .await
+            .map_err(|e| {
+                if let Some(error_source) = e.source() {
+                    if let Some(pg_error) =
+                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
+                    {
+                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
+                            return super::Error::UndefinedTable {
+                                source: Box::new(pg_error.clone()),
+                                table_name: table_reference.to_string(),
+                            };
+                        }
+                    }
+                }
+                super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                }
+            })?;
+
+        if rows.is_empty() {
+            tracing::warn!(
+                "Schema inference from table data rows returned no rows. The schema for table '{table_reference}' is empty.",
+            );
+            return Ok(Arc::new(Schema::empty()));
+        }
+
+        let rec =
+            rows_to_arrow(rows.as_slice(), &None).map_err(|e| super::Error::UnableToGetSchema {
+                source: Box::new(PostgresError::ConversionError { source: e }),
+            })?;
+
+        Ok(rec.schema())
     }
 }

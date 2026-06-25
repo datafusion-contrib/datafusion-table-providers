@@ -19,7 +19,7 @@ arrow-schema = { workspace = true, optional = true, features = ["serde"] }
 arrow-json = { workspace = true }
 arrow-odbc = { workspace = true, optional = true }
 
-datafusion = { workspace = true, default-features = false, features = ["sql"]}
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-expr = { workspace = true, optional = true }
 datafusion-federation = { workspace = true, features = [
   "sql",
@@ -57,6 +57,7 @@ futures = "0.3"
 geo-types = "0.7"
 itertools = "0.14"
 mongodb = { version = "3.6.0", features = ["openssl-tls"], optional = true }
+logos = { version = "0.16", optional = true }
 mysql_async = { version = "0.36", features = [
   "native-tls-tls",
   "chrono",
@@ -166,16 +167,17 @@ postgres = [
   "dep:pem",
   "dep:async-stream",
   "dep:arrow-schema",
+  "dep:logos",
 ]
 postgres-federation = ["postgres", "federation"]
 sqlite = ["dep:rusqlite", "dep:tokio-rusqlite", "dep:arrow-schema"]
 sqlite-federation = ["sqlite", "federation"]
 sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 adbc = [
-  "dep:adbc_driver_manager", 
-  "dep:adbc_core", 
-  "dep:r2d2_adbc", 
-  "dep:async-stream", 
+  "dep:adbc_driver_manager",
+  "dep:adbc_core",
+  "dep:r2d2_adbc",
+  "dep:async-stream",
   "dep:arrow-schema",
   "dep:r2d2",
 ]

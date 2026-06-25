@@ -198,6 +198,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_json_type(container_manager.port).await;
     test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
     test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
+    test_postgres_composite_array_list_struct(container_manager.port).await;
     test_postgres_sort_limit(container_manager.port).await;
 }
 
@@ -643,6 +644,155 @@ async fn test_postgres_json_list_struct_projected(port: usize, sql_type: &str) {
     assert_eq!(ids.value(1), "u2");
     assert_eq!(emails.value(0), "one@example.com");
     assert_eq!(emails.value(1), "two@example.com");
+}
+
+/// Reads a native PostgreSQL array-of-composite column (`composite_type[]`) back as an
+/// Arrow `List<Struct>`, including the empty-array and NULL cases.
+async fn test_postgres_composite_array_list_struct(port: usize) {
+    let table_name = "composite_array_list_struct_values".to_string();
+
+    let create_type_stmt = "
+        CREATE TYPE line_item AS (
+            sku TEXT,
+            qty INT,
+            price DOUBLE PRECISION
+        );";
+    let create_table_stmt = format!(
+        "CREATE TABLE {table_name} (
+            id INT PRIMARY KEY,
+            items line_item[]
+        );"
+    );
+    let insert_table_stmt = format!(
+        "INSERT INTO {table_name} (id, items) VALUES
+            (1, ARRAY[ROW('a', 2, 9.99), ROW('b', 1, 4.50)]::line_item[]),
+            (2, ARRAY[]::line_item[]),
+            (3, NULL);"
+    );
+
+    let ctx = SessionContext::new();
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    // The container is shared across the module (`#[fixture] #[once]`), so make setup
+    // idempotent: drop any artifacts left by a prior run before recreating them. The
+    // table must go first — it depends on the composite type.
+    let _ = db_conn
+        .conn
+        .execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[])
+        .await
+        .expect("Existing table should be dropped");
+    let _ = db_conn
+        .conn
+        .execute("DROP TYPE IF EXISTS line_item;", &[])
+        .await
+        .expect("Existing composite type should be dropped");
+
+    let _ = db_conn
+        .conn
+        .execute(create_type_stmt, &[])
+        .await
+        .expect("Postgres composite type should be created");
+    let _ = db_conn
+        .conn
+        .execute(&create_table_stmt, &[])
+        .await
+        .expect("Postgres table should be created");
+    let _ = db_conn
+        .conn
+        .execute(&insert_table_stmt, &[])
+        .await
+        .expect("Postgres table data should be inserted");
+
+    let item_struct = DataType::Struct(
+        vec![
+            Field::new("sku", DataType::Utf8, true),
+            Field::new("qty", DataType::Int32, true),
+            Field::new("price", DataType::Float64, true),
+        ]
+        .into(),
+    );
+    let expected_items_type = DataType::List(Arc::new(Field::new("item", item_struct, true)));
+
+    // Register via `SqlTable::new` (no explicit schema) so `get_schema` auto-infers the
+    // composite array as List<Struct> from the catalog, exercising the schema SQL +
+    // `parse_array_type` composite-element path end to end.
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name.clone(), None)
+        .await
+        .expect("SqlTable should infer schema");
+
+    let inferred = table
+        .schema()
+        .field_with_name("items")
+        .expect("items field inferred")
+        .data_type()
+        .clone();
+    assert_eq!(
+        inferred, expected_items_type,
+        "composite array should auto-infer to List<Struct>"
+    );
+
+    ctx.register_table(table_name.as_str(), Arc::new(table))
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql(&format!("SELECT id, items FROM {table_name} ORDER BY id"))
+        .await
+        .expect("DataFrame should be created from query");
+
+    let record_batch = df.collect().await.expect("RecordBatch should be collected");
+    assert_eq!(record_batch.len(), 1);
+    assert_eq!(record_batch[0].num_rows(), 3);
+
+    let items_col = record_batch[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .expect("items should decode to ListArray");
+
+    // row 0: two structs, row 1: empty list (not null), row 2: NULL.
+    assert!(!items_col.is_null(0));
+    assert_eq!(items_col.value_length(0), 2);
+    assert!(!items_col.is_null(1));
+    assert_eq!(items_col.value_length(1), 0);
+    assert!(items_col.is_null(2));
+
+    let row_zero = items_col.value(0);
+    let structs = row_zero
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("list values should be StructArray");
+
+    let skus = structs
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("sku field should be StringArray");
+    let qtys = structs
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow::array::Int32Array>()
+        .expect("qty field should be Int32Array");
+    let prices = structs
+        .column(2)
+        .as_any()
+        .downcast_ref::<arrow::array::Float64Array>()
+        .expect("price field should be Float64Array");
+
+    assert_eq!(skus.value(0), "a");
+    assert_eq!(skus.value(1), "b");
+    assert_eq!(qtys.value(0), 2);
+    assert_eq!(qtys.value(1), 1);
+    assert!((prices.value(0) - 9.99).abs() < f64::EPSILON);
+    assert!((prices.value(1) - 4.50).abs() < f64::EPSILON);
 }
 
 async fn test_postgres_jsonb_list_struct_with_projected_schema(port: usize) {
