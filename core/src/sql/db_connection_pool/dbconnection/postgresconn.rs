@@ -135,54 +135,72 @@ WHERE ns.nspname = $1
 ORDER BY a.attnum;
 ";
 
-// Redshift does not materialize datashare objects into the local `pg_catalog`
-// (pg_class/pg_attribute return zero rows for tables consumed from a datashare), and
-// `CREATE EXTERNAL TABLE` objects (Redshift Spectrum tables backed by external
-// catalogs such as AWS Glue / Hive Metastore) are not in `pg_catalog` either.
+// Redshift schema inference uses `SHOW COLUMNS FROM TABLE <db>.<schema>.<table>` rather
+// than the `svv_*` catalog views. The catalog views truncate `data_type` at the source
+// (`svv_all_columns.data_type` is `varchar(128)`; `svv_external_columns.external_type` is
+// `text`, i.e. `varchar(256)` on Redshift), which corrupts deeply nested Spectrum complex
+// types (`array<struct<...>>`) — and casting can't recover characters already dropped
+// inside the view. `SHOW COLUMNS` returns the full, untruncated type.
 //
-// `svv_all_columns` is AWS's unified view: a union of `svv_redshift_columns` (local +
-// datashare/shared columns) and the external columns from all external tables, so a
-// single query covers local, datashare, and external tables. The view exposes no type
-// OIDs, so the array/enum/composite `type_details` path is unavailable — that is
-// acceptable because Redshift has no PostgreSQL arrays/enums/composites (semi-structured
-// data uses SUPER).
-//
-// Notes:
-// - `data_type` is the bare type name (e.g. `numeric`, `character varying`), NOT a
-//   formatted string — precision/scale/length live in separate columns. We rebuild the
-//   `numeric(p,s)` form from `numeric_precision`/`numeric_scale` so decimals keep their
-//   real precision instead of falling back to the default; character lengths are dropped
-//   because they don't affect the resulting Arrow `Utf8`/`LargeUtf8`. For external
-//   columns `data_type` is the catalog-reported type, which may use simplified Hive type
-//   names (e.g. `string`, `int`, `double`) — these are resolved leniently by
-//   `pg_data_type_to_arrow_type` when the variant is Redshift.
-// - `is_nullable` is normalized to the literal `YES`/`NO` expected by `get_schema`. It
-//   can be an empty string ("no information", common for external columns), which we
-//   treat as nullable — only an explicit `no`/`false` maps to `NO`.
-// - `database_name = current_database()` scopes to the connected database (the datashare
-//   consumer DB) so a schema/table that exists in multiple accessible databases doesn't
-//   yield duplicated columns.
-const REDSHIFT_SCHEMA_QUERY: &str = r#"
-SELECT
-    column_name,
-    CASE
-        WHEN lower(data_type) IN ('numeric', 'decimal') AND numeric_precision IS NOT NULL
-            THEN data_type || '(' || numeric_precision::varchar || ',' || COALESCE(numeric_scale, 0)::varchar || ')'
-        ELSE data_type
-    END AS data_type,
-    CASE WHEN lower(is_nullable) IN ('no', 'false') THEN 'NO' ELSE 'YES' END AS is_nullable,
-    CAST(NULL AS VARCHAR) AS type_details
-FROM svv_all_columns
-WHERE schema_name = $1
-    AND table_name = $2
-    AND database_name = current_database()
-ORDER BY ordinal_position;
-"#;
+// `SHOW COLUMNS` is a standalone command: it can't take bind parameters or be wrapped in
+// a CTE/subquery, so we interpolate quoted identifiers (see `quote_pg_identifier`) and do
+// the `numeric(p,s)` rebuild and `is_nullable` normalization in Rust instead of SQL (see
+// `redshift_columns`). It covers local, datashare, and external tables.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostgresVariant {
     Default,
     Redshift,
+}
+
+/// A column description normalized across the per-variant schema-inference queries, so
+/// `get_schema` can build Arrow fields without caring how the metadata was obtained.
+struct ColumnDef {
+    name: String,
+    /// Fully formatted SQL type string (e.g. `numeric(10,2)`, `array<struct<...>>`).
+    data_type: String,
+    nullable: bool,
+    type_details: Option<serde_json::Value>,
+}
+
+/// Quotes a SQL identifier for safe interpolation into a statement that can't use bind
+/// parameters (e.g. Redshift `SHOW COLUMNS`), doubling any embedded double quotes.
+fn quote_pg_identifier(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// Reads an optional integer column without assuming its wire integer width
+/// (`SHOW COLUMNS` may report `numeric_precision`/`numeric_scale` as int2/int4/int8).
+fn row_opt_int(row: &Row, column: &str) -> Option<i64> {
+    if let Ok(v) = row.try_get::<_, Option<i32>>(column) {
+        return v.map(i64::from);
+    }
+    if let Ok(v) = row.try_get::<_, Option<i64>>(column) {
+        return v;
+    }
+    if let Ok(v) = row.try_get::<_, Option<i16>>(column) {
+        return v.map(i64::from);
+    }
+    None
+}
+
+/// Maps an error from the catalog schema query into the right `super::Error`, surfacing a
+/// missing relation as [`super::Error::UndefinedTable`].
+fn map_schema_query_error(
+    e: tokio_postgres::Error,
+    table_reference: &TableReference,
+) -> super::Error {
+    if let Some(db_error) = e.as_db_error() {
+        if db_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
+            return super::Error::UndefinedTable {
+                source: Box::new(db_error.clone()),
+                table_name: table_reference.to_string(),
+            };
+        }
+    }
+    super::Error::UnableToGetSchema {
+        source: Box::new(e),
+    }
 }
 
 const SCHEMAS_QUERY: &str = "
@@ -198,12 +216,14 @@ FROM pg_tables
 WHERE schemaname = $1;
 ";
 
-// Like `REDSHIFT_SCHEMA_QUERY`, these read from the unified `svv_all_*` system views so
-// that schemas/tables consumed from a datashare (absent from the local `pg_catalog`) and
+// Schema/table discovery reads from the unified `svv_all_*` system views so that
+// schemas/tables consumed from a datashare (absent from the local `pg_catalog`) and
 // external schemas/tables (Redshift Spectrum) are listed alongside the connected
 // database's own schemas/tables. `svv_all_schemas`/`svv_all_tables` are AWS's unions of
 // the `svv_redshift_*` views with the external schemas/tables. `current_database()`
-// scopes results to the connected (datashare consumer) database.
+// scopes results to the connected (datashare consumer) database. (Per-column type
+// inference, by contrast, uses `SHOW COLUMNS` — see `redshift_columns` — because the
+// `svv_*` views truncate `data_type`.)
 const REDSHIFT_SCHEMAS_QUERY: &str = "
 SELECT schema_name
 FROM svv_all_schemas
@@ -343,12 +363,12 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, super::Error> {
-        let (variant, rows) = self.query_variant_and_schema(table_reference).await?;
+        let (variant, columns) = self.query_variant_and_schema(table_reference).await?;
 
         // Native inference can return zero rows even though the table exists and is
         // queryable — e.g. Redshift datashare objects that aren't represented in the
         // catalog views we query. Fall back to inferring the schema from a sample row.
-        if rows.is_empty() {
+        if columns.is_empty() {
             tracing::warn!(
                 "Native PostgreSQL schema inference returned no data. Inferring schema from table data rows."
             );
@@ -356,42 +376,29 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         }
 
         let mut fields = Vec::new();
-        for row in rows {
-            let column_name = row.get::<usize, String>(0);
-            let pg_type = row.get::<usize, String>(1);
-            let nullable_str = row.get::<usize, String>(2);
-            let nullable = nullable_str == "YES";
-
-            let type_details = match variant {
-                PostgresVariant::Default => row.get::<usize, Option<serde_json::Value>>(3),
-                // Redshift has no json* functions, so we make and parse the same value struct
-                // from a text column instead.
-                PostgresVariant::Redshift => row
-                    .get::<usize, Option<&str>>(3)
-                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
-            };
-
+        for column in columns {
             let mut context =
                 ParseContext::new().with_unsupported_type_action(self.unsupported_type_action);
 
-            if let Some(type_details) = type_details {
+            if let Some(type_details) = column.type_details {
                 context = context.with_type_details(type_details);
             };
 
-            let Ok(arrow_type) = pg_data_type_to_arrow_type(&pg_type, &context, Some(variant))
+            let Ok(arrow_type) =
+                pg_data_type_to_arrow_type(&column.data_type, &context, Some(variant))
             else {
                 handle_unsupported_type_error(
                     self.unsupported_type_action,
                     super::Error::UnsupportedDataType {
-                        data_type: pg_type.to_string(),
-                        field_name: column_name.to_string(),
+                        data_type: column.data_type.clone(),
+                        field_name: column.name.clone(),
                     },
                 )?;
 
                 continue;
             };
 
-            fields.push(Field::new(column_name, arrow_type, nullable));
+            fields.push(Field::new(column.name, arrow_type, column.nullable));
         }
 
         let schema = Arc::new(Schema::new(fields));
@@ -491,40 +498,135 @@ impl PostgresConnection {
     async fn query_variant_and_schema(
         &self,
         table_reference: &TableReference,
-    ) -> Result<(PostgresVariant, Vec<Row>), super::Error> {
+    ) -> Result<(PostgresVariant, Vec<ColumnDef>), super::Error> {
         let table_name = table_reference.table();
         let schema_name = table_reference.schema().unwrap_or("public");
 
         let variant = self.get_variant().await?;
 
-        let query = match variant {
-            PostgresVariant::Default => SCHEMA_QUERY,
-            PostgresVariant::Redshift => REDSHIFT_SCHEMA_QUERY,
+        let columns = match variant {
+            PostgresVariant::Default => {
+                let rows = self
+                    .conn
+                    .query(SCHEMA_QUERY, &[&schema_name, &table_name])
+                    .await
+                    .map_err(|e| map_schema_query_error(e, table_reference))?;
+
+                rows.iter()
+                    .map(|row| ColumnDef {
+                        name: row.get::<usize, String>(0),
+                        // `data_type` is already a formatted type string via
+                        // `pg_catalog.format_type` (e.g. `numeric(10,2)`).
+                        data_type: row.get::<usize, String>(1),
+                        nullable: row.get::<usize, String>(2) == "YES",
+                        type_details: row.get::<usize, Option<serde_json::Value>>(3),
+                    })
+                    .collect()
+            }
+            PostgresVariant::Redshift => {
+                self.redshift_columns(table_reference.catalog(), schema_name, table_name)
+                    .await?
+            }
         };
 
-        let rows = self
-            .conn
-            .query(query, &[&schema_name, &table_name])
-            .await
-            .map_err(|e| {
-                if let Some(error_source) = e.source() {
-                    if let Some(pg_error) =
-                        error_source.downcast_ref::<tokio_postgres::error::DbError>()
-                    {
-                        if pg_error.code() == &tokio_postgres::error::SqlState::UNDEFINED_TABLE {
-                            return super::Error::UndefinedTable {
-                                source: Box::new(pg_error.clone()),
-                                table_name: table_reference.to_string(),
-                            };
-                        }
+        Ok((variant, columns))
+    }
+
+    /// Infers a Redshift table's columns via `SHOW COLUMNS FROM TABLE`, which (unlike the
+    /// `svv_*` catalog views) returns the full, untruncated `data_type` — essential for
+    /// deeply nested Spectrum complex types. It can't take bind parameters or be composed,
+    /// so identifiers are quoted/interpolated and the `numeric(p,s)` rebuild + nullable
+    /// normalization happen here in Rust rather than in SQL.
+    async fn redshift_columns(
+        &self,
+        catalog: Option<&str>,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<Vec<ColumnDef>, super::Error> {
+        // `SHOW COLUMNS` needs a fully-qualified 3-part name including the database. Use
+        // the catalog from the table reference when the caller fully-qualified it;
+        // otherwise scope to the connected database (matching the previous
+        // `current_database()` filter).
+        let database_name: String = match catalog {
+            Some(catalog) => catalog.to_string(),
+            None => self
+                .conn
+                .query_one("SELECT current_database()", &[])
+                .await
+                .map_err(|e| super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                })?
+                .try_get(0)
+                .map_err(|e| super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                })?,
+        };
+
+        let sql = format!(
+            "SHOW COLUMNS FROM TABLE {}.{}.{}",
+            quote_pg_identifier(&database_name),
+            quote_pg_identifier(schema_name),
+            quote_pg_identifier(table_name),
+        );
+
+        let rows = match self.conn.query(&sql, &[]).await {
+            Ok(rows) => rows,
+            // `SHOW COLUMNS` raises `UNDEFINED_TABLE` for relations it can't resolve in the
+            // target database (e.g. cross-database datashare objects). Treat only that as a
+            // miss and fall back to data-based inference — matching the catalog path's
+            // empty-result behavior — while surfacing any other error (permissions, syntax,
+            // connectivity) instead of silently hiding it.
+            Err(e)
+                if e.as_db_error().map(tokio_postgres::error::DbError::code)
+                    == Some(&tokio_postgres::error::SqlState::UNDEFINED_TABLE) =>
+            {
+                tracing::debug!(
+                    "Redshift SHOW COLUMNS: {schema_name}.{table_name} not found in {database_name}; falling back to data inference"
+                );
+                return Ok(Vec::new());
+            }
+            Err(e) => {
+                return Err(super::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                })
+            }
+        };
+
+        let columns = rows
+            .iter()
+            .map(|row| {
+                let name: String = row.get("column_name");
+                let mut data_type: String = row.get("data_type");
+
+                // `SHOW COLUMNS` reports numeric/decimal as the bare type with precision
+                // and scale in separate columns; rebuild the formatted `numeric(p,s)`.
+                let lowered = data_type.to_lowercase();
+                if lowered == "numeric" || lowered == "decimal" {
+                    if let Some(precision) = row_opt_int(row, "numeric_precision") {
+                        let scale = row_opt_int(row, "numeric_scale").unwrap_or(0);
+                        data_type = format!("{data_type}({precision},{scale})");
                     }
                 }
-                super::Error::UnableToGetSchema {
-                    source: Box::new(e),
-                }
-            });
 
-        Ok((variant, rows?))
+                // Normalize nullability: only an explicit no/false is non-nullable; an
+                // empty/absent value (common for external columns) is treated as nullable.
+                let nullable = row
+                    .try_get::<_, Option<String>>("is_nullable")
+                    .ok()
+                    .flatten()
+                    .map(|v| !matches!(v.to_lowercase().as_str(), "no" | "false"))
+                    .unwrap_or(true);
+
+                ColumnDef {
+                    name,
+                    data_type,
+                    nullable,
+                    type_details: None,
+                }
+            })
+            .collect();
+
+        Ok(columns)
     }
 
     /// Fallback schema inference used when native (catalog-based) inference returns no
