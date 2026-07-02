@@ -4,9 +4,9 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, LogicalTableSour
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::unparser::Unparser;
+use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
