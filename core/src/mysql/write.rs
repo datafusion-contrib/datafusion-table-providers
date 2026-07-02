@@ -15,7 +15,6 @@ use datafusion::{
 use futures::StreamExt;
 use mysql_async::TxOpts;
 use snafu::ResultExt;
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -46,10 +45,6 @@ impl MySQLTableWriter {
 
 #[async_trait]
 impl TableProvider for MySQLTableWriter {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.read_provider.schema()
     }
@@ -98,10 +93,6 @@ pub struct MySQLDataSink {
 
 #[async_trait]
 impl DataSink for MySQLDataSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }

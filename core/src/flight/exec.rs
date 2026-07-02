@@ -17,7 +17,6 @@
 
 //! Execution plan for reading flights from Arrow Flight services
 
-use std::any::Any;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
@@ -286,10 +285,6 @@ impl DisplayAs for FlightExec {
 impl ExecutionPlan for FlightExec {
     fn name(&self) -> &str {
         "FlightExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

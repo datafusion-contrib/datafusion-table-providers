@@ -1,5 +1,5 @@
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use crate::duckdb::DuckDB;
 use crate::sql::db_connection_pool::duckdbpool::DuckDbConnectionPool;
@@ -135,10 +135,6 @@ impl DuckDBTableWriter {
 
 #[async_trait]
 impl TableProvider for DuckDBTableWriter {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.read_provider.schema()
     }
@@ -194,10 +190,6 @@ pub(crate) struct DuckDBDataSink {
 
 #[async_trait]
 impl DataSink for DuckDBDataSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }

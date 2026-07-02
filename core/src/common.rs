@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::sql::db_connection_pool::dbconnection::{get_schemas, get_tables};
 use crate::sql::db_connection_pool::DbConnectionPool;
@@ -38,10 +38,6 @@ impl DatabaseCatalogProvider {
 }
 
 impl CatalogProvider for DatabaseCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.schemas.iter().map(|s| s.key().clone()).collect()
     }
@@ -74,10 +70,6 @@ impl<T, P: 'static> DatabaseSchemaProvider<T, P> {
 
 #[async_trait]
 impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables.clone()
     }

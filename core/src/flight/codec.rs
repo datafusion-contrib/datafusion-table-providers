@@ -52,7 +52,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> datafusion::common::Result<()> {
-        if let Some(flight) = node.as_any().downcast_ref::<FlightExec>() {
+        if let Some(flight) = node.downcast_ref::<FlightExec>() {
             let mut bytes = serde_json::to_vec(flight.config()).map_err(to_df_err)?;
             buf.append(&mut bytes);
             Ok(())

@@ -35,7 +35,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use snafu::ResultExt;
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
@@ -132,10 +132,6 @@ where
     D: Database + Send + 'static,
     D::ConnectionType: Connection + Send + Sync,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.read_provider.schema()
     }
@@ -221,10 +217,6 @@ where
     D: Database + Send + 'static,
     D::ConnectionType: Connection + Send + Sync,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }
