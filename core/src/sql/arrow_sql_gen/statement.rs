@@ -14,8 +14,9 @@ use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,
     IntoIndexColumn, Keyword, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder, Query,
-    QueryBuilder, SeaRc, SimpleExpr, SqliteQueryBuilder, Table, TableRef,
+    QueryBuilder, SimpleExpr, SqliteQueryBuilder, Table, TableRef,
 };
+use sea_query::{ExprTrait, IntoTableRef};
 use snafu::Snafu;
 use std::{str::FromStr, sync::Arc};
 use time::{OffsetDateTime, PrimitiveDateTime};
@@ -1020,7 +1021,7 @@ impl<'a> InsertBuilder<'a> {
                             let mut params_vec = Vec::new();
                             for param_value in &param_values {
                                 let mut params_str = String::new();
-                                query_builder.prepare_simple_expr(param_value, &mut params_str);
+                                query_builder.prepare_expr(param_value, &mut params_str);
                                 params_vec.push(params_str);
                             }
 
@@ -1116,24 +1117,17 @@ impl<'a> InsertBuilder<'a> {
     }
 }
 
-fn table_reference_to_sea_table_ref(table: &TableReference) -> TableRef {
+pub fn table_reference_to_sea_table_ref(table: &TableReference) -> TableRef {
     match table {
-        TableReference::Bare { table } => {
-            TableRef::Table(SeaRc::new(Alias::new(table.to_string())))
+        TableReference::Bare { table } => table.to_string().into_table_ref(),
+        TableReference::Partial { schema, table } => {
+            (schema.to_string(), table.to_string()).into_table_ref()
         }
-        TableReference::Partial { schema, table } => TableRef::SchemaTable(
-            SeaRc::new(Alias::new(schema.to_string())),
-            SeaRc::new(Alias::new(table.to_string())),
-        ),
         TableReference::Full {
             catalog,
             schema,
             table,
-        } => TableRef::DatabaseSchemaTable(
-            SeaRc::new(Alias::new(catalog.to_string())),
-            SeaRc::new(Alias::new(schema.to_string())),
-            SeaRc::new(Alias::new(table.to_string())),
-        ),
+        } => (catalog.to_string(), schema.to_string(), table.to_string()).into_table_ref(),
     }
 }
 
