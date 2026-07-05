@@ -37,7 +37,7 @@ arrow-flight = { version = "58.0", features = [
 arrow-ipc = { version = "58.0" }
 arrow-schema = { version = "58.0", features = ["serde"] }
 arrow-json = "58.0"
-arrow-odbc = { version = "23.1" }
+arrow-odbc = { version = "25.2" }
 datafusion = { version = "53.0", default-features = false }
 datafusion-expr = { version = "53.0" }
 datafusion-federation = { version = "0.5.3" }
