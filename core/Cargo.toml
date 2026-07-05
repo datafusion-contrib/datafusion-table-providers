@@ -112,7 +112,7 @@ r2d2_adbc = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0"
-bollard = "0.20"
+bollard = "=0.19.4"
 geozero = { version = "0.15.1", features = ["with-wkb"] }
 insta = { version = "1.46.0", features = ["filters"] }
 prost = { version = "=0.14.3" }

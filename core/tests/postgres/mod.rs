@@ -1,14 +1,14 @@
 use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
 use arrow::{
     array::{
-        Array, Decimal128Array, Decimal128Builder, ListArray, ListBuilder, RecordBatch,
+        Array, Decimal128Array, Decimal128Builder, Int32Array, ListArray, ListBuilder, RecordBatch,
         StringArray, StructArray,
     },
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
+use datafusion::{catalog::TableProvider, execution::context::SessionContext};
 use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 use datafusion::{
     common::{Constraints, ToDFSchema},
@@ -239,7 +239,7 @@ async fn test_postgres_sort_limit(port: usize) {
         .expect("INSERT should succeed");
 
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, "sort_limit_test", None)
+    let table = SqlTable::new("postgres", &sqltable_pool, "sort_limit_test")
         .await
         .expect("Table should be created");
     ctx.register_table("sort_limit_test", Arc::new(table))
@@ -725,7 +725,7 @@ async fn test_postgres_composite_array_list_struct(port: usize) {
     // composite array as List<Struct> from the catalog, exercising the schema SQL +
     // `parse_array_type` composite-element path end to end.
     let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
-    let table = SqlTable::new("postgres", &sqltable_pool, table_name.clone(), None)
+    let table = SqlTable::new("postgres", &sqltable_pool, table_name.clone())
         .await
         .expect("SqlTable should infer schema");
 

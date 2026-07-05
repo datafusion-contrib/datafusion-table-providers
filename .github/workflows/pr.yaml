@@ -144,6 +144,10 @@ jobs:
           dbc install sqlite
           dbc install duckdb
 
+      - name: Compile integration tests
+        run: |
+          cargo test --no-run --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,adbc
+
       - name: Run tests
         run: make test
 
