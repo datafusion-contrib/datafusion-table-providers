@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-python"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "arrow-flight",
