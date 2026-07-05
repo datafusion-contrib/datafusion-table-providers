@@ -71,7 +71,7 @@ impl ClickHouseConnectionPool {
                 }
                 key if key.starts_with("option_") => {
                     let opt = &key["option_".len()..];
-                    client = client.with_option(opt, value);
+                    client = client.with_setting(opt, value);
                 }
                 key if key.starts_with("header_") => {
                     let header = &key["header_".len()..];

@@ -20,7 +20,7 @@ members = ["core", "python"]
 resolver = "2"
 
 [workspace.package]
-version = "0.11.0"
+version = "0.11.2"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
@@ -37,7 +37,7 @@ arrow-flight = { version = "58.0", features = [
 arrow-ipc = { version = "58.0" }
 arrow-schema = { version = "58.0", features = ["serde"] }
 arrow-json = "58.0"
-arrow-odbc = { version = "23.1" }
+arrow-odbc = { version = "25.2" }
 datafusion = { version = "54.0", default-features = false }
 datafusion-expr = { version = "54.0" }
 datafusion-federation = { version = "0.5.5" }

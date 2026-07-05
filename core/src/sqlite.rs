@@ -1,4 +1,6 @@
-use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
+use crate::sql::arrow_sql_gen::statement::{
+    table_reference_to_sea_table_ref, CreateTableBuilder, IndexBuilder, InsertBuilder,
+};
 use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
 use crate::sql::db_connection_pool::DbInstanceKey;
@@ -628,30 +630,12 @@ impl Sqlite {
 
         // Add ON CONFLICT clause if specified
         if let Some(oc) = on_conflict {
-            use sea_query::SeaRc;
-            use sea_query::{Alias, Query, SqliteQueryBuilder, TableRef};
+            use sea_query::{Alias, Query, SqliteQueryBuilder};
 
             let sea_query_on_conflict = oc.build_sea_query_on_conflict(&self.schema);
 
             // Build a temporary table reference for the dummy statement
-            let table_ref = match &self.table {
-                TableReference::Bare { table } => {
-                    TableRef::Table(SeaRc::new(Alias::new(table.to_string())))
-                }
-                TableReference::Partial { schema, table } => TableRef::SchemaTable(
-                    SeaRc::new(Alias::new(schema.to_string())),
-                    SeaRc::new(Alias::new(table.to_string())),
-                ),
-                TableReference::Full {
-                    catalog,
-                    schema,
-                    table,
-                } => TableRef::DatabaseSchemaTable(
-                    SeaRc::new(Alias::new(catalog.to_string())),
-                    SeaRc::new(Alias::new(schema.to_string())),
-                    SeaRc::new(Alias::new(table.to_string())),
-                ),
-            };
+            let table_ref = table_reference_to_sea_table_ref(&self.table);
 
             // Build a dummy insert statement to get the ON CONFLICT SQL
             let mut dummy_insert = Query::insert();
