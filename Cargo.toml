@@ -38,14 +38,14 @@ arrow-ipc = { version = "58.0" }
 arrow-schema = { version = "58.0", features = ["serde"] }
 arrow-json = "58.0"
 arrow-odbc = { version = "25.2" }
-datafusion = { version = "53.0", default-features = false }
-datafusion-expr = { version = "53.0" }
-datafusion-federation = { version = "0.5.3" }
-datafusion-ffi = { version = "53.0" }
-datafusion-proto = { version = "53.0" }
-datafusion-physical-expr = { version = "53.0" }
-datafusion-physical-plan = { version = "53.0" }
-datafusion-python = { version = "53.0" }
+datafusion = { version = "54.0", default-features = false }
+datafusion-expr = { version = "54.0" }
+datafusion-federation = { version = "0.5.5" }
+datafusion-ffi = { version = "54.0" }
+datafusion-proto = { version = "54.0" }
+datafusion-physical-expr = { version = "54.0" }
+datafusion-physical-plan = { version = "54.0" }
+datafusion-python = { version = "54.0" }
 datafusion-table-providers = { path = "core" }
 duckdb = { version = "=1.4.4", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.23" }

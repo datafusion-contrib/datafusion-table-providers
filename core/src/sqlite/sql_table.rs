@@ -4,7 +4,7 @@ use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
 use futures::TryStreamExt;
 use std::fmt::Display;
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use crate::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
@@ -68,10 +68,6 @@ impl<T, P> SQLiteTable<T, P> {
 
 #[async_trait]
 impl<T, P> TableProvider for SQLiteTable<T, P> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.base_table.schema()
     }
@@ -147,10 +143,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         "SQLiteSqlExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.base_exec.schema()
     }
@@ -177,7 +169,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         match self.base_exec.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => {
                 let base_exec = inner
-                    .as_any()
                     .downcast_ref::<SqlExec<T, P>>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(
@@ -191,7 +182,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 let base_exec = inner
-                    .as_any()
                     .downcast_ref::<SqlExec<T, P>>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(
@@ -219,7 +209,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         let base_exec = self
             .base_exec
             .with_fetch(limit)?
-            .as_any()
             .downcast_ref::<SqlExec<T, P>>()?
             .clone();
         Some(Arc::new(SQLiteSqlExec { base_exec }))
@@ -238,7 +227,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
             .updated_node
             .map(|node| {
                 let base_exec = node
-                    .as_any()
                     .downcast_ref::<SqlExec<T, P>>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(

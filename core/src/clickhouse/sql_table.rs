@@ -4,9 +4,9 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, LogicalTableSour
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::unparser::Unparser;
+use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::{any::Any, fmt};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -55,10 +55,6 @@ impl ClickHouseTable {
 
 #[async_trait]
 impl TableProvider for ClickHouseTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

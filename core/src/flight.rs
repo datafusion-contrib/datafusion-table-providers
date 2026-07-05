@@ -18,7 +18,6 @@
 //! Generic [FlightTableFactory] that can connect to Arrow Flight services,
 //! with a [sql::FlightSqlDriver] provided out-of-the-box.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Debug;
@@ -318,10 +317,6 @@ impl std::fmt::Debug for FlightTable {
 
 #[async_trait]
 impl TableProvider for FlightTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.logical_schema.clone()
     }

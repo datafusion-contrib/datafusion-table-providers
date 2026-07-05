@@ -17,7 +17,7 @@ use datafusion::{
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 use std::{
     fmt::{Display, Formatter},
     sync::LazyLock,
@@ -200,10 +200,6 @@ impl<T, P> SqlTable<T, P> {
 
 #[async_trait]
 impl<T, P> TableProvider for SqlTable<T, P> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -361,17 +357,17 @@ fn physical_expr_to_logical_expr(
         NotExpr,
     };
 
-    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+    if let Some(col) = expr.downcast_ref::<Column>() {
         return Some(Expr::Column(datafusion::common::Column::new_unqualified(
             col.name(),
         )));
     }
 
-    if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+    if let Some(lit) = expr.downcast_ref::<Literal>() {
         return Some(Expr::Literal(lit.value().clone(), None));
     }
 
-    if let Some(bin) = expr.as_any().downcast_ref::<BinaryExpr>() {
+    if let Some(bin) = expr.downcast_ref::<BinaryExpr>() {
         let left = physical_expr_to_logical_expr(bin.left())?;
         let right = physical_expr_to_logical_expr(bin.right())?;
         return Some(Expr::BinaryExpr(datafusion::logical_expr::BinaryExpr::new(
@@ -381,27 +377,27 @@ fn physical_expr_to_logical_expr(
         )));
     }
 
-    if let Some(not) = expr.as_any().downcast_ref::<NotExpr>() {
+    if let Some(not) = expr.downcast_ref::<NotExpr>() {
         let inner = physical_expr_to_logical_expr(not.arg())?;
         return Some(Expr::Not(Box::new(inner)));
     }
 
-    if let Some(is_null) = expr.as_any().downcast_ref::<IsNullExpr>() {
+    if let Some(is_null) = expr.downcast_ref::<IsNullExpr>() {
         let inner = physical_expr_to_logical_expr(is_null.arg())?;
         return Some(Expr::IsNull(Box::new(inner)));
     }
 
-    if let Some(is_not_null) = expr.as_any().downcast_ref::<IsNotNullExpr>() {
+    if let Some(is_not_null) = expr.downcast_ref::<IsNotNullExpr>() {
         let inner = physical_expr_to_logical_expr(is_not_null.arg())?;
         return Some(Expr::IsNotNull(Box::new(inner)));
     }
 
-    if let Some(neg) = expr.as_any().downcast_ref::<NegativeExpr>() {
+    if let Some(neg) = expr.downcast_ref::<NegativeExpr>() {
         let inner = physical_expr_to_logical_expr(neg.arg())?;
         return Some(Expr::Negative(Box::new(inner)));
     }
 
-    if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
         let inner = physical_expr_to_logical_expr(cast.expr())?;
         return Some(Expr::Cast(datafusion::logical_expr::Cast::new(
             Box::new(inner),
@@ -409,7 +405,7 @@ fn physical_expr_to_logical_expr(
         )));
     }
 
-    if let Some(in_list) = expr.as_any().downcast_ref::<InListExpr>() {
+    if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
         let value = physical_expr_to_logical_expr(in_list.expr())?;
         let list: Option<Vec<Expr>> = in_list
             .list()
@@ -487,10 +483,6 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         "SqlExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.projected_schema)
     }
@@ -537,7 +529,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         // Build ORDER BY clause from physical sort expressions using the Unparser
         let mut order_by_parts = Vec::with_capacity(order.len());
         for sort_expr in order {
-            let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
+            let Some(col) = sort_expr.expr.downcast_ref::<Column>() else {
                 return Ok(SortOrderPushdownResult::Unsupported);
             };
             let logical_sort = Sort::new(
@@ -891,7 +883,6 @@ mod tests {
             match exec.try_pushdown_sort(&order).unwrap() {
                 SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
-                        .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                         .unwrap();
                     assert_eq!(
@@ -917,7 +908,6 @@ mod tests {
             match exec.try_pushdown_sort(&order).unwrap() {
                 SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
-                        .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                         .unwrap();
                     assert_eq!(
@@ -952,7 +942,6 @@ mod tests {
             match exec.try_pushdown_sort(&order).unwrap() {
                 SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
-                        .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                         .unwrap();
                     assert_eq!(
@@ -979,7 +968,6 @@ mod tests {
             match exec.try_pushdown_sort(&order).unwrap() {
                 SortOrderPushdownResult::Inexact { inner } => {
                     let sql_exec = inner
-                        .as_any()
                         .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                         .unwrap();
                     assert_eq!(
@@ -1096,7 +1084,6 @@ mod tests {
             let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\"");
             let result = exec.with_fetch(Some(10)).unwrap();
             let sql_exec = result
-                .as_any()
                 .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                 .unwrap();
             assert_eq!(
@@ -1110,7 +1097,6 @@ mod tests {
             let exec = make_exec("SELECT \"name\", \"age\" FROM \"users\" LIMIT 100");
             let result = exec.with_fetch(Some(5)).unwrap();
             let sql_exec = result
-                .as_any()
                 .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                 .unwrap();
             assert_eq!(
@@ -1132,7 +1118,6 @@ mod tests {
             );
             let result = exec.with_fetch(Some(10)).unwrap();
             let sql_exec = result
-                .as_any()
                 .downcast_ref::<SqlExec<(), &'static dyn ToString>>()
                 .unwrap();
             assert_eq!(

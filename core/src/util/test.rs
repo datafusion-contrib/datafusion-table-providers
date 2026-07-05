@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -83,10 +83,6 @@ impl ExecutionPlan for MockExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -149,7 +145,7 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -161,11 +157,11 @@ impl ExecutionPlan for MockExec {
 
         let data = data?;
 
-        Ok(common::compute_record_batch_statistics(
+        Ok(Arc::new(common::compute_record_batch_statistics(
             &[data],
             &self.schema,
             None,
-        ))
+        )))
     }
 }
 

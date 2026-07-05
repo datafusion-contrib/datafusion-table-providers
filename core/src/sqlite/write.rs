@@ -1,4 +1,4 @@
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
@@ -50,10 +50,6 @@ impl SqliteTableWriter {
 
 #[async_trait]
 impl TableProvider for SqliteTableWriter {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.read_provider.schema()
     }
@@ -125,10 +121,6 @@ struct SqliteDataSink {
 
 #[async_trait]
 impl DataSink for SqliteDataSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }

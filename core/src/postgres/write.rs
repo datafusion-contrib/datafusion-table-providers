@@ -1,4 +1,4 @@
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
@@ -52,10 +52,6 @@ impl PostgresTableWriter {
 
 #[async_trait]
 impl TableProvider for PostgresTableWriter {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.read_provider.schema()
     }
@@ -109,10 +105,6 @@ struct PostgresDataSink {
 
 #[async_trait]
 impl DataSink for PostgresDataSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }

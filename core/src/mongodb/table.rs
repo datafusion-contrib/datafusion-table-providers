@@ -20,7 +20,7 @@ use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 use mongodb::bson::Document;
 use serde_json;
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 #[derive(Debug)]
 pub struct MongoDBTable {
@@ -47,10 +47,6 @@ impl MongoDBTable {
 
 #[async_trait]
 impl TableProvider for MongoDBTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -205,10 +201,6 @@ impl ExecutionPlan for MongoDBExec {
         "MongoDBExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.projected_schema)
     }
@@ -236,7 +228,7 @@ impl ExecutionPlan for MongoDBExec {
 
         let mut sort_doc = Document::new();
         for sort_expr in order {
-            let Some(col) = sort_expr.expr.as_any().downcast_ref::<Column>() else {
+            let Some(col) = sort_expr.expr.downcast_ref::<Column>() else {
                 // Can only push down simple column references
                 return Ok(SortOrderPushdownResult::Unsupported);
             };
@@ -667,7 +659,7 @@ mod tests {
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
             SortOrderPushdownResult::Inexact { inner } => {
-                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                let mongo_exec = inner.downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1 });
                 let display = format_exec(mongo_exec);
                 assert!(
@@ -698,7 +690,7 @@ mod tests {
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
             SortOrderPushdownResult::Inexact { inner } => {
-                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                let mongo_exec = inner.downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "age": -1 });
             }
             other => panic!("Expected Inexact, got: {other:?}"),
@@ -733,7 +725,7 @@ mod tests {
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
             SortOrderPushdownResult::Inexact { inner } => {
-                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                let mongo_exec = inner.downcast_ref::<MongoDBExec>().unwrap();
                 assert_eq!(mongo_exec.sort_doc, doc! { "name": 1, "age": -1 });
             }
             other => panic!("Expected Inexact, got: {other:?}"),
@@ -779,7 +771,7 @@ mod tests {
         let result = exec.try_pushdown_sort(&sort_exprs).unwrap();
         match result {
             SortOrderPushdownResult::Inexact { inner } => {
-                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                let mongo_exec = inner.downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     !mongo_exec.filters_doc.is_empty(),
                     "Filters should be preserved"
@@ -800,7 +792,7 @@ mod tests {
         let result = exec.try_pushdown_sort(&[]).unwrap();
         match result {
             SortOrderPushdownResult::Inexact { inner } => {
-                let mongo_exec = inner.as_any().downcast_ref::<MongoDBExec>().unwrap();
+                let mongo_exec = inner.downcast_ref::<MongoDBExec>().unwrap();
                 assert!(
                     mongo_exec.sort_doc.is_empty(),
                     "Empty sort should produce empty doc"

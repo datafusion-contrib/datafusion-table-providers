@@ -9,7 +9,7 @@ use pyo3::{prelude::*, types::PyCapsule};
 
 #[pyclass(module = "datafusion_table_providers._internal")]
 struct RawTableProvider {
-    pub(crate) table: Arc<dyn TableProvider + Send>,
+    pub(crate) table: Arc<dyn TableProvider>,
     pub(crate) supports_pushdown_filters: bool,
 }
 
