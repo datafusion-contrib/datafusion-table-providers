@@ -284,7 +284,7 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
 mod tests {
     use super::*;
     use crate::sql::db_connection_pool::Mode;
-    use rand::Rng;
+    use rand::RngExt;
     use rstest::rstest;
     use std::time::Duration;
 

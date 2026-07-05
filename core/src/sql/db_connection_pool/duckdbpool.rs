@@ -385,7 +385,7 @@ fn extract_db_name(file_path: Arc<str>) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use rand::Rng;
+    use rand::RngExt;
 
     use super::*;
     use crate::sql::db_connection_pool::DbConnectionPool;
