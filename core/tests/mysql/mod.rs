@@ -901,7 +901,7 @@ INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
 
 async fn test_mysql_sort_limit(port: usize) {
     let ctx = SessionContext::new();
-    let pool = common::get_mysql_connection_pool(port, None)
+    let pool = common::get_mysql_connection_pool(port)
         .await
         .expect("MySQL connection pool should be created");
 
@@ -937,12 +937,8 @@ async fn test_mysql_sort_limit(port: usize) {
             + Send
             + Sync
             + 'static,
-    > = Arc::new(
-        common::get_mysql_connection_pool(port, None)
-            .await
-            .expect("pool"),
-    );
-    let table = SqlTable::new("mysql", &sqltable_pool, "sort_limit_test", None)
+    > = Arc::new(common::get_mysql_connection_pool(port).await.expect("pool"));
+    let table = SqlTable::new("mysql", &sqltable_pool, "sort_limit_test")
         .await
         .expect("Table should be created");
     ctx.register_table("sort_limit_test", Arc::new(table))

@@ -604,6 +604,65 @@ pub(crate) fn get_arrow_list_record_batch() -> (RecordBatch, SchemaRef) {
     (record_batch, schema)
 }
 
+pub(crate) fn get_arrow_list_utf8_record_batch() -> (RecordBatch, SchemaRef) {
+    let mut list_builder = ListBuilder::new(StringBuilder::new());
+    list_builder.append_value([Some("one"), Some("two"), Some("three")]);
+    list_builder.append_value([Some("four")]);
+    list_builder.append_value([Some("six")]);
+    let list_array = list_builder.finish();
+
+    let mut large_list_builder = LargeListBuilder::new(StringBuilder::new());
+    large_list_builder.append_value([Some("one"), Some("two"), Some("three")]);
+    large_list_builder.append_value([Some("four")]);
+    large_list_builder.append_value([Some("six")]);
+    let large_list_array = large_list_builder.finish();
+
+    let mut fixed_size_list_builder = FixedSizeListBuilder::new(StringBuilder::new(), 3);
+    fixed_size_list_builder.values().append_value("zero");
+    fixed_size_list_builder.values().append_value("one");
+    fixed_size_list_builder.values().append_value("two");
+    fixed_size_list_builder.append(true);
+    fixed_size_list_builder.values().append_value("three");
+    fixed_size_list_builder.values().append_value("four");
+    fixed_size_list_builder.values().append_value("five");
+    fixed_size_list_builder.append(true);
+    fixed_size_list_builder.values().append_value("six");
+    fixed_size_list_builder.values().append_value("seven");
+    fixed_size_list_builder.values().append_value("eight");
+    fixed_size_list_builder.append(true);
+    let fixed_size_list_array = fixed_size_list_builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "list",
+            DataType::List(Field::new("item", DataType::Utf8, true).into()),
+            false,
+        ),
+        Field::new(
+            "large_list",
+            DataType::LargeList(Field::new("item", DataType::Utf8, true).into()),
+            false,
+        ),
+        Field::new(
+            "fixed_size_list",
+            DataType::FixedSizeList(Field::new("item", DataType::Utf8, true).into(), 3),
+            false,
+        ),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(list_array),
+            Arc::new(large_list_array),
+            Arc::new(fixed_size_list_array),
+        ],
+    )
+    .expect("Failed to created arrow list record batch");
+
+    (record_batch, schema)
+}
+
 pub(crate) fn get_arrow_list_of_structs_record_batch() -> (RecordBatch, SchemaRef) {
     let input_batch_json_data = r#"
             {"labels": [{"id": 1}, {"id": 2}]}
@@ -778,7 +837,7 @@ pub(crate) fn get_arrow_dictionary_array_record_batch() -> (RecordBatch, SchemaR
     let schema = Arc::new(Schema::new(vec![Field::new(
         "mood_status",
         DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-        true,
+        false,
     )]));
 
     let record_batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
