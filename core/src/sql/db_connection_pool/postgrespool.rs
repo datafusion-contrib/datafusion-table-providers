@@ -351,10 +351,7 @@ impl PostgresConnectionPool {
         let mut config =
             Config::from_str(connection_string.as_str()).context(ConnectionPoolSnafu)?;
 
-        if let Some(application_name) = params.get("application_name").map(SecretBox::expose_secret)
-        {
-            config.application_name(application_name);
-        }
+        apply_optional_session_params(&mut config, &params);
 
         verify_postgres_config(&config).await?;
 
@@ -494,6 +491,24 @@ fn parse_connection_string(
     }
 
     (connection_string, ssl_mode, ssl_rootcert_path, password)
+}
+
+/// Apply the optional string session params libpq forwards verbatim to the
+/// backend — `application_name` and `options` — onto a parsed [`Config`]. Split
+/// out of `new_inner` so it is unit-testable without a live server.
+///
+/// `options` is the libpq `options` connection parameter: arbitrary command-line
+/// switches sent at connection time (e.g. `-c statement_timeout=5000`), applied via
+/// [`Config::options`]. It lets a caller pin session-level GUCs
+/// (`statement_timeout`, `default_transaction_read_only`, …) that `Config` has no
+/// dedicated setter for.
+fn apply_optional_session_params(config: &mut Config, params: &HashMap<String, SecretString>) {
+    if let Some(application_name) = params.get("application_name").map(SecretBox::expose_secret) {
+        config.application_name(application_name);
+    }
+    if let Some(options) = params.get("options").map(SecretBox::expose_secret) {
+        config.options(options);
+    }
 }
 
 fn get_join_context(config: &Config) -> JoinPushDown {
@@ -703,5 +718,35 @@ mod tests {
             parse_connection_string("host=localhost user=postgres dbname=mydb");
         assert_eq!(conn_str.trim(), "host=localhost user=postgres dbname=mydb");
         assert!(password.is_none());
+    }
+
+    #[test]
+    fn options_param_reaches_the_config() {
+        let mut params: HashMap<String, SecretString> = HashMap::new();
+        params.insert(
+            "options".to_string(),
+            SecretString::from("-c statement_timeout=5000".to_string()),
+        );
+        params.insert(
+            "application_name".to_string(),
+            SecretString::from("semvia".to_string()),
+        );
+
+        let mut config = Config::new();
+        apply_optional_session_params(&mut config, &params);
+
+        assert_eq!(config.get_options(), Some("-c statement_timeout=5000"));
+        assert_eq!(config.get_application_name(), Some("semvia"));
+    }
+
+    #[test]
+    fn absent_options_param_leaves_the_config_untouched() {
+        let params: HashMap<String, SecretString> = HashMap::new();
+
+        let mut config = Config::new();
+        apply_optional_session_params(&mut config, &params);
+
+        assert_eq!(config.get_options(), None);
+        assert_eq!(config.get_application_name(), None);
     }
 }
