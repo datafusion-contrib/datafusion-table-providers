@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse", "crates/flight", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/duckdb", "crates/adbc"]
+members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse", "crates/flightsql", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/duckdb", "crates/adbc"]
 resolver = "2"
 
 [workspace.package]
@@ -50,7 +50,7 @@ datafusion-table-providers = { version = "0.12.1", path = "core" }
 datafusion-table-providers-common = { version = "0.12.1", path = "crates/common" }
 datafusion-table-providers-odbc = { version = "0.12.1", path = "crates/odbc" }
 datafusion-table-providers-clickhouse = { version = "0.12.1", path = "crates/clickhouse" }
-datafusion-table-providers-flight = { version = "0.12.1", path = "crates/flight" }
+datafusion-table-providers-flightsql = { version = "0.12.1", path = "crates/flightsql" }
 datafusion-table-providers-mongodb = { version = "0.12.1", path = "crates/mongodb" }
 datafusion-table-providers-mysql = { version = "0.12.1", path = "crates/mysql" }
 datafusion-table-providers-sqlite = { version = "0.12.1", path = "crates/sqlite" }

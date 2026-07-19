@@ -2424,7 +2424,7 @@ dependencies = [
  "datafusion-table-providers-clickhouse",
  "datafusion-table-providers-common",
  "datafusion-table-providers-duckdb",
- "datafusion-table-providers-flight",
+ "datafusion-table-providers-flightsql",
  "datafusion-table-providers-mongodb",
  "datafusion-table-providers-mysql",
  "datafusion-table-providers-odbc",
@@ -2564,7 +2564,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-table-providers-flight"
+name = "datafusion-table-providers-flightsql"
 version = "0.12.1"
 dependencies = [
  "arrow",

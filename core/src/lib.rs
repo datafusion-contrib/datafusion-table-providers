@@ -77,7 +77,7 @@ pub use datafusion_table_providers_clickhouse as clickhouse;
 #[cfg(feature = "duckdb")]
 pub use datafusion_table_providers_duckdb as duckdb;
 #[cfg(feature = "flight")]
-pub use datafusion_table_providers_flight as flight;
+pub use datafusion_table_providers_flightsql as flight;
 #[cfg(feature = "mongodb")]
 pub use datafusion_table_providers_mongodb as mongodb;
 #[cfg(feature = "mysql")]

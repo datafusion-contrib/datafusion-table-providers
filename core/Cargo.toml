@@ -16,7 +16,7 @@ tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
 datafusion-table-providers-adbc = { workspace = true, optional = true }
 datafusion-table-providers-clickhouse = { workspace = true, optional = true }
 datafusion-table-providers-duckdb = { workspace = true, optional = true }
-datafusion-table-providers-flight = { workspace = true, optional = true }
+datafusion-table-providers-flightsql = { workspace = true, optional = true }
 datafusion-table-providers-mongodb = { workspace = true, optional = true }
 datafusion-table-providers-mysql = { workspace = true, optional = true }
 datafusion-table-providers-odbc = { workspace = true, optional = true }
@@ -80,7 +80,7 @@ default = []
 adbc = ["dep:datafusion-table-providers-adbc"]
 clickhouse = ["dep:datafusion-table-providers-clickhouse"]
 duckdb = ["dep:datafusion-table-providers-duckdb"]
-flight = ["dep:datafusion-table-providers-flight"]
+flight = ["dep:datafusion-table-providers-flightsql"]
 mongodb = ["dep:datafusion-table-providers-mongodb"]
 mysql = ["dep:datafusion-table-providers-mysql"]
 odbc = ["dep:datafusion-table-providers-odbc"]

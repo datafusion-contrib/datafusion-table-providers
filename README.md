@@ -35,7 +35,7 @@ Existing examples continue to use the facade crate and its feature flags.
 - SQLite (`datafusion-table-providers-sqlite`)
 - ClickHouse (`datafusion-table-providers-clickhouse`)
 - DuckDB (`datafusion-table-providers-duckdb`)
-- Flight SQL (`datafusion-table-providers-flight`)
+- Flight SQL (`datafusion-table-providers-flightsql`)
 - MongoDB (`datafusion-table-providers-mongodb`)
 - ADBC (`datafusion-table-providers-adbc`)
 - ODBC (`datafusion-table-providers-odbc`)

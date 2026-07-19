@@ -1,5 +1,5 @@
 [package]
-name = "datafusion-table-providers-flight"
+name = "datafusion-table-providers-flightsql"
 version = { workspace = true }
 readme = { workspace = true }
 edition = { workspace = true }

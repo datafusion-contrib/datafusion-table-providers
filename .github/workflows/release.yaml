@@ -13,7 +13,7 @@
 #   datafusion-table-providers-common
 #   datafusion-table-providers-odbc
 #   datafusion-table-providers-clickhouse
-#   datafusion-table-providers-flight
+#   datafusion-table-providers-flightsql
 #   datafusion-table-providers-mongodb
 #   datafusion-table-providers-mysql
 #   datafusion-table-providers-sqlite
@@ -107,7 +107,7 @@ jobs:
               "datafusion-table-providers-common",
               "datafusion-table-providers-odbc",
               "datafusion-table-providers-clickhouse",
-              "datafusion-table-providers-flight",
+              "datafusion-table-providers-flightsql",
               "datafusion-table-providers-mongodb",
               "datafusion-table-providers-mysql",
               "datafusion-table-providers-sqlite",
@@ -187,7 +187,7 @@ jobs:
           cargo publish -p datafusion-table-providers-common
           cargo publish -p datafusion-table-providers-odbc
           cargo publish -p datafusion-table-providers-clickhouse
-          cargo publish -p datafusion-table-providers-flight
+          cargo publish -p datafusion-table-providers-flightsql
           cargo publish -p datafusion-table-providers-mongodb
           cargo publish -p datafusion-table-providers-mysql
           cargo publish -p datafusion-table-providers-sqlite
