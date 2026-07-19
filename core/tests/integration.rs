@@ -12,7 +12,7 @@ mod clickhouse;
     feature = "postgres"
 ))]
 mod docker;
-#[cfg(all(feature = "duckdb", feature = "federation"))]
+#[cfg(feature = "duckdb")]
 mod duckdb;
 #[cfg(feature = "flight")]
 mod flight;

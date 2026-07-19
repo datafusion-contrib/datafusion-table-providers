@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-members = ["core", "python"]
+members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse", "crates/flightsql", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/duckdb", "crates/adbc"]
 resolver = "2"
 
 [workspace.package]
@@ -46,7 +46,17 @@ datafusion-proto = { version = "54.0" }
 datafusion-physical-expr = { version = "54.0" }
 datafusion-physical-plan = { version = "54.0" }
 datafusion-python = { version = "54.0" }
-datafusion-table-providers = { path = "core" }
+datafusion-table-providers = { version = "0.12.1", path = "core" }
+datafusion-table-providers-common = { version = "0.12.1", path = "crates/common" }
+datafusion-table-providers-odbc = { version = "0.12.1", path = "crates/odbc" }
+datafusion-table-providers-clickhouse = { version = "0.12.1", path = "crates/clickhouse" }
+datafusion-table-providers-flightsql = { version = "0.12.1", path = "crates/flightsql" }
+datafusion-table-providers-mongodb = { version = "0.12.1", path = "crates/mongodb" }
+datafusion-table-providers-mysql = { version = "0.12.1", path = "crates/mysql" }
+datafusion-table-providers-sqlite = { version = "0.12.1", path = "crates/sqlite" }
+datafusion-table-providers-postgres = { version = "0.12.1", path = "crates/postgres" }
+datafusion-table-providers-duckdb = { version = "0.12.1", path = "crates/duckdb" }
+datafusion-table-providers-adbc = { version = "0.12.1", path = "crates/adbc" }
 duckdb = { version = "=1.4.4", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
 adbc_core = { version = "0.23" }
 adbc_driver_manager = { version = "0.23" }

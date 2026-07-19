@@ -21,7 +21,7 @@ use datafusion::common::{Constraints, ToDFSchema};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
-#[cfg(feature = "mysql-federation")]
+
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
 use secrecy::ExposeSecret;
@@ -743,7 +743,6 @@ async fn arrow_mysql_round_trip(
         record_batch[0].columns()
     );
 
-    #[cfg(feature = "mysql-federation")]
     let casted_result =
         try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
@@ -752,7 +751,6 @@ async fn arrow_mysql_round_trip(
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
 
-    #[cfg(feature = "mysql-federation")]
     assert_eq!(arrow_record, casted_result);
 }
 

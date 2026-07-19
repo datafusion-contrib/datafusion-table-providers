@@ -3,11 +3,24 @@
 # Required repository secrets:
 #   RELEASE_TOKEN - Admin-capable PAT that can push to protected main and create releases
 #
-# Required crates.io trusted publishing config
-# (https://crates.io/crates/datafusion-table-providers/settings/trusted-publishing):
+# Required crates.io trusted publishing config for EACH published crate
+# (configure under each crate's settings → trusted publishing on crates.io):
 #   Repository:     datafusion-contrib/datafusion-table-providers
 #   Workflow file:  release.yaml
 #   Environment:    crates-io
+#
+# Crates published by this workflow:
+#   datafusion-table-providers-common
+#   datafusion-table-providers-odbc
+#   datafusion-table-providers-clickhouse
+#   datafusion-table-providers-flightsql
+#   datafusion-table-providers-mongodb
+#   datafusion-table-providers-mysql
+#   datafusion-table-providers-sqlite
+#   datafusion-table-providers-postgres
+#   datafusion-table-providers-duckdb
+#   datafusion-table-providers-adbc
+#   datafusion-table-providers (facade)
 #
 # Also create a GitHub Environment named "crates-io" (Settings → Environments).
 #
@@ -88,10 +101,36 @@ jobs:
 
           cargo_toml.write_text(bump_workspace_package_version(text, version))
 
+          # Keep path+version workspace deps in sync for crates.io publish.
+          workspace_crate_names = (
+              "datafusion-table-providers",
+              "datafusion-table-providers-common",
+              "datafusion-table-providers-odbc",
+              "datafusion-table-providers-clickhouse",
+              "datafusion-table-providers-flightsql",
+              "datafusion-table-providers-mongodb",
+              "datafusion-table-providers-mysql",
+              "datafusion-table-providers-sqlite",
+              "datafusion-table-providers-postgres",
+              "datafusion-table-providers-duckdb",
+              "datafusion-table-providers-adbc",
+          )
+          cargo_text = cargo_toml.read_text()
+          for name in workspace_crate_names:
+              pattern = (
+                  rf'(?m)^({re.escape(name)}\s*=\s*\{{\s*version\s*=\s*")[^"]+(")'
+              )
+              cargo_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", cargo_text, count=1)
+              if count != 1:
+                  raise SystemExit(
+                      f"Failed to update workspace.dependencies version for {name} in Cargo.toml"
+                  )
+          cargo_toml.write_text(cargo_text)
+
           lock = pathlib.Path("Cargo.lock")
           lock_text = lock.read_text()
           for name in (
-              "datafusion-table-providers",
+              *workspace_crate_names,
               "datafusion-table-providers-python",
           ):
               pattern = (
@@ -102,7 +141,6 @@ jobs:
                   raise SystemExit(f"Failed to update version for {name} in Cargo.lock")
           lock.write_text(lock_text)
           PY
-
       - name: Commit and push version bump
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -144,4 +182,16 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish -p datafusion-table-providers
+        run: |
+          # Publish in dependency order: common → leaves → facade
+          cargo publish -p datafusion-table-providers-common
+          cargo publish -p datafusion-table-providers-odbc
+          cargo publish -p datafusion-table-providers-clickhouse
+          cargo publish -p datafusion-table-providers-flightsql
+          cargo publish -p datafusion-table-providers-mongodb
+          cargo publish -p datafusion-table-providers-mysql
+          cargo publish -p datafusion-table-providers-sqlite
+          cargo publish -p datafusion-table-providers-postgres
+          cargo publish -p datafusion-table-providers-duckdb
+          cargo publish -p datafusion-table-providers-adbc
+          cargo publish -p datafusion-table-providers

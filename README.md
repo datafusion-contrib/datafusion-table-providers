@@ -18,17 +18,27 @@ let ctx = SessionContext::with_state(state);
 // queries will now automatically be federated
 ```
 
+## Crate layout
+
+Prefer a single-provider leaf crate when you only need one backend — for example `datafusion-table-providers-postgres` or `datafusion-table-providers-duckdb`. Leaf crates do not use the facade feature flags.
+
+- Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature.
+- The existing `datafusion-table-providers` facade keeps the same module paths and provider feature names (`duckdb`, `postgres`, `sqlite`, etc.). Enabling a provider feature pulls in that leaf crate with its defaults (including federation). There is no separate `federation` / `*-federation` feature on the facade.
+- ClickHouse pool connections are exposed as `ClickHouseConnection` (wrapping the ClickHouse `Client`) under `sql::db_connection_pool::dbconnection::clickhouseconn`.
+
+Existing examples continue to use the facade crate and its feature flags.
+
 ## Table Providers
 
-- PostgreSQL
-- MySQL
-- SQLite
-- ClickHouse
-- DuckDB
-- Flight SQL
-- MongoDB
-- ADBC
-- ODBC
+- PostgreSQL (`datafusion-table-providers-postgres`)
+- MySQL (`datafusion-table-providers-mysql`)
+- SQLite (`datafusion-table-providers-sqlite`)
+- ClickHouse (`datafusion-table-providers-clickhouse`)
+- DuckDB (`datafusion-table-providers-duckdb`)
+- Flight SQL (`datafusion-table-providers-flightsql`)
+- MongoDB (`datafusion-table-providers-mongodb`)
+- ADBC (`datafusion-table-providers-adbc`)
+- ODBC (`datafusion-table-providers-odbc`)
 
 ## Development
 
