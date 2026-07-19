@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-pub mod pool;
 pub mod conn;
+pub mod pool;
 
 use clickhouse::Client;
 use datafusion::arrow::datatypes::SchemaRef;

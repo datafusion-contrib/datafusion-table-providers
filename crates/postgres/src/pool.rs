@@ -1,13 +1,13 @@
 use crate::conn::PostgresConnection;
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
+use async_trait::async_trait;
+use bb8::ErrorSink;
+use bb8_postgres::tokio_postgres::{config::Host, types::ToSql, Config};
 use datafusion_table_providers_common::{
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
     UnsupportedTypeAction,
 };
-use async_trait::async_trait;
-use bb8::ErrorSink;
-use bb8_postgres::tokio_postgres::{config::Host, types::ToSql, Config};
 use native_tls::{Certificate, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
 use secrecy::{ExposeSecret, SecretBox, SecretString};

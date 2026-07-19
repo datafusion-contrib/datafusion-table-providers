@@ -99,7 +99,13 @@ where
         }
     }
 
-    fn tables(&self, schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn tables(
+        &self,
+        schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
         let result = conn
@@ -154,7 +160,12 @@ where
         Ok(tables)
     }
 
-    fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
 
@@ -192,7 +203,13 @@ where
         Ok(schemas)
     }
 
-    fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn get_schema(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let conn_mx = self.conn.lock().unwrap();
         let conn = conn_mx.borrow();
 

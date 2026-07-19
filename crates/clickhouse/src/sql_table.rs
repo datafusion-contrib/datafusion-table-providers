@@ -15,7 +15,9 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown, TableType},
 };
 
-use datafusion_table_providers_common::sql::sql_provider_datafusion::{default_filter_pushdown, SqlExec};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{
+    default_filter_pushdown, SqlExec,
+};
 use datafusion_table_providers_common::util::table_arg_replace::TableArgReplace;
 
 use super::{into_table_args, ClickHouseTable};

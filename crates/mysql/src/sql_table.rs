@@ -1,16 +1,13 @@
 use crate::pool::MySQLConnectionPool;
-use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::{Dialect, MySqlDialect};
+use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use futures::TryStreamExt;
 use mysql_async::prelude::ToValue;
 use std::fmt::Display;
 use std::{fmt, sync::Arc};
 
-use datafusion_table_providers_common::sql::sql_provider_datafusion::{
-    self, get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
-};
 use datafusion::{
     arrow::datatypes::SchemaRef,
     config::ConfigOptions,
@@ -26,6 +23,9 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     },
     sql::TableReference,
+};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{
+    self, get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 
 pub struct MySQLTable {

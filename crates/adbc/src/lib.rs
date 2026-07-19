@@ -9,13 +9,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-pub mod pool;
 pub mod conn;
-
+pub mod pool;
 
 use crate::conn::AdbcDbConnection;
-use crate::write::{ADBCTableWriterBuilder, AdbcDataSink};
 use crate::pool::ADBCPool;
+use crate::write::{ADBCTableWriterBuilder, AdbcDataSink};
 use datafusion_table_providers_common::sql::db_connection_pool::{
     self,
     dbconnection::{get_schema, DbConnection},

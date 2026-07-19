@@ -6,8 +6,7 @@ use snafu::{ResultExt, Snafu};
 
 use crate::conn::ClickHouseConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::DbConnection,
-    DbConnectionPool, JoinPushDown,
+    dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
 };
 type PoolResult<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 

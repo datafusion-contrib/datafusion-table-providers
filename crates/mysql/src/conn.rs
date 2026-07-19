@@ -16,7 +16,9 @@ use mysql_async::{prelude::ToValue, Conn, Params, Row};
 use snafu::prelude::*;
 
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result;
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{AsyncDbConnection, DbConnection};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
+    AsyncDbConnection, DbConnection,
+};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -79,7 +81,7 @@ impl<'a> DbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         self
     }
 
-    fn as_async(&self) -> Option<&dyn datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)>> {
+    fn as_async(&self) -> Option<&dyn datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)>>{
         Some(self)
     }
 }
@@ -92,7 +94,13 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         }
     }
 
-    async fn tables(&self, schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn tables(
+        &self,
+        schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 
@@ -111,7 +119,12 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         Ok(table_names)
     }
 
-    async fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 
@@ -136,7 +149,10 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     async fn get_schema(
         &self,
         table_reference: &TableReference,
-    ) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 

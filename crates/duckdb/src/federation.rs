@@ -1,5 +1,3 @@
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
-use datafusion_table_providers_common::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::sql::unparser::dialect::Dialect;
@@ -7,6 +5,12 @@ use datafusion_federation::sql::{
     RemoteTableRef, SQLExecutor, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
+    get_schema, Error as DbError,
+};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{
+    get_stream, to_execution_error,
+};
 use futures::TryStreamExt;
 use snafu::ResultExt;
 

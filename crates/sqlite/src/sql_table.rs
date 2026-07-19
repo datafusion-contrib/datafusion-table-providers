@@ -1,14 +1,11 @@
-use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
+use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use futures::TryStreamExt;
 use std::fmt::Display;
 use std::{fmt, sync::Arc};
 
-use datafusion_table_providers_common::sql::sql_provider_datafusion::{
-    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
-};
 use datafusion::{
     arrow::datatypes::SchemaRef,
     config::ConfigOptions,
@@ -24,6 +21,9 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     },
     sql::TableReference,
+};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{
+    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
 };
 
 pub struct SQLiteTable<T: 'static, P: 'static> {

@@ -1,7 +1,4 @@
 use crate::MySQL;
-use datafusion_table_providers_common::util::on_conflict::OnConflict;
-use datafusion_table_providers_common::util::retriable_error::check_and_mark_retriable_error;
-use datafusion_table_providers_common::util::{constraints, to_datafusion_error};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
@@ -12,6 +9,9 @@ use datafusion::{
     logical_expr::{dml::InsertOp, Expr},
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
+use datafusion_table_providers_common::util::on_conflict::OnConflict;
+use datafusion_table_providers_common::util::retriable_error::check_and_mark_retriable_error;
+use datafusion_table_providers_common::util::{constraints, to_datafusion_error};
 use futures::StreamExt;
 use mysql_async::TxOpts;
 use snafu::ResultExt;

@@ -99,8 +99,8 @@
 
 use crate::conn::DuckDBSyncParameter;
 use crate::Error;
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::SyncDbConnection;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::SyncDbConnection;
 use duckdb::DuckdbConnectionManager;
 use r2d2::PooledConnection;
 use snafu::prelude::*;
@@ -265,11 +265,9 @@ impl DuckDBSetting for MemoryLimitSetting {
     }
 
     fn validate(&self, value: &str) -> Result<(), Error> {
-        byte_unit::Byte::parse_str(value, true).context(
-            crate::UnableToParseMemoryLimitSnafu {
-                value: value.to_string(),
-            },
-        )?;
+        byte_unit::Byte::parse_str(value, true).context(crate::UnableToParseMemoryLimitSnafu {
+            value: value.to_string(),
+        })?;
         Ok(())
     }
 

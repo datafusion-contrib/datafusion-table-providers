@@ -13,22 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-pub mod pool;
-pub mod conn;
 pub mod arrow_sql_gen;
+pub mod conn;
+pub mod pool;
 
-use crate::write::MySQLTableWriter;
-use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
 use crate::conn::MySQLConnection;
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::DbConnection;
 use crate::pool::MySQLConnectionPool;
-use datafusion_table_providers_common::sql::db_connection_pool::{self, DbConnectionPool};
-use datafusion_table_providers_common::sql::sql_provider_datafusion::{self, SqlTable};
-use datafusion_table_providers_common::util::{
-    self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
-    indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
-};
-use datafusion_table_providers_common::util::{column_reference, constraints, on_conflict};
+use crate::write::MySQLTableWriter;
 use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
@@ -38,6 +29,17 @@ use datafusion::{
     catalog::TableProviderFactory, common::Constraints, datasource::TableProvider,
     error::DataFusionError, logical_expr::CreateExternalTable, sql::TableReference,
 };
+use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
+    CreateTableBuilder, IndexBuilder, InsertBuilder,
+};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::DbConnection;
+use datafusion_table_providers_common::sql::db_connection_pool::{self, DbConnectionPool};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{self, SqlTable};
+use datafusion_table_providers_common::util::{
+    self, column_reference::ColumnReference, constraints::get_primary_keys_from_constraints,
+    indexes::IndexType, on_conflict::OnConflict, secrets::to_secret_map, to_datafusion_error,
+};
+use datafusion_table_providers_common::util::{column_reference, constraints, on_conflict};
 use mysql_async::prelude::{Queryable, ToValue};
 use mysql_async::{Metrics, TxOpts};
 use sea_query::{Alias, DeleteStatement, MysqlQueryBuilder};

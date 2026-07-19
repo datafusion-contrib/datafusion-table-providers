@@ -5,7 +5,9 @@ use datafusion_table_providers_common::sql::arrow_sql_gen::statement::CreateTabl
 use sea_query::{ColumnType, PostgresQueryBuilder};
 
 use crate::arrow_sql_gen::builder::TypeBuilder;
-use crate::arrow_sql_gen::{get_postgres_composite_type_name, map_data_type_to_column_type_postgres};
+use crate::arrow_sql_gen::{
+    get_postgres_composite_type_name, map_data_type_to_column_type_postgres,
+};
 
 /// Extends [`CreateTableBuilder`] with the ability to build a PostgreSQL-specific
 /// `CREATE TABLE` statement, including any composite types (i.e. structs) that

@@ -6,15 +6,15 @@ use crate::arrow_sql_gen::rows_to_arrow;
 use crate::arrow_sql_gen::schema::pg_data_type_to_arrow_type;
 use crate::arrow_sql_gen::schema::ParseContext;
 use crate::pool::ConnectionManager;
-use datafusion_table_providers_common::util::handle_unsupported_type_error;
-use datafusion_table_providers_common::util::schema::SchemaValidator;
-use datafusion_table_providers_common::UnsupportedTypeAction;
 use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
+use datafusion_table_providers_common::util::handle_unsupported_type_error;
+use datafusion_table_providers_common::util::schema::SchemaValidator;
+use datafusion_table_providers_common::UnsupportedTypeAction;
 
 /// A pooled Postgres connection obtained from a [`PostgresConnectionPool`](crate::pool::PostgresConnectionPool).
 ///
@@ -251,9 +251,7 @@ pub enum PostgresError {
     },
 
     #[snafu(display("Failed to convert query result to Arrow.\n{source}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
-    ConversionError {
-        source: crate::arrow_sql_gen::Error,
-    },
+    ConversionError { source: crate::arrow_sql_gen::Error },
 }
 
 fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> String {
@@ -327,7 +325,13 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         }
     }
 
-    async fn tables(&self, schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn tables(
+        &self,
+        schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let query = match self.get_variant().await? {
             PostgresVariant::Default => TABLES_QUERY,
             PostgresVariant::Redshift => REDSHIFT_TABLES_QUERY,
@@ -342,7 +346,12 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
     }
 
-    async fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let query = match self.get_variant().await? {
             PostgresVariant::Default => SCHEMAS_QUERY,
             PostgresVariant::Redshift => REDSHIFT_SCHEMAS_QUERY,
@@ -362,7 +371,10 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
     async fn get_schema(
         &self,
         table_reference: &TableReference,
-    ) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let (variant, columns) = self.query_variant_and_schema(table_reference).await?;
 
         // Native inference can return zero rows even though the table exists and is
@@ -471,7 +483,12 @@ impl PostgresConnection {
         self
     }
 
-    pub async fn get_variant(&self) -> Result<PostgresVariant, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    pub async fn get_variant(
+        &self,
+    ) -> Result<
+        PostgresVariant,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let row = self
             .conn
             .query_one("SELECT version()", &[])
@@ -498,7 +515,10 @@ impl PostgresConnection {
     async fn query_variant_and_schema(
         &self,
         table_reference: &TableReference,
-    ) -> Result<(PostgresVariant, Vec<ColumnDef>), datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        (PostgresVariant, Vec<ColumnDef>),
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let table_name = table_reference.table();
         let schema_name = table_reference.schema().unwrap_or("public");
 
@@ -542,7 +562,10 @@ impl PostgresConnection {
         catalog: Option<&str>,
         schema_name: &str,
         table_name: &str,
-    ) -> Result<Vec<ColumnDef>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        Vec<ColumnDef>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         // `SHOW COLUMNS` needs a fully-qualified 3-part name including the database. Use
         // the catalog from the table reference when the caller fully-qualified it;
         // otherwise scope to the connected database (matching the previous
@@ -638,7 +661,10 @@ impl PostgresConnection {
     async fn infer_schema_from_data(
         &self,
         table_reference: &TableReference,
-    ) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let rows = self
             .conn
             .query(&format!("SELECT * FROM {table_reference} LIMIT 1"), &[])

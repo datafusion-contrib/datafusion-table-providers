@@ -1,7 +1,5 @@
 use crate::utils::unnest::{DuplicateBehavior, UnnestBehavior, UnnestParameters};
-use crate::{
-    connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result,
-};
+use crate::{connection::MongoDBConnection, ConnectionFailedSnafu, Error, InvalidUriSnafu, Result};
 use mongodb::{
     bson::doc,
     error::ErrorKind,
@@ -32,7 +30,9 @@ const DEFAULT_SCHEMA_INFER_MAX_RECORDS: u32 = 400;
 
 impl MongoDBConnectionPool {
     pub async fn new(params: HashMap<String, SecretString>) -> Result<Self> {
-        let params = datafusion_table_providers_common::util::remove_prefix_from_hashmap_keys(params, "mongodb_");
+        let params = datafusion_table_providers_common::util::remove_prefix_from_hashmap_keys(
+            params, "mongodb_",
+        );
 
         let (uri, explicit_db_name) = build_connection_uri(&params)?;
 

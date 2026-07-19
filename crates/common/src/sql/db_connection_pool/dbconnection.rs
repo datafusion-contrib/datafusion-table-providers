@@ -5,7 +5,6 @@ use datafusion::{
 };
 use snafu::prelude::*;
 
-
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T, E = GenericError> = std::result::Result<T, E>;
 

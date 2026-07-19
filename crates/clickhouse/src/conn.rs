@@ -13,7 +13,9 @@ use regex::Regex;
 use serde::Deserialize;
 use snafu::ResultExt;
 
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{AsyncDbConnection, DbConnection, Error, SyncDbConnection};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
+    AsyncDbConnection, DbConnection, Error, SyncDbConnection,
+};
 
 #[derive(Clone)]
 pub struct ClickHouseConnection {
@@ -22,7 +24,8 @@ pub struct ClickHouseConnection {
 
 impl std::fmt::Debug for ClickHouseConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClickHouseConnection").finish_non_exhaustive()
+        f.debug_struct("ClickHouseConnection")
+            .finish_non_exhaustive()
     }
 }
 
@@ -184,7 +187,9 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
         sql: &str,
         _params: &[()],
         projected_schema: Option<SchemaRef>,
-    ) -> datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result<SendableRecordBatchStream> {
+    ) -> datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result<
+        SendableRecordBatchStream,
+    > {
         let query = self.client.query(sql);
 
         let mut bytes_stream = query
@@ -238,7 +243,11 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
     ///
     /// * `sql` - The SQL statement.
     /// * `params` - The parameters for the SQL statement.
-    async fn execute(&self, sql: &str, params: &[()]) -> datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result<u64> {
+    async fn execute(
+        &self,
+        sql: &str,
+        params: &[()],
+    ) -> datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result<u64> {
         let mut query = self.client.query(sql);
 
         for param in params {

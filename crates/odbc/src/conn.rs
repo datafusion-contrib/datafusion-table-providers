@@ -18,11 +18,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
-    runtime::run_async_with_tokio,
-    DbConnectionPool,
-};
 use arrow_odbc::arrow_schema_from;
 use arrow_odbc::OdbcReader;
 use arrow_odbc::OdbcReaderBuilder;
@@ -35,6 +30,11 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::TableReference;
+use datafusion_table_providers_common::sql::db_connection_pool::{
+    dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
+    runtime::run_async_with_tokio,
+    DbConnectionPool,
+};
 use dyn_clone::DynClone;
 use futures::lock::Mutex;
 use odbc_api::handles::SqlResult;
@@ -134,11 +134,22 @@ where
         }
     }
 
-    async fn tables(&self, _schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn tables(
+        &self,
+        _schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         unimplemented!()
     }
 
-    async fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         unimplemented!()
     }
 

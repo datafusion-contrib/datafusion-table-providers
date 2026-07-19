@@ -1,23 +1,10 @@
-pub mod pool;
-pub mod conn;
 pub mod arrow_sql_gen;
+pub mod conn;
+pub mod pool;
 
 use crate::conn::SqliteConnection;
-use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
-    table_reference_to_sea_table_ref, CreateTableBuilder, IndexBuilder, InsertBuilder
-};
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
-use crate::pool::SqliteConnectionPoolFactory;
-use datafusion_table_providers_common::sql::db_connection_pool::DbInstanceKey;
-use datafusion_table_providers_common::sql::db_connection_pool::{
-    self,
-    dbconnection::DbConnection,
-    DbConnectionPool, Mode
-};
 use crate::pool::SqliteConnectionPool;
-use datafusion_table_providers_common::sql::sql_provider_datafusion;
-use datafusion_table_providers_common::util::schema::SchemaValidator;
-use datafusion_table_providers_common::UnsupportedTypeAction;
+use crate::pool::SqliteConnectionPoolFactory;
 use arrow::array::{Int64Array, StringArray};
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use async_trait::async_trait;
@@ -28,8 +15,21 @@ use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::TableReference
+    sql::TableReference,
 };
+use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
+    table_reference_to_sea_table_ref, CreateTableBuilder, IndexBuilder, InsertBuilder,
+};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
+    self, get_schema, AsyncDbConnection,
+};
+use datafusion_table_providers_common::sql::db_connection_pool::DbInstanceKey;
+use datafusion_table_providers_common::sql::db_connection_pool::{
+    self, dbconnection::DbConnection, DbConnectionPool, Mode,
+};
+use datafusion_table_providers_common::sql::sql_provider_datafusion;
+use datafusion_table_providers_common::util::schema::SchemaValidator;
+use datafusion_table_providers_common::UnsupportedTypeAction;
 use futures::TryStreamExt;
 use rusqlite::{ToSql, Transaction};
 use snafu::prelude::*;
@@ -45,7 +45,7 @@ use datafusion_table_providers_common::util::{
     column_reference::{self, ColumnReference},
     constraints::{self, get_primary_keys_from_constraints},
     indexes::IndexType,
-    on_conflict::{self, OnConflict}
+    on_conflict::{self, OnConflict},
 };
 
 use self::write::SqliteTableWriter;
@@ -63,7 +63,7 @@ pub mod write;
 pub enum Error {
     #[snafu(display("DbConnectionError: {source}"))]
     DbConnectionError {
-        source: db_connection_pool::dbconnection::GenericError
+        source: db_connection_pool::dbconnection::GenericError,
     },
 
     #[snafu(display("DbConnectionPoolError: {source}"))]
@@ -74,12 +74,12 @@ pub enum Error {
 
     #[snafu(display("Unable to construct SQLTable instance: {source}"))]
     UnableToConstuctSqlTableProvider {
-        source: sql_provider_datafusion::Error
+        source: sql_provider_datafusion::Error,
     },
 
     #[snafu(display("Unable to create table in Sqlite: {source}"))]
     UnableToCreateTable {
-        source: tokio_rusqlite::Error<rusqlite::Error>
+        source: tokio_rusqlite::Error<rusqlite::Error>,
     },
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
@@ -87,7 +87,7 @@ pub enum Error {
 
     #[snafu(display("Unable to insert data into the Sqlite table: {source}"))]
     UnableToInsertIntoTableAsync {
-        source: tokio_rusqlite::Error<rusqlite::Error>
+        source: tokio_rusqlite::Error<rusqlite::Error>,
     },
 
     #[snafu(display("Unable to insert data into the Sqlite table. The disk is full."))]
@@ -122,7 +122,7 @@ pub enum Error {
     #[snafu(display(
         "Failed to create '{table_name}': creating a table with a schema is not supported"
     ))]
-    TableWithSchemaCreationNotSupported { table_name: String }
+    TableWithSchemaCreationNotSupported { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -130,7 +130,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct SqliteTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, SqliteConnectionPool>>>,
-    batch_insert_use_prepared_statements: bool
+    batch_insert_use_prepared_statements: bool,
 }
 
 const SQLITE_DB_PATH_PARAM: &str = "file";
@@ -143,7 +143,7 @@ impl SqliteTableProviderFactory {
     pub fn new() -> Self {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
-            batch_insert_use_prepared_statements: false
+            batch_insert_use_prepared_statements: false,
         }
     }
 
@@ -202,7 +202,7 @@ impl SqliteTableProviderFactory {
                     .context(UnableToParseBusyTimeoutParameterSnafu)?;
                 Ok(duration)
             }
-            None => Ok(Duration::from_millis(5000))
+            None => Ok(Duration::from_millis(5000)),
         }
     }
 
@@ -215,7 +215,7 @@ impl SqliteTableProviderFactory {
         let db_path = db_path.into();
         let key = match mode {
             Mode::Memory => DbInstanceKey::memory(),
-            Mode::File => DbInstanceKey::file(Arc::clone(&db_path))
+            Mode::File => DbInstanceKey::file(Arc::clone(&db_path)),
         };
         let mut instances = self.instances.lock().await;
 
@@ -253,7 +253,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
-                table_name: cmd.name.to_string()
+                table_name: cmd.name.to_string(),
             }
             .fail()
             .map_err(to_datafusion_error)?;
@@ -267,7 +267,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         let indexes_option_str = options.remove("indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
             Some(indexes_str) => util::hashmap_from_option_string(&indexes_str),
-            None => HashMap::new()
+            None => HashMap::new(),
         };
 
         let unparsed_indexes = unparsed_indexes
@@ -405,7 +405,7 @@ impl TableProviderFactory for SqliteTableProviderFactory {
 
 pub struct SqliteTableFactory {
     pool: Arc<SqliteConnectionPool>,
-    batch_insert_use_prepared_statements: bool
+    batch_insert_use_prepared_statements: bool,
 }
 
 impl SqliteTableFactory {
@@ -413,7 +413,7 @@ impl SqliteTableFactory {
     pub fn new(pool: Arc<SqliteConnectionPool>) -> Self {
         Self {
             pool,
-            batch_insert_use_prepared_statements: false
+            batch_insert_use_prepared_statements: false,
         }
     }
 
@@ -462,7 +462,7 @@ pub struct Sqlite {
     schema: SchemaRef,
     pool: Arc<SqliteConnectionPool>,
     constraints: Constraints,
-    batch_insert_use_prepared_statements: bool
+    batch_insert_use_prepared_statements: bool,
 }
 
 impl std::fmt::Debug for Sqlite {
@@ -488,7 +488,7 @@ impl Sqlite {
             schema,
             pool,
             constraints,
-            batch_insert_use_prepared_statements: false
+            batch_insert_use_prepared_statements: false,
         }
     }
 
@@ -870,7 +870,7 @@ impl Sqlite {
                                         .unwrap();
                                     array.value(row_idx)
                                 }
-                                _ => 0
+                                _ => 0,
                             };
                             params.push(Box::new(value));
                         }
@@ -894,7 +894,7 @@ impl Sqlite {
                                         .unwrap();
                                     Some(array.value(row_idx))
                                 }
-                                _ => None
+                                _ => None,
                             }
                         };
                         if let Some(v) = value {
@@ -1223,7 +1223,7 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Schema};
     use datafusion::{
         common::{Constraint, ToDFSchema},
-        prelude::SessionContext
+        prelude::SessionContext,
     };
 
     use super::*;
@@ -1278,7 +1278,7 @@ pub(crate) mod tests {
             constraints: primary_keys_constraints,
             column_defaults: HashMap::default(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
         let ctx = SessionContext::new();
         let table = SqliteTableProviderFactory::default()

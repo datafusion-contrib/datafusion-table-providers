@@ -1,13 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fmt, sync::Arc};
 
-use crate::DuckDB;
 use crate::pool::DuckDbConnectionPool;
-use datafusion_table_providers_common::util::{
-    constraints,
-    on_conflict::OnConflict,
-    retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
-};
+use crate::DuckDB;
 use arrow::array::RecordBatchReader;
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::{array::RecordBatch, datatypes::SchemaRef};
@@ -23,6 +18,11 @@ use datafusion::{
     execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::Expr,
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
+};
+use datafusion_table_providers_common::util::{
+    constraints,
+    on_conflict::OnConflict,
+    retriable_error::{check_and_mark_retriable_error, to_retriable_data_write_error},
 };
 use duckdb::Transaction;
 use futures::StreamExt;

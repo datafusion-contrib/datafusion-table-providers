@@ -1,25 +1,14 @@
-pub mod pool;
-pub mod conn;
 pub mod arrow_sql_gen;
+pub mod conn;
+pub mod pool;
 
 use crate::arrow_sql_gen::statement_ext::CreateTableBuilderPostgresExt;
 use crate::conn::PostgresConnection;
-use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
-    CreateTableBuilder, Error as SqlGenError, IndexBuilder, InsertBuilder
-};
 use crate::conn::PostgresPooledConnection;
-use datafusion_table_providers_common::sql::db_connection_pool::{
-    self,
-    dbconnection::DbConnection,
-    DbConnectionPool
-};
 use crate::pool::PostgresConnectionPool;
-use datafusion_table_providers_common::sql::sql_provider_datafusion::SqlTable;
-use datafusion_table_providers_common::util::schema::SchemaValidator;
-use datafusion_table_providers_common::UnsupportedTypeAction;
 use arrow::{
     array::RecordBatch,
-    datatypes::{Schema, SchemaRef}
+    datatypes::{Schema, SchemaRef},
 };
 use async_trait::async_trait;
 use bb8_postgres::tokio_postgres::{types::ToSql, Transaction};
@@ -31,8 +20,17 @@ use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::TableReference
+    sql::TableReference,
 };
+use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
+    CreateTableBuilder, Error as SqlGenError, IndexBuilder, InsertBuilder,
+};
+use datafusion_table_providers_common::sql::db_connection_pool::{
+    self, dbconnection::DbConnection, DbConnectionPool,
+};
+use datafusion_table_providers_common::sql::sql_provider_datafusion::SqlTable;
+use datafusion_table_providers_common::util::schema::SchemaValidator;
+use datafusion_table_providers_common::UnsupportedTypeAction;
 use snafu::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
@@ -43,7 +41,7 @@ use datafusion_table_providers_common::util::{
     indexes::IndexType,
     on_conflict::{self, OnConflict},
     secrets::to_secret_map,
-    to_datafusion_error
+    to_datafusion_error,
 };
 
 use self::write::PostgresTableWriter;
@@ -59,7 +57,7 @@ pub type DynPostgresConnection =
 pub enum Error {
     #[snafu(display("DbConnectionError: {source}"))]
     DbConnectionError {
-        source: db_connection_pool::dbconnection::GenericError
+        source: db_connection_pool::dbconnection::GenericError,
     },
 
     #[snafu(display("Unable to create Postgres connection pool: {source}"))]
@@ -70,22 +68,22 @@ pub enum Error {
 
     #[snafu(display("Unable to begin Postgres transaction: {source}"))]
     UnableToBeginTransaction {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to create the Postgres table: {source}"))]
     UnableToCreatePostgresTable {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to create an index for the Postgres table: {source}"))]
     UnableToCreateIndexForPostgresTable {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to commit the Postgres transaction: {source}"))]
     UnableToCommitPostgresTransaction {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to generate SQL: {source}"))]
@@ -93,17 +91,17 @@ pub enum Error {
 
     #[snafu(display("Unable to delete all data from the Postgres table: {source}"))]
     UnableToDeleteAllTableData {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to delete data from the Postgres table: {source}"))]
     UnableToDeleteData {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to insert Arrow batch to Postgres table: {source}"))]
     UnableToInsertArrowBatch {
-        source: tokio_postgres::error::Error
+        source: tokio_postgres::error::Error,
     },
 
     #[snafu(display("Unable to create insertion statement for Postgres table: {source}"))]
@@ -127,13 +125,13 @@ pub enum Error {
     TableWithSchemaCreationNotSupported { table_name: String },
 
     #[snafu(display("Schema validation error: the provided data schema does not match the expected table schema: '{table_name}'"))]
-    SchemaValidationError { table_name: String }
+    SchemaValidationError { table_name: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct PostgresTableFactory {
-    pool: Arc<PostgresConnectionPool>
+    pool: Arc<PostgresConnectionPool>,
 }
 
 impl PostgresTableFactory {
@@ -209,7 +207,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
-                table_name: cmd.name.to_string()
+                table_name: cmd.name.to_string(),
             }
             .fail()
             .map_err(to_datafusion_error)?;
@@ -222,7 +220,7 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         let indexes_option_str = options.remove("indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
             Some(indexes_str) => util::hashmap_from_option_string(&indexes_str),
-            None => HashMap::new()
+            None => HashMap::new(),
         };
 
         let unparsed_indexes = unparsed_indexes
@@ -326,7 +324,7 @@ pub struct Postgres {
     table: TableReference,
     pool: Arc<PostgresConnectionPool>,
     schema: SchemaRef,
-    constraints: Constraints
+    constraints: Constraints,
 }
 
 impl std::fmt::Debug for Postgres {
@@ -351,7 +349,7 @@ impl Postgres {
             table,
             pool,
             schema,
-            constraints
+            constraints,
         }
     }
 
@@ -372,7 +370,7 @@ impl Postgres {
 
         if !self.table_exists(pg_conn).await {
             TableDoesntExistSnafu {
-                table_name: self.table.to_string()
+                table_name: self.table.to_string(),
             }
             .fail()?;
         }

@@ -1133,7 +1133,6 @@ mod tests {
         assert_eq!(format!("{table_ref}"), "test");
     }
 
-
     mod fetch_tests {
         use crate::sql::sql_provider_datafusion::SqlExec;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};

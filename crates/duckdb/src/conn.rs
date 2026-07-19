@@ -350,7 +350,13 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         }
     }
 
-    fn tables(&self, schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn tables(
+        &self,
+        schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let sql = "SELECT table_name FROM information_schema.tables \
                   WHERE table_schema = ? AND table_type = 'BASE TABLE'";
 
@@ -372,7 +378,12 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Ok(tables)
     }
 
-    fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let sql = "SELECT DISTINCT schema_name FROM information_schema.schemata \
                   WHERE schema_name NOT IN ('information_schema', 'pg_catalog')";
 
@@ -398,7 +409,13 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         Ok(schemas)
     }
 
-    fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    fn get_schema(
+        &self,
+        table_reference: &TableReference,
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let table_str = if is_table_function(table_reference) {
             table_reference.to_string()
         } else {

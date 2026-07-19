@@ -2,8 +2,6 @@ use std::convert;
 use std::io::Read;
 use std::sync::Arc;
 
-use datafusion_table_providers_common::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
-use datafusion_table_providers_common::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use arrow::array::{
     new_null_array, Array, ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder,
     Decimal128Builder, FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder,
@@ -21,6 +19,8 @@ use bigdecimal::BigDecimal;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, Timelike, Utc};
 use composite::CompositeType;
+use datafusion_table_providers_common::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder_optional;
+use datafusion_table_providers_common::sql::arrow_sql_gen::statement::map_data_type_to_column_type;
 use geo_types::geometry::Point;
 use rust_decimal::Decimal;
 use sea_query::{Alias, ColumnType, SeaRc};

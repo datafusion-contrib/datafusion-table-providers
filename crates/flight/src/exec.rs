@@ -23,7 +23,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::{flight_channel, to_df_err, FlightMetadata, FlightProperties, SizeLimits};
-use datafusion_table_providers_common::sql::db_connection_pool::runtime::run_async_with_tokio;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
@@ -39,6 +38,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion_table_providers_common::sql::db_connection_pool::runtime::run_async_with_tokio;
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tonic::metadata::{AsciiMetadataKey, MetadataMap};

@@ -28,11 +28,11 @@ pub mod sql {
     }
 
     pub mod db_connection_pool {
+        pub use datafusion_table_providers_common::sql::db_connection_pool::runtime;
         pub use datafusion_table_providers_common::sql::db_connection_pool::{
             DbConnectionPool, DbInstanceKey, JoinPushDown, Mode, PasswordProvider,
             StaticPasswordProvider,
         };
-        pub use datafusion_table_providers_common::sql::db_connection_pool::runtime;
 
         #[cfg(feature = "adbc")]
         pub use datafusion_table_providers_adbc::pool as adbcpool;

@@ -743,7 +743,6 @@ async fn arrow_mysql_round_trip(
         record_batch[0].columns()
     );
 
-    
     let casted_result =
         try_cast_to(record_batch[0].clone(), source_schema).expect("Failed to cast record batch");
 
@@ -752,7 +751,6 @@ async fn arrow_mysql_round_trip(
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
 
-    
     assert_eq!(arrow_record, casted_result);
 }
 

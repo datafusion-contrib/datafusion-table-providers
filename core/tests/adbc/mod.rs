@@ -86,7 +86,6 @@ async fn arrow_adbc_round_trip(
 
     let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-    
     let casted_record = try_cast_to(record_batch[0].clone(), _source_schema).unwrap();
 
     tracing::debug!("Original Arrow Record Batch: {:?}", arrow_record.columns());
@@ -99,7 +98,7 @@ async fn arrow_adbc_round_trip(
     assert_eq!(record_batch.len(), 1);
     assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
     assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-    
+
     assert_eq!(casted_record, arrow_record);
 }
 

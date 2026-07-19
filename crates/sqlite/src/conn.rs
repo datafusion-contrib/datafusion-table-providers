@@ -1,14 +1,14 @@
 use std::any::Any;
 
 use crate::arrow_sql_gen::rows_to_arrow;
-use datafusion_table_providers_common::util::schema::SchemaValidator;
-use datafusion_table_providers_common::UnsupportedTypeAction;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use async_trait::async_trait;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::sql::TableReference;
+use datafusion_table_providers_common::util::schema::SchemaValidator;
+use datafusion_table_providers_common::UnsupportedTypeAction;
 use rusqlite::ToSql;
 use snafu::prelude::*;
 use tokio_rusqlite::Connection;
@@ -28,9 +28,7 @@ pub enum Error {
     QueryError { source: rusqlite::Error },
 
     #[snafu(display("Failed to convert query result to Arrow: {source}"))]
-    ConversionError {
-        source: crate::arrow_sql_gen::Error,
-    },
+    ConversionError { source: crate::arrow_sql_gen::Error },
 }
 
 pub struct SqliteConnection {
@@ -91,7 +89,13 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         SqliteConnection { conn }
     }
 
-    async fn tables(&self, _schema: &str) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn tables(
+        &self,
+        _schema: &str,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let tables = self
             .conn
             .call(move |conn| {
@@ -109,14 +113,22 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         Ok(tables)
     }
 
-    async fn schemas(&self) -> Result<Vec<String>, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    async fn schemas(
+        &self,
+    ) -> Result<
+        Vec<String>,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         Ok(vec!["main".to_string()])
     }
 
     async fn get_schema(
         &self,
         table_reference: &TableReference,
-    ) -> Result<SchemaRef, datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error> {
+    ) -> Result<
+        SchemaRef,
+        datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
+    > {
         let table_reference = table_reference.to_quoted_string();
         let schema: SchemaRef = self
             .conn

@@ -1,26 +1,26 @@
-pub mod pool;
 pub mod conn;
+pub mod pool;
 
+use crate::conn::{
+    flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
+};
+use crate::pool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder};
 use datafusion_table_providers_common::sql::sql_provider_datafusion;
 use datafusion_table_providers_common::util::{
     self,
     column_reference::{self, ColumnReference},
     constraints,
     indexes::IndexType,
-    on_conflict::{self, OnConflict}
+    on_conflict::{self, OnConflict},
 };
 use datafusion_table_providers_common::{
     sql::db_connection_pool::{
         self,
         dbconnection::{get_schema, DbConnection},
-        DbConnectionPool, DbInstanceKey, Mode
+        DbConnectionPool, DbInstanceKey, Mode,
     },
-    UnsupportedTypeAction
+    UnsupportedTypeAction,
 };
-use crate::conn::{
-    flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection
-};
-use crate::pool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -32,7 +32,7 @@ use datafusion::{
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::TableReference
+    sql::TableReference,
 };
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
@@ -43,7 +43,7 @@ use write::DuckDBTableWriterBuilder;
 
 pub use self::settings::{
     DuckDBSetting, DuckDBSettingScope, DuckDBSettingsRegistry, MemoryLimitSetting,
-    PreserveInsertionOrderSetting, TempDirectorySetting
+    PreserveInsertionOrderSetting, TempDirectorySetting,
 };
 use self::sql_table::DuckDBTable;
 
@@ -60,7 +60,7 @@ pub use creator::{RelationName, TableDefinition};
 pub enum Error {
     #[snafu(display("DbConnectionError: {source}"))]
     DbConnectionError {
-        source: db_connection_pool::dbconnection::GenericError
+        source: db_connection_pool::dbconnection::GenericError,
     },
 
     #[snafu(display("DbConnectionPoolError: {source}"))]
@@ -68,7 +68,7 @@ pub enum Error {
 
     #[snafu(display("DuckDBDataFusionError: {source}"))]
     DuckDBDataFusion {
-        source: sql_provider_datafusion::Error
+        source: sql_provider_datafusion::Error,
     },
 
     #[snafu(display("Unable to downcast DbConnection to DuckDbConnection"))]
@@ -139,7 +139,7 @@ pub enum Error {
     #[snafu(display("Failed to parse memory_limit value '{value}': {source}\nProvide a valid value, e.g. '2GB', '512MiB' (expected: KB, MB, GB, TB for 1000^i units or KiB, MiB, GiB, TiB for 1024^i units)"))]
     UnableToParseMemoryLimit {
         value: String,
-        source: byte_unit::ParseError
+        source: byte_unit::ParseError,
     },
 
     #[snafu(display("Unable to add primary key to table: {source}"))]
@@ -169,7 +169,7 @@ pub enum Error {
     UnableToRegisterArrowScanViewForTableCreation { source: duckdb::Error },
 
     #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
-    UnableToDropArrowScanView { source: duckdb::Error }
+    UnableToDropArrowScanView { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -183,7 +183,7 @@ pub struct DuckDBTableProviderFactory {
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
     unsupported_type_action: UnsupportedTypeAction,
     dialect: Arc<dyn Dialect>,
-    settings_registry: DuckDBSettingsRegistry
+    settings_registry: DuckDBSettingsRegistry,
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
@@ -205,7 +205,7 @@ impl DuckDBTableProviderFactory {
             instances: Arc::new(Mutex::new(HashMap::new())),
             unsupported_type_action: UnsupportedTypeAction::Error,
             dialect: Arc::new(DuckDBDialect::new()),
-            settings_registry: DuckDBSettingsRegistry::new()
+            settings_registry: DuckDBSettingsRegistry::new(),
         }
     }
 
@@ -303,13 +303,13 @@ impl DuckDBTableProviderFactory {
                 let path = pool_builder.get_path();
                 DbInstanceKey::file(path.into())
             }
-            Mode::Memory => DbInstanceKey::memory()
+            Mode::Memory => DbInstanceKey::memory(),
         };
 
         let access_mode = match &self.access_mode {
             AccessMode::ReadOnly => AccessMode::ReadOnly,
             AccessMode::ReadWrite => AccessMode::ReadWrite,
-            AccessMode::Automatic => AccessMode::Automatic
+            AccessMode::Automatic => AccessMode::Automatic,
         };
         let pool_builder = pool_builder.with_access_mode(access_mode);
 
@@ -344,7 +344,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         if cmd.name.schema().is_some() {
             TableWithSchemaCreationNotSupportedSnafu {
-                table_name: cmd.name.to_string()
+                table_name: cmd.name.to_string(),
             }
             .fail()
             .map_err(to_datafusion_error)?;
@@ -358,7 +358,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let indexes_option_str = remove_option(&mut options, "indexes");
         let unparsed_indexes: HashMap<String, IndexType> = match indexes_option_str {
             Some(indexes_str) => util::hashmap_from_option_string(&indexes_str),
-            None => HashMap::new()
+            None => HashMap::new(),
         };
 
         let unparsed_indexes = unparsed_indexes
@@ -400,7 +400,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
             Mode::Memory => self
                 .get_or_init_memory_instance()
                 .await
-                .map_err(to_datafusion_error)?
+                .map_err(to_datafusion_error)?,
         };
 
         let read_pool = match &mode {
@@ -409,7 +409,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
 
                 read_pool.set_attached_databases(&self.attach_databases(&options))
             }
-            Mode::Memory => pool.clone()
+            Mode::Memory => pool.clone(),
         };
 
         // Get local DuckDB SET statements to use as setup queries on the pool
@@ -440,7 +440,7 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
         let Some(conn) = db_conn.as_sync() else {
             return Err(DataFusionError::External(Box::new(
                 Error::DbConnectionError {
-                    source: "Failed to get sync DuckDbConnection using DbConnection".into()
+                    source: "Failed to get sync DuckDbConnection using DbConnection".into(),
                 },
             )));
         };
@@ -478,7 +478,7 @@ pub struct DuckDB {
     table_name: String,
     pool: Arc<DuckDbConnectionPool>,
     schema: SchemaRef,
-    constraints: Constraints
+    constraints: Constraints,
 }
 
 impl std::fmt::Debug for DuckDB {
@@ -503,7 +503,7 @@ impl DuckDB {
             table_name,
             pool,
             schema,
-            constraints
+            constraints,
         }
     }
 
@@ -547,7 +547,7 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
 
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
-    dialect: Arc<dyn Dialect>
+    dialect: Arc<dyn Dialect>,
 }
 
 impl DuckDBTableFactory {
@@ -555,7 +555,7 @@ impl DuckDBTableFactory {
     pub fn new(pool: Arc<DuckDbConnectionPool>) -> Self {
         Self {
             pool,
-            dialect: Arc::new(DuckDBDialect::new())
+            dialect: Arc::new(DuckDBDialect::new()),
         }
     }
 
@@ -724,7 +724,7 @@ pub(crate) mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
 
         let table_provider = factory
@@ -785,7 +785,7 @@ pub(crate) mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
 
         let table_provider = factory
@@ -842,7 +842,7 @@ pub(crate) mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
 
         let table_provider = factory
@@ -897,7 +897,7 @@ pub(crate) mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
 
         let table_provider = factory
@@ -955,7 +955,7 @@ pub(crate) mod tests {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             temporary: false,
-            or_replace: false
+            or_replace: false,
         };
 
         let result = factory.create(&ctx.state(), &cmd).await;

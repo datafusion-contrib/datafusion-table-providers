@@ -16,7 +16,6 @@ limitations under the License.
 
 use std::sync::Arc;
 
-use datafusion_table_providers_common::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
 use arrow::{
     array::{
         ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
@@ -26,6 +25,7 @@ use arrow::{
     },
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
+use datafusion_table_providers_common::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
 use rusqlite::{types::Type, Row, Rows};
 use snafu::prelude::*;
 

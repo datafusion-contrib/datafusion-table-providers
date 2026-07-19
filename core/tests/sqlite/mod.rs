@@ -99,7 +99,6 @@ async fn arrow_sqlite_round_trip(
 
         let record_batch = df.collect().await.expect("RecordBatch should be collected");
 
-        
         let casted_record =
             try_cast_to(record_batch[0].clone(), Arc::clone(&source_schema)).unwrap();
 
@@ -113,7 +112,7 @@ async fn arrow_sqlite_round_trip(
         assert_eq!(record_batch.len(), 1);
         assert_eq!(record_batch[0].num_rows(), arrow_record.num_rows());
         assert_eq!(record_batch[0].num_columns(), arrow_record.num_columns());
-        
+
         assert_eq!(casted_record, arrow_record);
     }
 }
@@ -355,12 +354,12 @@ async fn test_sqlite_table_provider_roundtrip(
     );
 
     // Cast the result back to the original schema for comparison
-    
+
     let casted_result = try_cast_to(result_batch.clone(), Arc::clone(&schema))
         .expect("should cast result to original schema");
 
     // Verify the data matches
-    
+
     assert_eq!(
         casted_result, record_batch,
         "Round-tripped data should match original"

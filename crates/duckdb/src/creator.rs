@@ -1,7 +1,5 @@
-use crate::pool::DuckDbConnectionPool;
-use datafusion_table_providers_common::sql::arrow_sql_gen::statement::IndexBuilder;
 use crate::conn::DuckDbConnection;
-use datafusion_table_providers_common::util::on_conflict::OnConflict;
+use crate::pool::DuckDbConnectionPool;
 use arrow::{
     array::{RecordBatch, RecordBatchIterator, RecordBatchReader},
     datatypes::SchemaRef,
@@ -10,6 +8,8 @@ use arrow::{
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::sql::TableReference;
+use datafusion_table_providers_common::sql::arrow_sql_gen::statement::IndexBuilder;
+use datafusion_table_providers_common::util::on_conflict::OnConflict;
 use duckdb::Transaction;
 use itertools::Itertools;
 use snafu::prelude::*;
@@ -744,10 +744,7 @@ impl ViewCreator {
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::{
-        duckdb::make_initial_table,
-        sql::db_connection_pool::{
-            crate::conn::DuckDbConnection,
-        },
+        duckdb::make_initial_table, sql::db_connection_pool::crate::conn::DuckDbConnection,
     };
     use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
