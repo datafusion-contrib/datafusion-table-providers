@@ -1,0 +1,147 @@
+# Release automation for datafusion-table-providers.
+#
+# Required repository secrets:
+#   RELEASE_TOKEN - Admin-capable PAT that can push to protected main and create releases
+#
+# Required crates.io trusted publishing config
+# (https://crates.io/crates/datafusion-table-providers/settings/trusted-publishing):
+#   Repository:     datafusion-contrib/datafusion-table-providers
+#   Workflow file:  release.yaml
+#   Environment:    crates-io
+#
+# Also create a GitHub Environment named "crates-io" (Settings → Environments).
+#
+# Trigger via Actions → Release → Run workflow, providing the new version (e.g. 0.13.0 or v0.13.0).
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.13.0 or v0.13.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - name: Normalize and validate version
+        id: version
+        run: |
+          raw="${{ inputs.version }}"
+          version="${raw#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: '$raw' (expected X.Y.Z or vX.Y.Z)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bump workspace version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 <<'PY'
+          import pathlib
+          import re
+          import os
+
+          version = os.environ["VERSION"]
+          cargo_toml = pathlib.Path("Cargo.toml")
+          text = cargo_toml.read_text()
+
+          def bump_workspace_package_version(contents: str, new_version: str) -> str:
+              lines = contents.splitlines(keepends=True)
+              in_workspace_package = False
+              replaced = False
+              out = []
+              for line in lines:
+                  if line.startswith("[") and line.strip().endswith("]"):
+                      in_workspace_package = line.strip() == "[workspace.package]"
+                  if in_workspace_package and re.match(r'^version\s*=\s*"', line):
+                      out.append(f'version = "{new_version}"\n')
+                      replaced = True
+                      in_workspace_package = False
+                      continue
+                  out.append(line)
+              if not replaced:
+                  raise SystemExit("Failed to find [workspace.package] version in Cargo.toml")
+              return "".join(out)
+
+          cargo_toml.write_text(bump_workspace_package_version(text, version))
+
+          lock = pathlib.Path("Cargo.lock")
+          lock_text = lock.read_text()
+          for name in (
+              "datafusion-table-providers",
+              "datafusion-table-providers-python",
+          ):
+              pattern = (
+                  rf'(?m)(^\[\[package\]\]\nname = "{re.escape(name)}"\nversion = ")[^"]+(")'
+              )
+              lock_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", lock_text, count=1)
+              if count != 1:
+                  raise SystemExit(f"Failed to update version for {name} in Cargo.lock")
+          lock.write_text(lock_text)
+          PY
+
+      - name: Commit and push version bump
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          if git diff --staged --quiet; then
+            echo "No version changes to commit (already at ${TAG}?)"
+            exit 1
+          fi
+          git commit -m "${TAG}"
+          git push origin HEAD:main
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --target main \
+            --title "${TAG}" \
+            --generate-notes
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish -p datafusion-table-providers
