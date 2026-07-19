@@ -66,8 +66,22 @@ jobs:
           fi
 
   leaf-crates:
-    name: Leaf crates
+    name: Leaf (${{ matrix.crate }})
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        crate:
+          - datafusion-table-providers-common
+          - datafusion-table-providers-adbc
+          - datafusion-table-providers-clickhouse
+          - datafusion-table-providers-duckdb
+          - datafusion-table-providers-flight
+          - datafusion-table-providers-mongodb
+          - datafusion-table-providers-mysql
+          - datafusion-table-providers-odbc
+          - datafusion-table-providers-postgres
+          - datafusion-table-providers-sqlite
 
     steps:
       - uses: actions/checkout@v7
@@ -82,12 +96,12 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check common and sample leaf crates
-        run: |
-          cargo check -p datafusion-table-providers-common
-          cargo check -p datafusion-table-providers-postgres
-          cargo check -p datafusion-table-providers-sqlite
-          cargo check -p datafusion-table-providers-duckdb
+      - name: Install ODBC
+        if: matrix.crate == 'datafusion-table-providers-odbc'
+        run: sudo apt-get install -y unixodbc-dev
+
+      - name: Check ${{ matrix.crate }}
+        run: cargo check -p ${{ matrix.crate }}
 
   integration-test:
     name: Tests

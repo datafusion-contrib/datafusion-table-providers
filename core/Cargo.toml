@@ -86,7 +86,6 @@ mysql = ["dep:datafusion-table-providers-mysql"]
 odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
 sqlite = ["dep:datafusion-table-providers-sqlite"]
-sqlite-bundled = ["sqlite"]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
