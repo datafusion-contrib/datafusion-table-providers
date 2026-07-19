@@ -1,0 +1,48 @@
+[package]
+name = "datafusion-table-providers-postgres"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion postgres table provider"
+
+[dependencies]
+arrow = { workspace = true }
+arrow-json = { workspace = true }
+arrow-schema = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+bb8 = "0.9"
+bb8-postgres = "0.9"
+bigdecimal = "0.4"
+byteorder = "1.5"
+chrono = "0.4.44"
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
+datafusion-table-providers-common = { workspace = true }
+fallible-iterator = "0.3"
+futures = "0.3"
+geo-types = "0.7"
+logos = "0.16"
+native-tls = "0.2"
+pem = "3.0"
+postgres-native-tls = "0.5.0"
+rust_decimal = { version = "1.38", features = ["db-postgres"] }
+sea-query = { version = "1.0.0", features = ["backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
+secrecy = "0.10"
+serde_json = "1.0"
+snafu = "0.9"
+tokio = { version = "1.52", features = ["macros", "fs"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1", "with-geo-types-0_7"] }
+tracing = "0.1"
+uuid = { version = "1.18" }
+url = "2.5"
+
+[features]
+default = ["federation"]
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

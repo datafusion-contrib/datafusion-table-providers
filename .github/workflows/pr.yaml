@@ -30,7 +30,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - run: cargo clippy --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-features -- -D warnings
 
   build:
     name: Build (${{ matrix.features }})
@@ -60,10 +60,34 @@ jobs:
       - name: Build with ${{ matrix.features }}
         run: |
           if [ "${{ matrix.features }}" = "no-default-features" ]; then
-            cargo check --no-default-features
+            cargo check -p datafusion-table-providers --no-default-features
           else
-            cargo check --no-default-features --features ${{ matrix.features }}
+            cargo check -p datafusion-table-providers --no-default-features --features ${{ matrix.features }}
           fi
+
+  leaf-crates:
+    name: Leaf crates
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check common and sample leaf crates
+        run: |
+          cargo check -p datafusion-table-providers-common
+          cargo check -p datafusion-table-providers-postgres
+          cargo check -p datafusion-table-providers-sqlite
+          cargo check -p datafusion-table-providers-duckdb
 
   integration-test:
     name: Tests
@@ -146,7 +170,7 @@ jobs:
 
       - name: Compile integration tests
         run: |
-          cargo test --no-run --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,adbc
+          cargo test -p datafusion-table-providers --no-run --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,adbc
 
       - name: Run tests
         run: make test

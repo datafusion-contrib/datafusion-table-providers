@@ -3,7 +3,7 @@ all:
 
 .PHONY: test
 test:
-	cargo test --features clickhouse-federation,duckdb-federation,flight,mysql-federation,postgres-federation,sqlite-federation,adbc-federation -p datafusion-table-providers --lib
+	cargo test --features clickhouse,duckdb,flight,mysql,postgres,sqlite,adbc -p datafusion-table-providers --lib
 
 .PHONY: lint
 lint:

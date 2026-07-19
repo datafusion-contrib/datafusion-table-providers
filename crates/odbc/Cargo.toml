@@ -1,0 +1,33 @@
+[package]
+name = "datafusion-table-providers-odbc"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion odbc table provider"
+
+[dependencies]
+arrow = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
+datafusion-table-providers-common = { workspace = true }
+dyn-clone = "1.0"
+futures = "0.3"
+odbc-api = "28.2"
+arrow-odbc = { workspace = true }
+snafu = "0.9"
+tokio = { version = "1.52", features = ["macros", "fs"] }
+tracing = "0.1"
+secrecy = "0.10"
+sha2 = "0.11"
+
+[features]
+default = ["federation"]
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
