@@ -30,15 +30,15 @@ Existing examples continue to use the facade crate and its feature flags.
 
 ## Table Providers
 
-- PostgreSQL
-- MySQL
-- SQLite
-- ClickHouse
-- DuckDB
-- Flight SQL
-- MongoDB
-- ADBC
-- ODBC
+- PostgreSQL (`datafusion-table-providers-postgres`)
+- MySQL (`datafusion-table-providers-mysql`)
+- SQLite (`datafusion-table-providers-sqlite`)
+- ClickHouse (`datafusion-table-providers-clickhouse`)
+- DuckDB (`datafusion-table-providers-duckdb`)
+- Flight SQL (`datafusion-table-providers-flight`)
+- MongoDB (`datafusion-table-providers-mongodb`)
+- ADBC (`datafusion-table-providers-adbc`)
+- ODBC (`datafusion-table-providers-odbc`)
 
 ## Development
 
