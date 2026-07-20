@@ -7,6 +7,7 @@ on:
       - main
       - spiceai
 
+
 jobs:
   lint:
     name: Clippy
@@ -93,13 +94,9 @@ jobs:
       - name: Check ${{ matrix.crate }}
         run: cargo check -p ${{ matrix.crate }}
 
-  integration-test:
-    name: Tests
+  unit-test:
+    name: Unit Tests
     runs-on: ubuntu-latest
-
-    env:
-      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
-      MYSQL_DOCKER_IMAGE: mysql:8.0
 
     steps:
       - uses: actions/checkout@v7
@@ -109,75 +106,91 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ODBC & Sqlite
+        run: |
+          sudo apt-get install -y unixodbc-dev libsqlite3-dev
+
+      - name: Run unit tests
+        run: make test
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+      MYSQL_DOCKER_IMAGE: mysql:8.0
+      CLICKHOUSE_DOCKER_IMAGE: clickhouse/clickhouse-server:24.8
+      # Keep integration test logs concise for faster CI runs.
+      RUST_LOG: info
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # Free space before pulling images so we do not delete the images we need.
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
+            /usr/lib/jvm || true
+          sudo docker system prune -af >/dev/null 2>&1 || true
+          df -h
+
       - name: Cache Docker images
         id: docker-cache
         uses: actions/cache@v6
         with:
           path: /tmp/docker-images
-          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}
+          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}-${{ env.CLICKHOUSE_DOCKER_IMAGE }}
 
       - name: Load or pull Docker images
         run: |
-          if [ -f /tmp/docker-images/postgres.tar ] && [ -f /tmp/docker-images/mysql.tar ]; then
-            echo "Loading cached Docker images..."
-            docker load -i /tmp/docker-images/postgres.tar
-            docker load -i /tmp/docker-images/mysql.tar
-          else
-            echo "Pulling Docker images..."
-            docker pull ${{ env.PG_DOCKER_IMAGE }}
-            docker pull ${{ env.MYSQL_DOCKER_IMAGE }}
-            mkdir -p /tmp/docker-images
-            docker save -o /tmp/docker-images/postgres.tar ${{ env.PG_DOCKER_IMAGE }}
-            docker save -o /tmp/docker-images/mysql.tar ${{ env.MYSQL_DOCKER_IMAGE }}
-          fi
-
-      - name: Free Disk Space
-        run: |
-          sudo docker rmi $(docker image ls -aq) >/dev/null 2>&1 || true
-          sudo rm -rf \
-            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
-            /usr/lib/jvm || true
-          echo "some directories deleted"
-          sudo apt-get update >/dev/null 2>&1
-          sudo apt install aptitude -y >/dev/null 2>&1 || true
-          sudo aptitude purge aria2 ansible azure-cli shellcheck rpm xorriso zsync \
-            esl-erlang firefox gfortran-8 gfortran-9 google-chrome-stable \
-            google-cloud-sdk imagemagick \
-            libmagickcore-dev libmagickwand-dev libmagic-dev ant ant-optional kubectl \
-            mercurial apt-transport-https mono-complete libmysqlclient \
-            yarn chrpath libssl-dev libxft-dev \
-            libfreetype6 libfreetype6-dev libfontconfig1 libfontconfig1-dev \
-            snmp pollinate libpq-dev postgresql-client powershell ruby-full \
-            sphinxsearch subversion mongodb-org azure-cli microsoft-edge-stable \
-            -y -f >/dev/null 2>&1 || true
-          sudo aptitude purge google-cloud-sdk -f -y >/dev/null 2>&1 || true
-          sudo aptitude purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
-          sudo apt purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
-          sudo aptitude purge '~n ^php' -f -y >/dev/null 2>&1 || true
-          sudo aptitude purge '~n ^dotnet' -f -y >/dev/null 2>&1 || true
-          sudo apt-get autoremove -y >/dev/null 2>&1 || true
-          sudo apt-get autoclean -y >/dev/null 2>&1 || true
-          echo "some packages purged"
-          df -h
+          mkdir -p /tmp/docker-images
+          load_or_pull() {
+            local name="$1"
+            local image="$2"
+            local tar="/tmp/docker-images/${name}.tar"
+            if [ -f "$tar" ]; then
+              echo "Loading cached $image..."
+              docker load -i "$tar"
+            else
+              echo "Pulling $image..."
+              docker pull "$image"
+              docker save -o "$tar" "$image"
+            fi
+          }
+          load_or_pull postgres "${{ env.PG_DOCKER_IMAGE }}"
+          load_or_pull mysql "${{ env.MYSQL_DOCKER_IMAGE }}"
+          load_or_pull clickhouse "${{ env.CLICKHOUSE_DOCKER_IMAGE }}"
 
       - name: Install ODBC & Sqlite
         run: |
-          sudo apt-get install -y unixodbc-dev
-          sudo apt-get install -y libsqlite3-dev
+          sudo apt-get update
+          sudo apt-get install -y unixodbc-dev libsqlite3-dev
 
       - name: Install ADBC drivers
         run: |
           curl -LsSf https://dbc.columnar.tech/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           dbc install sqlite
           dbc install duckdb
+          ls -la "${XDG_CONFIG_HOME:-$HOME/.config}/adbc/drivers" || true
 
-      - name: Compile integration tests
-        run: |
-          cargo test -p datafusion-table-providers --no-run --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,adbc
-
-      - name: Run tests
-        run: make test
+      - name: Run integration tests
+        run: make test-integration
 
   python-integration-test:
     name: Python Tests

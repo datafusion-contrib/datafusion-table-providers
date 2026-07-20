@@ -1,3 +1,4 @@
+use datafusion::sql::unparser::dialect::MySqlDialect;
 use datafusion::{datasource::memory::MemorySourceConfig, execution::context::SessionContext};
 use datafusion_table_providers::sql::{
     db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
@@ -936,9 +937,12 @@ async fn test_mysql_sort_limit(port: usize) {
             + Sync
             + 'static,
     > = Arc::new(common::get_mysql_connection_pool(port).await.expect("pool"));
+    // MySQL does not support NULLS FIRST/LAST; use MySqlDialect so sort pushdown
+    // omits those clauses (same as MySQLTable).
     let table = SqlTable::new("mysql", &sqltable_pool, "sort_limit_test")
         .await
-        .expect("Table should be created");
+        .expect("Table should be created")
+        .with_dialect(Arc::new(MySqlDialect {}));
     ctx.register_table("sort_limit_test", Arc::new(table))
         .expect("Table should be registered");
 
