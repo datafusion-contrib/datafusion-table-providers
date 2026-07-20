@@ -216,8 +216,9 @@ jobs:
       - name: Install ODBC, Sqlite and Roapi
         run: |
           sudo apt-get install -y unixodbc-dev libsqliteodbc libsqlite3-dev
+          # 0.13.0 musl release panics on HTTP UI route registration; 0.12.7 is fine.
           curl -fsSL -o /tmp/roapi.tar.gz \
-            https://github.com/roapi/roapi/releases/download/roapi-v0.13.0/roapi-x86_64-unknown-linux-musl.tar.gz
+            https://github.com/roapi/roapi/releases/download/roapi-v0.12.7/roapi-x86_64-unknown-linux-musl.tar.gz
           sudo tar -xzf /tmp/roapi.tar.gz -C /usr/local/bin roapi
           sudo chmod +x /usr/local/bin/roapi
           roapi --help >/dev/null

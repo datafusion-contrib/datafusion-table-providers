@@ -46,7 +46,17 @@ class TestFlightIntegration:
         pq.write_table(table, cls.parquet_path)
 
         cls.process = subprocess.Popen(
-            ["roapi", "-t", f"taxi={cls.parquet_path}"],
+            [
+                "roapi",
+                "-t",
+                f"taxi={cls.parquet_path}",
+                "--addr-http",
+                "127.0.0.1:18080",
+                "--addr-postgres",
+                "127.0.0.1:15432",
+                "--addr-flight-sql",
+                "127.0.0.1:32010",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
