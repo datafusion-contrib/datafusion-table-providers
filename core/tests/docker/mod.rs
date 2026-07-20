@@ -171,6 +171,7 @@ impl ContainerRunner<'_> {
             .await?;
 
         let start_time = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(90);
         loop {
             let inspect_container = self
                 .docker
@@ -192,11 +193,16 @@ impl ContainerRunner<'_> {
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 30 {
-                return Err(anyhow::anyhow!("Container failed to start"));
+            if start_time.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Container {} failed to become healthy within {:?}: {:?}",
+                    self.name,
+                    timeout,
+                    inspect_container.state
+                ));
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
 
         Ok(RunningContainer {

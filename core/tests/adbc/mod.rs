@@ -59,8 +59,7 @@ async fn arrow_adbc_round_trip(
         tracing::warn!("ADBC sqlite driver not available; skipping roundtrip test");
         return;
     };
-    let adbc_pool =
-        Arc::new(ADBCPool::new(db, None).expect("Failed to create ADBC pool"));
+    let adbc_pool = Arc::new(ADBCPool::new(db, None).expect("Failed to create ADBC pool"));
 
     let table_factory = AdbcTableFactory::new(adbc_pool.clone());
     let ctx = SessionContext::new();

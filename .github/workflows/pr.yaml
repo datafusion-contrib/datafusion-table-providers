@@ -124,12 +124,14 @@ jobs:
     timeout-minutes: 25
 
     env:
-      PG_DOCKER_IMAGE: ghcr.io/cloudnative-pg/postgresql:16-bookworm
+      # Official Postgres image — CNPG variants can exceed the healthcheck window in CI.
+      PG_DOCKER_IMAGE: postgres:16
       MYSQL_DOCKER_IMAGE: mysql:8.0
       CLICKHOUSE_DOCKER_IMAGE: clickhouse/clickhouse-server:24.8
       # Keep integration test logs concise for faster CI runs.
       RUST_LOG: info
-
+      # Serialize Docker-backed tests a bit to avoid stampeding many Postgres containers.
+      RUST_TEST_THREADS: "4"
     steps:
       - uses: actions/checkout@v7
 
