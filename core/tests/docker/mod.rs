@@ -72,8 +72,9 @@ impl<'a> ContainerRunnerBuilder<'a> {
         self
     }
 
-    pub fn add_port_binding(mut self, host_port: u16, container_port: u16) -> Self {
-        self.port_bindings.push((host_port, container_port));
+    /// Maps `container_port` inside the container to `host_port` on the host.
+    pub fn add_port_binding(mut self, container_port: u16, host_port: u16) -> Self {
+        self.port_bindings.push((container_port, host_port));
         self
     }
 
@@ -130,7 +131,8 @@ impl ContainerRunner<'_> {
                 format!("{container_port}/tcp"),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(format!("{host_port}/tcp")),
+                    // Docker HostPort is the bare port number (e.g. "15432"), not "15432/tcp".
+                    host_port: Some(format!("{host_port}")),
                 }]),
             );
         }
@@ -169,6 +171,7 @@ impl ContainerRunner<'_> {
             .await?;
 
         let start_time = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(90);
         loop {
             let inspect_container = self
                 .docker
@@ -190,11 +193,16 @@ impl ContainerRunner<'_> {
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 30 {
-                return Err(anyhow::anyhow!("Container failed to start"));
+            if start_time.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Container {} failed to become healthy within {:?}: {:?}",
+                    self.name,
+                    timeout,
+                    inspect_container.state
+                ));
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
 
         Ok(RunningContainer {
