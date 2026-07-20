@@ -24,3 +24,6 @@ dist
 venv
 .venv
 
+# Generated test fixtures
+python/tests/fixtures/
+
