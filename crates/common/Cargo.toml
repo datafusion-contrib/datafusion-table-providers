@@ -21,7 +21,7 @@ fallible-iterator = "0.3"
 fundu = "2.0"
 futures = "0.3"
 geo-types = "0.7"
-itertools = "0.14"
+itertools = "0.15"
 num-bigint = "0.4"
 rand = { version = "0.10" }
 regex = { version = "1" }
