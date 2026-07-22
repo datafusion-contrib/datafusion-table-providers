@@ -19,7 +19,7 @@ datafusion-table-providers-common = { workspace = true }
 duckdb = { workspace = true, features = ["bundled", "r2d2", "vtab", "vtab-arrow", "appender-arrow"] }
 dyn-clone = "1.0"
 futures = "0.3"
-itertools = "0.14"
+itertools = "0.15"
 r2d2 = "0.8"
 rand = { version = "0.10" }
 sea-query = { version = "1.0.0", features = ["backend-sqlite", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
