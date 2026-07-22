@@ -53,7 +53,7 @@ mysql_async = { version = "0.36", features = [
   "time",
   "bigdecimal",
 ] }
-prost = { version = "=0.14.3" }
+prost = { version = "=0.14.4" }
 r2d2 = "0.8"
 r2d2_adbc = "0.3.0"
 rand = "0.10"
