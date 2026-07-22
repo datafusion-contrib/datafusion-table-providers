@@ -22,7 +22,7 @@ fundu = "2.0"
 futures = "0.3"
 geo-types = "0.7"
 itertools = "0.15"
-num-bigint = "0.4"
+num-bigint = "0.5"
 rand = { version = "0.10" }
 regex = { version = "1" }
 sea-query = { version = "1.0.0", features = [
