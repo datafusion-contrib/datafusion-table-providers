@@ -26,7 +26,7 @@ futures = "0.3"
 geo-types = "0.7"
 logos = "0.16"
 native-tls = "0.2"
-pem = "3.0"
+pem = "4.0"
 postgres-native-tls = "0.5.0"
 rust_decimal = { version = "1.38", features = ["db-postgres"] }
 sea-query = { version = "1.0.0", features = ["backend-postgres", "postgres-array", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
