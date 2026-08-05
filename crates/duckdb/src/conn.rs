@@ -2,7 +2,9 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::compute::cast;
+use arrow_schema::ArrowError;
 use arrow_schema::{DataType, Field};
 use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -63,11 +65,44 @@ impl<T: ToSql + Sync + Send + DynClone> DuckDBSyncParameter for T {
 dyn_clone::clone_trait_object!(DuckDBSyncParameter);
 pub type DuckDBParameter = Box<dyn DuckDBSyncParameter>;
 
+/// Filesystem identity used to detect when a database path has been replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// Read the identity of `path`, or `None` when it cannot be determined.
+#[must_use]
+pub fn file_identity(path: &str) -> Option<FileIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[derive(Debug)]
+struct AttachedState {
+    search_path: Arc<str>,
+    identities: Vec<(Arc<str>, Option<FileIdentity>)>,
+}
+
 #[derive(Debug)]
 pub struct DuckDBAttachments {
     attachments: HashSet<Arc<str>>,
     random_id: String,
     main_db: String,
+    attached: std::sync::Mutex<Option<AttachedState>>,
 }
 
 impl DuckDBAttachments {
@@ -80,7 +115,23 @@ impl DuckDBAttachments {
             attachments,
             random_id,
             main_db: main_db.to_string(),
+            attached: std::sync::Mutex::new(None),
         }
+    }
+
+    fn attachment_identities(&self) -> Vec<(Arc<str>, Option<FileIdentity>)> {
+        let mut identities: Vec<_> = self
+            .attachments
+            .iter()
+            .map(|path| (Arc::clone(path), file_identity(path)))
+            .collect();
+        identities.sort_by(|(left, _), (right, _)| left.cmp(right));
+        identities
+    }
+
+    #[must_use]
+    pub fn attachments(&self) -> &HashSet<Arc<str>> {
+        &self.attachments
     }
 
     /// Returns the search path for the given database and attachments.
@@ -211,6 +262,45 @@ impl DuckDBAttachments {
     fn get_attachment_name(random_id: &str, index: usize) -> String {
         format!("attachment_{random_id}_{index}")
     }
+
+    /// Attach once per DuckDB instance and re-attach when a backing file at an
+    /// attachment path has been replaced.
+    pub fn attach_once(&self, conn: &Connection) -> Result<()> {
+        let identities = self.attachment_identities();
+        let search_path = {
+            let mut attached = self
+                .attached
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            match attached.as_ref() {
+                Some(state) if state.identities == identities => Arc::clone(&state.search_path),
+                previous => {
+                    if previous.is_some() {
+                        tracing::debug!(
+                            "Re-attaching DuckDB databases {:?}: an attached file was replaced",
+                            self.attachments
+                        );
+                        if let Err(error) = self.detach(conn) {
+                            tracing::warn!(
+                                "Failed to detach replaced DuckDB databases; retrying on the next checkout: {error}"
+                            );
+                        }
+                    }
+                    let search_path = self.attach(conn)?;
+                    *attached = Some(AttachedState {
+                        search_path: Arc::clone(&search_path),
+                        identities,
+                    });
+                    search_path
+                }
+            }
+        };
+
+        conn.execute(&format!("SET search_path = '{}'", search_path), [])
+            .context(DuckDBConnectionSnafu)?;
+        Ok(())
+    }
 }
 
 pub struct DuckDbConnection {
@@ -293,7 +383,7 @@ impl DuckDbConnection {
     /// See `DuckDBAttachments::attach` for more information.
     pub fn attach(conn: &Connection, attachments: &Option<Arc<DuckDBAttachments>>) -> Result<()> {
         if let Some(attachments) = attachments {
-            attachments.attach(conn)?;
+            attachments.attach_once(conn)?;
         }
         Ok(())
     }
@@ -439,7 +529,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         &self,
         sql: &str,
         params: &[DuckDBParameter],
-        _projected_schema: Option<SchemaRef>,
+        projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<RecordBatch>(4);
 
@@ -459,7 +549,8 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        let schema = result.get_schema();
+        let schema = projected_schema.unwrap_or_else(|| result.get_schema());
+        let cast_schema = Arc::clone(&schema);
 
         let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
 
@@ -474,8 +565,9 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                     .collect::<Vec<_>>();
                 let result: duckdb::ArrowStream<'_> =
                     stmt.stream_arrow(params).context(DuckDBQuerySnafu)?;
-                for i in result {
-                    blocking_channel_send(&batch_tx, i)?;
+                for batch in result {
+                    let batch = cast_batch_to_schema(batch, &cast_schema)?;
+                    blocking_channel_send(&batch_tx, batch)?;
                 }
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
@@ -518,6 +610,34 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
         let rows_modified = self.conn.execute(sql, params).context(DuckDBQuerySnafu)?;
         Ok(rows_modified as u64)
     }
+}
+
+fn cast_batch_to_schema(
+    batch: RecordBatch,
+    schema: &SchemaRef,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    if batch.num_columns() != schema.fields().len() {
+        return Err(ArrowError::SchemaError(format!(
+            "DuckDB returned {} columns for projected schema with {} fields",
+            batch.num_columns(),
+            schema.fields().len()
+        )));
+    }
+
+    let columns: std::result::Result<Vec<ArrayRef>, ArrowError> = batch
+        .columns()
+        .iter()
+        .zip(schema.fields())
+        .map(|(column, field)| {
+            if column.data_type() == field.data_type() {
+                Ok(Arc::clone(column))
+            } else {
+                cast(column, field.data_type())
+            }
+        })
+        .collect();
+
+    RecordBatch::try_new(Arc::clone(schema), columns?)
 }
 
 fn blocking_channel_send<T>(channel: &Sender<T>, item: T) -> Result<()> {
@@ -760,7 +880,7 @@ mod tests {
             .into();
 
         for db in [&db1, &db2, &db3] {
-            let conn1 = Connection::open(db.as_ref())?;
+            let conn1 = Connection::open(db.as_ref() as &str)?;
             conn1.execute("CREATE TABLE test1 (id INTEGER, name VARCHAR)", [])?;
         }
 

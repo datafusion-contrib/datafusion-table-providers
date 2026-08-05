@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 
 pub mod common;
+pub mod schema_projection;
 pub mod sql;
 pub mod util;
 

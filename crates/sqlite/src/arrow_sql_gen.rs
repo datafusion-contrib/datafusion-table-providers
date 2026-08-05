@@ -26,7 +26,10 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_table_providers_common::sql::arrow_sql_gen::arrow::map_data_type_to_array_builder;
-use rusqlite::{types::Type, Row, Rows};
+use rusqlite::{
+    types::{Type, ValueRef},
+    Row, Rows,
+};
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
@@ -47,6 +50,11 @@ pub enum Error {
 
     #[snafu(display("Failed to extract column name: {source}"))]
     FailedToExtractColumnName { source: rusqlite::Error },
+
+    #[snafu(display(
+        "Failed to decode REAL value {value} at index {index} as an integer: the value has a fractional part or is out of range"
+    ))]
+    RealNotRepresentableAsInteger { index: usize, value: f64 },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -87,7 +95,9 @@ pub fn rows_to_arrow(
             // Refer to the rusqlite type handling documentation for more details:
             // https://github.com/rusqlite/rusqlite/blob/95680270eca6f405fb51f5fbe6a214aac5fdce58/src/types/mod.rs#L21C1-L22C75
             //
-            // `REAL` to integer: always returns an [`Error::InvalidColumnType`](datafusion_table_providers_common::Error::InvalidColumnType) error.
+            // `REAL` to integer: decoded by `append_integer_value!` when the value is
+            //   exactly integral (SQLite computes e.g. `round()` in REAL even when the
+            //   plan schema says integer); a fractional REAL is a structured error.
             // `INTEGER` to float: casts using `as` operator. Never fails.
             // `REAL` to float: casts using `as` operator. Never fails.
 
@@ -186,6 +196,53 @@ macro_rules! append_value {
     }};
 }
 
+/// Appends a value into an integer-typed builder, tolerating SQLite's dynamic typing.
+///
+/// SQLite computes many numeric expressions in REAL even when DataFusion's plan
+/// schema says integer. A REAL that is exactly integral decodes into the integer
+/// builder; a fractional or out-of-range REAL fails instead of being truncated.
+macro_rules! append_integer_value {
+    ($builder:expr, $row:expr, $index:expr, $type:ty, $builder_type:ty) => {{
+        let Some(builder) = $builder.as_any_mut().downcast_mut::<$builder_type>() else {
+            FailedToDowncastBuilderSnafu {
+                sqlite_type: format!("{}", Type::Integer),
+            }
+            .fail()?
+        };
+        match $row.get_ref($index).context(FailedToExtractRowValueSnafu)? {
+            ValueRef::Null => builder.append_null(),
+            ValueRef::Real(value) => {
+                let as_i64 = integral_real_to_i64($index, value)?;
+                builder.append_value(i64_to_integer::<$type>($index, as_i64)?);
+            }
+            _ => {
+                let value: Option<i64> = $row.get($index).context(FailedToExtractRowValueSnafu)?;
+                match value {
+                    Some(value) => builder.append_value(i64_to_integer::<$type>($index, value)?),
+                    None => builder.append_null(),
+                }
+            }
+        }
+    }};
+}
+
+fn integral_real_to_i64(index: usize, value: f64) -> Result<i64> {
+    const I64_LOWER_INCLUSIVE: f64 = -9_223_372_036_854_775_808.0;
+    const I64_UPPER_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+    ensure!(
+        value.fract() == 0.0 && (I64_LOWER_INCLUSIVE..I64_UPPER_EXCLUSIVE).contains(&value),
+        RealNotRepresentableAsIntegerSnafu { index, value }
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(value as i64)
+}
+
+fn i64_to_integer<T: TryFrom<i64>>(index: usize, value: i64) -> Result<T> {
+    T::try_from(value)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+        .context(FailedToExtractRowValueSnafu)
+}
+
 fn add_row_to_builders(
     row: &Row,
     arrow_types: &[DataType],
@@ -206,14 +263,14 @@ fn add_row_to_builders(
                 };
                 builder.append_null();
             }
-            DataType::Int8 => append_value!(builder, row, i, i8, Int8Builder, Type::Integer),
-            DataType::Int16 => append_value!(builder, row, i, i16, Int16Builder, Type::Integer),
-            DataType::Int32 => append_value!(builder, row, i, i32, Int32Builder, Type::Integer),
-            DataType::Int64 => append_value!(builder, row, i, i64, Int64Builder, Type::Integer),
-            DataType::UInt8 => append_value!(builder, row, i, u8, UInt8Builder, Type::Integer),
-            DataType::UInt16 => append_value!(builder, row, i, u16, UInt16Builder, Type::Integer),
-            DataType::UInt32 => append_value!(builder, row, i, u32, UInt32Builder, Type::Integer),
-            DataType::UInt64 => append_value!(builder, row, i, u64, UInt64Builder, Type::Integer),
+            DataType::Int8 => append_integer_value!(builder, row, i, i8, Int8Builder),
+            DataType::Int16 => append_integer_value!(builder, row, i, i16, Int16Builder),
+            DataType::Int32 => append_integer_value!(builder, row, i, i32, Int32Builder),
+            DataType::Int64 => append_integer_value!(builder, row, i, i64, Int64Builder),
+            DataType::UInt8 => append_integer_value!(builder, row, i, u8, UInt8Builder),
+            DataType::UInt16 => append_integer_value!(builder, row, i, u16, UInt16Builder),
+            DataType::UInt32 => append_integer_value!(builder, row, i, u32, UInt32Builder),
+            DataType::UInt64 => append_integer_value!(builder, row, i, u64, UInt64Builder),
 
             DataType::Boolean => {
                 append_value!(builder, row, i, bool, BooleanBuilder, Type::Integer)
@@ -244,5 +301,130 @@ fn map_column_type_to_data_type(column_type: Type) -> DataType {
         Type::Real => DataType::Float64,
         Type::Text => DataType::Utf8,
         Type::Blob => DataType::Binary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int64Array, UInt64Array};
+    use rusqlite::Connection;
+
+    fn query_to_arrow(sql: &str, projected_schema: Option<SchemaRef>) -> Result<RecordBatch> {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite connection");
+        let mut stmt = conn.prepare(sql).expect("prepare statement");
+        let num_cols = stmt.column_count();
+        let rows = stmt.query([]).expect("execute query");
+        rows_to_arrow(rows, num_cols, projected_schema)
+    }
+
+    fn int64_schema(name: &str) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new(name, DataType::Int64, true)]))
+    }
+
+    #[test]
+    fn integral_real_decodes_into_int64_column() {
+        let batch = query_to_arrow(
+            "SELECT round(5 / 2, 2) AS ratio",
+            Some(int64_schema("ratio")),
+        )
+        .expect("integral REAL should decode into an Int64 column");
+
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64 array");
+        assert_eq!(col.value(0), 2);
+    }
+
+    #[test]
+    fn fractional_real_into_integer_column_is_an_error() {
+        let err = query_to_arrow("SELECT 2.5 AS v", Some(int64_schema("v")))
+            .expect_err("fractional REAL must not silently truncate");
+        assert!(matches!(
+            err,
+            Error::RealNotRepresentableAsInteger { index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn out_of_range_real_into_integer_column_is_an_error() {
+        let err = query_to_arrow("SELECT 1e19 AS v", Some(int64_schema("v")))
+            .expect_err("out-of-range REAL must not silently truncate");
+        assert!(matches!(
+            err,
+            Error::RealNotRepresentableAsInteger { index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn mixed_integer_and_real_rows_decode_into_int64_column() {
+        let batch = query_to_arrow(
+            "SELECT v FROM (SELECT 2 AS v UNION ALL SELECT 3.0 ORDER BY 1)",
+            Some(int64_schema("v")),
+        )
+        .expect("mixed INTEGER/integral-REAL rows should decode");
+
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64 array");
+        assert_eq!((col.value(0), col.value(1)), (2, 3));
+    }
+
+    #[test]
+    fn null_and_integral_real_decode_into_int64_column() {
+        let batch = query_to_arrow(
+            "SELECT v FROM (SELECT NULL AS v UNION ALL SELECT 4.0)",
+            Some(int64_schema("v")),
+        )
+        .expect("NULL and integral REAL should decode");
+
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64 array");
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), 4);
+    }
+
+    #[test]
+    fn integral_real_decodes_into_uint64_column() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::UInt64, true)]));
+        let batch = query_to_arrow("SELECT 7.0 AS v", Some(schema))
+            .expect("integral REAL should decode into a UInt64 column");
+
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("UInt64 array");
+        assert_eq!(col.value(0), 7);
+    }
+
+    #[test]
+    fn negative_real_into_uint64_column_is_an_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::UInt64, true)]));
+        let err = query_to_arrow("SELECT -1.0 AS v", Some(schema))
+            .expect_err("negative value must be out of range for UInt64");
+        assert!(matches!(err, Error::FailedToExtractRowValue { .. }));
+    }
+
+    #[test]
+    fn text_into_integer_column_still_fails() {
+        let err = query_to_arrow(
+            "SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 'abc' ORDER BY 1)",
+            Some(int64_schema("v")),
+        )
+        .expect_err("TEXT into an integer column must keep failing");
+        assert!(matches!(
+            err,
+            Error::FailedToExtractRowValue {
+                source: rusqlite::Error::InvalidColumnType(..)
+            }
+        ));
     }
 }

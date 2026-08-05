@@ -61,6 +61,9 @@ pub enum Error {
 
     #[snafu(display("Projected schema field \"{field_name}\" not found in query result"))]
     FieldNotFoundInResult { field_name: String },
+
+    #[snafu(display("Unsupported MySQL column type {mysql_type}"))]
+    UnsupportedColumnType { mysql_type: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -622,7 +625,12 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         None => builder.append_null(),
                     }
                 }
-                _ => unimplemented!("Unsupported column type {:?}", mysql_type),
+                _ => {
+                    return UnsupportedColumnTypeSnafu {
+                        mysql_type: format!("{mysql_type:?}"),
+                    }
+                    .fail();
+                }
             }
         }
     }
@@ -681,7 +689,6 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
     Ok(batch)
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn map_column_to_data_type(
     column_type: ColumnType,
@@ -769,9 +776,7 @@ pub fn map_column_to_data_type(
         | ColumnType::MYSQL_TYPE_TINY_BLOB
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_GEOMETRY
-        | ColumnType::MYSQL_TYPE_VECTOR => {
-            unimplemented!("Unsupported column type {:?}", column_type)
-        }
+        | ColumnType::MYSQL_TYPE_VECTOR => None,
     }
 }
 
@@ -832,5 +837,49 @@ fn handle_null_error<T>(
         Ok(val) => Ok(val),
         Err(FromValueError(Value::NULL)) => Ok(None),
         err => err,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_column_to_data_type_unsupported_returns_none() {
+        for column_type in [
+            ColumnType::MYSQL_TYPE_GEOMETRY,
+            ColumnType::MYSQL_TYPE_VECTOR,
+            ColumnType::MYSQL_TYPE_TYPED_ARRAY,
+            ColumnType::MYSQL_TYPE_UNKNOWN,
+            ColumnType::MYSQL_TYPE_LONG_BLOB,
+            ColumnType::MYSQL_TYPE_TINY_BLOB,
+            ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
+        ] {
+            assert_eq!(
+                map_column_to_data_type(column_type, false, false, false, false, None, None),
+                None,
+                "expected None for unsupported column type {column_type:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn map_column_to_data_type_supported_examples() {
+        let cases = [
+            (ColumnType::MYSQL_TYPE_TINY, DataType::Int8),
+            (ColumnType::MYSQL_TYPE_SHORT, DataType::Int16),
+            (ColumnType::MYSQL_TYPE_LONG, DataType::Int32),
+            (ColumnType::MYSQL_TYPE_LONGLONG, DataType::Int64),
+            (ColumnType::MYSQL_TYPE_FLOAT, DataType::Float32),
+            (ColumnType::MYSQL_TYPE_DOUBLE, DataType::Float64),
+            (ColumnType::MYSQL_TYPE_DATE, DataType::Date32),
+        ];
+        for (column_type, expected) in cases {
+            assert_eq!(
+                map_column_to_data_type(column_type, false, false, false, false, None, None),
+                Some(expected.clone()),
+                "unexpected mapping for {column_type:?}",
+            );
+        }
     }
 }

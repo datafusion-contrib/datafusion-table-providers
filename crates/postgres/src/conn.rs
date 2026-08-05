@@ -16,6 +16,14 @@ use datafusion_table_providers_common::util::handle_unsupported_type_error;
 use datafusion_table_providers_common::util::schema::SchemaValidator;
 use datafusion_table_providers_common::UnsupportedTypeAction;
 
+fn maybe_db_source_err(err: tokio_postgres::Error) -> Box<dyn Error + Send + Sync> {
+    if let Some(err) = err.as_db_error() {
+        Box::new(err.clone())
+    } else {
+        Box::new(err)
+    }
+}
+
 /// A pooled Postgres connection obtained from a [`PostgresConnectionPool`](crate::pool::PostgresConnectionPool).
 ///
 /// Dereferences to [`tokio_postgres::Client`](bb8_postgres::tokio_postgres::Client) for executing queries.
@@ -199,7 +207,7 @@ fn map_schema_query_error(
         }
     }
     datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-        source: Box::new(e),
+        source: maybe_db_source_err(e),
     }
 }
 
@@ -339,7 +347,7 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
 
         let rows = self.conn.query(query, &[&schema]).await.map_err(|e| {
             datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetTables {
-                source: Box::new(e),
+                source: maybe_db_source_err(e),
             }
         })?;
 
@@ -362,7 +370,7 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
                 .query(query, &[])
                 .await
                 .map_err(|e| datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchemas {
-                    source: Box::new(e),
+                    source: maybe_db_source_err(e),
                 })?;
 
         Ok(rows.iter().map(|r| r.get::<usize, String>(0)).collect())
@@ -494,13 +502,13 @@ impl PostgresConnection {
             .query_one("SELECT version()", &[])
             .await
             .map_err(|e| datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                source: Box::new(e),
+                source: maybe_db_source_err(e),
             })?;
 
         let version: String = row
             .try_get(0)
             .map_err(|e| datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                source: Box::new(e),
+                source: maybe_db_source_err(e),
             })?;
 
         let variant = if version.contains("Redshift") {
@@ -577,11 +585,11 @@ impl PostgresConnection {
                 .query_one("SELECT current_database()", &[])
                 .await
                 .map_err(|e| datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                    source: Box::new(e),
+                    source: maybe_db_source_err(e),
                 })?
                 .try_get(0)
                 .map_err(|e| datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                    source: Box::new(e),
+                    source: maybe_db_source_err(e),
                 })?,
         };
 
@@ -610,7 +618,7 @@ impl PostgresConnection {
             }
             Err(e) => {
                 return Err(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                    source: Box::new(e),
+                    source: maybe_db_source_err(e),
                 })
             }
         };
@@ -683,7 +691,7 @@ impl PostgresConnection {
                     }
                 }
                 datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error::UnableToGetSchema {
-                    source: Box::new(e),
+                    source: maybe_db_source_err(e),
                 }
             })?;
 

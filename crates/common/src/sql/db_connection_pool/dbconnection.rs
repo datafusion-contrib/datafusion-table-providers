@@ -5,6 +5,8 @@ use datafusion::{
 };
 use snafu::prelude::*;
 
+use crate::sql::db_connection_pool::runtime::run_async_with_tokio;
+
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T, E = GenericError> = std::result::Result<T, E>;
 
@@ -148,18 +150,29 @@ pub trait DbConnection<T, P>: Send {
     }
 }
 
-pub async fn get_tables<T, P>(
+pub async fn get_tables<T: 'static, P: 'static>(
     conn: Box<dyn DbConnection<T, P>>,
     schema: &str,
 ) -> Result<Vec<String>, Error> {
-    let schema = if let Some(conn) = conn.as_sync() {
-        conn.tables(schema)?
+    if conn.as_sync().is_some() {
+        let schema = schema.to_string();
+        let offload = async move || -> Result<Vec<String>, Error> {
+            tokio::task::spawn_blocking(move || {
+                conn.as_sync()
+                    .expect("as_sync() returned Some above")
+                    .tables(&schema)
+            })
+            .await
+            .map_err(|e| Error::UnableToGetTables {
+                source: Box::new(e),
+            })?
+        };
+        run_async_with_tokio(offload).await
     } else if let Some(conn) = conn.as_async() {
-        conn.tables(schema).await?
+        conn.tables(schema).await
     } else {
-        return Err(Error::UnableToDowncastConnection {});
-    };
-    Ok(schema)
+        Err(Error::UnableToDowncastConnection {})
+    }
 }
 
 /// Get the schemas for the database.
@@ -167,15 +180,27 @@ pub async fn get_tables<T, P>(
 /// # Errors
 ///
 /// Returns an error if the schemas cannot be retrieved.
-pub async fn get_schemas<T, P>(conn: Box<dyn DbConnection<T, P>>) -> Result<Vec<String>, Error> {
-    let schema = if let Some(conn) = conn.as_sync() {
-        conn.schemas()?
+pub async fn get_schemas<T: 'static, P: 'static>(
+    conn: Box<dyn DbConnection<T, P>>,
+) -> Result<Vec<String>, Error> {
+    if conn.as_sync().is_some() {
+        let offload = async move || -> Result<Vec<String>, Error> {
+            tokio::task::spawn_blocking(move || {
+                conn.as_sync()
+                    .expect("as_sync() returned Some above")
+                    .schemas()
+            })
+            .await
+            .map_err(|e| Error::UnableToGetSchemas {
+                source: Box::new(e),
+            })?
+        };
+        run_async_with_tokio(offload).await
     } else if let Some(conn) = conn.as_async() {
-        conn.schemas().await?
+        conn.schemas().await
     } else {
-        return Err(Error::UnableToDowncastConnection {});
-    };
-    Ok(schema)
+        Err(Error::UnableToDowncastConnection {})
+    }
 }
 
 /// Get the schema for a table reference.
@@ -188,18 +213,29 @@ pub async fn get_schemas<T, P>(conn: Box<dyn DbConnection<T, P>>) -> Result<Vec<
 /// # Errors
 ///
 /// Returns an error if the schema cannot be retrieved.
-pub async fn get_schema<T, P>(
+pub async fn get_schema<T: 'static, P: 'static>(
     conn: Box<dyn DbConnection<T, P>>,
     table_reference: &datafusion::sql::TableReference,
 ) -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
-    let schema = if let Some(conn) = conn.as_sync() {
-        conn.get_schema(table_reference)?
+    if conn.as_sync().is_some() {
+        let table_reference = table_reference.clone();
+        let offload = async move || -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
+            tokio::task::spawn_blocking(move || {
+                conn.as_sync()
+                    .expect("as_sync() returned Some above")
+                    .get_schema(&table_reference)
+            })
+            .await
+            .map_err(|e| Error::UnableToGetSchema {
+                source: Box::new(e),
+            })?
+        };
+        run_async_with_tokio(offload).await
     } else if let Some(conn) = conn.as_async() {
-        conn.get_schema(table_reference).await?
+        conn.get_schema(table_reference).await
     } else {
-        return Err(Error::UnableToDowncastConnection {});
-    };
-    Ok(schema)
+        Err(Error::UnableToDowncastConnection {})
+    }
 }
 
 /// Query the database with the given SQL statement and parameters, returning a `Result` of `SendableRecordBatchStream`.

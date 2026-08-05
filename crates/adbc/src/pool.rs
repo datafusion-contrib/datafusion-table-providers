@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::conn::AdbcDbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{DbConnection, SyncDbConnection},
+    runtime::run_async_with_tokio,
     DbConnectionPool, JoinPushDown,
 };
 type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
@@ -191,10 +192,25 @@ where
     ) -> Result<Box<dyn DbConnection<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>>>
     {
         let pool = Arc::clone(&self.pool);
-        let conn: r2d2::PooledConnection<AdbcConnectionManager<D>> =
-            pool.get().context(ConnectionPoolSnafu)?;
 
-        Ok(Box::new(AdbcDbConnection::new(conn)))
+        let connect = async move || -> Result<
+            Box<dyn DbConnection<r2d2::PooledConnection<AdbcConnectionManager<D>>, RecordBatch>>,
+        > {
+            let conn: r2d2::PooledConnection<AdbcConnectionManager<D>> =
+                tokio::task::spawn_blocking(move || pool.get())
+                    .await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                    .context(ConnectionPoolSnafu)?;
+
+            Ok(Box::new(AdbcDbConnection::new(conn))
+                as Box<
+                    dyn DbConnection<
+                        r2d2::PooledConnection<AdbcConnectionManager<D>>,
+                        RecordBatch,
+                    >,
+                >)
+        };
+        run_async_with_tokio(connect).await
     }
 
     fn join_push_down(&self) -> JoinPushDown {

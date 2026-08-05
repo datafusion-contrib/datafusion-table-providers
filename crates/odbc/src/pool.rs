@@ -17,7 +17,9 @@ limitations under the License.
 use crate::conn::ODBCConnection;
 use crate::conn::{ODBCDbConnection, ODBCParameter};
 use async_trait::async_trait;
-use datafusion_table_providers_common::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
+use datafusion_table_providers_common::sql::db_connection_pool::{
+    runtime::run_async_with_tokio, DbConnectionPool, JoinPushDown,
+};
 use odbc_api::{sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use sha2::{Digest, Sha256};
@@ -107,17 +109,29 @@ where
     async fn connect(
         &self,
     ) -> Result<Box<ODBCDbConnection<'a>>, Box<dyn std::error::Error + Send + Sync>> {
-        let cxn = self.pool.connect_with_connection_string(
-            &self.connection_string,
-            ConnectionOptions::default(),
-        )?;
+        let pool: &'static Environment = self.pool;
+        let connection_string = self.connection_string.clone();
+        let params = Arc::clone(&self.params);
 
-        let odbc_cxn = ODBCConnection {
-            conn: Arc::new(cxn.into()),
-            params: Arc::clone(&self.params),
+        let connect = async move || -> Result<
+            Box<ODBCDbConnection<'a>>,
+            Box<dyn std::error::Error + Send + Sync>,
+        > {
+            let cxn = tokio::task::spawn_blocking(move || {
+                pool.connect_with_connection_string(
+                    &connection_string,
+                    ConnectionOptions::default(),
+                )
+            })
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)??;
+
+            Ok(Box::new(ODBCConnection {
+                conn: Arc::new(cxn.into()),
+                params,
+            }) as Box<ODBCDbConnection<'a>>)
         };
-
-        Ok(Box::new(odbc_cxn))
+        run_async_with_tokio(connect).await
     }
 
     fn join_push_down(&self) -> JoinPushDown {

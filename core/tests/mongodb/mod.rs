@@ -769,6 +769,126 @@ async fn test_mongodb_unnesting_depth_1(port: usize) {
     .await;
 }
 
+/// JSON nesting (`json_object`): declared static columns (`_id`, `name`) stay
+/// top-level while every other document field — scalar, nested document, and
+/// array — folds into one sorted-key JSON `Utf8` catch-all column (`data`).
+/// Exercised end-to-end through the DataFusion scan path against a live MongoDB.
+async fn test_mongodb_json_nesting(port: usize) {
+    use datafusion_table_providers::schema_projection::SchemaProjection;
+
+    let test_docs = vec![
+        doc! {
+            "_id": 1,
+            "name": "Alice",
+            "email": "alice@example.com",
+            "age": 30,
+            "address": { "city": "NYC", "zip": "10001" },
+        },
+        doc! {
+            "_id": 2,
+            "name": "Bob",
+            "email": "bob@example.com",
+            "tags": ["x", "y"],
+        },
+    ];
+
+    let ctx = SessionContext::new();
+    let client = common::get_mongodb_client(port)
+        .await
+        .expect("MongoDB client should be created");
+    let collection = client
+        .database("testdb")
+        .collection::<Document>("json_nesting_collection");
+    let _ = collection.drop().await;
+    collection
+        .insert_many(test_docs)
+        .await
+        .expect("MongoDB documents should be inserted");
+
+    // `_id` and `name` are declared static; every other field folds into `data`.
+    let projection = SchemaProjection::nesting(
+        vec!["_id".to_string(), "name".to_string()],
+        "data".to_string(),
+    );
+
+    let pool = common::get_mongodb_connection_pool(port, None)
+        .await
+        .expect("MongoDB connection pool should be created");
+    let table = MongoDBTable::new_with_projection(
+        &Arc::new(pool),
+        "json_nesting_collection",
+        None,
+        Some(projection),
+    )
+    .await
+    .expect("Table should be created");
+    ctx.register_table("json_nesting_collection", Arc::new(table))
+        .expect("Table should be registered");
+
+    let batches = ctx
+        .sql("SELECT name, data FROM json_nesting_collection ORDER BY _id")
+        .await
+        .expect("query should plan")
+        .collect()
+        .await
+        .expect("query should execute");
+
+    let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
+    for batch in &batches {
+        let names = batch
+            .column_by_name("name")
+            .expect("name column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name should be a static Utf8 column");
+        let data = batch
+            .column_by_name("data")
+            .expect("catch-all data column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("catch-all should be a Utf8 JSON string");
+        for row in 0..batch.num_rows() {
+            let catch_all: serde_json::Value =
+                serde_json::from_str(data.value(row)).expect("catch-all must be valid JSON");
+            rows.push((names.value(row).to_string(), catch_all));
+        }
+    }
+
+    assert_eq!(rows.len(), 2, "expected two documents");
+
+    // Row 0 (Alice): non-declared scalar + nested-document fields fold into the
+    // catch-all; declared static keys must not leak into it.
+    let (name0, data0) = &rows[0];
+    assert_eq!(name0, "Alice");
+    assert_eq!(data0["email"], serde_json::json!("alice@example.com"));
+    assert!(
+        data0.get("age").is_some(),
+        "scalar `age` must be in the catch-all"
+    );
+    assert!(
+        data0["address"].is_object(),
+        "nested `address` must be preserved as JSON in the catch-all"
+    );
+    assert!(
+        data0.get("name").is_none(),
+        "static `name` must not leak into the catch-all"
+    );
+    assert!(
+        data0.get("_id").is_none(),
+        "static `_id` must not leak into the catch-all"
+    );
+
+    // Row 1 (Bob): an array field folds in as well.
+    let (name1, data1) = &rows[1];
+    assert_eq!(name1, "Bob");
+    assert_eq!(data1["email"], serde_json::json!("bob@example.com"));
+    assert!(
+        data1["tags"].is_array(),
+        "array `tags` must be preserved in the catch-all"
+    );
+    assert!(data1.get("name").is_none());
+}
+
 use datafusion::common::Result as DFResult;
 fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<RecordBatch> {
     let schema = batch.schema();
@@ -812,6 +932,7 @@ async fn test_mongodb_arrow_oneway() {
     test_mongodb_nested_object_types(port).await;
     test_mongodb_null_and_missing_fields(port).await;
     test_mongodb_unnesting_depth_1(port).await;
+    test_mongodb_json_nesting(port).await;
     test_mongodb_sort_limit(port).await;
 
     mongodb_container.remove().await.expect("container to stop");

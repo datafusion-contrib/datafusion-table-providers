@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion::sql::TableReference;
+use datafusion_table_providers_common::schema_projection::SchemaProjection;
 use futures::TryStreamExt;
 use mongodb::bson::Document;
 use serde_json;
@@ -27,6 +28,7 @@ pub struct MongoDBTable {
     pool: Arc<MongoDBConnectionPool>,
     schema: SchemaRef,
     table_reference: Arc<TableReference>,
+    projection: Option<SchemaProjection>,
 }
 
 impl MongoDBTable {
@@ -34,13 +36,30 @@ impl MongoDBTable {
         pool: &Arc<MongoDBConnectionPool>,
         table_reference: impl Into<TableReference>,
     ) -> Result<Self, Error> {
+        Self::new_with_projection(pool, table_reference, None, None).await
+    }
+
+    pub async fn new_with_projection(
+        pool: &Arc<MongoDBConnectionPool>,
+        table_reference: impl Into<TableReference>,
+        declared_schema: Option<SchemaRef>,
+        projection: Option<SchemaProjection>,
+    ) -> Result<Self, Error> {
         let table_reference = table_reference.into();
-        let schema = pool.connect().await?.get_schema(&table_reference).await?;
+        let schema = pool
+            .connect()
+            .await?
+            .get_schema_with_declared_schema(&table_reference, declared_schema)
+            .await?;
+        let schema = projection.as_ref().map_or(schema.clone(), |projection| {
+            projection.project_schema(schema)
+        });
 
         Ok(Self {
             pool: Arc::clone(pool),
             schema,
             table_reference: Arc::new(table_reference),
+            projection,
         })
     }
 }
@@ -62,13 +81,14 @@ impl TableProvider for MongoDBTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(MongoDBExec::new(
+        Ok(Arc::new(MongoDBExec::new_with_projection(
             Arc::clone(&self.table_reference),
             Arc::clone(&self.pool),
             Arc::clone(&self.schema),
             projection,
             filters,
             limit,
+            self.projection.clone(),
         )?))
     }
 
@@ -103,9 +123,11 @@ struct MongoDBExec {
     sort_doc: Document,
     limit: Option<i32>,
     properties: Arc<PlanProperties>,
+    schema_projection: Option<SchemaProjection>,
 }
 
 impl MongoDBExec {
+    #[cfg(test)]
     pub fn new(
         table_reference: Arc<TableReference>,
         pool: Arc<MongoDBConnectionPool>,
@@ -113,6 +135,26 @@ impl MongoDBExec {
         projections: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
+    ) -> DataFusionResult<Self> {
+        Self::new_with_projection(
+            table_reference,
+            pool,
+            schema,
+            projections,
+            filters,
+            limit,
+            None,
+        )
+    }
+
+    pub fn new_with_projection(
+        table_reference: Arc<TableReference>,
+        pool: Arc<MongoDBConnectionPool>,
+        schema: SchemaRef,
+        projections: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+        schema_projection: Option<SchemaProjection>,
     ) -> DataFusionResult<Self> {
         let mut projected_schema = project_schema(&schema, projections)?;
 
@@ -161,6 +203,7 @@ impl MongoDBExec {
                 EmissionType::Final,
                 Boundedness::Bounded,
             )),
+            schema_projection,
         })
     }
 }
@@ -244,6 +287,7 @@ impl ExecutionPlan for MongoDBExec {
             sort_doc,
             limit: self.limit,
             properties: self.properties.clone(),
+            schema_projection: self.schema_projection.clone(),
         };
 
         // Update equivalence properties to reflect the output ordering
@@ -278,16 +322,18 @@ impl ExecutionPlan for MongoDBExec {
         let filters_doc = self.filters_doc.clone();
         let sort_doc = self.sort_doc.clone();
         let limit = self.limit;
+        let schema_projection = self.schema_projection.clone();
 
         let stream = futures::stream::once(async move {
             let conn = pool.connect().await.map_err(to_execution_error)?;
 
-            conn.query_arrow(
+            conn.query_arrow_with_projection(
                 &table_reference,
                 &projected_schema,
                 &filters_doc,
                 limit,
                 &sort_doc,
+                schema_projection.as_ref(),
             )
             .await
             .map_err(to_execution_error)

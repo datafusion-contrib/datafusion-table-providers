@@ -49,6 +49,10 @@ url = "2.5"
 default = ["federation"]
 federation = ["dep:datafusion-federation"]
 
+[dev-dependencies]
+reqwest = "0.13"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

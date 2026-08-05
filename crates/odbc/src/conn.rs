@@ -157,23 +157,38 @@ where
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, dbconnection::Error> {
-        let cxn = self.conn.lock().await;
-
-        let mut prepared = cxn
-            .prepare(&format!(
-                "SELECT * FROM {} LIMIT 1",
-                table_reference.to_quoted_string()
-            ))
-            .boxed()
-            .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?;
-
-        let schema = Arc::new(
-            arrow_schema_from(&mut prepared, None, false)
-                .boxed()
-                .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?,
+        let conn = Arc::clone(&self.conn);
+        let sql = format!(
+            "SELECT * FROM {} LIMIT 1",
+            table_reference.to_quoted_string()
         );
 
-        Ok(schema)
+        let get_schema = async || -> Result<SchemaRef, dbconnection::Error> {
+            let join_handle = tokio::task::spawn_blocking(move || {
+                let handle = Handle::current();
+                let cxn = handle.block_on(async { conn.lock().await });
+
+                let mut prepared = cxn
+                    .prepare(&sql)
+                    .boxed()
+                    .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?;
+
+                let schema = Arc::new(
+                    arrow_schema_from(&mut prepared, None, false)
+                        .boxed()
+                        .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?,
+                );
+
+                Ok::<SchemaRef, dbconnection::Error>(schema)
+            });
+
+            join_handle
+                .await
+                .map_err(|e| dbconnection::Error::UnableToGetSchema {
+                    source: Box::new(e),
+                })?
+        };
+        run_async_with_tokio(get_schema).await
     }
 
     async fn query_arrow(
@@ -263,18 +278,44 @@ where
     }
 
     async fn execute(&self, query: &str, params: &[ODBCParameter]) -> Result<u64> {
-        let cxn = self.conn.lock().await;
-        let prepared = cxn.prepare(query)?;
-        let mut statement = prepared.into_handle();
+        let conn = Arc::clone(&self.conn);
+        let query = query.to_string();
+        let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
 
-        bind_parameters(&mut statement, params)?;
+        let execute = async || -> Result<u64> {
+            let join_handle = tokio::task::spawn_blocking(move || {
+                let handle = Handle::current();
+                let cxn = handle.block_on(async { conn.lock().await });
 
-        let row_count = unsafe {
-            statement.execute().unwrap();
-            statement.row_count()
+                let prepared = cxn.prepare(&query)?;
+                let mut statement = prepared.into_handle();
+
+                bind_parameters(&mut statement, &params)?;
+
+                let row_count = unsafe {
+                    if let SqlResult::Error { function } = statement.execute() {
+                        return Err(Error::ODBCAPIErrorNoSource {
+                            message: function.to_string(),
+                        }
+                        .into());
+                    }
+                    match statement.row_count() {
+                        SqlResult::Success(count) | SqlResult::SuccessWithInfo(count) => count,
+                        result => {
+                            return Err(Error::ODBCAPIErrorNoSource {
+                                message: format!("SQLRowCount returned {result:?}"),
+                            }
+                            .into());
+                        }
+                    }
+                };
+
+                Ok::<u64, GenericError>(row_count.try_into().context(TryFromSnafu)?)
+            });
+
+            join_handle.await.map_err(|e| Box::new(e) as GenericError)?
         };
-
-        Ok(row_count.unwrap().try_into().context(TryFromSnafu)?)
+        run_async_with_tokio(execute).await
     }
 }
 

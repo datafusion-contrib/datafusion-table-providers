@@ -232,6 +232,19 @@ impl SqliteTableProviderFactory {
 
         Ok(pool)
     }
+
+    /// Evict a cached SQLite instance so the next lookup reopens its file.
+    pub async fn invalidate_instance(&self, key: &DbInstanceKey) -> Option<SqliteConnectionPool> {
+        self.instances.lock().await.remove(key)
+    }
+
+    pub async fn invalidate_file_instance(
+        &self,
+        db_path: impl Into<Arc<str>>,
+    ) -> Option<SqliteConnectionPool> {
+        self.invalidate_instance(&DbInstanceKey::file(db_path.into()))
+            .await
+    }
 }
 
 impl Default for SqliteTableProviderFactory {
