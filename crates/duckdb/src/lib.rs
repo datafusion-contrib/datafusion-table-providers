@@ -98,6 +98,15 @@ pub enum Error {
     #[snafu(display("Unable to get appender to duckdb table: {source}"))]
     UnableToGetAppenderToDuckDBTable { source: duckdb::Error },
 
+    #[snafu(display("Unable to append Arrow record batch to duckdb table: {source}"))]
+    UnableToAppendRecordBatchToDuckDBTable { source: duckdb::Error },
+
+    #[snafu(display("Unable to flush DuckDB appender: {source}"))]
+    UnableToFlushDuckDBAppender { source: duckdb::Error },
+
+    #[snafu(display("Unable to decode Arrow dictionary columns for DuckDB: {source}"))]
+    UnableToDecodeDictionaryColumns { source: arrow_schema::ArrowError },
+
     #[snafu(display("Unable to delete data from the duckdb table: {source}"))]
     UnableToDeleteDuckdbData { source: duckdb::Error },
 
@@ -159,17 +168,6 @@ pub enum Error {
 
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
-
-    #[snafu(display("Failed to register Arrow scan view for DuckDB ingestion: {source}"))]
-    UnableToRegisterArrowScanView { source: duckdb::Error },
-
-    #[snafu(display(
-        "Failed to register Arrow scan view to build table creation statement: {source}"
-    ))]
-    UnableToRegisterArrowScanViewForTableCreation { source: duckdb::Error },
-
-    #[snafu(display("Failed to drop Arrow scan view for DuckDB ingestion: {source}"))]
-    UnableToDropArrowScanView { source: duckdb::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
