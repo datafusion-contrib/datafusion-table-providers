@@ -26,6 +26,10 @@ tokio-rusqlite = "0.7"
 tracing = "0.1"
 uuid = { version = "1.18" }
 
+[dev-dependencies]
+rand = "0.10"
+rstest = "0.26.1"
+
 [features]
 default = ["federation", "bundled"]
 federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]

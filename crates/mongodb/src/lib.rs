@@ -1,13 +1,16 @@
 pub mod connection;
 pub mod connection_pool;
+pub mod projection;
 pub mod table;
 pub mod utils;
 
 use crate::connection_pool::MongoDBConnectionPool;
 use crate::table::MongoDBTable;
 use arrow_schema::ArrowError;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::TableReference;
+use datafusion_table_providers_common::schema_projection::SchemaProjection;
 use snafu::prelude::*;
 use std::sync::Arc;
 
@@ -34,6 +37,11 @@ pub enum Error {
     UnableToGetSchema {
         source: Box<dyn std::error::Error + std::marker::Send + Sync>,
     },
+
+    #[snafu(display(
+        "Unable to infer schema. Collection empty or non-existent: {collection_name}"
+    ))]
+    EmptyCollection { collection_name: String },
 
     #[snafu(display("Unable to get schemas: {source}"))]
     UnableToGetSchemas {
@@ -76,9 +84,22 @@ impl MongoDBTableFactory {
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
+        self.table_provider_with_projection(table_reference, None, None)
+            .await
+    }
+
+    /// Build a provider with an optional declared schema and connector-agnostic
+    /// row projection. A declared schema permits registering an empty collection;
+    /// a projection can fold undeclared fields into one JSON catch-all column.
+    pub async fn table_provider_with_projection(
+        &self,
+        table_reference: TableReference,
+        declared_schema: Option<SchemaRef>,
+        projection: Option<SchemaProjection>,
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync>> {
         let pool = Arc::clone(&self.pool);
         let table_provider = Arc::new(
-            MongoDBTable::new(&pool, table_reference)
+            MongoDBTable::new_with_projection(&pool, table_reference, declared_schema, projection)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         );

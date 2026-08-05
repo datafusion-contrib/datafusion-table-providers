@@ -2563,6 +2563,7 @@ dependencies = [
  "num-bigint",
  "rand 0.10.2",
  "regex",
+ "reqwest 0.13.2",
  "sea-query",
  "secrecy",
  "serde",
@@ -2572,6 +2573,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -2593,11 +2595,14 @@ dependencies = [
  "itertools 0.15.0",
  "r2d2",
  "rand 0.10.2",
+ "reqwest 0.13.2",
  "sea-query",
  "secrecy",
  "snafu",
+ "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -2712,6 +2717,7 @@ dependencies = [
  "fallible-iterator 0.3.0",
  "futures",
  "geo-types",
+ "geozero",
  "logos",
  "native-tls",
  "pem 4.0.0",
@@ -2756,6 +2762,8 @@ dependencies = [
  "datafusion-table-providers-common",
  "fundu",
  "futures",
+ "rand 0.10.2",
+ "rstest",
  "rusqlite",
  "sea-query",
  "secrecy",

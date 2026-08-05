@@ -43,6 +43,9 @@ url = "2.5"
 default = ["federation"]
 federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
 
+[dev-dependencies]
+geozero = { version = "0.15.1", features = ["with-wkb"] }
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

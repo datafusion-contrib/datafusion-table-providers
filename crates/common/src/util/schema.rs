@@ -1,11 +1,59 @@
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use super::handle_unsupported_type_error;
 use crate::UnsupportedTypeAction;
-use datafusion::arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T, E = GenericError> = std::result::Result<T, E>;
+
+/// Merge an inferred schema with a declared schema.
+///
+/// Declared fields override inferred fields with the same name; inferred-only
+/// fields are kept, and declared-only fields are appended.
+#[must_use]
+pub fn merge_inferred_and_declared_schemas(
+    inferred: SchemaRef,
+    declared: Option<&SchemaRef>,
+) -> SchemaRef {
+    let Some(declared) = declared else {
+        return inferred;
+    };
+
+    let declared_by_name: HashMap<&str, &Field> = declared
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.as_ref()))
+        .collect();
+    let inferred_names: HashSet<&str> = inferred
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+
+    let mut merged: Vec<Field> = inferred
+        .fields()
+        .iter()
+        .map(|f| {
+            declared_by_name
+                .get(f.name().as_str())
+                .copied()
+                .cloned()
+                .unwrap_or_else(|| f.as_ref().clone())
+        })
+        .collect();
+
+    for field in declared.fields() {
+        if !inferred_names.contains(field.name().as_str()) {
+            merged.push(field.as_ref().clone());
+        }
+    }
+
+    Arc::new(Schema::new(merged))
+}
 
 pub trait SchemaValidator {
     type Error: std::error::Error + Send + Sync;

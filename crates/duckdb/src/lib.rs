@@ -24,7 +24,6 @@ use datafusion_table_providers_common::{
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use creator::TableManager;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
@@ -51,10 +50,13 @@ use self::sql_table::DuckDBTable;
 mod federation;
 
 mod creator;
+mod file_swap;
 mod settings;
 mod sql_table;
 pub mod write;
-pub use creator::{RelationName, TableDefinition};
+pub mod write_settings;
+pub use creator::{RelationName, TableDefinition, TableManager};
+pub use file_swap::{recover_database_file_generations, SwapFileRecovery};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -160,6 +162,12 @@ pub enum Error {
     #[snafu(display("Failed to parse the system time: {source}"))]
     UnableToParseSystemTime { source: std::num::ParseIntError },
 
+    #[snafu(display("Failed to parse 'connection_pool_size' value '{value}': {source}. Provide a positive integer."))]
+    UnableToParseConnectionPoolSize {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+
     #[snafu(display("A read provider is required to create a DuckDBTableWriter"))]
     MissingReadProvider,
 
@@ -168,6 +176,42 @@ pub enum Error {
 
     #[snafu(display("A table definition is required to create a DuckDBTableWriter"))]
     MissingTableDefinition,
+
+    #[snafu(display("Failed to prepare the DuckDB database file swap ({path}): {source}"))]
+    UnableToPrepareFileSwap {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Failed to open the DuckDB file-swap staging database ({path}): {source}"))]
+    UnableToOpenSwapStaging { path: String, source: duckdb::Error },
+
+    #[snafu(display(
+        "Failed to checkpoint the DuckDB file-swap staging database ({path}): {source}"
+    ))]
+    UnableToCheckpointSwapStaging { path: String, source: duckdb::Error },
+
+    #[snafu(display("Failed to copy live data during the DuckDB file swap ({detail}): {source}"))]
+    UnableToCopyLiveDatabase {
+        detail: String,
+        source: duckdb::Error,
+    },
+
+    #[snafu(display("Failed to complete the DuckDB database file swap ({path}): {source}"))]
+    UnableToCompleteFileSwap {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display(
+        "A WAL unexpectedly exists beside the DuckDB file-swap staging database ({path})"
+    ))]
+    FileSwapWalPresent { path: String },
+
+    #[snafu(display(
+        "The DuckDB database file {path} was replaced by another process or mechanism while a file swap was in progress. The swap was aborted rather than overwrite the replacement."
+    ))]
+    FileSwapFileReplaced { path: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -277,7 +321,17 @@ impl DuckDBTableProviderFactory {
     }
 
     pub async fn get_or_init_memory_instance(&self) -> Result<DuckDbConnectionPool> {
+        self.get_or_init_memory_instance_with_options(&HashMap::new())
+            .await
+    }
+
+    pub async fn get_or_init_memory_instance_with_options(
+        &self,
+        options: &HashMap<String, String>,
+    ) -> Result<DuckDbConnectionPool> {
+        let max_size = extract_connection_pool_size(options)?;
         let pool_builder = DuckDbConnectionPoolBuilder::memory();
+        let pool_builder = pool_builder.with_max_size(max_size);
         self.get_or_init_instance_with_builder(pool_builder).await
     }
 
@@ -285,8 +339,18 @@ impl DuckDBTableProviderFactory {
         &self,
         db_path: impl Into<Arc<str>>,
     ) -> Result<DuckDbConnectionPool> {
+        self.get_or_init_file_instance_with_options(db_path, &HashMap::new())
+            .await
+    }
+
+    pub async fn get_or_init_file_instance_with_options(
+        &self,
+        db_path: impl Into<Arc<str>>,
+        options: &HashMap<String, String>,
+    ) -> Result<DuckDbConnectionPool> {
         let db_path: Arc<str> = db_path.into();
-        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path);
+        let pool_builder = DuckDbConnectionPoolBuilder::file(&db_path)
+            .with_max_size(extract_connection_pool_size(options)?);
 
         self.get_or_init_instance_with_builder(pool_builder).await
     }
@@ -317,6 +381,12 @@ impl DuckDBTableProviderFactory {
             return Ok(instance.clone());
         }
 
+        if let DbInstanceKey::File(path) = &key {
+            recover_database_file_generations(path).context(UnableToPrepareFileSwapSnafu {
+                path: path.to_string(),
+            })?;
+        }
+
         let pool = pool_builder
             .build()
             .context(DbConnectionPoolSnafu)?
@@ -325,6 +395,19 @@ impl DuckDBTableProviderFactory {
         instances.insert(key, pool.clone());
 
         Ok(pool)
+    }
+
+    /// Evict a cached instance so the next lookup reopens its backing file.
+    pub async fn invalidate_instance(&self, key: &DbInstanceKey) -> Option<DuckDbConnectionPool> {
+        self.instances.lock().await.remove(key)
+    }
+
+    pub async fn invalidate_file_instance(
+        &self,
+        path: impl Into<Arc<str>>,
+    ) -> Option<DuckDbConnectionPool> {
+        self.invalidate_instance(&DbInstanceKey::file(path.into()))
+            .await
     }
 }
 
@@ -391,12 +474,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                     .duckdb_file_path(&name, &mut options)
                     .map_err(to_datafusion_error)?;
 
-                self.get_or_init_file_instance(db_path)
+                self.get_or_init_file_instance_with_options(db_path, &options)
                     .await
                     .map_err(to_datafusion_error)?
             }
             Mode::Memory => self
-                .get_or_init_memory_instance()
+                .get_or_init_memory_instance_with_options(&options)
                 .await
                 .map_err(to_datafusion_error)?,
         };
@@ -425,12 +508,19 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
                 .with_indexes(indexes.clone());
 
         let pool = Arc::new(pool);
+        pool.record_instance_setup_queries(
+            self.settings_registry
+                .get_setting_statements(&options, DuckDBSettingScope::Global),
+        );
         make_initial_table(Arc::new(table_definition.clone()), &pool)?;
 
+        let write_settings = write_settings::DuckDBWriteSettings::from_params(&options);
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_table_definition(table_definition)
             .with_pool(pool)
-            .set_on_conflict(on_conflict);
+            .set_on_conflict(on_conflict)
+            .with_write_settings(write_settings)
+            .with_dialect(self.dialect.clone());
 
         let dyn_pool: Arc<DynDuckDbConnectionPool> = Arc::new(read_pool);
 
@@ -543,9 +633,22 @@ fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<Str
         .or_else(|| options.remove(&format!("duckdb.{key}")))
 }
 
+fn extract_connection_pool_size(options: &HashMap<String, String>) -> Result<Option<u32>> {
+    options
+        .get("connection_pool_size")
+        .map(|value| {
+            value.parse().context(UnableToParseConnectionPoolSizeSnafu {
+                value: value.clone(),
+            })
+        })
+        .transpose()
+}
+
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
+    schema: Option<SchemaRef>,
+    indexes: Vec<(ColumnReference, IndexType)>,
 }
 
 impl DuckDBTableFactory {
@@ -554,12 +657,26 @@ impl DuckDBTableFactory {
         Self {
             pool,
             dialect: Arc::new(DuckDBDialect::new()),
+            schema: None,
+            indexes: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+        self.indexes = indexes;
         self
     }
 
@@ -571,7 +688,10 @@ impl DuckDBTableFactory {
         let conn = Arc::clone(&pool).connect().await?;
         let dyn_pool: Arc<DynDuckDbConnectionPool> = pool;
 
-        let schema = get_schema(conn, &table_reference).await?;
+        let schema = match &self.schema {
+            Some(schema) => Arc::clone(schema),
+            None => get_schema(conn, &table_reference).await?,
+        };
         let (tbl_ref, cte) = if is_table_function(&table_reference) {
             let tbl_ref_view = create_table_function_view_name(&table_reference);
             (
@@ -608,11 +728,13 @@ impl DuckDBTableFactory {
         let schema = read_provider.schema();
 
         let table_name = RelationName::from(table_reference);
-        let table_definition = TableDefinition::new(table_name, Arc::clone(&schema));
+        let table_definition = TableDefinition::new(table_name, Arc::clone(&schema))
+            .with_indexes(self.indexes.clone());
         let table_writer_builder = DuckDBTableWriterBuilder::new()
             .with_read_provider(read_provider)
             .with_pool(Arc::clone(&self.pool))
-            .with_table_definition(table_definition);
+            .with_table_definition(table_definition)
+            .with_dialect(self.dialect.clone());
 
         Ok(Arc::new(table_writer_builder.build()?))
     }
@@ -646,6 +768,11 @@ pub(crate) fn make_initial_table(
     table_definition: Arc<TableDefinition>,
     pool: &Arc<DuckDbConnectionPool>,
 ) -> DataFusionResult<()> {
+    let write_gate = pool.write_gate();
+    let _write_guard = write_gate
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let cloned_pool = Arc::clone(pool);
     let mut db_conn = Arc::clone(&cloned_pool)
         .connect_sync()

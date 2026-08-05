@@ -8,7 +8,7 @@
 //! and module paths for backward compatibility.
 
 pub use datafusion_table_providers_common::{
-    common, util, Error, UnsupportedTypeAction, DESCRIPTION_METADATA_KEY,
+    common, schema_projection, util, Error, UnsupportedTypeAction, DESCRIPTION_METADATA_KEY,
 };
 
 pub mod sql {

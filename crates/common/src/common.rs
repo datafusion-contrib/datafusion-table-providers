@@ -59,7 +59,7 @@ impl<T, P> std::fmt::Debug for DatabaseSchemaProvider<T, P> {
     }
 }
 
-impl<T, P: 'static> DatabaseSchemaProvider<T, P> {
+impl<T: 'static, P: 'static> DatabaseSchemaProvider<T, P> {
     pub async fn try_new(name: String, pool: Pool<T, P>) -> Result<Self> {
         let conn = pool.connect().await?;
         let tables = get_tables(conn, &name).await?;

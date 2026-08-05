@@ -11,7 +11,7 @@ use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::DuckDB;
 use datafusion_table_providers_common::util::{
@@ -44,35 +44,45 @@ impl From<TableReference> for RelationName {
 
 /// A table definition, which includes the table name, schema, constraints, and indexes.
 /// This is used to store the definition of a table for a dataset, and can be re-used to create one or more tables (like internal data tables).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct TableDefinition {
     name: RelationName,
     schema: SchemaRef,
     constraints: Option<Constraints>,
     indexes: Vec<(ColumnReference, IndexType)>,
+    ignored_index_prefixes: Mutex<Vec<String>>,
 }
 
 impl TableDefinition {
     #[must_use]
-    pub(crate) fn new(name: RelationName, schema: SchemaRef) -> Self {
+    pub fn new(name: RelationName, schema: SchemaRef) -> Self {
         Self {
             name,
             schema,
             constraints: None,
             indexes: Vec::new(),
+            ignored_index_prefixes: Mutex::new(Vec::new()),
         }
     }
 
     #[must_use]
-    pub(crate) fn with_constraints(mut self, constraints: Constraints) -> Self {
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = Some(constraints);
         self
     }
 
     #[must_use]
-    pub(crate) fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
+    pub fn with_indexes(mut self, indexes: Vec<(ColumnReference, IndexType)>) -> Self {
         self.indexes = indexes;
         self
+    }
+
+    /// Ignore indexes managed outside this writer when checking index drift.
+    pub fn add_ignored_index_prefix(&self, prefix: impl Into<String>) {
+        self.ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(prefix.into());
     }
 
     #[must_use]
@@ -80,8 +90,7 @@ impl TableDefinition {
         &self.name
     }
 
-    #[cfg(test)]
-    pub(crate) fn schema(&self) -> SchemaRef {
+    pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 
@@ -97,7 +106,7 @@ impl TableDefinition {
         )))
     }
 
-    pub(crate) fn constraints(&self) -> Option<&Constraints> {
+    pub fn constraints(&self) -> Option<&Constraints> {
         self.constraints.as_ref()
     }
 
@@ -168,17 +177,53 @@ impl TableDefinition {
             .map(|(name, time_created)| (RelationName(name), time_created))
             .collect())
     }
+
+    /// Resolve the physical table targeted by DELETE and UPDATE. Overwrites
+    /// expose a view backed by the latest internal table, and DuckDB cannot
+    /// apply DML directly to that view.
+    pub fn resolve_dml_table_name(&self, tx: &Transaction<'_>) -> super::Result<String> {
+        let internal_tables = self.list_internal_tables(tx)?;
+        Ok(internal_tables
+            .last()
+            .map_or_else(|| self.name.to_string(), |(name, _)| name.to_string()))
+    }
+}
+
+impl PartialEq for TableDefinition {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.schema == other.schema
+            && self.constraints == other.constraints
+            && self.indexes == other.indexes
+    }
+}
+
+impl Clone for TableDefinition {
+    fn clone(&self) -> Self {
+        let ignored_index_prefixes = self
+            .ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Self {
+            name: self.name.clone(),
+            schema: Arc::clone(&self.schema),
+            constraints: self.constraints.clone(),
+            indexes: self.indexes.clone(),
+            ignored_index_prefixes: Mutex::new(ignored_index_prefixes),
+        }
+    }
 }
 
 /// A table creator, which is used to create, delete, and manage tables based on a `TableDefinition`.
 #[derive(Debug, Clone)]
-pub(crate) struct TableManager {
+pub struct TableManager {
     table_definition: Arc<TableDefinition>,
     internal_name: Option<RelationName>,
 }
 
 impl TableManager {
-    pub(crate) fn new(table_definition: Arc<TableDefinition>) -> Self {
+    pub fn new(table_definition: Arc<TableDefinition>) -> Self {
         Self {
             table_definition,
             internal_name: None,
@@ -186,7 +231,7 @@ impl TableManager {
     }
 
     /// Set the internal flag for the table creator.
-    pub(crate) fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
+    pub fn with_internal(mut self, is_internal: bool) -> super::Result<Self> {
         if is_internal {
             self.internal_name = Some(self.table_definition.generate_internal_name()?);
         } else {
@@ -196,12 +241,12 @@ impl TableManager {
         Ok(self)
     }
 
-    pub(crate) fn definition_name(&self) -> &RelationName {
+    pub fn definition_name(&self) -> &RelationName {
         &self.table_definition.name
     }
 
     /// Returns the canonical name for this table, which is the internal name if the table is internal, or the table name if it is not.
-    pub(crate) fn table_name(&self) -> &RelationName {
+    pub fn table_name(&self) -> &RelationName {
         self.internal_name
             .as_ref()
             .unwrap_or_else(|| &self.table_definition.name)
@@ -605,8 +650,18 @@ impl TableManager {
             .map(|index| index.replace(&self.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
+        let ignored_index_prefixes = self
+            .table_definition
+            .ignored_index_prefixes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let actual_indexes_str_map = actual_indexes_str_map
             .iter()
+            .filter(|index| {
+                !ignored_index_prefixes
+                    .iter()
+                    .any(|prefix| index.starts_with(prefix))
+            })
             .map(|index| index.replace(&other_table.table_name().to_string(), ""))
             .collect::<HashSet<_>>();
 
@@ -669,12 +724,10 @@ impl TableManager {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::{
-        duckdb::make_initial_table, sql::db_connection_pool::crate::conn::DuckDbConnection,
-    };
+    use crate::{conn::DuckDbConnection, make_initial_table};
     use datafusion::{arrow::array::RecordBatch, datasource::sink::DataSink};
     use datafusion::{
-        common::SchemaExt,
+        common::{Constraint, SchemaExt},
         execution::{SendableRecordBatchStream, TaskContext},
         logical_expr::dml::InsertOp,
         parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
@@ -683,12 +736,29 @@ pub(crate) mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    use crate::{
-        duckdb::write::DuckDBDataSink,
-        util::constraints::tests::{get_pk_constraints, get_unique_constraints},
-    };
+    use crate::write::DuckDBDataSink;
 
     use super::*;
+
+    fn constraints_for(
+        columns: &[&str],
+        schema: SchemaRef,
+        make: impl FnOnce(Vec<usize>) -> Constraint,
+    ) -> Constraints {
+        let indices = columns
+            .iter()
+            .filter_map(|name| schema.column_with_name(name).map(|(index, _)| index))
+            .collect();
+        Constraints::new_unverified(vec![make(indices)])
+    }
+
+    fn get_unique_constraints(columns: &[&str], schema: SchemaRef) -> Constraints {
+        constraints_for(columns, schema, Constraint::Unique)
+    }
+
+    fn get_pk_constraints(columns: &[&str], schema: SchemaRef) -> Constraints {
+        constraints_for(columns, schema, Constraint::PrimaryKey)
+    }
 
     pub(crate) fn get_mem_duckdb() -> Arc<DuckDbConnectionPool> {
         Arc::new(
