@@ -35,6 +35,7 @@ async fn arrow_duckdb_round_trip(
         constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
+        or_replace: false,
     };
     let table_provider = factory
         .create(&ctx.state(), &cmd)
@@ -119,6 +120,82 @@ async fn test_arrow_duckdb_roundtrip(
         &format!("{table_name}_types"),
     )
     .await;
+}
+
+#[test_log::test(tokio::test)]
+async fn test_multi_batch_append() {
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let batches = vec![
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .expect("first record batch"),
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![4, 5, 6]))],
+        )
+        .expect("second record batch"),
+    ];
+
+    let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+    let ctx = SessionContext::new();
+    let cmd = CreateExternalTable {
+        schema: Arc::new(Arc::clone(&schema).to_dfschema().expect("to df schema")),
+        name: "multi_batch_append".into(),
+        location: String::new(),
+        file_type: String::new(),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Constraints::default(),
+        column_defaults: HashMap::new(),
+        temporary: false,
+        or_replace: false,
+    };
+    let table_provider = factory
+        .create(&ctx.state(), &cmd)
+        .await
+        .expect("table provider created");
+
+    let mem_exec = MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)
+        .expect("memory exec created");
+    let insert_plan = table_provider
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
+        .await
+        .expect("insert plan created");
+    collect(insert_plan, ctx.task_ctx())
+        .await
+        .expect("insert done");
+
+    ctx.register_table("multi_batch_append", table_provider)
+        .expect("table registered");
+    let result = ctx
+        .sql("SELECT id FROM multi_batch_append ORDER BY id")
+        .await
+        .expect("query created")
+        .collect()
+        .await
+        .expect("query completed");
+    let values: Vec<i32> = result
+        .iter()
+        .flat_map(|batch| {
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Int32 result column");
+            (0..column.len()).map(|index| column.value(index))
+        })
+        .collect();
+
+    assert_eq!(values, vec![1, 2, 3, 4, 5, 6]);
 }
 
 mod sort_limit_pushdown {

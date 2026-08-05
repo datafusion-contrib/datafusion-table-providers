@@ -1,11 +1,14 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fmt, sync::Arc};
 
 use crate::pool::DuckDbConnectionPool;
 use crate::DuckDB;
-use arrow::array::RecordBatchReader;
-use arrow::ffi_stream::FFI_ArrowArrayStream;
-use arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{
+    array::{ArrayRef, RecordBatch},
+    compute::cast,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 use arrow_schema::ArrowError;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -30,14 +33,15 @@ use snafu::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use super::creator::{TableDefinition, TableManager, ViewCreator};
-use super::{to_datafusion_error, RelationName};
+use super::creator::{TableDefinition, TableManager};
+use super::to_datafusion_error;
 
 // checking schemas are equivalent is disabled because it incorrectly marks single-level list fields are different when the name of the field is different
 // e.g. List(Field { name: 'a', data_type: Int32 }) != List(Field { name: 'b', data_type: Int32 })
 // but, in this case, they are actually equivalent because the field name does not matter for the schema.
 // related: https://github.com/apache/arrow-rs/issues/6733#issuecomment-2482582556
 const SCHEMA_EQUIVALENCE_ENABLED: bool = false;
+static NEXT_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub struct DuckDBTableWriterBuilder {
@@ -610,57 +614,101 @@ fn write_to_table(
     table: &TableManager,
     tx: &Transaction<'_>,
     schema: SchemaRef,
-    data_batches: Receiver<RecordBatch>,
+    mut data_batches: Receiver<RecordBatch>,
     on_conflict: Option<&OnConflict>,
 ) -> datafusion::common::Result<u64> {
-    let stream = FFI_ArrowArrayStream::new(Box::new(RecordBatchReaderFromStream::new(
-        data_batches,
-        schema,
-    )));
-
     let current_ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context(super::UnableToGetSystemTimeSnafu)
         .map_err(to_datafusion_error)?
-        .as_millis();
+        .as_nanos();
 
-    let view_name = format!("__scan_{}_{current_ts}", table.table_name());
-    tx.register_arrow_scan_view(&view_name, &stream)
-        .context(super::UnableToRegisterArrowScanViewSnafu)
+    let staging_id = NEXT_STAGING_ID.fetch_add(1, Ordering::Relaxed);
+    let staging_name = format!("__datafusion_ingest_{current_ts}_{staging_id}");
+    let create_staging_sql = format!(
+        r#"CREATE TABLE "{staging_name}" AS SELECT * FROM "{table_name}" LIMIT 0"#,
+        table_name = table.table_name(),
+    );
+    tx.execute(&create_staging_sql, [])
+        .context(super::UnableToCreateDuckDBTableSnafu)
         .map_err(to_datafusion_error)?;
 
-    let view = ViewCreator::from_name(RelationName::new(view_name));
-    let rows = view
-        .insert_into(table, tx, on_conflict)
+    {
+        let mut appender = tx
+            .appender(&staging_name)
+            .context(super::UnableToGetAppenderToDuckDBTableSnafu)
+            .map_err(to_datafusion_error)?;
+
+        while let Some(batch) = data_batches.blocking_recv() {
+            let batch = decode_dictionary_columns(batch)
+                .context(super::UnableToDecodeDictionaryColumnsSnafu)
+                .map_err(to_datafusion_error)?;
+            appender
+                .append_record_batch(batch)
+                .context(super::UnableToAppendRecordBatchToDuckDBTableSnafu)
+                .map_err(to_datafusion_error)?;
+        }
+
+        appender
+            .flush()
+            .context(super::UnableToFlushDuckDBAppenderSnafu)
+            .map_err(to_datafusion_error)?;
+    }
+
+    let mut insert_sql = format!(
+        r#"INSERT INTO "{table_name}" SELECT * FROM "{staging_name}""#,
+        table_name = table.table_name(),
+    );
+    if let Some(on_conflict) = on_conflict {
+        insert_sql.push(' ');
+        insert_sql.push_str(&on_conflict.build_on_conflict_statement(&schema));
+    }
+    tracing::debug!("{insert_sql}");
+
+    let rows = tx
+        .execute(&insert_sql, [])
+        .context(super::UnableToInsertToDuckDBTableSnafu)
         .map_err(to_datafusion_error)?;
-    view.drop(tx).map_err(to_datafusion_error)?;
+
+    tx.execute(&format!(r#"DROP TABLE "{staging_name}""#), [])
+        .context(super::UnableToDropDuckDBTableSnafu)
+        .map_err(to_datafusion_error)?;
 
     Ok(rows as u64)
 }
 
-struct RecordBatchReaderFromStream {
-    stream: Receiver<RecordBatch>,
-    schema: SchemaRef,
-}
+fn decode_dictionary_columns(batch: RecordBatch) -> Result<RecordBatch, ArrowError> {
+    let mut decoded = false;
+    let mut fields = Vec::with_capacity(batch.num_columns());
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
 
-impl RecordBatchReaderFromStream {
-    fn new(stream: Receiver<RecordBatch>, schema: SchemaRef) -> Self {
-        Self { stream, schema }
+    for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
+        if let DataType::Dictionary(_, value_type) = field.data_type() {
+            decoded = true;
+            fields.push(Arc::new(
+                Field::new(
+                    field.name(),
+                    value_type.as_ref().clone(),
+                    field.is_nullable(),
+                )
+                .with_metadata(field.metadata().clone()),
+            ));
+            columns.push(cast(column, value_type)?);
+        } else {
+            fields.push(Arc::clone(field));
+            columns.push(Arc::clone(column));
+        }
     }
-}
 
-impl Iterator for RecordBatchReaderFromStream {
-    type Item = Result<RecordBatch, ArrowError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.stream.blocking_recv().map(Ok)
+    if !decoded {
+        return Ok(batch);
     }
-}
 
-impl RecordBatchReader for RecordBatchReaderFromStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        batch.schema().metadata().clone(),
+    ));
+    RecordBatch::try_new(schema, columns)
 }
 
 #[cfg(test)]
@@ -669,6 +717,7 @@ mod test {
     use datafusion::physical_plan::memory::MemoryStream;
 
     use super::*;
+    use crate::RelationName;
     use crate::{
         duckdb::creator::tests::{get_basic_table_definition, get_mem_duckdb, init_tracing},
         util::{column_reference::ColumnReference, indexes::IndexType},

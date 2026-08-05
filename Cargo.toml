@@ -57,6 +57,6 @@ datafusion-table-providers-sqlite = { version = "0.13.0", path = "crates/sqlite"
 datafusion-table-providers-postgres = { version = "0.13.0", path = "crates/postgres" }
 datafusion-table-providers-duckdb = { version = "0.13.0", path = "crates/duckdb" }
 datafusion-table-providers-adbc = { version = "0.13.0", path = "crates/adbc" }
-duckdb = { version = "=1.4.4", package = "spiceai_duckdb_fork" } # Forked to add support for duckdb_scan_arrow, pending: https://github.com/duckdb/duckdb-rs/pull/488
+duckdb = { version = "=1.10505.0" }
 adbc_core = { version = "0.24" }
 adbc_driver_manager = { version = "0.24" }

@@ -1,16 +1,12 @@
 use crate::conn::DuckDbConnection;
 use crate::pool::DuckDbConnectionPool;
-use arrow::{
-    array::{RecordBatch, RecordBatchIterator, RecordBatchReader},
-    datatypes::SchemaRef,
-    ffi_stream::FFI_ArrowArrayStream,
-};
+use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::arrow_sql_gen::statement::IndexBuilder;
 use datafusion_table_providers_common::util::on_conflict::OnConflict;
-use duckdb::Transaction;
+use duckdb::{vtab::arrow::arrow_recordbatch_to_query_params, Transaction};
 use itertools::Itertools;
 use snafu::prelude::*;
 use std::collections::HashSet;
@@ -23,7 +19,7 @@ use datafusion_table_providers_common::util::{
     indexes::IndexType,
 };
 
-/// A newtype for a relation name, to better control the inputs for the `TableDefinition`, `TableCreator`, and `ViewCreator`.
+/// A newtype for a relation name, to better control the inputs for the `TableDefinition` and `TableCreator`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelationName(String);
 
@@ -397,24 +393,13 @@ impl TableManager {
             .transaction()
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
-        let record_batch_reader =
-            create_empty_record_batch_reader(Arc::clone(&self.table_definition.schema));
-        let stream = FFI_ArrowArrayStream::new(Box::new(record_batch_reader));
-
-        let current_ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .context(super::UnableToGetSystemTimeSnafu)?
-            .as_millis();
-
-        let view_name = format!("__scan_{}_{current_ts}", table_name);
-        tx.register_arrow_scan_view(&view_name, &stream)
-            .context(super::UnableToRegisterArrowScanViewForTableCreationSnafu)?;
-
+        let empty_batch = RecordBatch::new_empty(Arc::clone(&self.table_definition.schema));
+        let params = arrow_recordbatch_to_query_params(empty_batch);
         let sql =
-            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM "{view_name}""#,);
+            format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM arrow(?, ?)"#,);
         tracing::debug!("{sql}");
 
-        tx.execute(&sql, [])
+        tx.execute(&sql, params)
             .context(super::UnableToCreateDuckDBTableSnafu)?;
 
         let create_stmt = tx
@@ -679,65 +664,6 @@ impl TableManager {
             .context(super::UnableToQueryDataSnafu)?;
 
         Ok(count)
-    }
-}
-
-fn create_empty_record_batch_reader(schema: SchemaRef) -> impl RecordBatchReader {
-    let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
-    let batches = vec![empty_batch];
-    RecordBatchIterator::new(batches.into_iter().map(Ok), schema)
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ViewCreator {
-    name: RelationName,
-}
-
-impl ViewCreator {
-    #[must_use]
-    pub(crate) fn from_name(name: RelationName) -> Self {
-        Self { name }
-    }
-
-    pub(crate) fn insert_into(
-        &self,
-        table: &TableManager,
-        tx: &Transaction<'_>,
-        on_conflict: Option<&OnConflict>,
-    ) -> super::Result<u64> {
-        // insert from this view, into the target table
-        let mut insert_sql = format!(
-            r#"INSERT INTO "{table_name}" SELECT * FROM "{view_name}""#,
-            view_name = self.name,
-            table_name = table.table_name()
-        );
-
-        if let Some(on_conflict) = on_conflict {
-            let on_conflict_sql =
-                on_conflict.build_on_conflict_statement(&table.table_definition.schema);
-            insert_sql.push_str(&format!(" {on_conflict_sql}"));
-        }
-        tracing::debug!("{insert_sql}");
-
-        let rows = tx
-            .execute(&insert_sql, [])
-            .context(super::UnableToInsertToDuckDBTableSnafu)?;
-
-        Ok(rows as u64)
-    }
-
-    pub(crate) fn drop(&self, tx: &Transaction<'_>) -> super::Result<()> {
-        // drop this view
-        tx.execute(
-            &format!(
-                r#"DROP VIEW IF EXISTS "{view_name}""#,
-                view_name = self.name
-            ),
-            [],
-        )
-        .context(super::UnableToDropDuckDBTableSnafu)?;
-
-        Ok(())
     }
 }
 
