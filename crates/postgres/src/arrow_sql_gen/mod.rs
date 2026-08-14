@@ -100,6 +100,16 @@ pub enum Error {
         source: arrow::error::ArrowError,
     },
 
+    #[snafu(display(
+        "Cannot represent the Postgres numeric value {value} as Decimal128(38, {scale}): the value overflows 128 bits"
+    ))]
+    DecimalOverflowsColumnScale { value: String, scale: u32 },
+
+    #[snafu(display(
+        "The Postgres numeric value {value} has more decimal places than the column scale {scale}; rescaling it would silently lose precision"
+    ))]
+    DecimalExceedsColumnScale { value: String, scale: u32 },
+
     #[snafu(display("The field '{field_name}' has an unsupported data type: {data_type}."))]
     UnsupportedDataType {
         data_type: String,
@@ -108,6 +118,48 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// The Arrow scale used for a Postgres `numeric` column that declares no scale of its own
+/// (bare `numeric`, and anything derived from it such as `max()`, `avg()` or arithmetic).
+///
+/// Such a column has no fixed scale in Postgres: every row may carry a different number of
+/// decimal places. The Arrow column, however, needs one scale for all rows, so it is pinned
+/// here instead of being inferred from whichever row happens to arrive first — inferring it
+/// made the result depend on row order and silently rounded every later, longer value.
+///
+/// This matches the scale schema inference already assigns to a bare `numeric`
+/// (`Decimal128(38, 20)`), so the row path and the schema path agree.
+const DEFAULT_UNCONSTRAINED_NUMERIC_SCALE: u32 = 20;
+
+/// Returns the `Decimal128` mantissa representing `value` in a column of scale `dest_scale`,
+/// without losing precision.
+///
+/// `Decimal::rescale` is deliberately not used: it rounds when narrowing (the cause of the
+/// silent corruption this replaces) and refuses to widen past its own 96-bit mantissa. Both
+/// directions are handled explicitly here, and anything that cannot be represented exactly is
+/// reported as an error rather than quietly rounded.
+fn decimal_to_i128_mantissa(value: Decimal, dest_scale: u32) -> Result<i128> {
+    let value_scale = value.scale();
+    let mantissa = value.mantissa();
+
+    match dest_scale.cmp(&value_scale) {
+        std::cmp::Ordering::Equal => Ok(mantissa),
+        std::cmp::Ordering::Greater => {
+            let factor = 10i128.checked_pow(dest_scale - value_scale);
+            factor
+                .and_then(|factor| mantissa.checked_mul(factor))
+                .context(DecimalOverflowsColumnScaleSnafu {
+                    value: value.to_string(),
+                    scale: dest_scale,
+                })
+        }
+        std::cmp::Ordering::Less => DecimalExceedsColumnScaleSnafu {
+            value: value.to_string(),
+            scale: dest_scale,
+        }
+        .fail(),
+    }
+}
 
 macro_rules! handle_primitive_type {
     ($builder:expr, $type:expr, $builder_ty:ty, $value_ty:ty, $row:expr, $index:expr) => {{
@@ -553,13 +605,11 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     let v: Option<Decimal> = row.try_get(i).context(FailedToGetRowValueSnafu {
                         pg_type: Type::NUMERIC,
                     })?;
-                    let scale = {
-                        if let Some(v) = &v {
-                            v.scale()
-                        } else {
-                            0
-                        }
-                    };
+                    // A declared scale (`numeric(p,s)`) comes from the projected schema; a bare
+                    // `numeric` has no scale of its own, so use the pinned default rather than
+                    // the first row's scale, which later rows would then be rounded down to.
+                    let scale =
+                        postgres_numeric_scale.unwrap_or(DEFAULT_UNCONSTRAINED_NUMERIC_SCALE);
 
                     let dec_builder = builder.get_or_insert_with(|| {
                         Box::new(
@@ -595,16 +645,12 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                         *postgres_numeric_scale = Some(scale);
                     };
 
-                    let Some(mut v) = v else {
+                    let Some(v) = v else {
                         dec_builder.append_null();
                         continue;
                     };
 
-                    // Record Batch Scale is determined by first row, while Postgres Numeric Type doesn't have fixed scale
-                    // Resolve scale difference for incoming records
-                    let dest_scale = postgres_numeric_scale.unwrap_or_default();
-                    v.rescale(dest_scale);
-                    dec_builder.append_value(v.mantissa());
+                    dec_builder.append_value(decimal_to_i128_mantissa(v, scale)?);
                 }
                 Type::NUMERIC_ARRAY => {
                     let v: Option<Vec<Option<Decimal>>> =
@@ -612,15 +658,10 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                             pg_type: Type::NUMERIC_ARRAY,
                         })?;
 
-                    let inferred_scale = v
-                        .iter()
-                        .flatten()
-                        .flatten()
-                        .map(Decimal::scale)
-                        .max()
-                        .unwrap_or_default();
-
-                    let dest_scale = postgres_numeric_scale.unwrap_or(inferred_scale);
+                    // As for scalar `numeric`: only a declared scale is trusted, otherwise the
+                    // pinned default, so the column's scale does not depend on the first row.
+                    let dest_scale =
+                        postgres_numeric_scale.unwrap_or(DEFAULT_UNCONSTRAINED_NUMERIC_SCALE);
                     let decimal_scale = i8::try_from(dest_scale).unwrap_or_default();
 
                     let decimal_array_builder = builder.get_or_insert_with(|| {
@@ -669,11 +710,10 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     };
 
                     for item in values {
-                        if let Some(mut decimal) = item {
-                            decimal.rescale(dest_scale);
+                        if let Some(decimal) = item {
                             decimal_array_builder
                                 .values()
-                                .append_value(decimal.mantissa());
+                                .append_value(decimal_to_i128_mantissa(decimal, dest_scale)?);
                         } else {
                             decimal_array_builder.values().append_null();
                         }
@@ -1561,6 +1601,53 @@ mod tests {
         let negative_result = Decimal::from_sql(&Type::NUMERIC, negative_raw.as_slice())
             .expect("Failed to run FromSql");
         assert_eq!(negative_result, negative);
+    }
+
+    /// Regression guard for the unconstrained `numeric` precision loss: values are widened
+    /// to the column scale exactly, and a value that would have to be rounded is rejected
+    /// instead of being silently truncated (the previous `Decimal::rescale` behaviour).
+    #[test]
+    fn test_decimal_to_i128_mantissa() {
+        // Whole number first, more decimals after: the fixture order that used to corrupt
+        // 17.685 into 18 and 15.334 into 15.
+        let scale = DEFAULT_UNCONSTRAINED_NUMERIC_SCALE;
+        for (value, expected) in [
+            ("20", 20 * 10i128.pow(20)),
+            ("17.685", 17_685 * 10i128.pow(17)),
+            ("15.334", 15_334 * 10i128.pow(17)),
+            ("-0.0045", -45 * 10i128.pow(16)),
+        ] {
+            let decimal = Decimal::from_str(value).expect("decimal parses");
+            assert_eq!(
+                decimal_to_i128_mantissa(decimal, scale).expect("value is representable"),
+                expected,
+                "value {value} must be widened to scale {scale} exactly"
+            );
+        }
+
+        // A declared scale that already matches is passed through untouched.
+        let decimal = Decimal::from_str("1.23").expect("decimal parses");
+        assert_eq!(
+            decimal_to_i128_mantissa(decimal, 2).expect("value is representable"),
+            123
+        );
+
+        // More decimal places than the column can hold is an error, not a rounded value.
+        let decimal = Decimal::from_str("1.235").expect("decimal parses");
+        let error = decimal_to_i128_mantissa(decimal, 2).expect_err("must not round silently");
+        assert!(
+            error.to_string().contains("more decimal places"),
+            "unexpected error: {error}"
+        );
+
+        // Widening that overflows 128 bits is reported rather than wrapped.
+        let decimal = Decimal::from_str("79228162514264337593543950335").expect("decimal parses");
+        let error = decimal_to_i128_mantissa(decimal, DEFAULT_UNCONSTRAINED_NUMERIC_SCALE)
+            .expect_err("must not wrap");
+        assert!(
+            error.to_string().contains("overflows"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
