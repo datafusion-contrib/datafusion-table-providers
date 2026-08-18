@@ -16,7 +16,7 @@ datafusion-federation = { workspace = true, features = ["sql"], optional = true 
 datafusion-table-providers-common = { workspace = true }
 dyn-clone = "1.0"
 futures = "0.3"
-odbc-api = "28.2"
+odbc-api = "29.0"
 arrow-odbc = { workspace = true }
 snafu = "0.9"
 tokio = { version = "1.52", features = ["macros", "fs"] }
