@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use bb8_postgres::tokio_postgres::types::ToSql;
 use datafusion_table_providers_common::util::handle_unsupported_type_error;
 use datafusion_table_providers_common::util::schema::SchemaValidator;
 use datafusion_table_providers_common::UnsupportedTypeAction;
+use datafusion_table_providers_common::SOURCE_TYPE_METADATA_KEY;
 
 fn maybe_db_source_err(err: tokio_postgres::Error) -> Box<dyn Error + Send + Sync> {
     if let Some(err) = err.as_db_error() {
@@ -92,6 +94,10 @@ SELECT
     WHEN t.typtype = 'c' THEN 'composite'
     ELSE pg_catalog.format_type(a.atttypid, a.atttypmod)
     END AS data_type,
+    -- The type as Postgres itself names it, uncategorized: the branches above replace
+    -- `text[]`/`mood` with the 'array'/'enum' labels the Arrow mapping dispatches on,
+    -- which loses exactly the types the Arrow mapping is lossiest about.
+    pg_catalog.format_type(a.atttypid, a.atttypmod) AS source_type,
     CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
     CASE
     WHEN t.typcategory = 'A' THEN
@@ -167,6 +173,9 @@ struct ColumnDef {
     name: String,
     /// Fully formatted SQL type string (e.g. `numeric(10,2)`, `array<struct<...>>`).
     data_type: String,
+    /// The source type as the database names it, before any categorization the Arrow
+    /// mapping needs. `None` where the variant's query cannot report one.
+    source_type: Option<String>,
     nullable: bool,
     type_details: Option<serde_json::Value>,
 }
@@ -418,7 +427,17 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
                 continue;
             };
 
-            fields.push(Field::new(column.name, arrow_type, column.nullable));
+            // The Arrow mapping is lossy (`varchar(50)` and `citext` both land on
+            // `Utf8`), so keep the source type the catalog reported alongside it.
+            let mut field = Field::new(column.name, arrow_type, column.nullable);
+            if let Some(source_type) = column.source_type {
+                field = field.with_metadata(HashMap::from([(
+                    SOURCE_TYPE_METADATA_KEY.to_string(),
+                    source_type,
+                )]));
+            }
+
+            fields.push(field);
         }
 
         let schema = Arc::new(Schema::new(fields));
@@ -543,11 +562,14 @@ impl PostgresConnection {
                 rows.iter()
                     .map(|row| ColumnDef {
                         name: row.get::<usize, String>(0),
-                        // `data_type` is already a formatted type string via
-                        // `pg_catalog.format_type` (e.g. `numeric(10,2)`).
+                        // `data_type` is the categorized column: a `format_type`
+                        // string (e.g. `numeric(10,2)`) except for arrays, enums, and
+                        // composites, which the query rewrites to the labels
+                        // `pg_data_type_to_arrow_type` dispatches on.
                         data_type: row.get::<usize, String>(1),
-                        nullable: row.get::<usize, String>(2) == "YES",
-                        type_details: row.get::<usize, Option<serde_json::Value>>(3),
+                        source_type: Some(row.get::<usize, String>(2)),
+                        nullable: row.get::<usize, String>(3) == "YES",
+                        type_details: row.get::<usize, Option<serde_json::Value>>(4),
                     })
                     .collect()
             }
@@ -650,6 +672,9 @@ impl PostgresConnection {
 
                 ColumnDef {
                     name,
+                    // `SHOW COLUMNS` reports the full formatted type and this path does
+                    // not categorize it, so it is already the source type.
+                    source_type: Some(data_type.clone()),
                     data_type,
                     nullable,
                     type_details: None,

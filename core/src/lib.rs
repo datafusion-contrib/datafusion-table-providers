@@ -9,6 +9,7 @@
 
 pub use datafusion_table_providers_common::{
     common, schema_projection, util, Error, UnsupportedTypeAction, DESCRIPTION_METADATA_KEY,
+    SOURCE_TYPE_METADATA_KEY,
 };
 
 pub mod sql {
