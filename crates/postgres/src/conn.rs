@@ -174,8 +174,8 @@ struct ColumnDef {
     /// Fully formatted SQL type string (e.g. `numeric(10,2)`, `array<struct<...>>`).
     data_type: String,
     /// The source type as the database names it, before any categorization the Arrow
-    /// mapping needs. `None` where the variant's query cannot report one.
-    source_type: Option<String>,
+    /// mapping needs.
+    source_type: String,
     nullable: bool,
     type_details: Option<serde_json::Value>,
 }
@@ -429,15 +429,11 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
 
             // The Arrow mapping is lossy (`varchar(50)` and `citext` both land on
             // `Utf8`), so keep the source type the catalog reported alongside it.
-            let mut field = Field::new(column.name, arrow_type, column.nullable);
-            if let Some(source_type) = column.source_type {
-                field = field.with_metadata(HashMap::from([(
-                    SOURCE_TYPE_METADATA_KEY.to_string(),
-                    source_type,
-                )]));
-            }
-
-            fields.push(field);
+            fields.push(
+                Field::new(column.name, arrow_type, column.nullable).with_metadata(HashMap::from(
+                    [(SOURCE_TYPE_METADATA_KEY.to_string(), column.source_type)],
+                )),
+            );
         }
 
         let schema = Arc::new(Schema::new(fields));
@@ -567,7 +563,7 @@ impl PostgresConnection {
                         // composites, which the query rewrites to the labels
                         // `pg_data_type_to_arrow_type` dispatches on.
                         data_type: row.get::<usize, String>(1),
-                        source_type: Some(row.get::<usize, String>(2)),
+                        source_type: row.get::<usize, String>(2),
                         nullable: row.get::<usize, String>(3) == "YES",
                         type_details: row.get::<usize, Option<serde_json::Value>>(4),
                     })
@@ -674,7 +670,7 @@ impl PostgresConnection {
                     name,
                     // `SHOW COLUMNS` reports the full formatted type and this path does
                     // not categorize it, so it is already the source type.
-                    source_type: Some(data_type.clone()),
+                    source_type: data_type.clone(),
                     data_type,
                     nullable,
                     type_details: None,
