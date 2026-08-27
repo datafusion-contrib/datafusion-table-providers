@@ -31,7 +31,7 @@ arrow-flight = { workspace = true }
 arrow-json = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1"
-bollard = "=0.19.4"
+bollard = "=0.21.1"
 chrono = "0.4.44"
 clickhouse = "0.15"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
