@@ -452,16 +452,16 @@ dependencies = [
 
 [[package]]
 name = "arrow-odbc"
-version = "25.2.0"
+version = "25.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45b83b76a9a49115106a600f88c90bc484b0b4ccdb231dddb7e72afc64443f1"
+checksum = "91e0f110f8249da6359c86d8b94e78ad14834895990e2d3f4fd08bf55f39c304"
 dependencies = [
  "arrow",
  "atoi 3.1.0",
  "chrono",
  "encoding_rs",
  "log",
- "odbc-api 28.2.0",
+ "odbc-api",
  "simdutf8",
  "thiserror 2.0.18",
 ]
@@ -2689,7 +2689,7 @@ dependencies = [
  "datafusion-table-providers-common",
  "dyn-clone",
  "futures",
- "odbc-api 29.0.0",
+ "odbc-api",
  "secrecy",
  "sha2 0.11.0",
  "snafu",
@@ -5081,20 +5081,6 @@ dependencies = [
  "walkdir",
  "wasm-bindgen-futures",
  "web-time",
-]
-
-[[package]]
-name = "odbc-api"
-version = "28.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c81fc7467324b7a4dfcce514d18439f95ec6acec1adcae113f7b72c34b1dc1d8"
-dependencies = [
- "atoi 3.1.0",
- "log",
- "odbc-sys",
- "thiserror 2.0.18",
- "widestring",
- "winit",
 ]
 
 [[package]]
