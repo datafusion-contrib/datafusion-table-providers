@@ -24,6 +24,17 @@
 #
 # Also create a GitHub Environment named "crates-io" (Settings → Environments).
 #
+# Publishing is staged across parallel jobs so that each job fetches its own
+# fresh crates.io trusted-publishing token (a single long-lived token can
+# expire mid-publish and take the whole run down with it):
+#   1. release          - validate, bump, commit, push, create GitHub release
+#   2. publish-common   - publish the common crate
+#   3. publish-provider - publish each of the 9 provider crates (in parallel)
+#   4. publish-facade   - publish the facade crate (needs all providers)
+#
+# Each publish step skips a crate whose exact version is already on crates.io,
+# so a re-run after a partial failure resumes where it left off.
+#
 # Trigger via Actions → Release → Run workflow, providing the new version (e.g. 0.13.0 or v0.13.0).
 
 name: Release
@@ -49,6 +60,9 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     environment: crates-io
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Normalize and validate version
         id: version
@@ -118,7 +132,7 @@ jobs:
           cargo_text = cargo_toml.read_text()
           for name in workspace_crate_names:
               pattern = (
-                  rf'(?m)^({re.escape(name)}\s*=\s*\{{\s*version\s*=\s*")[^"]+(")'
+                  rf'(?m)^({re.escape(name)}\s*=\s*\{\s*version\s*=\s*")[^"]+(\")'
               )
               cargo_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", cargo_text, count=1)
               if count != 1:
@@ -134,13 +148,14 @@ jobs:
               "datafusion-table-providers-python",
           ):
               pattern = (
-                  rf'(?m)(^\[\[package\]\]\nname = "{re.escape(name)}"\nversion = ")[^"]+(")'
+                  rf'(?m)(^\[\[package\]\]\nname = "{re.escape(name)}"\nversion = ")[^"]+(\")'
               )
               lock_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", lock_text, count=1)
               if count != 1:
                   raise SystemExit(f"Failed to update version for {name} in Cargo.lock")
           lock.write_text(lock_text)
           PY
+
       - name: Commit and push version bump
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -169,6 +184,22 @@ jobs:
             --title "${TAG}" \
             --generate-notes
 
+  # Shared shape for every publish job: check out the version-bumped main, set
+  # up the toolchain, fetch a FRESH crates.io trusted-publishing token, and
+  # publish a single crate (skipping it if that exact version is already out).
+  # The fresh per-job token is what keeps a long publish from tripping over an
+  # expired token.
+
+  publish-common:
+    name: Publish common
+    needs: release
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Protoc
@@ -187,33 +218,104 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: |
-          # Publish in dependency order: common → leaves → facade.
-          # Skip any crate whose exact version is already on crates.io so a
-          # re-run after a partial failure (e.g. a trusted-publishing token
-          # expiring mid-publish) resumes where it left off instead of
-          # failing on already-published crates. If the crates.io API check
-          # itself fails, we fall through to `cargo publish` (safe behavior).
-          crates=(
-            datafusion-table-providers-common
-            datafusion-table-providers-odbc
-            datafusion-table-providers-clickhouse
-            datafusion-table-providers-flightsql
-            datafusion-table-providers-mongodb
-            datafusion-table-providers-mysql
-            datafusion-table-providers-sqlite
-            datafusion-table-providers-postgres
-            datafusion-table-providers-duckdb
-            datafusion-table-providers-adbc
-            datafusion-table-providers
-          )
-          version="${{ steps.version.outputs.version }}"
-          for c in "${crates[@]}"; do
-            if curl -fsS -H "User-Agent: dftp-release-workflow" \
-                 "https://crates.io/api/v1/crates/${c}/versions?per_page=100" 2>/dev/null \
-                 | python3 -c "import sys,json; nums=[v['num'] for v in json.load(sys.stdin).get('versions',[])]; sys.exit(0 if '${version}' in nums else 1)" 2>/dev/null; then
-              echo "${c} ${version} already on crates.io — skipping"
-              continue
-            fi
-            echo "Publishing ${c} ${version} to crates.io"
-            cargo publish -p "${c}"
-          done
+          crate="datafusion-table-providers-common"
+          version="${{ needs.release.outputs.version }}"
+          if curl -fsS -H "User-Agent: dftp-release-workflow" \
+               "https://crates.io/api/v1/crates/${crate}/versions?per_page=100" 2>/dev/null \
+               | python3 -c "import sys,json; nums=[v['num'] for v in json.load(sys.stdin).get('versions',[])]; sys.exit(0 if '${version}' in nums else 1)" 2>/dev/null; then
+            echo "${crate} ${version} already on crates.io — skipping"
+            exit 0
+          fi
+          echo "Publishing ${crate} ${version} to crates.io"
+          cargo publish -p "${crate}"
+
+  publish-provider:
+    name: Publish provider
+    needs: publish-common
+    runs-on: ubuntu-latest
+    environment: crates-io
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - odbc
+          - clickhouse
+          - flightsql
+          - mongodb
+          - mysql
+          - sqlite
+          - postgres
+          - duckdb
+          - adbc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: |
+          crate="datafusion-table-providers-${{ matrix.crate }}"
+          version="${{ needs.release.outputs.version }}"
+          if curl -fsS -H "User-Agent: dftp-release-workflow" \
+               "https://crates.io/api/v1/crates/${crate}/versions?per_page=100" 2>/dev/null \
+               | python3 -c "import sys,json; nums=[v['num'] for v in json.load(sys.stdin).get('versions',[])]; sys.exit(0 if '${version}' in nums else 1)" 2>/dev/null; then
+            echo "${crate} ${version} already on crates.io — skipping"
+            exit 0
+          fi
+          echo "Publishing ${crate} ${version} to crates.io"
+          cargo publish -p "${crate}"
+
+  publish-facade:
+    name: Publish facade
+    needs: publish-provider
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: |
+          crate="datafusion-table-providers"
+          version="${{ needs.release.outputs.version }}"
+          if curl -fsS -H "User-Agent: dftp-release-workflow" \
+               "https://crates.io/api/v1/crates/${crate}/versions?per_page=100" 2>/dev/null \
+               | python3 -c "import sys,json; nums=[v['num'] for v in json.load(sys.stdin).get('versions',[])]; sys.exit(0 if '${version}' in nums else 1)" 2>/dev/null; then
+            echo "${crate} ${version} already on crates.io — skipping"
+            exit 0
+          fi
+          echo "Publishing ${crate} ${version} to crates.io"
+          cargo publish -p "${crate}"
