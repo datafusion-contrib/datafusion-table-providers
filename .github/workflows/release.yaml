@@ -231,7 +231,9 @@ jobs:
 
   publish-provider:
     name: Publish provider
-    needs: publish-common
+    needs:
+      - release
+      - publish-common
     runs-on: ubuntu-latest
     environment: crates-io
     strategy:
@@ -283,7 +285,9 @@ jobs:
 
   publish-facade:
     name: Publish facade
-    needs: publish-provider
+    needs:
+      - release
+      - publish-provider
     runs-on: ubuntu-latest
     environment: crates-io
     steps:
