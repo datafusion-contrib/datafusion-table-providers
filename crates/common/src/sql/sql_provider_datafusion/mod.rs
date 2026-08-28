@@ -25,6 +25,7 @@ use std::{
 
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema, SchemaRef},
+    common::Constraints,
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -73,6 +74,7 @@ pub struct SqlTable<T: 'static, P: 'static> {
     schema: SchemaRef,
     pub table_reference: TableReference,
     dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    constraints: Option<Constraints>,
 }
 
 impl<T, P> fmt::Debug for SqlTable<T, P> {
@@ -116,6 +118,7 @@ impl<T, P> SqlTable<T, P> {
             schema: schema.into(),
             table_reference: table_reference.into(),
             dialect: None,
+            constraints: None,
         }
     }
 
@@ -172,6 +175,19 @@ impl<T, P> SqlTable<T, P> {
         }
     }
 
+    /// Declares the constraints (primary key, unique) that hold on the remote table.
+    ///
+    /// The provider does not discover these itself. A caller that already knows them,
+    /// from a catalog probe or from the schema it created the table with, supplies
+    /// them here so that DataFusion's optimizer and any catalog consumer can see them.
+    #[must_use]
+    pub fn with_constraints(self, constraints: Constraints) -> Self {
+        Self {
+            constraints: Some(constraints),
+            ..self
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -206,6 +222,10 @@ impl<T, P> TableProvider for SqlTable<T, P> {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 
     fn supports_filters_pushdown(
@@ -1369,6 +1389,75 @@ mod tests {
             let sql = "SELECT * FROM t ORDER BY b LIMIT 5";
             let result = insert_where_clause(sql, "\"c\" > 3");
             assert_eq!(result, "SELECT * FROM t WHERE \"c\" > 3 ORDER BY b LIMIT 5");
+        }
+    }
+
+    mod constraints_tests {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::{Constraint, Constraints};
+        use datafusion::datasource::TableProvider;
+        use std::sync::Arc;
+
+        use crate::sql::db_connection_pool::{
+            dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+        };
+        use crate::sql::sql_provider_datafusion::SqlTable;
+
+        struct MockConn {}
+
+        impl DbConnection<(), &'static dyn ToString> for MockConn {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        struct MockDBPool {}
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(MockConn {}))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        fn new_sql_table() -> SqlTable<(), &'static dyn ToString> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("email", DataType::Utf8, false),
+            ]));
+            let pool = Arc::new(MockDBPool {})
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            SqlTable::new_with_schema("users", &pool, schema, "users")
+        }
+
+        #[test]
+        fn test_constraints_default_to_none() {
+            assert!(new_sql_table().constraints().is_none());
+        }
+
+        #[test]
+        fn test_with_constraints_round_trips() {
+            let constraints = Constraints::new_unverified(vec![
+                Constraint::PrimaryKey(vec![0]),
+                Constraint::Unique(vec![1]),
+            ]);
+
+            let table = new_sql_table().with_constraints(constraints.clone());
+
+            assert_eq!(table.constraints(), Some(&constraints));
         }
     }
 }
