@@ -1,4 +1,4 @@
-use bollard::secret::HealthConfig;
+use bollard::models::HealthConfig;
 use datafusion_table_providers::mongodb::connection_pool::MongoDBConnectionPool;
 use mongodb::{options::ClientOptions, Client};
 use secrecy::SecretString;

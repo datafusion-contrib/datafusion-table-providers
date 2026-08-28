@@ -1,4 +1,4 @@
-use bollard::secret::HealthConfig;
+use bollard::models::HealthConfig;
 use datafusion_table_providers::{
     sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool, util::secrets::to_secret_map,
 };
