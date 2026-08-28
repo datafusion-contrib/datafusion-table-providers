@@ -8,6 +8,19 @@ use super::hive_schema;
 use crate::conn::PostgresVariant;
 use datafusion_table_providers_common::UnsupportedTypeAction;
 
+/// The Arrow precision and scale used for a Postgres `numeric` that declares none of its own —
+/// a bare `numeric`, and anything derived from one such as `max()`, `avg()` or arithmetic.
+///
+/// Such a column has no fixed scale in Postgres: every row may carry a different number of
+/// decimal places. An Arrow column needs a single scale for all of its rows, so one is pinned
+/// here rather than inferred from whichever row happens to arrive first — inferring it made the
+/// result depend on row order and silently rounded every later, longer value.
+///
+/// Both the schema path ([`parse_numeric_type`]) and the row-decode path
+/// (`arrow_sql_gen::rows_to_arrow`) read these, so the two cannot drift apart.
+pub(crate) const DEFAULT_NUMERIC_PRECISION: u8 = 38;
+pub(crate) const DEFAULT_NUMERIC_SCALE: i8 = 20;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ParseContext {
     pub(crate) unsupported_type_action: UnsupportedTypeAction,
@@ -247,7 +260,8 @@ fn parse_numeric_type(pg_type: &str) -> Result<(u8, i8), ArrowError> {
         .trim();
 
     if type_str.is_empty() || type_str == "()" {
-        return Ok((38, 20)); // Default precision and scale if not specified
+        // Default precision and scale if not specified — shared with the row-decode path.
+        return Ok((DEFAULT_NUMERIC_PRECISION, DEFAULT_NUMERIC_SCALE));
     }
 
     let parts: Vec<&str> = type_str

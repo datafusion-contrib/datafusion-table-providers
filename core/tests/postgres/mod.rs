@@ -199,6 +199,68 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
     test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
     test_postgres_composite_array_list_struct(container_manager.port).await;
     test_postgres_sort_limit(container_manager.port).await;
+    test_postgres_unconstrained_numeric_precision(container_manager.port).await;
+}
+
+/// An unconstrained `numeric` column (what `max()`, `avg()` and arithmetic over `numeric`
+/// return) has no fixed scale, so the Arrow column scale must not be taken from the first
+/// row: every later row carrying more decimals was rounded down to it.
+///
+/// The fixture order matters — a whole number first, longer values after. Ordered the other
+/// way round the values happen to survive even without the fix.
+async fn test_postgres_unconstrained_numeric_precision(port: usize) {
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let conn = sqltable_pool.connect().await.expect("connect should work");
+    let async_conn = conn.as_async().expect("should be async connection");
+
+    // No projected schema: the scale can only come from the column itself.
+    let stream = async_conn
+        .query_arrow(
+            "SELECT v FROM (VALUES (20::numeric),(17.685::numeric),(15.334::numeric)) t(v)",
+            &[],
+            None,
+        )
+        .await
+        .expect("query should work");
+    let batches: Vec<RecordBatch> = futures::StreamExt::collect::<Vec<_>>(stream)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("batches should be readable");
+
+    let scale: u32 = 20;
+    let expected: Vec<i128> = vec![
+        20 * 10i128.pow(scale),
+        17_685 * 10i128.pow(scale - 3),
+        15_334 * 10i128.pow(scale - 3),
+    ];
+
+    let got: Vec<i128> = batches
+        .iter()
+        .flat_map(|batch| {
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .expect("v should be Decimal128");
+            assert_eq!(
+                column.scale(),
+                20,
+                "unconstrained numeric must use the fixed default scale, not the first row's"
+            );
+            (0..column.len())
+                .map(|i| column.value(i))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    assert_eq!(
+        got, expected,
+        "every numeric value must survive exactly, independent of row order"
+    );
 }
 
 async fn test_postgres_sort_limit(port: usize) {
