@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-adbc"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -2510,7 +2510,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-clickhouse"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-common"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-json",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-duckdb"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2597,7 +2597,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-flightsql"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2619,7 +2619,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-mongodb"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-mysql"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "async-stream",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-odbc"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-odbc",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-postgres"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-json",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-python"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-sqlite"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "arrow",
  "arrow-schema",
