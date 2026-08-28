@@ -132,7 +132,7 @@ jobs:
           cargo_text = cargo_toml.read_text()
           for name in workspace_crate_names:
               pattern = (
-                  rf'(?m)^({re.escape(name)}\s*=\s*\{\s*version\s*=\s*")[^"]+(\")'
+                  rf'(?m)^({re.escape(name)}\s*=\s*\{{\s*version\s*=\s*")[^"]+(")'
               )
               cargo_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", cargo_text, count=1)
               if count != 1:
@@ -148,7 +148,7 @@ jobs:
               "datafusion-table-providers-python",
           ):
               pattern = (
-                  rf'(?m)(^\[\[package\]\]\nname = "{re.escape(name)}"\nversion = ")[^"]+(\")'
+                  rf'(?m)(^\[\[package\]\]\nname = "{re.escape(name)}"\nversion = ")[^"]+(")'
               )
               lock_text, count = re.subn(pattern, rf"\g<1>{version}\g<2>", lock_text, count=1)
               if count != 1:
