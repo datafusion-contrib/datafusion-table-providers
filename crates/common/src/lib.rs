@@ -10,6 +10,13 @@ pub mod util;
 
 pub const DESCRIPTION_METADATA_KEY: &str = "description";
 
+/// Arrow field metadata key holding the column type exactly as the source
+/// database reports it (e.g. `numeric(10,2)`, `varchar(50)`, an enum or domain
+/// name). The Arrow mapping is lossy, so this preserves the source type for
+/// consumers that need it (round-tripping DDL, catalog export, type-aware
+/// pushdown).
+pub const SOURCE_TYPE_METADATA_KEY: &str = "source_type";
+
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("The database file path is not within the current directory: {path}"))]
