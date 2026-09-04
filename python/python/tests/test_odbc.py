@@ -7,7 +7,20 @@ class TestOdbcIntegration:
     def setup_method(self):
         """Set up the test environment"""
         self.ctx = SessionContext()
-        connection_param: dict = {'connection_string': 'driver=SQLite3;database=../../../core/examples/sqlite_example.db;'}
+        db_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "..",
+                "core",
+                "examples",
+                "sqlite_example.db",
+            )
+        )
+        connection_param: dict = {
+            "connection_string": f"driver=SQLite3;database={db_path};"
+        }
         self.pool = odbc.ODBCTableFactory(connection_param)
         
     def test_query_companies(self):

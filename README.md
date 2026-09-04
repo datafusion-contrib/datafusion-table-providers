@@ -18,16 +18,39 @@ let ctx = SessionContext::with_state(state);
 // queries will now automatically be federated
 ```
 
+## Crate layout
+
+Prefer a single-provider leaf crate when you only need one backend — for example `datafusion-table-providers-postgres` or `datafusion-table-providers-duckdb`. Leaf crates do not use the facade feature flags.
+
+- Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature.
+- The existing `datafusion-table-providers` facade keeps the same module paths and provider feature names (`duckdb`, `postgres`, `sqlite`, etc.). Enabling a provider feature pulls in that leaf crate with its defaults (including federation). There is no separate `federation` / `*-federation` feature on the facade.
+- ClickHouse pool connections are exposed as `ClickHouseConnection` (wrapping the ClickHouse `Client`) under `sql::db_connection_pool::dbconnection::clickhouseconn`.
+
+Existing examples continue to use the facade crate and its feature flags.
+
 ## Table Providers
 
-- PostgreSQL
-- MySQL
-- Oracle
-- SQLite
-- ClickHouse
-- DuckDB
-- Flight SQL
-- ODBC
+- PostgreSQL (`datafusion-table-providers-postgres`)
+- MySQL (`datafusion-table-providers-mysql`)
+- SQLite (`datafusion-table-providers-sqlite`)
+- ClickHouse (`datafusion-table-providers-clickhouse`)
+- DuckDB (`datafusion-table-providers-duckdb`)
+- Flight SQL (`datafusion-table-providers-flightsql`)
+- MongoDB (`datafusion-table-providers-mongodb`)
+- ADBC (`datafusion-table-providers-adbc`)
+- ODBC (`datafusion-table-providers-odbc`)
+
+## Development
+
+During development, and especially before opening a PR, it is recommended to run:
+
+```bash
+cargo check --all-features --all
+```
+
+This verifies that all features and all crates compile without building
+binaries. It’s much faster than cargo build and avoids issues with
+native/shared library dependencies and heavy compilation.
 
 ## Examples (in Rust)
 
@@ -166,55 +189,34 @@ EOF
 cargo run -p datafusion-table-providers --example mysql --features mysql
 ```
 
-### Oracle
+### MongoDB
 
-In order to run the Oracle example, you need to have an Oracle database server running. You can use the following command to start an Oracle Free server in a Docker container the example can use:
+In order to run the MongoDB example, you need to have a MongoDB server running. You can use the following command to start a MongoDB server in a Docker container the example can use:
 
 ```bash
-docker run --name oracle-free \
-    -e ORACLE_PASSWORD=OraclePassword123 \
-    -p 1521:1521 \
-    -d gvenzl/oracle-free:latest
+docker run --name mongodb \
+    -e MONGO_INITDB_ROOT_USERNAME=root \
+    -e MONGO_INITDB_ROOT_PASSWORD=password \
+    -e MONGO_INITDB_DATABASE=mongo_db \
+    -p 27017:27017 \
+    -d mongo:7.0
+# Wait for the MongoDB server to start
+sleep 30
 
-# Wait for the Oracle server to start and healthcheck to pass
-echo "Waiting for Oracle to start (this may take 1-2 minutes)..."
-until docker exec oracle-free /usr/local/bin/checkHealth.sh >/dev/null 2>&1; do
-    sleep 5
-done
-echo "Oracle is ready!"
+# Create a collection in the MongoDB server and insert some data
+docker exec -i mongodb mongosh -u root -p password --authenticationDatabase admin <<EOF
+use mongo_db;
 
-# Create a table in the Oracle server and insert some data
-docker exec -i oracle-free sqlplus system/OraclePassword123@FREEPDB1 <<EOF
-CREATE TABLE companies (
-   id NUMBER PRIMARY KEY,
-   name VARCHAR2(100)
-);
-
-INSERT INTO companies (id, name) VALUES (1, 'Acme Corporation');
-INSERT INTO companies (id, name) VALUES (2, 'Widget Inc.');
-COMMIT;
-EXIT;
+db.companies.insertOne({
+  id: 1,
+  name: "Acme Corporation"
+});
 EOF
 ```
 
-**Prerequisites:** The `rust-oracle` crate requires Oracle Instant Client libraries (ODPI-C). Install them:
-
-- **Linux (Debian/Ubuntu):**
-  ```bash
-  apt-get install libaio1 wget unzip
-  wget https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
-  unzip instantclient-basiclite-linuxx64.zip -d /opt/oracle
-  export LD_LIBRARY_PATH=/opt/oracle/instantclient_XX_X:$LD_LIBRARY_PATH
-  ```
-
-- **macOS:**
-  ```bash
-  brew install instantclient-basic
-  ```
-
 ```bash
 # Run from repo folder
-cargo run -p datafusion-table-providers --example oracle --features oracle
+cargo run -p datafusion-table-providers --example mongodb --features mongodb
 ```
 
 ### Flight SQL
@@ -227,6 +229,20 @@ roapi -t taxi=https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_20
 
 # Run from repo folder
 cargo run -p datafusion-table-providers --example flight-sql --features flight
+```
+
+### ADBC
+
+Install an ADBC driver using [dbc](https://github.com/columnar-tech/dbc):
+
+```bash
+dbc install duckdb
+```
+
+Read from a table via the installed driver (using DuckDB as an example):
+
+```bash
+cargo run --example adbc --features adbc
 ```
 
 ### ODBC

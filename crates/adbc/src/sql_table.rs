@@ -1,0 +1,270 @@
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
+
+use async_trait::async_trait;
+use futures::TryStreamExt;
+
+use datafusion_table_providers_common::sql::sql_provider_datafusion::{
+    get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
+};
+use std::sync::Arc;
+
+use datafusion::catalog::Session;
+use datafusion::{
+    arrow::datatypes::SchemaRef,
+    config::ConfigOptions,
+    datasource::TableProvider,
+    error::{DataFusionError, Result as DataFusionResult},
+    execution::TaskContext,
+    logical_expr::{Expr, TableProviderFilterPushDown, TableType},
+    physical_expr::PhysicalSortExpr,
+    physical_plan::{
+        filter_pushdown::{ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation},
+        sort_pushdown::SortOrderPushdownResult,
+        stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+    },
+    sql::{unparser::dialect::Dialect, TableReference},
+};
+
+pub struct AdbcDBTable<T: 'static, P: 'static> {
+    pub(crate) base_table: SqlTable<T, P>,
+}
+
+impl<T, P> std::fmt::Debug for AdbcDBTable<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("AdbcDBTable")
+            .field("base_table", &self.base_table)
+            .finish()
+    }
+}
+
+impl<T, P> AdbcDBTable<T, P> {
+    pub fn new_with_schema(
+        pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        schema: impl Into<SchemaRef>,
+        table_reference: impl Into<TableReference>,
+        dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    ) -> Self {
+        let mut base_table = SqlTable::new_with_schema("adbc", pool, schema, table_reference);
+
+        if let Some(d) = dialect {
+            base_table = base_table.with_dialect(d);
+        }
+        Self { base_table }
+    }
+
+    fn create_physical_plan(
+        &self,
+        projection: Option<&Vec<usize>>,
+        schema: &SchemaRef,
+        sql: String,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(AdbcSqlExec::new(
+            projection,
+            schema,
+            self.base_table.clone_pool(),
+            sql,
+            self.base_table.dialect_arc(),
+        )?))
+    }
+}
+
+#[async_trait]
+impl<T, P> TableProvider for AdbcDBTable<T, P> {
+    fn schema(&self) -> SchemaRef {
+        self.base_table.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.base_table.table_type()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        self.base_table.supports_filters_pushdown(filters)
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let sql = self.base_table.scan_to_sql(projection, filters, limit)?;
+        return self.create_physical_plan(projection, &self.schema(), sql);
+    }
+}
+
+#[derive(Clone)]
+struct AdbcSqlExec<T, P> {
+    base_exec: SqlExec<T, P>,
+}
+
+impl<T, P> AdbcSqlExec<T, P> {
+    fn new(
+        projection: Option<&Vec<usize>>,
+        schema: &SchemaRef,
+        pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        sql: String,
+        dialect: Arc<dyn Dialect + Send + Sync>,
+    ) -> DataFusionResult<Self> {
+        let base_exec = SqlExec::new(projection, schema, pool, sql, dialect)?;
+        Ok(Self { base_exec })
+    }
+
+    fn sql(&self) -> SqlResult<String> {
+        let sql = self.base_exec.sql()?;
+        Ok(sql)
+    }
+}
+
+impl<T, P> std::fmt::Debug for AdbcSqlExec<T, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "AdbcSqlExec sql={}", self.sql().unwrap_or_default())
+    }
+}
+
+impl<T, P> DisplayAs for AdbcSqlExec<T, P> {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "AdbcSqlExec sql={}", self.sql().unwrap_or_default())
+    }
+}
+
+impl<T: 'static, P: 'static> ExecutionPlan for AdbcSqlExec<T, P> {
+    fn name(&self) -> &'static str {
+        "AdbcSqlExec"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.base_exec.schema()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.base_exec.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.base_exec.children()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        match self.base_exec.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let base_exec = inner
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(AdbcSqlExec { base_exec }),
+                })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let base_exec = inner
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in sort pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: Arc::new(AdbcSqlExec { base_exec }),
+                })
+            }
+            SortOrderPushdownResult::Unsupported => Ok(SortOrderPushdownResult::Unsupported),
+        }
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_exec.fetch()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let base_exec = self
+            .base_exec
+            .with_fetch(limit)?
+            .downcast_ref::<SqlExec<T, P>>()?
+            .clone();
+        Some(Arc::new(AdbcSqlExec { base_exec }))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        config: &ConfigOptions,
+    ) -> DataFusionResult<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let result =
+            self.base_exec
+                .handle_child_pushdown_result(phase, child_pushdown_result, config)?;
+        let updated_node = result
+            .updated_node
+            .map(|node| {
+                let base_exec = node
+                    .downcast_ref::<SqlExec<T, P>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast SqlExec in filter pushdown".to_string(),
+                        )
+                    })?
+                    .clone();
+                Ok::<_, DataFusionError>(
+                    Arc::new(AdbcSqlExec { base_exec }) as Arc<dyn ExecutionPlan>
+                )
+            })
+            .transpose()?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node,
+        })
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> DataFusionResult<SendableRecordBatchStream> {
+        let sql = self.sql().map_err(to_execution_error)?;
+        tracing::debug!("AdbcSqlExec sql: {sql}");
+
+        let schema = self.schema();
+
+        let fut = get_stream(self.base_exec.clone_pool(), sql, Arc::clone(&schema));
+
+        let stream = futures::stream::once(fut).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+}

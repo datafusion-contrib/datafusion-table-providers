@@ -213,10 +213,15 @@ async fn test_flight_sql_data_source() -> datafusion::common::Result<()> {
         .await
         .unwrap();
     let df = ctx.sql("select col1 from fsql").await.unwrap();
-    assert_eq!(
-        df.count().await.unwrap(),
-        rows_per_partition * num_partitions
-    );
+
+    let row_count: usize = df
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(row_count, rows_per_partition * num_partitions);
     let df = ctx.sql("select sum(col2) from fsql").await?;
     let rb = df
         .collect()

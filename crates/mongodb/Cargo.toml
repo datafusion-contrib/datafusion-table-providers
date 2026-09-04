@@ -1,0 +1,36 @@
+[package]
+name = "datafusion-table-providers-mongodb"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion mongodb table provider"
+
+[dependencies]
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+chrono = "0.4.44"
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
+datafusion-table-providers-common = { workspace = true }
+futures = "0.3"
+mongodb = { version = "3.6.0", features = ["openssl-tls"] }
+num-traits = "0.2"
+rust_decimal = { version = "1.38" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+snafu = "0.9"
+tokio = { version = "1.52", features = ["macros", "fs"] }
+tracing = "0.1"
+secrecy = "0.10"
+
+[features]
+default = []
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

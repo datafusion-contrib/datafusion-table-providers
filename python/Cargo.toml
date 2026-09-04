@@ -16,17 +16,19 @@ doc = false
 [dependencies]
 arrow = { workspace = true }
 arrow-flight = { workspace = true, optional = true }
-datafusion = { workspace = true, features = ["pyarrow"] }
+datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
+datafusion-python = { workspace = true } 
 datafusion-table-providers = { workspace = true }
-pyo3 = { version = "0.26.0" }
-tokio = { version = "1.46", features = [
+duckdb = { workspace = true, optional = true }
+
+pyo3 = { version = "0.28" }
+tokio = { version = "1.52", features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "sync",
 ] }
-duckdb = { workspace = true, optional = true }
 
 [features]
 default = [
@@ -36,12 +38,14 @@ default = [
     "mysql",
     "postgres",
     "odbc",
-    "flight",    
+    "flight",
+    "mongodb",
 ]
-clickhouse = ["datafusion-table-providers/clickhouse-federation"]
-duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb-federation"]
-sqlite = ["datafusion-table-providers/sqlite-federation"]
-mysql = ["datafusion-table-providers/mysql-federation"]
-postgres = ["datafusion-table-providers/postgres-federation"]
-odbc = ["datafusion-table-providers/odbc-federation"]
+clickhouse = ["datafusion-table-providers/clickhouse"]
+duckdb = ["dep:duckdb", "datafusion-table-providers/duckdb"]
+sqlite = ["datafusion-table-providers/sqlite"]
+mysql = ["datafusion-table-providers/mysql"]
+postgres = ["datafusion-table-providers/postgres"]
+odbc = ["datafusion-table-providers/odbc"]
 flight = ["dep:arrow-flight", "datafusion-table-providers/flight"]
+mongodb = ["datafusion-table-providers/mongodb"]

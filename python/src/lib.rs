@@ -3,13 +3,13 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use datafusion::catalog::TableProvider;
+use datafusion::{catalog::TableProvider, execution::TaskContextProvider, prelude::SessionContext};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::{prelude::*, types::PyCapsule};
 
 #[pyclass(module = "datafusion_table_providers._internal")]
 struct RawTableProvider {
-    pub(crate) table: Arc<dyn TableProvider + Send>,
+    pub(crate) table: Arc<dyn TableProvider>,
     pub(crate) supports_pushdown_filters: bool,
 }
 
@@ -19,11 +19,20 @@ pub(crate) fn get_tokio_runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"))
 }
 
+/// Returns a static reference to a default SessionContext.
+/// This ensures the Arc backing the Weak reference inside
+/// FFI_TaskContextProvider is never dropped.
+fn get_default_session_context() -> &'static Arc<SessionContext> {
+    static CTX: OnceLock<Arc<SessionContext>> = OnceLock::new();
+    CTX.get_or_init(|| Arc::new(SessionContext::default()))
+}
+
 #[pymethods]
 impl RawTableProvider {
     fn __datafusion_table_provider__<'py>(
         &self,
         py: Python<'py>,
+        _session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let name = CString::new("datafusion_table_provider").unwrap();
 
@@ -33,10 +42,13 @@ impl RawTableProvider {
             None
         };
 
+        let ctx = Arc::clone(get_default_session_context()) as Arc<dyn TaskContextProvider>;
         let provider = FFI_TableProvider::new(
             Arc::clone(&self.table),
             self.supports_pushdown_filters,
             runtime,
+            &ctx,
+            None,
         );
 
         PyCapsule::new(py, provider, Some(name.clone()))
@@ -49,6 +61,8 @@ pub mod clickhouse;
 pub mod duckdb;
 #[cfg(feature = "flight")]
 pub mod flight;
+#[cfg(feature = "mongodb")]
+pub mod mongodb;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "odbc")]
@@ -111,6 +125,13 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let clickhouse = PyModule::new(py, "clickhouse")?;
         clickhouse::init_module(&clickhouse)?;
         m.add_submodule(&clickhouse)?;
+    }
+
+    #[cfg(feature = "mongodb")]
+    {
+        let mongodb = PyModule::new(py, "mongodb")?;
+        mongodb::init_module(&mongodb)?;
+        m.add_submodule(&mongodb)?;
     }
 
     Ok(())

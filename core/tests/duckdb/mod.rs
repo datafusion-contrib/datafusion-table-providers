@@ -35,6 +35,7 @@ async fn arrow_duckdb_round_trip(
         constraints: Constraints::default(),
         column_defaults: HashMap::new(),
         temporary: false,
+        or_replace: false,
     };
     let table_provider = factory
         .create(&ctx.state(), &cmd)
@@ -119,4 +120,190 @@ async fn test_arrow_duckdb_roundtrip(
         &format!("{table_name}_types"),
     )
     .await;
+}
+
+#[test_log::test(tokio::test)]
+async fn test_multi_batch_append() {
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let batches = vec![
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .expect("first record batch"),
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![4, 5, 6]))],
+        )
+        .expect("second record batch"),
+    ];
+
+    let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+    let ctx = SessionContext::new();
+    let cmd = CreateExternalTable {
+        schema: Arc::new(Arc::clone(&schema).to_dfschema().expect("to df schema")),
+        name: "multi_batch_append".into(),
+        location: String::new(),
+        file_type: String::new(),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        definition: None,
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Constraints::default(),
+        column_defaults: HashMap::new(),
+        temporary: false,
+        or_replace: false,
+    };
+    let table_provider = factory
+        .create(&ctx.state(), &cmd)
+        .await
+        .expect("table provider created");
+
+    let mem_exec = MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)
+        .expect("memory exec created");
+    let insert_plan = table_provider
+        .insert_into(&ctx.state(), mem_exec, InsertOp::Append)
+        .await
+        .expect("insert plan created");
+    collect(insert_plan, ctx.task_ctx())
+        .await
+        .expect("insert done");
+
+    ctx.register_table("multi_batch_append", table_provider)
+        .expect("table registered");
+    let result = ctx
+        .sql("SELECT id FROM multi_batch_append ORDER BY id")
+        .await
+        .expect("query created")
+        .collect()
+        .await
+        .expect("query completed");
+    let values: Vec<i32> = result
+        .iter()
+        .flat_map(|batch| {
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Int32 result column");
+            (0..column.len()).map(|index| column.value(index))
+        })
+        .collect();
+
+    assert_eq!(values, vec![1, 2, 3, 4, 5, 6]);
+}
+
+mod sort_limit_pushdown {
+    use super::*;
+    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    async fn setup_table(ctx: &SessionContext, name: &str) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+
+        // 20 rows: id = 1..=20
+        let ids: Vec<i32> = (1..=20).collect();
+        let labels: Vec<String> = ids.iter().map(|i| format!("row-{i:02}")).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(StringArray::from(labels)),
+            ],
+        )
+        .unwrap();
+
+        let factory = DuckDBTableProviderFactory::new(duckdb::AccessMode::ReadWrite);
+        let cmd = CreateExternalTable {
+            schema: Arc::new(batch.schema().to_dfschema().unwrap()),
+            name: name.into(),
+            location: String::new(),
+            file_type: String::new(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+            temporary: false,
+        };
+        let table = factory.create(&ctx.state(), &cmd).await.unwrap();
+        let mem =
+            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None).unwrap();
+        let insert = table
+            .insert_into(&ctx.state(), mem, InsertOp::Append)
+            .await
+            .unwrap();
+        let _ = collect(insert, ctx.task_ctx()).await.unwrap();
+        ctx.register_table(name, table).unwrap();
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_returns_exactly_n_rows() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_test ORDER BY id DESC LIMIT 5")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 5, "LIMIT 5 must return exactly 5 rows");
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![20, 19, 18, 17, 16], "top-5 DESC rows");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn order_by_limit_with_filter() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "sort_limit_filter_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM sort_limit_filter_test WHERE id > 10 ORDER BY id ASC LIMIT 3")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 3);
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let got: Vec<i32> = (0..col.len()).map(|i| col.value(i)).collect();
+        assert_eq!(got, vec![11, 12, 13]);
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn limit_without_order_by() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "limit_only_test").await;
+
+        let df = ctx
+            .sql("SELECT id FROM limit_only_test LIMIT 7")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 7, "LIMIT without ORDER BY must still cap rows");
+    }
 }

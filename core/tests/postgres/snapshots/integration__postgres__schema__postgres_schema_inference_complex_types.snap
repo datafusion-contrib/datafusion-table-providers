@@ -7,21 +7,33 @@ Schema {
         Field {
             name: "id",
             data_type: Int32,
+            metadata: {
+                "source_type": "integer",
+            },
         },
         Field {
             name: "small_int_col",
             data_type: Int16,
             nullable: true,
+            metadata: {
+                "source_type": "smallint",
+            },
         },
         Field {
             name: "integer_col",
             data_type: Int32,
             nullable: true,
+            metadata: {
+                "source_type": "integer",
+            },
         },
         Field {
             name: "big_int_col",
             data_type: Int64,
             nullable: true,
+            metadata: {
+                "source_type": "bigint",
+            },
         },
         Field {
             name: "decimal_col",
@@ -30,6 +42,9 @@ Schema {
                 2,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "numeric(10,2)",
+            },
         },
         Field {
             name: "numeric_col",
@@ -38,41 +53,65 @@ Schema {
                 2,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "numeric(10,2)",
+            },
         },
         Field {
             name: "real_col",
             data_type: Float32,
             nullable: true,
+            metadata: {
+                "source_type": "real",
+            },
         },
         Field {
             name: "double_col",
             data_type: Float64,
             nullable: true,
+            metadata: {
+                "source_type": "double precision",
+            },
         },
         Field {
             name: "char_col",
             data_type: Utf8,
             nullable: true,
+            metadata: {
+                "source_type": "character(10)",
+            },
         },
         Field {
             name: "varchar_col",
             data_type: Utf8,
             nullable: true,
+            metadata: {
+                "source_type": "character varying(255)",
+            },
         },
         Field {
             name: "text_col",
             data_type: Utf8,
             nullable: true,
+            metadata: {
+                "source_type": "text",
+            },
         },
         Field {
             name: "bytea_col",
             data_type: Binary,
             nullable: true,
+            metadata: {
+                "source_type": "bytea",
+            },
         },
         Field {
             name: "date_col",
             data_type: Date32,
             nullable: true,
+            metadata: {
+                "source_type": "date",
+            },
         },
         Field {
             name: "time_col",
@@ -80,6 +119,9 @@ Schema {
                 Nanosecond,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "time without time zone",
+            },
         },
         Field {
             name: "timestamp_col",
@@ -88,6 +130,9 @@ Schema {
                 None,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "timestamp without time zone",
+            },
         },
         Field {
             name: "timestamptz_col",
@@ -98,6 +143,9 @@ Schema {
                 ),
             ),
             nullable: true,
+            metadata: {
+                "source_type": "timestamp with time zone",
+            },
         },
         Field {
             name: "interval_col",
@@ -105,11 +153,17 @@ Schema {
                 MonthDayNano,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "interval",
+            },
         },
         Field {
             name: "boolean_col",
             data_type: Boolean,
             nullable: true,
+            metadata: {
+                "source_type": "boolean",
+            },
         },
         Field {
             name: "mood_col",
@@ -118,16 +172,25 @@ Schema {
                 Utf8,
             ),
             nullable: true,
+            metadata: {
+                "source_type": "mood",
+            },
         },
         Field {
             name: "uuid_col",
             data_type: Utf8,
             nullable: true,
+            metadata: {
+                "source_type": "uuid",
+            },
         },
         Field {
             name: "json_col",
             data_type: Utf8,
             nullable: true,
+            metadata: {
+                "source_type": "json",
+            },
         },
         Field {
             name: "int_array_col",
@@ -138,6 +201,9 @@ Schema {
                 },
             ),
             nullable: true,
+            metadata: {
+                "source_type": "integer[]",
+            },
         },
         Field {
             name: "text_array_col",
@@ -148,6 +214,9 @@ Schema {
                 },
             ),
             nullable: true,
+            metadata: {
+                "source_type": "text[]",
+            },
         },
         Field {
             name: "int_range_col",
@@ -166,6 +235,9 @@ Schema {
                 ],
             ),
             nullable: true,
+            metadata: {
+                "source_type": "int4range",
+            },
         },
         Field {
             name: "composite_col",
@@ -197,6 +269,9 @@ Schema {
                 ],
             ),
             nullable: true,
+            metadata: {
+                "source_type": "complex_type",
+            },
         },
     ],
     metadata: {},

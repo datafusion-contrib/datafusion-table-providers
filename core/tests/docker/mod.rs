@@ -1,15 +1,14 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bollard::{
-    container::{
-        Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,
-        StartContainerOptions, StopContainerOptions,
+    models::{
+        ContainerCreateBody, ContainerState, ContainerStateStatusEnum, Health, HealthConfig,
+        HealthStatusEnum, HostConfig, PortBinding,
     },
-    image::CreateImageOptions,
-    query_parameters::{ListContainersOptions, ListImagesOptions},
-    secret::{
-        ContainerState, ContainerStateStatusEnum, Health, HealthConfig, HealthStatusEnum,
-        HostConfig, PortBinding,
+    query_parameters::{
+        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectContainerOptions,
+        ListContainersOptions, ListImagesOptions, RemoveContainerOptionsBuilder,
+        StartContainerOptions, StopContainerOptions,
     },
     Docker,
 };
@@ -34,10 +33,7 @@ pub async fn remove(docker: &Docker, name: &str) -> Result<(), anyhow::Error> {
     Ok(docker
         .remove_container(
             name,
-            Some(RemoveContainerOptions {
-                force: true,
-                ..Default::default()
-            }),
+            Some(RemoveContainerOptionsBuilder::new().force(true).build()),
         )
         .await?)
 }
@@ -72,8 +68,9 @@ impl<'a> ContainerRunnerBuilder<'a> {
         self
     }
 
-    pub fn add_port_binding(mut self, host_port: u16, container_port: u16) -> Self {
-        self.port_bindings.push((host_port, container_port));
+    /// Maps `container_port` inside the container to `host_port` on the host.
+    pub fn add_port_binding(mut self, container_port: u16, host_port: u16) -> Self {
+        self.port_bindings.push((container_port, host_port));
         self
     }
 
@@ -119,10 +116,9 @@ impl ContainerRunner<'_> {
 
         self.pull_image().await?;
 
-        let options = CreateContainerOptions {
-            name: self.name.as_ref(),
-            platform: None,
-        };
+        let options = CreateContainerOptionsBuilder::new()
+            .name(self.name.as_ref())
+            .build();
 
         let mut port_bindings_map = HashMap::new();
         for (container_port, host_port) in self.port_bindings {
@@ -130,11 +126,12 @@ impl ContainerRunner<'_> {
                 format!("{container_port}/tcp"),
                 Some(vec![PortBinding {
                     host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(format!("{host_port}/tcp")),
+                    // Docker HostPort is the bare port number (e.g. "15432"), not "15432/tcp".
+                    host_port: Some(format!("{host_port}")),
                 }]),
             );
         }
-        tracing::debug!("Port bindings: {:?}", port_bindings_map);
+        tracing::debug!("Port bindings: {port_bindings_map:?}");
 
         let port_bindings = if port_bindings_map.is_empty() {
             None
@@ -152,11 +149,10 @@ impl ContainerRunner<'_> {
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
-        let env_vars_str = env_vars.iter().map(String::as_str).collect::<Vec<&str>>();
 
-        let config = Config::<&str> {
-            image: Some(&self.image),
-            env: Some(env_vars_str),
+        let config = ContainerCreateBody {
+            image: Some(self.image.clone()),
+            env: Some(env_vars),
             host_config,
             healthcheck: self.healthcheck,
             ..Default::default()
@@ -165,10 +161,11 @@ impl ContainerRunner<'_> {
         let _ = self.docker.create_container(Some(options), config).await?;
 
         self.docker
-            .start_container(&self.name, None::<StartContainerOptions<String>>)
+            .start_container(&self.name, Option::<StartContainerOptions>::None)
             .await?;
 
         let start_time = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(90);
         loop {
             let inspect_container = self
                 .docker
@@ -190,11 +187,16 @@ impl ContainerRunner<'_> {
                 break;
             }
 
-            if start_time.elapsed().as_secs() > 30 {
-                return Err(anyhow::anyhow!("Container failed to start"));
+            if start_time.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Container {} failed to become healthy within {:?}: {:?}",
+                    self.name,
+                    timeout,
+                    inspect_container.state
+                ));
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
 
         Ok(RunningContainer {
@@ -216,10 +218,11 @@ impl ContainerRunner<'_> {
             }
         }
 
-        let options = Some(CreateImageOptions::<&str> {
-            from_image: &self.image,
-            ..Default::default()
-        });
+        let options = Some(
+            CreateImageOptionsBuilder::new()
+                .from_image(&self.image)
+                .build(),
+        );
 
         let mut pulling_stream = self.docker.create_image(options, None, None);
         while let Some(event) = pulling_stream.next().await {

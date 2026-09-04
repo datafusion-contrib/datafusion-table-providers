@@ -77,7 +77,7 @@ async fn insert_rows(
     table: &str,
     rows: Vec<Row>,
 ) -> clickhouse::error::Result<()> {
-    let mut insert = client.insert(table)?;
+    let mut insert = client.insert::<Row>(table).await?;
     for row in rows {
         insert.write(&row).await?;
     }
