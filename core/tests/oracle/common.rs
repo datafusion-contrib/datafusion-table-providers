@@ -1,8 +1,6 @@
-use bollard::models::HealthConfig;
 use datafusion_table_providers::sql::db_connection_pool::oraclepool::OracleConnectionPool;
 use secrecy::SecretString;
 
-use crate::docker::{ContainerRunnerBuilder, RunningContainer};
 use std::collections::HashMap;
 use std::env;
 use std::net::ToSocketAddrs;
@@ -70,95 +68,38 @@ async fn listener_reachable() -> bool {
     false
 }
 
-static ORACLE_CONTAINER: tokio::sync::OnceCell<Option<RunningContainer>> =
-    tokio::sync::OnceCell::const_new();
-
-/// Starts an Oracle Free container (mirroring `start_clickhouse_docker_container`
-/// from the ClickHouse suite) so the integration tests have a database. The
-/// container is started once per test binary and intentionally left running —
-/// the CI runner tears it down with the job.
+/// Waits for the configured Oracle listener to accept TCP connections.
 ///
-/// Returns `false` only when Docker itself is unavailable (e.g. running the
-/// suite on a host without a Docker daemon), in which case the tests skip
-/// instead of failing.
-async fn ensure_oracle_container() -> bool {
-    ORACLE_CONTAINER
-        .get_or_init(|| async {
-            match start_oracle_docker_container().await {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    eprintln!("Failed to start Oracle container: {e:#}");
-                    None
-                }
-            }
-        })
-        .await
-        .is_some()
+/// The CI job starts gvenzl/oracle-free as its own step (with its own
+/// health-wait loop) before invoking the tests, so here we only wait. Keeping
+/// container startup out of the test process means the slow Oracle boot runs
+/// against the step's own budget instead of the first test's.
+async fn wait_for_listener(timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if listener_reachable().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!("Oracle listener not reachable after {timeout:?}; skipping Oracle integration tests");
+            return false;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
 }
 
-async fn start_oracle_docker_container() -> Result<RunningContainer, anyhow::Error> {
-    let container_name = "runtime-integration-test-oracle";
-
-    // Container startup is opt-in via ORACLE_DOCKER_IMAGE (set by CI), so
-    // running the suite locally doesn't silently pull a multi-GB image.
-    let oracle_docker_image = std::env::var("ORACLE_DOCKER_IMAGE")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("ORACLE_DOCKER_IMAGE not set; not starting an Oracle container")
-        })?;
-
-    let running_container = ContainerRunnerBuilder::new(container_name)
-        .image(oracle_docker_image)
-        .add_port_binding(1521, 1521)
-        .add_env_var("ORACLE_PASSWORD", ORACLE_PASSWORD)
-        .healthcheck(HealthConfig {
-            test: Some(vec![
-                "CMD-SHELL".to_string(),
-                "${ORACLE_BASE}/healthcheck.sh >/dev/null || exit 1".to_string(),
-            ]),
-            // Oracle Free can take a few minutes to open its listener on first boot.
-            interval: Some(5_000_000_000),      // 5s
-            timeout: Some(30_000_000_000),      // 30s
-            retries: Some(60),                  // up to ~5 min
-            start_period: Some(60_000_000_000), // 60s grace
-            start_interval: None,
-        })
-        .health_timeout(Duration::from_secs(600))
-        .build()?
-        .run()
-        .await?;
-
-    Ok(running_container)
-}
-
-/// Creates the shared test connection pool, or `None` when neither an Oracle
-/// listener nor a Docker daemon is available (the Oracle suite then skips
-/// rather than fails).
 /// Creates the shared test connection pool, or `None` when no Oracle is
 /// available (the Oracle suite then skips rather than fails).
 ///
 /// The whole attempt is memoized: with `--test-threads=1` every test calls
-/// this, and only the first may pay the container-start/wait cost.
+/// this, and only the first may pay the availability wait.
 pub async fn get_oracle_connection_pool() -> Option<Arc<OracleConnectionPool>> {
     static POOL: tokio::sync::OnceCell<Option<Arc<OracleConnectionPool>>> =
         tokio::sync::OnceCell::const_new();
 
     POOL.get_or_init(|| async {
-        if !listener_reachable().await {
-            if !ensure_oracle_container().await {
-                eprintln!("No Oracle available (no listener, no Docker); skipping Oracle integration tests");
-                return None;
-            }
-            // Wait for the freshly-started listener to accept connections.
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
-            while !listener_reachable().await {
-                if tokio::time::Instant::now() >= deadline {
-                    eprintln!("Oracle listener never came up; skipping Oracle integration tests");
-                    return None;
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
+        if !wait_for_listener(Duration::from_secs(900)).await {
+            return None;
         }
         let params = get_oracle_params();
         Some(Arc::new(
