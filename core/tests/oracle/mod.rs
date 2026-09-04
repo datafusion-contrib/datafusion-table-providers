@@ -101,7 +101,11 @@ async fn test_oracle_connection_pool() {
     assert_eq!(val_str, "1");
 }
 
-/// Test registering Oracle's DUAL table as a DataFusion table provider
+/// Test registering Oracle's DUAL table as a DataFusion table provider.
+///
+/// DUAL is owned by SYS and only reachable through a public synonym, so it is
+/// referenced explicitly as `SYS.DUAL`: schema resolution is scoped to the
+/// owning schema (`CURRENT_SCHEMA`) and would not see the synonym.
 #[tokio::test]
 async fn test_oracle_table_provider_registration() {
     let Some(pool) = common::get_oracle_connection_pool().await else {
@@ -110,7 +114,7 @@ async fn test_oracle_table_provider_registration() {
     let factory = OracleTableFactory::new(Arc::clone(&pool));
 
     let provider = factory
-        .table_provider(TableReference::from("DUAL"))
+        .table_provider(TableReference::partial("SYS", "DUAL"))
         .await
         .expect("Failed to create table provider");
 
@@ -122,7 +126,9 @@ async fn test_oracle_table_provider_registration() {
         .sql("SELECT * FROM dual_test")
         .await
         .expect("Failed to create dataframe");
-    let _result = df.collect().await.expect("Failed to execute query");
+    let result = df.collect().await.expect("Failed to execute query");
+    let row_count: usize = result.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(row_count, 1, "DUAL has exactly one row");
 }
 
 /// Test querying data through DataFusion using a fixture table in the
