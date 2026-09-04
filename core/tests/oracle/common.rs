@@ -6,6 +6,7 @@ use crate::docker::{ContainerRunnerBuilder, RunningContainer};
 use std::collections::HashMap;
 use std::env;
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 use std::time::Duration;
 
 const ORACLE_PASSWORD: &str = "password";
@@ -134,28 +135,38 @@ async fn start_oracle_docker_container() -> Result<RunningContainer, anyhow::Err
 /// Creates the shared test connection pool, or `None` when neither an Oracle
 /// listener nor a Docker daemon is available (the Oracle suite then skips
 /// rather than fails).
-pub async fn get_oracle_connection_pool() -> Option<OracleConnectionPool> {
-    if !listener_reachable().await {
-        if !ensure_oracle_container().await {
-            eprintln!(
-                "No Oracle available (no listener, no Docker); skipping Oracle integration tests"
-            );
-            return None;
-        }
-        // Wait for the freshly-started listener to accept connections.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
-        while !listener_reachable().await {
-            if tokio::time::Instant::now() >= deadline {
-                eprintln!("Oracle listener never came up; skipping Oracle integration tests");
+/// Creates the shared test connection pool, or `None` when no Oracle is
+/// available (the Oracle suite then skips rather than fails).
+///
+/// The whole attempt is memoized: with `--test-threads=1` every test calls
+/// this, and only the first may pay the container-start/wait cost.
+pub async fn get_oracle_connection_pool() -> Option<Arc<OracleConnectionPool>> {
+    static POOL: tokio::sync::OnceCell<Option<Arc<OracleConnectionPool>>> =
+        tokio::sync::OnceCell::const_new();
+
+    POOL.get_or_init(|| async {
+        if !listener_reachable().await {
+            if !ensure_oracle_container().await {
+                eprintln!("No Oracle available (no listener, no Docker); skipping Oracle integration tests");
                 return None;
             }
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Wait for the freshly-started listener to accept connections.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+            while !listener_reachable().await {
+                if tokio::time::Instant::now() >= deadline {
+                    eprintln!("Oracle listener never came up; skipping Oracle integration tests");
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
         }
-    }
-    let params = get_oracle_params();
-    Some(
-        OracleConnectionPool::new(params)
-            .await
-            .expect("Failed to create Oracle connection pool"),
-    )
+        let params = get_oracle_params();
+        Some(Arc::new(
+            OracleConnectionPool::new(params)
+                .await
+                .expect("Failed to create Oracle connection pool"),
+        ))
+    })
+    .await
+    .clone()
 }

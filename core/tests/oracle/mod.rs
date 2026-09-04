@@ -28,7 +28,7 @@ struct FixtureTable {
 }
 
 impl FixtureTable {
-    async fn create(pool: OracleConnectionPool, name: &'static str) -> Self {
+    async fn create(pool: Arc<OracleConnectionPool>, name: &'static str) -> Self {
         let conn = pool
             .connect_direct()
             .await
@@ -60,10 +60,7 @@ impl FixtureTable {
             .expect("Failed to insert fixture row 3");
         conn.conn.commit().expect("Failed to commit fixture");
         drop(conn);
-        Self {
-            name,
-            pool: Arc::new(pool),
-        }
+        Self { name, pool }
     }
 }
 
@@ -110,7 +107,7 @@ async fn test_oracle_table_provider_registration() {
     let Some(pool) = common::get_oracle_connection_pool().await else {
         return;
     };
-    let factory = OracleTableFactory::new(Arc::new(pool));
+    let factory = OracleTableFactory::new(Arc::clone(&pool));
 
     let provider = factory
         .table_provider(TableReference::from("DUAL"))
@@ -319,7 +316,7 @@ async fn test_oracle_insert_and_read() {
     let Some(pool_query) = common::get_oracle_connection_pool().await else {
         return;
     };
-    let factory = OracleTableFactory::new(Arc::new(pool_query));
+    let factory = OracleTableFactory::new(pool_query);
 
     let ctx = SessionContext::new();
     let provider = factory
@@ -447,7 +444,7 @@ async fn arrow_oracle_one_way(
             + Send
             + Sync
             + 'static,
-    > = Arc::new(pool);
+    > = pool;
     let table = SqlTable::new("oracle", &sqltable_pool, table_name)
         .await
         .expect("Table should be created");

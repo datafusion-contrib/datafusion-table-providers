@@ -198,7 +198,7 @@ jobs:
   oracle-integration-test:
     name: Oracle Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     env:
       ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
@@ -216,7 +216,7 @@ jobs:
         run: |
           # `rust-oracle` uses ODPI-C and dlopens the Instant Client at runtime.
           sudo apt-get update
-          sudo apt-get install -y libaio1t64 libaio1 wget unzip || true
+          sudo apt-get install -y libaio1t64 wget unzip || sudo apt-get install -y libaio1 wget unzip
           wget -q https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
           mkdir -p /opt/oracle
           unzip -q instantclient-basiclite-linuxx64.zip -d /opt/oracle -x "META-INF/*"
@@ -243,6 +243,29 @@ jobs:
             docker pull "${ORACLE_DOCKER_IMAGE}"
             docker save -o /tmp/oracle-image/oracle.tar "${ORACLE_DOCKER_IMAGE}"
           fi
+
+      # Build the test binary first so the Rust compile does not eat into the
+      # Oracle container's boot/health window below or the job timeout.
+      - name: Build integration test binary
+        run: cargo build --tests -p datafusion-table-providers --no-default-features --features oracle
+
+      - name: Start Oracle container
+        run: |
+          docker run -d --name oracle-it \
+            -e ORACLE_PASSWORD=password \
+            -p 1521:1521 \
+            "${ORACLE_DOCKER_IMAGE}"
+          echo "Waiting for Oracle to become healthy (may take several minutes)..."
+          for i in $(seq 1 120); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' oracle-it 2>/dev/null || echo starting)
+            echo "attempt $i: $status"
+            [ "$status" = "healthy" ] && exit 0
+            docker inspect --format '{{.State.Status}}' oracle-it | grep -q exited && { docker logs oracle-it; exit 1; }
+            sleep 5
+          done
+          echo "Oracle never became healthy" >&2
+          docker logs oracle-it >&2 || true
+          exit 1
 
       - name: Run Oracle integration tests
         run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
