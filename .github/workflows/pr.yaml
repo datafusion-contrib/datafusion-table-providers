@@ -255,15 +255,23 @@ jobs:
             -e ORACLE_PASSWORD=password \
             -p 1521:1521 \
             "${ORACLE_DOCKER_IMAGE}"
-          echo "Waiting for Oracle to become healthy (may take several minutes)..."
-          for i in $(seq 1 120); do
-            status=$(docker inspect --format '{{.State.Health.Status}}' oracle-it 2>/dev/null || echo starting)
-            echo "attempt $i: $status"
-            [ "$status" = "healthy" ] && exit 0
-            docker inspect --format '{{.State.Status}}' oracle-it | grep -q exited && { docker logs oracle-it; exit 1; }
+          echo "Waiting for Oracle to become ready (cold boot can take ~10 minutes on CI runners)..."
+          # gvenzl/oracle-free ships no Docker HEALTHCHECK, so readiness is
+          # detected via the image's own "DATABASE IS READY TO USE!" marker
+          # plus a successful TCP probe of the published listener port.
+          for i in $(seq 1 360); do
+            if docker logs oracle-it 2>&1 | grep -q "DATABASE IS READY TO USE!" \
+               && (exec 3<>/dev/tcp/127.0.0.1/1521) 2>/dev/null; then
+              echo "Oracle listener is up on 1521"
+              exit 0
+            fi
+            if docker inspect --format '{{.State.Status}}' oracle-it | grep -q exited; then
+              docker logs oracle-it
+              exit 1
+            fi
             sleep 5
           done
-          echo "Oracle never became healthy" >&2
+          echo "Oracle never became ready" >&2
           docker logs oracle-it >&2 || true
           exit 1
 
