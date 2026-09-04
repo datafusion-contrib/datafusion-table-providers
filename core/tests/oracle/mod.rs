@@ -386,7 +386,7 @@ async fn test_oracle_number_types() {
         Arc::clone(&schema),
         vec![
             Arc::new(
-                Decimal128Array::from(vec![Some(123_4560000000000000000000)])
+                Decimal128Array::from(vec![Some(12_345_600_000_000_000_000_000)]) // 123.456 at scale 20
                     .with_precision_and_scale(38, 20)
                     .unwrap(),
             ),
