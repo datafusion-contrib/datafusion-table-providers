@@ -9,6 +9,7 @@ mod clickhouse;
     feature = "clickhouse",
     feature = "mongodb",
     feature = "mysql",
+    feature = "oracle",
     feature = "postgres"
 ))]
 mod docker;
