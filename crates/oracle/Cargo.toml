@@ -1,0 +1,35 @@
+[package]
+name = "datafusion-table-providers-oracle"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion oracle table provider"
+
+[dependencies]
+arrow = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+bb8 = "0.9"
+bb8-oracle = { version = "0.3", features = ["chrono"] }
+bigdecimal = "0.4"
+chrono = "0.4.44"
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
+datafusion-table-providers-common = { workspace = true }
+futures = "0.3"
+num-bigint = "0.4"
+oracle = { version = "0.6", features = ["chrono"] }
+secrecy = "0.10"
+snafu = "0.9"
+tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
+tracing = "0.1"
+
+[features]
+default = ["federation"]
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
