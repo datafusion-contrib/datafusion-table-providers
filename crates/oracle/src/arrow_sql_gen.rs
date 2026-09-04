@@ -152,23 +152,36 @@ fn map_field_to_builder(field: &Field, capacity: usize) -> Result<Box<dyn ArrayB
         DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
         DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
         DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
-        DataType::Decimal128(_, _) => Box::new(Decimal128Builder::with_capacity(capacity)),
-        DataType::Decimal256(_, _) => Box::new(Decimal256Builder::with_capacity(capacity)),
+        // A fresh Decimal builder defaults to (38, 10); pin it to the field's
+        // declared precision/scale so the built array matches the schema.
+        DataType::Decimal128(precision, scale) => Box::new(
+            Decimal128Builder::with_capacity(capacity)
+                .with_precision_and_scale(*precision, *scale)
+                .context(FailedToBuildRecordBatchSnafu)?,
+        ),
+        DataType::Decimal256(precision, scale) => Box::new(
+            Decimal256Builder::with_capacity(capacity)
+                .with_precision_and_scale(*precision, *scale)
+                .context(FailedToBuildRecordBatchSnafu)?,
+        ),
         DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 0)),
         DataType::LargeBinary => Box::new(LargeBinaryBuilder::with_capacity(capacity, 0)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            Box::new(TimestampSecondBuilder::with_capacity(capacity))
+        // Likewise a fresh Timestamp builder has no timezone; carry the field's
+        // timezone through so `TIMESTAMP WITH TIME ZONE` arrays are typed
+        // `Timestamp(_, "UTC")` like the schema declares.
+        DataType::Timestamp(TimeUnit::Second, tz) => {
+            Box::new(TimestampSecondBuilder::with_capacity(capacity).with_timezone_opt(tz.clone()))
         }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            Box::new(TimestampMillisecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            Box::new(TimestampMicrosecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            Box::new(TimestampNanosecondBuilder::with_capacity(capacity))
-        }
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => Box::new(
+            TimestampMillisecondBuilder::with_capacity(capacity).with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => Box::new(
+            TimestampMicrosecondBuilder::with_capacity(capacity).with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Box::new(
+            TimestampNanosecondBuilder::with_capacity(capacity).with_timezone_opt(tz.clone()),
+        ),
         DataType::Interval(IntervalUnit::YearMonth) => Box::new(
             arrow::array::IntervalYearMonthBuilder::with_capacity(capacity),
         ),
@@ -585,7 +598,7 @@ mod tests {
             .unwrap()
             .with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
         let nanos = fixed_offset_to_nanos(ts).expect("in range");
-        assert_eq!(nanos, 1_726_135_200_000_000_000 - 0); // UTC epoch nanos of 10:00Z
+        assert_eq!(nanos, 1_726_135_200_000_000_000); // UTC epoch nanos of 10:00Z
     }
 
     #[test]
