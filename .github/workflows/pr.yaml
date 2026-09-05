@@ -71,6 +71,7 @@ jobs:
           - datafusion-table-providers-mongodb
           - datafusion-table-providers-mysql
           - datafusion-table-providers-odbc
+          - datafusion-table-providers-oracle
           - datafusion-table-providers-postgres
           - datafusion-table-providers-sqlite
 
@@ -193,6 +194,89 @@ jobs:
 
       - name: Run integration tests
         run: make test-integration
+
+  oracle-integration-test:
+    name: Oracle Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
+      RUST_LOG: info
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Oracle Instant Client
+        run: |
+          # `rust-oracle` uses ODPI-C and dlopens the Instant Client at runtime.
+          sudo apt-get update
+          sudo apt-get install -y libaio1t64 wget unzip || sudo apt-get install -y libaio1 wget unzip
+          wget -q https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
+          mkdir -p /opt/oracle
+          unzip -q instantclient-basiclite-linuxx64.zip -d /opt/oracle -x "META-INF/*"
+          IC_DIR=$(ls -d /opt/oracle/instantclient*)
+          # Ubuntu 22.04+ renamed libaio.so.1 to libaio.so.1t64; the Instant Client still looks for the old name.
+          if [ -f /usr/lib/x86_64-linux-gnu/libaio.so.1t64 ] && [ ! -f "$IC_DIR/libaio.so.1" ]; then
+            sudo ln -s /usr/lib/x86_64-linux-gnu/libaio.so.1t64 "$IC_DIR/libaio.so.1"
+          fi
+          echo "LD_LIBRARY_PATH=$IC_DIR" >> "$GITHUB_ENV"
+
+      - name: Cache Oracle Docker image
+        id: oracle-docker-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/oracle-image
+          key: oracle-image-${{ env.ORACLE_DOCKER_IMAGE }}
+
+      - name: Load or pull Oracle image
+        run: |
+          mkdir -p /tmp/oracle-image
+          if [ -f /tmp/oracle-image/oracle.tar ]; then
+            docker load -i /tmp/oracle-image/oracle.tar
+          else
+            docker pull "${ORACLE_DOCKER_IMAGE}"
+            docker save -o /tmp/oracle-image/oracle.tar "${ORACLE_DOCKER_IMAGE}"
+          fi
+
+      # Build the test binary first so the Rust compile does not eat into the
+      # Oracle container's boot/health window below or the job timeout.
+      - name: Build integration test binary
+        run: cargo build --tests -p datafusion-table-providers --no-default-features --features oracle
+
+      - name: Start Oracle container
+        run: |
+          docker run -d --name oracle-it \
+            -e ORACLE_PASSWORD=password \
+            -p 1521:1521 \
+            "${ORACLE_DOCKER_IMAGE}"
+          echo "Waiting for Oracle to become ready (cold boot can take ~10 minutes on CI runners)..."
+          # gvenzl/oracle-free ships no Docker HEALTHCHECK, so readiness is
+          # detected via the image's own "DATABASE IS READY TO USE!" marker
+          # plus a successful TCP probe of the published listener port.
+          for i in $(seq 1 360); do
+            if docker logs oracle-it 2>&1 | grep -q "DATABASE IS READY TO USE!" \
+               && (exec 3<>/dev/tcp/127.0.0.1/1521) 2>/dev/null; then
+              echo "Oracle listener is up on 1521"
+              exit 0
+            fi
+            if docker inspect --format '{{.State.Status}}' oracle-it | grep -q exited; then
+              docker logs oracle-it
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Oracle never became ready" >&2
+          docker logs oracle-it >&2 || true
+          exit 1
+
+      - name: Run Oracle integration tests
+        run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
 
   python-integration-test:
     name: Python Tests

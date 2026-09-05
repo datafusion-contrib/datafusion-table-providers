@@ -18,6 +18,8 @@ pub mod sql {
 
         #[cfg(feature = "mysql")]
         pub use datafusion_table_providers_mysql::arrow_sql_gen as mysql;
+        #[cfg(feature = "oracle")]
+        pub use datafusion_table_providers_oracle::arrow_sql_gen as oracle;
         #[cfg(feature = "postgres")]
         pub use datafusion_table_providers_postgres::arrow_sql_gen as postgres;
         #[cfg(feature = "sqlite")]
@@ -45,6 +47,8 @@ pub mod sql {
         pub use datafusion_table_providers_mysql::pool as mysqlpool;
         #[cfg(feature = "odbc")]
         pub use datafusion_table_providers_odbc::pool as odbcpool;
+        #[cfg(feature = "oracle")]
+        pub use datafusion_table_providers_oracle::pool as oraclepool;
         #[cfg(feature = "postgres")]
         pub use datafusion_table_providers_postgres::pool as postgrespool;
         #[cfg(feature = "sqlite")]
@@ -63,6 +67,8 @@ pub mod sql {
             pub use datafusion_table_providers_mysql::conn as mysqlconn;
             #[cfg(feature = "odbc")]
             pub use datafusion_table_providers_odbc::conn as odbcconn;
+            #[cfg(feature = "oracle")]
+            pub use datafusion_table_providers_oracle::conn as oracleconn;
             #[cfg(feature = "postgres")]
             pub use datafusion_table_providers_postgres::conn as postgresconn;
             #[cfg(feature = "sqlite")]
@@ -85,6 +91,8 @@ pub use datafusion_table_providers_mongodb as mongodb;
 pub use datafusion_table_providers_mysql as mysql;
 #[cfg(feature = "odbc")]
 pub use datafusion_table_providers_odbc as odbc;
+#[cfg(feature = "oracle")]
+pub use datafusion_table_providers_oracle as oracle;
 #[cfg(feature = "postgres")]
 pub use datafusion_table_providers_postgres as postgres;
 #[cfg(feature = "sqlite")]

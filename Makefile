@@ -4,6 +4,7 @@ all:
 .PHONY: test
 test:
 	cargo test --features clickhouse,duckdb,flight,mysql,postgres,sqlite,adbc -p datafusion-table-providers --lib
+	cargo test -p datafusion-table-providers-oracle
 
 .PHONY: lint
 lint:

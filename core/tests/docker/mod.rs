@@ -50,6 +50,7 @@ pub struct ContainerRunnerBuilder<'a> {
     port_bindings: Vec<(u16, u16)>,
     env_vars: Vec<(String, String)>,
     healthcheck: Option<HealthConfig>,
+    health_timeout: Option<std::time::Duration>,
 }
 
 impl<'a> ContainerRunnerBuilder<'a> {
@@ -60,6 +61,7 @@ impl<'a> ContainerRunnerBuilder<'a> {
             port_bindings: Vec::new(),
             env_vars: Vec::new(),
             healthcheck: None,
+            health_timeout: None,
         }
     }
 
@@ -84,6 +86,13 @@ impl<'a> ContainerRunnerBuilder<'a> {
         self
     }
 
+    /// Overrides the default 90s window allowed for a container to become healthy
+    /// (slow-booting databases like Oracle need more).
+    pub fn health_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.health_timeout = Some(timeout);
+        self
+    }
+
     pub fn build(self) -> Result<ContainerRunner<'a>, anyhow::Error> {
         let image = self
             .image
@@ -95,6 +104,7 @@ impl<'a> ContainerRunnerBuilder<'a> {
             port_bindings: self.port_bindings,
             env_vars: self.env_vars,
             healthcheck: self.healthcheck,
+            health_timeout: self.health_timeout,
         })
     }
 }
@@ -106,6 +116,7 @@ pub struct ContainerRunner<'a> {
     port_bindings: Vec<(u16, u16)>,
     env_vars: Vec<(String, String)>,
     healthcheck: Option<HealthConfig>,
+    health_timeout: Option<std::time::Duration>,
 }
 
 impl ContainerRunner<'_> {
@@ -165,7 +176,9 @@ impl ContainerRunner<'_> {
             .await?;
 
         let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(90);
+        let timeout = self
+            .health_timeout
+            .unwrap_or(std::time::Duration::from_secs(90));
         loop {
             let inspect_container = self
                 .docker

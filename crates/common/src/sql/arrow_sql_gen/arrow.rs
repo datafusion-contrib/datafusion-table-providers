@@ -3,13 +3,13 @@ use datafusion::arrow::{
         types::Int8Type, ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Date64Builder,
         Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
         FixedSizeBinaryBuilder, FixedSizeListBuilder, Float32Builder, Float64Builder, Int16Builder,
-        Int32Builder, Int64Builder, Int8Builder, IntervalMonthDayNanoBuilder, LargeBinaryBuilder,
-        LargeStringBuilder, ListBuilder, NullBuilder, StringBuilder, StringDictionaryBuilder,
-        StructBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-        TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
-        UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
+        Int32Builder, Int64Builder, Int8Builder, IntervalMonthDayNanoBuilder,
+        IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder, ListBuilder, NullBuilder,
+        StringBuilder, StringDictionaryBuilder, StructBuilder, Time64NanosecondBuilder,
+        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+        TimestampSecondBuilder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
     },
-    datatypes::{DataType, TimeUnit, UInt16Type},
+    datatypes::{DataType, IntervalUnit, TimeUnit, UInt16Type},
 };
 
 pub fn map_data_type_to_array_builder_optional(
@@ -39,7 +39,12 @@ pub fn map_data_type_to_array_builder(data_type: &DataType) -> Box<dyn ArrayBuil
         DataType::Boolean => Box::new(BooleanBuilder::new()),
         DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::LargeBinary => Box::new(LargeBinaryBuilder::new()),
-        DataType::Interval(_) => Box::new(IntervalMonthDayNanoBuilder::new()),
+        DataType::Interval(interval_unit) => match interval_unit {
+            IntervalUnit::YearMonth => Box::new(IntervalYearMonthBuilder::new()),
+            IntervalUnit::DayTime | IntervalUnit::MonthDayNano => {
+                Box::new(IntervalMonthDayNanoBuilder::new())
+            }
+        },
         DataType::Decimal32(precision, scale) => Box::new(
             Decimal32Builder::new()
                 .with_precision_and_scale(*precision, *scale)

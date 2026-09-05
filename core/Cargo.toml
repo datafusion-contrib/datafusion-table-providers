@@ -22,6 +22,7 @@ datafusion-table-providers-mysql = { workspace = true, optional = true }
 datafusion-table-providers-odbc = { workspace = true, optional = true }
 datafusion-table-providers-postgres = { workspace = true, optional = true }
 datafusion-table-providers-sqlite = { workspace = true, optional = true }
+datafusion-table-providers-oracle = { workspace = true, optional = true }
 
 [dev-dependencies]
 adbc_core = { workspace = true }
@@ -53,6 +54,7 @@ mysql_async = { version = "0.37", features = [
   "time",
   "bigdecimal",
 ] }
+oracle = { version = "0.6", features = ["chrono"] }
 prost = { version = "=0.14.4" }
 r2d2 = "0.8"
 r2d2_adbc = "0.3.0"
@@ -86,6 +88,7 @@ mysql = ["dep:datafusion-table-providers-mysql"]
 odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
 sqlite = ["dep:datafusion-table-providers-sqlite"]
+oracle = ["dep:datafusion-table-providers-oracle"]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
