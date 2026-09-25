@@ -13,8 +13,8 @@
 use adbc_core::options::{AdbcVersion, OptionDatabase};
 use adbc_core::{Driver, LOAD_FLAG_DEFAULT};
 use adbc_driver_manager::ManagedDriver;
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     adbc::AdbcTableFactory, sql::db_connection_pool::adbcpool::ADBCPool,
 };

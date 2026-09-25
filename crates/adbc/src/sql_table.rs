@@ -10,6 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ChildrenPropertiesMode;
+use datafusion::physical_plan::ReplaceChildrenOptions;
 use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 
 use async_trait::async_trait;
@@ -23,6 +27,7 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::{
     arrow::datatypes::SchemaRef,
+    common::TableReference,
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -35,7 +40,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     },
-    sql::{unparser::dialect::Dialect, TableReference},
+    sql::unparser::dialect::Dialect,
 };
 
 pub struct AdbcDBTable<T: 'static, P: 'static> {
@@ -162,11 +167,29 @@ impl<T: 'static, P: 'static> ExecutionPlan for AdbcSqlExec<T, P> {
         self.base_exec.children()
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn try_pushdown_sort(

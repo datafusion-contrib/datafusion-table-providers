@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::stats::Precision;
-use datafusion::common::{DataFusionError, Statistics};
+use datafusion::common::{plan_err, DataFusionError, Statistics};
 use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::{CreateExternalTable, Expr, TableType};
 use datafusion::physical_plan::ExecutionPlan;
@@ -148,7 +148,13 @@ impl TableProviderFactory for FlightTableFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
-        let table = self.open_table(&cmd.location, cmd.options.clone()).await?;
+        let [location] = cmd.locations.as_slice() else {
+            return plan_err!(
+                "Flight table requires exactly one LOCATION, got {}",
+                cmd.locations.len()
+            );
+        };
+        let table = self.open_table(location, cmd.options.clone()).await?;
         Ok(Arc::new(table))
     }
 }

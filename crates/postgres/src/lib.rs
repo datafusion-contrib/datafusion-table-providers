@@ -17,10 +17,10 @@ use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
     catalog::TableProviderFactory,
     common::Constraints,
+    common::TableReference,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::TableReference,
 };
 use datafusion_table_providers_common::sql::arrow_sql_gen::statement::{
     CreateTableBuilder, Error as SqlGenError, IndexBuilder, InsertBuilder,

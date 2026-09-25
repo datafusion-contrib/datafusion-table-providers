@@ -23,6 +23,7 @@ use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::{
     arrow::datatypes::SchemaRef,
     catalog::Session,
+    common::TableReference,
     datasource::{
         sink::{DataSink, DataSinkExec},
         TableProvider,
@@ -30,7 +31,6 @@ use datafusion::{
     execution::TaskContext,
     logical_expr::{dml::InsertOp, Expr, TableType},
     physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream},
-    sql::TableReference,
 };
 use datafusion_table_providers_common::util::retriable_error::{
     check_and_mark_retriable_error, to_retriable_data_write_error,

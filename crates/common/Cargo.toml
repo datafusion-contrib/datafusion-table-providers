@@ -42,6 +42,7 @@ default = ["federation"]
 federation = ["dep:datafusion-federation"]
 
 [dev-dependencies]
+datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
 reqwest = "0.13"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

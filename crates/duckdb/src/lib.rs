@@ -22,16 +22,16 @@ use datafusion_table_providers_common::{
     UnsupportedTypeAction,
 };
 
-use arrow::datatypes::SchemaRef;
+use duckdb::arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
 use datafusion::{
     catalog::{Session, TableProviderFactory},
     common::Constraints,
+    common::TableReference,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     logical_expr::CreateExternalTable,
-    sql::TableReference,
 };
 use duckdb::{AccessMode, DuckdbConnectionManager};
 use itertools::Itertools;
@@ -816,11 +816,11 @@ pub(crate) mod tests {
     use crate::write::DuckDBTableWriter;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use duckdb::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::TableReference;
     use datafusion::common::{Constraints, ToDFSchema};
     use datafusion::logical_expr::CreateExternalTable;
     use datafusion::prelude::SessionContext;
-    use datafusion::sql::TableReference;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -838,7 +838,7 @@ pub(crate) mod tests {
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
             name: table_name,
-            location: "".to_string(),
+            location: String::new(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -899,7 +899,7 @@ pub(crate) mod tests {
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
             name: table_name,
-            location: "".to_string(),
+            location: String::new(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -956,7 +956,7 @@ pub(crate) mod tests {
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
             name: table_name,
-            location: "".to_string(),
+            location: String::new(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -1011,7 +1011,7 @@ pub(crate) mod tests {
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
             name: table_name,
-            location: "".to_string(),
+            location: String::new(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -1069,7 +1069,7 @@ pub(crate) mod tests {
         let cmd = CreateExternalTable {
             schema: Arc::new(schema.to_dfschema().expect("to df schema")),
             name: table_name,
-            location: "".to_string(),
+            location: String::new(),
             file_type: "".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,

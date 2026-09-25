@@ -26,10 +26,10 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
     runtime::run_async_with_tokio,
