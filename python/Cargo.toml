@@ -14,11 +14,9 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
-arrow = { workspace = true }
 arrow-flight = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-ffi = { workspace = true }
-datafusion-python = { workspace = true } 
 datafusion-table-providers = { workspace = true }
 duckdb = { workspace = true, optional = true }
 
@@ -49,3 +47,6 @@ postgres = ["datafusion-table-providers/postgres"]
 odbc = ["datafusion-table-providers/odbc"]
 flight = ["dep:arrow-flight", "datafusion-table-providers/flight"]
 mongodb = ["datafusion-table-providers/mongodb"]
+
+[package.metadata.cargo-machete]
+ignored = ["arrow-flight"]

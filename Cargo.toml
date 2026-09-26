@@ -61,3 +61,6 @@ datafusion-table-providers-oracle = { version = "0.13.1", path = "crates/oracle"
 duckdb = { version = "=1.10505.0" }
 adbc_core = { version = "0.24" }
 adbc_driver_manager = { version = "0.24" }
+
+[workspace.metadata.cargo-machete]
+ignored = ["datafusion-federation"]

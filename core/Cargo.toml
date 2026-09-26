@@ -45,7 +45,6 @@ duckdb = { workspace = true, features = [
   "appender-arrow",
 ] }
 futures = "0.3"
-geozero = { version = "0.15.1", features = ["with-wkb"] }
 insta = { version = "1.46.0", features = ["filters"] }
 mongodb = { version = "3.6.0", features = ["openssl-tls"] }
 mysql_async = { version = "0.37", features = [
@@ -56,25 +55,19 @@ mysql_async = { version = "0.37", features = [
 ] }
 oracle = { version = "0.6", features = ["chrono"] }
 prost = { version = "=0.14.4" }
-r2d2 = "0.8"
-r2d2_adbc = "0.3.0"
 rand = "0.10"
 reqwest = "0.13"
 rstest = "0.26.1"
-rusqlite = { version = "0.37", features = ["bundled"] }
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.11"
 tempfile = "3.27.0"
 test-log = { version = "0.2", features = ["trace"] }
 tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
-tokio-rusqlite = "0.7"
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2.5"
 
 [features]
 default = []
