@@ -1,13 +1,16 @@
 use clickhouse::Client;
-use common::{get_clickhouse_params, start_clickhouse_docker_container};
+use common::get_clickhouse_params;
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_table_providers::{
     clickhouse::ClickHouseTableFactory,
     sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
 };
+use linktime::{ctor, dtor};
+use std::sync::Mutex;
 
 mod common;
 
+use crate::docker::ContainerManager;
 use serde::{Deserialize, Serialize};
 
 #[derive(clickhouse::Row, Serialize, Deserialize, Debug, PartialEq)]
@@ -85,13 +88,38 @@ async fn insert_rows(
     Ok(())
 }
 
+static CONTAINER_MANAGER_INSTANCE: Mutex<Option<ContainerManager>> = Mutex::new(None);
+
+#[ctor(unsafe)]
+fn global_setup() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+    *guard = Some(ContainerManager::default());
+}
+
+#[dtor(unsafe)]
+fn global_teardown() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(container_manager) = guard.take() {
+        drop(container_manager);
+    }
+}
+
 /// inserts data into clickhouse using official client and reads it back for now
 #[tokio::test]
 async fn clickhouse_insert_and_read() {
-    start_clickhouse_docker_container().await.unwrap();
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_clickhouse_docker_container)
+            .await;
+        container_manager.port
+    };
 
     let table_name = "test_table";
-    let pool = ClickHouseConnectionPool::new(get_clickhouse_params())
+    let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
         .await
         .unwrap();
 

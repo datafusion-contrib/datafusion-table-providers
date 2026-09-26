@@ -10,14 +10,14 @@ use std::sync::Arc;
 use tracing::instrument;
 
 use crate::{
-    container_registry,
+    docker::container_registry,
     docker::{ContainerRunnerBuilder, RunningContainer},
 };
 
 const PG_PASSWORD: &str = "runtime-integration-test-pw";
 const PG_DOCKER_CONTAINER: &str = "runtime-integration-test-postgres";
 
-pub(super) fn get_pg_params(port: usize) -> HashMap<String, String> {
+pub(super) fn get_pg_params(port: u16) -> HashMap<String, String> {
     let mut params = HashMap::new();
     params.insert("pg_host".to_string(), "localhost".to_string());
     params.insert("pg_port".to_string(), port.to_string());
@@ -30,7 +30,7 @@ pub(super) fn get_pg_params(port: usize) -> HashMap<String, String> {
 
 #[instrument]
 pub(super) async fn start_postgres_docker_container(
-    port: usize,
+    port: u16,
 ) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{PG_DOCKER_CONTAINER}-{port}");
     let port = port.try_into().unwrap_or(15432);
@@ -63,7 +63,7 @@ pub(super) async fn start_postgres_docker_container(
 
 #[instrument]
 pub(super) async fn get_postgres_connection_pool(
-    port: usize,
+    port: u16,
 ) -> Result<PostgresConnectionPool, anyhow::Error> {
     let pool = PostgresConnectionPool::new(to_secret_map(get_pg_params(port))).await?;
 
@@ -74,7 +74,7 @@ pub(super) async fn get_postgres_connection_pool(
 /// with a [`StaticPasswordProvider`], exercising the dynamic password path.
 #[instrument]
 pub(super) async fn get_postgres_pool_with_password_provider(
-    port: usize,
+    port: u16,
 ) -> Result<PostgresConnectionPool, anyhow::Error> {
     let mut params = get_pg_params(port);
     let password = params.remove("pg_pass").expect("pg_pass should be present");

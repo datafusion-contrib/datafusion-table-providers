@@ -47,6 +47,7 @@ duckdb = { workspace = true, features = [
 futures = "0.3"
 geozero = { version = "0.15.1", features = ["with-wkb"] }
 insta = { version = "1.46.0", features = ["filters"] }
+linktime = { default-features = false, version = "0.19.0", features = ["ctor", "dtor", "proc_macro"]  }
 mongodb = { version = "3.6.0", features = ["openssl-tls"] }
 mysql_async = { version = "0.37", features = [
   "native-tls-tls",

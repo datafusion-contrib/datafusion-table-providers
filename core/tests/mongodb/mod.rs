@@ -4,7 +4,7 @@ use datafusion_table_providers::mongodb::table::MongoDBTable;
 use mongodb::bson::{doc, Bson, DateTime as BsonDateTime, Decimal128, Document};
 use rstest::rstest;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use arrow::{
@@ -12,11 +12,9 @@ use arrow::{
     datatypes::{DataType, Field, Schema, TimeUnit},
 };
 
-use crate::docker::RunningContainer;
-
 mod common;
 
-async fn test_mongodb_datetime_types(port: usize) {
+async fn test_mongodb_datetime_types(port: u16) {
     let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -100,7 +98,7 @@ async fn test_mongodb_datetime_types(port: usize) {
 }
 
 #[allow(clippy::approx_constant)]
-async fn test_mongodb_numeric_types(port: usize) {
+async fn test_mongodb_numeric_types(port: u16) {
     let decimal = Decimal128::from_str("123.456").unwrap();
 
     let test_docs = vec![doc! {
@@ -141,7 +139,7 @@ async fn test_mongodb_numeric_types(port: usize) {
     arrow_mongodb_one_way(port, "numeric_collection", test_docs, expected_record, None).await;
 }
 
-async fn test_mongodb_string_types(port: usize) {
+async fn test_mongodb_string_types(port: u16) {
     let test_docs = vec![
         doc! {
             "name": "Alice",
@@ -177,7 +175,7 @@ async fn test_mongodb_string_types(port: usize) {
     arrow_mongodb_one_way(port, "string_collection", test_docs, expected_record, None).await;
 }
 
-async fn test_mongodb_boolean_types(port: usize) {
+async fn test_mongodb_boolean_types(port: u16) {
     let test_docs = vec![
         doc! {
             "is_active": true,
@@ -210,7 +208,7 @@ async fn test_mongodb_boolean_types(port: usize) {
     arrow_mongodb_one_way(port, "boolean_collection", test_docs, expected_record, None).await;
 }
 
-async fn test_mongodb_binary_types(port: usize) {
+async fn test_mongodb_binary_types(port: u16) {
     let test_docs = vec![doc! {
         "binary_data": Bson::Binary(mongodb::bson::Binary {
             subtype: mongodb::bson::spec::BinarySubtype::Generic,
@@ -239,7 +237,7 @@ async fn test_mongodb_binary_types(port: usize) {
     arrow_mongodb_one_way(port, "binary_collection", test_docs, expected_record, None).await;
 }
 
-async fn test_mongodb_object_id_types(port: usize) {
+async fn test_mongodb_object_id_types(port: u16) {
     let oid1 = mongodb::bson::oid::ObjectId::new();
     let oid2 = mongodb::bson::oid::ObjectId::new();
 
@@ -273,7 +271,7 @@ async fn test_mongodb_object_id_types(port: usize) {
 }
 
 #[allow(clippy::approx_constant)]
-async fn test_mongodb_array_types(port: usize) {
+async fn test_mongodb_array_types(port: u16) {
     let test_docs = vec![
         doc! {
             "string_tags": ["rust", "mongodb", "arrow"],
@@ -390,7 +388,7 @@ async fn test_mongodb_array_types(port: usize) {
     arrow_mongodb_one_way(port, "array_collection", test_docs, expected_record, None).await;
 }
 
-async fn test_mongodb_nested_object_types(port: usize) {
+async fn test_mongodb_nested_object_types(port: u16) {
     let test_docs = vec![
         doc! {
             "user": {
@@ -564,7 +562,7 @@ async fn test_mongodb_nested_object_types(port: usize) {
     assert_eq!(string_array.value(1), "also not an object");
 }
 
-async fn test_mongodb_null_and_missing_fields(port: usize) {
+async fn test_mongodb_null_and_missing_fields(port: u16) {
     let test_docs = vec![
         doc! {
             "name": "Alice",
@@ -616,7 +614,7 @@ async fn test_mongodb_null_and_missing_fields(port: usize) {
 }
 
 async fn arrow_mongodb_one_way(
-    port: usize,
+    port: u16,
     collection_name: &str,
     test_docs: Vec<Document>,
     expected_record: RecordBatch,
@@ -692,7 +690,7 @@ async fn arrow_mongodb_one_way(
     record_batches
 }
 
-async fn test_mongodb_unnesting_depth_1(port: usize) {
+async fn test_mongodb_unnesting_depth_1(port: u16) {
     let ts0 = DateTime::parse_from_rfc3339("2024-09-12T10:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -773,7 +771,7 @@ async fn test_mongodb_unnesting_depth_1(port: usize) {
 /// top-level while every other document field — scalar, nested document, and
 /// array — folds into one sorted-key JSON `Utf8` catch-all column (`data`).
 /// Exercised end-to-end through the DataFusion scan path against a live MongoDB.
-async fn test_mongodb_json_nesting(port: usize) {
+async fn test_mongodb_json_nesting(port: u16) {
     use datafusion_table_providers::schema_projection::SchemaProjection;
 
     let test_docs = vec![
@@ -889,7 +887,10 @@ async fn test_mongodb_json_nesting(port: usize) {
     assert!(data1.get("name").is_none());
 }
 
+use crate::docker::ContainerManager;
 use datafusion::common::Result as DFResult;
+use linktime::{ctor, dtor};
+
 fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<RecordBatch> {
     let schema = batch.schema();
     let indices: Vec<usize> = columns
@@ -906,21 +907,35 @@ fn project_record_batch(batch: &RecordBatch, columns: &[&str]) -> DFResult<Recor
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
-async fn start_mongodb_container(port: usize) -> RunningContainer {
-    let running_container = common::start_mongodb_docker_container(port)
-        .await
-        .expect("MongoDB container to start");
+static CONTAINER_MANAGER_INSTANCE: Mutex<Option<ContainerManager>> = Mutex::new(None);
 
-    tracing::debug!("MongoDB Container started");
+#[ctor(unsafe)]
+fn global_setup() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+    *guard = Some(ContainerManager::default());
+}
 
-    running_container
+#[dtor(unsafe)]
+fn global_teardown() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(container_manager) = guard.take() {
+        drop(container_manager);
+    }
 }
 
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mongodb_arrow_oneway() {
-    let port = crate::get_random_port();
-    let mongodb_container = start_mongodb_container(port).await;
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_mongodb_docker_container)
+            .await;
+        container_manager.port
+    };
 
     test_mongodb_datetime_types(port).await;
     test_mongodb_numeric_types(port).await;
@@ -934,8 +949,6 @@ async fn test_mongodb_arrow_oneway() {
     test_mongodb_unnesting_depth_1(port).await;
     test_mongodb_json_nesting(port).await;
     test_mongodb_sort_limit(port).await;
-
-    mongodb_container.remove().await.expect("container to stop");
 }
 
 /// Regression tests for `ORDER BY ... LIMIT N`.
@@ -945,7 +958,7 @@ async fn test_mongodb_arrow_oneway() {
 /// `MongoDBExec::try_pushdown_sort` returns `Exact` — silently losing the N.
 /// These tests verify end-to-end that `SELECT ... ORDER BY ... LIMIT N`
 /// returns exactly N rows.
-async fn test_mongodb_sort_limit(port: usize) {
+async fn test_mongodb_sort_limit(port: u16) {
     let ctx = SessionContext::new();
     let client = common::get_mongodb_client(port)
         .await

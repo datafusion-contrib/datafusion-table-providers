@@ -1,4 +1,4 @@
-use crate::{arrow_record_batch_gen::*, docker::RunningContainer};
+use crate::{arrow_record_batch_gen::*, docker::ContainerManager};
 use arrow::{
     array::{
         Array, Decimal128Array, Decimal128Builder, Int32Array, ListArray, ListBuilder, RecordBatch,
@@ -22,17 +22,19 @@ use datafusion_table_providers::{
     sql::sql_provider_datafusion::SqlTable,
     UnsupportedTypeAction,
 };
-use rstest::{fixture, rstest};
+
+use linktime::{ctor, dtor};
+use rstest::rstest;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 mod common;
 mod schema;
 
 async fn arrow_postgres_round_trip(
-    port: usize,
+    port: u16,
     arrow_record: RecordBatch,
     source_schema: SchemaRef,
     table_name: &str,
@@ -102,47 +104,22 @@ async fn arrow_postgres_round_trip(
     assert_eq!(arrow_record, casted_result);
 }
 
-struct ContainerManager {
-    port: usize,
-    claimed: bool,
-    running_container: Option<RunningContainer>,
+static CONTAINER_MANAGER_INSTANCE: Mutex<Option<ContainerManager>> = Mutex::new(None);
+
+#[ctor(unsafe)]
+fn global_setup() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+    *guard = Some(ContainerManager::default());
 }
 
-impl Drop for ContainerManager {
-    fn drop(&mut self) {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(stop_container(self.running_container.take(), self.port));
+#[dtor(unsafe)]
+fn global_teardown() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(container_manager) = guard.take() {
+        drop(container_manager);
     }
-}
-
-async fn stop_container(running_container: Option<RunningContainer>, port: usize) {
-    println!("Stopping Postgres container on port {}", port);
-    if let Some(running_container) = running_container {
-        if let Err(e) = running_container.stop().await {
-            tracing::error!("Error stopping container: {}", e);
-        };
-    }
-}
-
-#[fixture]
-#[once]
-fn container_manager() -> Mutex<ContainerManager> {
-    Mutex::new(ContainerManager {
-        port: crate::get_random_port(),
-        claimed: false,
-        running_container: None,
-    })
-}
-
-async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
-    let running_container = common::start_postgres_docker_container(manager.port)
-        .await
-        .expect("Postgres container to start");
-
-    manager.running_container = Some(running_container);
-
-    tracing::debug!("Container started");
 }
 
 #[rstest]
@@ -162,15 +139,14 @@ async fn start_container(manager: &mut MutexGuard<'_, ContainerManager>) {
 #[case::bytea_array(get_arrow_bytea_array_record_batch(), "bytea_array")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_postgres_roundtrip(
-    container_manager: &Mutex<ContainerManager>,
     #[case] arrow_result: (RecordBatch, SchemaRef),
     #[case] table_name: &str,
 ) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_container(&mut container_manager).await;
-    }
+    let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+    let container_manager = guard.as_mut().unwrap();
+    container_manager
+        .start_container(common::start_postgres_docker_container)
+        .await;
 
     arrow_postgres_round_trip(
         container_manager.port,
@@ -183,23 +159,26 @@ async fn test_arrow_postgres_roundtrip(
 
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_container(&mut container_manager).await;
-    }
+async fn test_arrow_postgres_one_way() {
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_postgres_docker_container)
+            .await;
+        container_manager.port
+    };
 
-    test_postgres_enum_type(container_manager.port).await;
-    test_postgres_numeric_type(container_manager.port).await;
-    test_postgres_numeric_array_type(container_manager.port).await;
-    test_postgres_jsonb_type(container_manager.port).await;
-    test_postgres_json_type(container_manager.port).await;
-    test_postgres_jsonb_list_struct_with_projected_schema(container_manager.port).await;
-    test_postgres_json_list_struct_with_projected_schema(container_manager.port).await;
-    test_postgres_composite_array_list_struct(container_manager.port).await;
-    test_postgres_sort_limit(container_manager.port).await;
-    test_postgres_unconstrained_numeric_precision(container_manager.port).await;
+    test_postgres_enum_type(port).await;
+    test_postgres_numeric_type(port).await;
+    test_postgres_numeric_array_type(port).await;
+    test_postgres_jsonb_type(port).await;
+    test_postgres_json_type(port).await;
+    test_postgres_jsonb_list_struct_with_projected_schema(port).await;
+    test_postgres_json_list_struct_with_projected_schema(port).await;
+    test_postgres_composite_array_list_struct(port).await;
+    test_postgres_sort_limit(port).await;
+    test_postgres_unconstrained_numeric_precision(port).await;
 }
 
 /// An unconstrained `numeric` column (what `max()`, `avg()` and arithmetic over `numeric`
@@ -208,7 +187,7 @@ async fn test_arrow_postgres_one_way(container_manager: &Mutex<ContainerManager>
 ///
 /// The fixture order matters — a whole number first, longer values after. Ordered the other
 /// way round the values happen to survive even without the fix.
-async fn test_postgres_unconstrained_numeric_precision(port: usize) {
+async fn test_postgres_unconstrained_numeric_precision(port: u16) {
     let pool = common::get_postgres_connection_pool(port)
         .await
         .expect("Postgres connection pool should be created");
@@ -263,7 +242,7 @@ async fn test_postgres_unconstrained_numeric_precision(port: usize) {
     );
 }
 
-async fn test_postgres_sort_limit(port: usize) {
+async fn test_postgres_sort_limit(port: u16) {
     let ctx = SessionContext::new();
     let pool = common::get_postgres_connection_pool(port)
         .await
@@ -348,7 +327,7 @@ async fn test_postgres_sort_limit(port: usize) {
     assert_eq!(total, 7);
 }
 
-async fn test_postgres_enum_type(port: usize) {
+async fn test_postgres_enum_type(port: u16) {
     let extra_stmt = Some("CREATE TYPE mood AS ENUM ('happy', 'sad', 'neutral');");
     let create_table_stmt = "
     CREATE TABLE person_mood (
@@ -373,7 +352,7 @@ async fn test_postgres_enum_type(port: usize) {
     .await;
 }
 
-async fn test_postgres_numeric_type(port: usize) {
+async fn test_postgres_numeric_type(port: u16) {
     let extra_stmt = None;
     let create_table_stmt = "
     CREATE TABLE numeric_values (
@@ -430,7 +409,7 @@ async fn test_postgres_numeric_type(port: usize) {
     .await;
 }
 
-async fn test_postgres_numeric_array_type(port: usize) {
+async fn test_postgres_numeric_array_type(port: u16) {
     let create_table_stmt = "
     CREATE TABLE numeric_array_values (
     numeric_values NUMERIC[]
@@ -497,7 +476,7 @@ async fn test_postgres_numeric_array_type(port: usize) {
     .await;
 }
 
-async fn test_postgres_jsonb_type(port: usize) {
+async fn test_postgres_jsonb_type(port: u16) {
     let create_table_stmt = "
     CREATE TABLE jsonb_values (
         id INT PRIMARY KEY,
@@ -548,7 +527,7 @@ async fn test_postgres_jsonb_type(port: usize) {
 
 /// Guards that plain JSON columns (not JSONB) still round-trip as Utf8 through
 /// `JsonbRawString` without the serde_json::Value intermediate.
-async fn test_postgres_json_type(port: usize) {
+async fn test_postgres_json_type(port: u16) {
     let create_table_stmt = "
     CREATE TABLE json_values (
         id INT PRIMARY KEY,
@@ -593,7 +572,7 @@ async fn test_postgres_json_type(port: usize) {
     }
 }
 
-async fn test_postgres_json_list_struct_projected(port: usize, sql_type: &str) {
+async fn test_postgres_json_list_struct_projected(port: u16, sql_type: &str) {
     let table_name = format!("{sql_type}_list_struct_values").to_lowercase();
 
     let create_table_stmt = format!(
@@ -709,7 +688,7 @@ async fn test_postgres_json_list_struct_projected(port: usize, sql_type: &str) {
 
 /// Reads a native PostgreSQL array-of-composite column (`composite_type[]`) back as an
 /// Arrow `List<Struct>`, including the empty-array and NULL cases.
-async fn test_postgres_composite_array_list_struct(port: usize) {
+async fn test_postgres_composite_array_list_struct(port: u16) {
     let table_name = "composite_array_list_struct_values".to_string();
 
     let create_type_stmt = "
@@ -856,11 +835,11 @@ async fn test_postgres_composite_array_list_struct(port: usize) {
     assert!((prices.value(1) - 4.50).abs() < f64::EPSILON);
 }
 
-async fn test_postgres_jsonb_list_struct_with_projected_schema(port: usize) {
+async fn test_postgres_jsonb_list_struct_with_projected_schema(port: u16) {
     test_postgres_json_list_struct_projected(port, "JSONB").await;
 }
 
-async fn test_postgres_json_list_struct_with_projected_schema(port: usize) {
+async fn test_postgres_json_list_struct_with_projected_schema(port: u16) {
     test_postgres_json_list_struct_projected(port, "JSON").await;
 }
 
@@ -868,14 +847,17 @@ async fn test_postgres_json_list_struct_with_projected_schema(port: usize) {
 /// a working pool by creating a table, inserting, and querying through the provider path.
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_password_provider_pool(container_manager: &Mutex<ContainerManager>) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_container(&mut container_manager).await;
-    }
+async fn test_password_provider_pool() {
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_postgres_docker_container)
+            .await;
+        container_manager.port
+    };
 
-    let pool = common::get_postgres_pool_with_password_provider(container_manager.port)
+    let pool = common::get_postgres_pool_with_password_provider(port)
         .await
         .expect("Pool with password provider should be created");
 
@@ -932,7 +914,7 @@ async fn test_password_provider_pool(container_manager: &Mutex<ContainerManager>
 }
 
 async fn arrow_postgres_one_way(
-    port: usize,
+    port: u16,
     table_name: &str,
     create_table_stmt: &str,
     insert_table_stmt: &str,
@@ -955,7 +937,7 @@ async fn arrow_postgres_one_way(
 }
 
 async fn query_postgres_one_way(
-    port: usize,
+    port: u16,
     table_name: &str,
     create_table_stmt: &str,
     insert_table_stmt: &str,
@@ -1016,12 +998,15 @@ async fn query_postgres_one_way(
 
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_postgres_io_runtime_segregation(container_manager: &Mutex<ContainerManager>) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_container(&mut container_manager).await;
-    }
+async fn test_postgres_io_runtime_segregation() {
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_postgres_docker_container)
+            .await;
+        container_manager.port
+    };
 
     // Create a separate IO runtime
     let io_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1030,7 +1015,7 @@ async fn test_postgres_io_runtime_segregation(container_manager: &Mutex<Containe
         .build()
         .expect("IO runtime should be created");
 
-    let pool = common::get_postgres_connection_pool(container_manager.port)
+    let pool = common::get_postgres_connection_pool(port)
         .await
         .expect("pool created")
         .with_io_runtime(io_runtime.handle().clone());
