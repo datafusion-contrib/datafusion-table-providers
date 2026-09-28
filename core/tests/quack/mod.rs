@@ -815,3 +815,32 @@ async fn create_external_table_attaches_to_an_existing_table() {
         assert!(err.to_string().contains(expected), "{statement}: {err}");
     }
 }
+
+/// A caller across an FFI boundary (e.g. Python) has no Tokio runtime of its own.
+#[test]
+fn pool_opens_and_hands_out_sessions_without_a_tokio_runtime() {
+    let Some(server) = server() else { return };
+    let pool = futures::executor::block_on(server.pool(&[]));
+    for _ in 0..2 {
+        let conn = futures::executor::block_on(
+            datafusion_table_providers::sql::db_connection_pool::DbConnectionPool::connect(&pool),
+        )
+        .expect("a session without a runtime");
+        drop(conn);
+    }
+
+    // The sessions stay usable from an ordinary runtime afterwards.
+    let pool = shared(pool);
+    let t = table_name("no_runtime");
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(async {
+            run(&pool, &format!("CREATE TABLE {t} AS SELECT 42 AS answer")).await;
+            let ctx = SessionContext::new();
+            ctx.register_table("t", provider(&pool, &t).await).unwrap();
+            assert_eq!(
+                row(&query(&ctx, "SELECT answer FROM t").await, 0),
+                ["answer: 42"]
+            );
+        });
+}

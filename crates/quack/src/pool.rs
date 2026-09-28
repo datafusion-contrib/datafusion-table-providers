@@ -5,6 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{AsyncDbConnection, DbConnection, GenericError},
+    runtime::run_async_with_tokio,
     DbConnectionPool, JoinPushDown,
 };
 use datafusion_table_providers_common::UnsupportedTypeAction;
@@ -72,6 +73,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// then fails.
 ///
 /// Joins are pushed down to the server only between tables that share one pool.
+///
+/// [`QuackConnectionPool::new`] and [`DbConnectionPool::connect`] may be called without a
+/// Tokio runtime (e.g. across an FFI boundary); they then run on a shared one. Inside a
+/// runtime, it must have its IO and time drivers enabled.
 pub struct QuackConnectionPool {
     pool: QuackPool,
     acquire_timeout: Duration,
@@ -149,12 +154,14 @@ impl QuackConnectionPool {
             max_supported_quack_version: Some(QUACK_PROTOCOL_VERSION),
             ..Default::default()
         };
-        let pool = QuackPool::connect(&endpoint, options, QuackPoolOptions { max_connections })
-            .await
-            .map_err(|e| Error::UnableToConnect {
-                endpoint: endpoint.clone(),
-                source: Box::new(e),
-            })?;
+        let pool = run_async_with_tokio(|| {
+            QuackPool::connect(&endpoint, options, QuackPoolOptions { max_connections })
+        })
+        .await
+        .map_err(|e| Error::UnableToConnect {
+            endpoint: endpoint.clone(),
+            source: Box::new(e),
+        })?;
 
         Ok(Self {
             pool,
@@ -198,15 +205,18 @@ fn parse_param<T>(
 #[async_trait]
 impl DbConnectionPool<QuackSession, ()> for QuackConnectionPool {
     async fn connect(&self) -> Result<Box<dyn DbConnection<QuackSession, ()>>, GenericError> {
-        let lease = tokio::time::timeout(self.acquire_timeout, self.pool.acquire())
-            .await
-            .map_err(|_| Error::AcquireTimeout {
-                pool_size: self.pool.max_connections(),
-                timeout: self.acquire_timeout,
-            })?
-            .map_err(|e| Error::UnableToAcquire {
-                source: Box::new(e),
-            })?;
+        let acquire = || async {
+            tokio::time::timeout(self.acquire_timeout, self.pool.acquire())
+                .await
+                .map_err(|_| Error::AcquireTimeout {
+                    pool_size: self.pool.max_connections(),
+                    timeout: self.acquire_timeout,
+                })?
+                .map_err(|e| Error::UnableToAcquire {
+                    source: Box::new(e),
+                })
+        };
+        let lease = run_async_with_tokio(acquire).await?;
 
         Ok(Box::new(
             QuackConnection::new(QuackSession::new(lease))
@@ -270,6 +280,23 @@ mod tests {
                 "{parameter}={value}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn connects_without_an_ambient_tokio_runtime() {
+        // Opening the pool needs a runtime for its HTTP client and heartbeat. Called from
+        // a thread with none, it runs on a shared one and fails cleanly: nothing listens
+        // on port 1.
+        let err = std::thread::spawn(|| {
+            futures::executor::block_on(QuackConnectionPool::new(params(&[(
+                ENDPOINT,
+                "127.0.0.1:1",
+            )])))
+        })
+        .join()
+        .expect("no panic without a runtime")
+        .expect_err("nothing listens on port 1");
+        assert!(matches!(err, Error::UnableToConnect { .. }), "{err}");
     }
 
     #[tokio::test]
