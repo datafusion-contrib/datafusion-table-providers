@@ -40,6 +40,7 @@ Existing examples continue to use the facade crate and its feature flags.
 - ADBC (`datafusion-table-providers-adbc`)
 - ODBC (`datafusion-table-providers-odbc`)
 - Oracle (`datafusion-table-providers-oracle`)
+- Quack, remote DuckDB (`datafusion-table-providers-quack`)
 
 ## Development
 

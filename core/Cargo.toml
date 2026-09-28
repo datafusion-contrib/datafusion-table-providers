@@ -23,6 +23,7 @@ datafusion-table-providers-odbc = { workspace = true, optional = true }
 datafusion-table-providers-postgres = { workspace = true, optional = true }
 datafusion-table-providers-sqlite = { workspace = true, optional = true }
 datafusion-table-providers-oracle = { workspace = true, optional = true }
+datafusion-table-providers-quack = { workspace = true, optional = true }
 
 [dev-dependencies]
 adbc_core = { workspace = true }
@@ -83,6 +84,7 @@ odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
 sqlite = ["dep:datafusion-table-providers-sqlite"]
 oracle = ["dep:datafusion-table-providers-oracle"]
+quack = ["dep:datafusion-table-providers-quack"]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]

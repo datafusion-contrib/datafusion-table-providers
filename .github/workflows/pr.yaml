@@ -73,6 +73,7 @@ jobs:
           - datafusion-table-providers-odbc
           - datafusion-table-providers-oracle
           - datafusion-table-providers-postgres
+          - datafusion-table-providers-quack
           - datafusion-table-providers-sqlite
 
     steps:

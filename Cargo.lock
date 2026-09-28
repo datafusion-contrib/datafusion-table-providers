@@ -274,6 +274,24 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
+version = "58.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b11eb61b95868592ad6edbd537465a6940eb3c81a875addecec24283301b267"
+dependencies = [
+ "ahash",
+ "arrow-buffer 58.4.1",
+ "arrow-data 58.4.1",
+ "arrow-schema 58.4.1",
+ "chrono",
+ "half",
+ "hashbrown 0.17.1",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "arrow-array"
 version = "59.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc9a4a4b2b5ecd0e04df03471661cb61f28bed3c7fd50994715129b01b2edb97"
@@ -308,6 +326,18 @@ dependencies = [
  "libc",
  "num-complex",
  "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "arrow-buffer"
+version = "58.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53ee609a07eb721c2e4a7669d7bb88e2106c560e7dec1219096fecf5eae356d1"
+dependencies = [
+ "bytes",
+ "half",
+ "num-bigint 0.4.8",
  "num-traits",
 ]
 
@@ -403,6 +433,19 @@ dependencies = [
  "csv",
  "csv-core",
  "regex",
+]
+
+[[package]]
+name = "arrow-data"
+version = "58.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10791765e6927cdd8ace5bf0e51a69f38a1c3aded2db93561b003c332d02ee2a"
+dependencies = [
+ "arrow-buffer 58.4.1",
+ "arrow-schema 58.4.1",
+ "half",
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -567,6 +610,12 @@ dependencies = [
  "arrow-schema 60.0.0",
  "half",
 ]
+
+[[package]]
+name = "arrow-schema"
+version = "58.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8506ad465ebb9483bb6efa1e2e78a313549122c6dd67dc2f7087297b762eaede"
 
 [[package]]
 name = "arrow-schema"
@@ -2440,6 +2489,7 @@ dependencies = [
  "datafusion-table-providers-odbc",
  "datafusion-table-providers-oracle",
  "datafusion-table-providers-postgres",
+ "datafusion-table-providers-quack",
  "datafusion-table-providers-sqlite",
  "duckdb",
  "futures",
@@ -2450,7 +2500,7 @@ dependencies = [
  "oracle",
  "prost",
  "rand 0.10.3",
- "reqwest",
+ "reqwest 0.13.5",
  "rstest",
  "secrecy",
  "serde",
@@ -2523,7 +2573,7 @@ dependencies = [
  "hickory-resolver",
  "itertools 0.15.0",
  "num-bigint 0.4.8",
- "reqwest",
+ "reqwest 0.13.5",
  "sea-query",
  "secrecy",
  "serde",
@@ -2554,7 +2604,7 @@ dependencies = [
  "itertools 0.15.0",
  "r2d2",
  "rand 0.10.3",
- "reqwest",
+ "reqwest 0.13.5",
  "snafu",
  "tempfile",
  "tokio",
@@ -2713,6 +2763,23 @@ dependencies = [
  "duckdb",
  "pyo3",
  "tokio",
+]
+
+[[package]]
+name = "datafusion-table-providers-quack"
+version = "0.14.0"
+dependencies = [
+ "arrow 59.2.0",
+ "async-trait",
+ "datafusion",
+ "datafusion-federation",
+ "datafusion-table-providers-common",
+ "futures",
+ "quack_protocol",
+ "secrecy",
+ "snafu",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3587,6 +3654,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -5494,6 +5562,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "quack_protocol"
+version = "0.3.0-alpha.1"
+source = "git+https://github.com/bnjjj/quack_protocol_rs?rev=2150f35#2150f35049eeedb15cc988d8d18eb1ab53ea29f9"
+dependencies = [
+ "arrow-array 58.4.1",
+ "arrow-buffer 58.4.1",
+ "arrow-schema 58.4.1",
+ "async-stream",
+ "base64 0.22.1",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "indexmap",
+ "reqwest 0.12.28",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5770,6 +5860,45 @@ name = "relative-path"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
+
+[[package]]
+name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-core",
+ "h2",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "webpki-roots",
+]
 
 [[package]]
 name = "reqwest"

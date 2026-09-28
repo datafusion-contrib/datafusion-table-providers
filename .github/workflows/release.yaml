@@ -20,6 +20,8 @@
 #   datafusion-table-providers-postgres
 #   datafusion-table-providers-duckdb
 #   datafusion-table-providers-adbc
+#   datafusion-table-providers-oracle
+#   datafusion-table-providers-quack
 #   datafusion-table-providers (facade)
 #
 # Also create a GitHub Environment named "crates-io" (Settings → Environments).
@@ -29,7 +31,7 @@
 # expire mid-publish and take the whole run down with it):
 #   1. release          - validate, bump, commit, push, create GitHub release
 #   2. publish-common   - publish the common crate
-#   3. publish-provider - publish each of the 9 provider crates (in parallel)
+#   3. publish-provider - publish each of the 11 provider crates (in parallel)
 #   4. publish-facade   - publish the facade crate (needs all providers)
 #
 # Each publish step skips a crate whose exact version is already on crates.io,
@@ -129,6 +131,7 @@ jobs:
               "datafusion-table-providers-duckdb",
               "datafusion-table-providers-adbc",
               "datafusion-table-providers-oracle",
+              "datafusion-table-providers-quack",
           )
           cargo_text = cargo_toml.read_text()
           for name in workspace_crate_names:
@@ -251,6 +254,7 @@ jobs:
           - duckdb
           - adbc
           - oracle
+          - quack
     steps:
       - uses: actions/checkout@v7
         with:

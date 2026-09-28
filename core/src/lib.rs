@@ -95,5 +95,7 @@ pub use datafusion_table_providers_odbc as odbc;
 pub use datafusion_table_providers_oracle as oracle;
 #[cfg(feature = "postgres")]
 pub use datafusion_table_providers_postgres as postgres;
+#[cfg(feature = "quack")]
+pub use datafusion_table_providers_quack as quack;
 #[cfg(feature = "sqlite")]
 pub use datafusion_table_providers_sqlite as sqlite;
