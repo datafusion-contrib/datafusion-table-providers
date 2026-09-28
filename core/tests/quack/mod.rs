@@ -1,4 +1,4 @@
-//! Integration tests against a live Quack server (DuckDB 2.0 or later running `quack_serve`).
+//! Integration tests against a live Quack server (DuckDB 2.0, Quack protocol v3, running `quack_serve`).
 //! They run when `QUACK_SERVER_URI` (and, if the server has one, `QUACK_AUTH_TOKEN`) is
 //! set, and pass without doing anything otherwise.
 

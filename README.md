@@ -228,7 +228,7 @@ cargo test -p datafusion-table-providers --test integration --no-default-feature
 
 ### Quack (remote DuckDB)
 
-The Quack provider reads tables from a remote DuckDB over DuckDB's [Quack protocol](https://github.com/duckdb/duckdb-quack), using the [`quack_protocol`](https://github.com/bnjjj/quack_protocol_rs) client. It needs a DuckDB 2.0 (or later) server; older servers are refused when the pool connects. Start one with the DuckDB CLI and leave it running:
+The Quack provider reads tables from a remote DuckDB over DuckDB's [Quack protocol](https://github.com/duckdb/duckdb-quack), using the [`quack_protocol`](https://github.com/bnjjj/quack_protocol_rs) client. It speaks Quack protocol v3, so it needs a DuckDB 2.0 server; servers speaking another protocol version are refused when the pool connects. Start one with the DuckDB CLI and leave it running:
 
 ```bash
 duckdb -cmd "
@@ -251,7 +251,7 @@ Things to know:
 
 - The provider is read-only and attaches to existing tables and views; it never creates anything on the server.
 - Each open scan holds one pooled session until its stream ends. Size `connection_pool_size` (default 4) for the scans a query runs at once; a query that can't get a session within `connection_pool_acquire_timeout` seconds (default 30) fails with an error saying so.
-- Filters are pushed down only where DuckDB gives the same answer as DataFusion: comparisons on integers, DECIMAL, DATE, BOOLEAN and µs/ms/s TIMESTAMP columns, and `IS [NOT] NULL`. Everything else is evaluated by DataFusion. With the federation optimizer, federated subplans run entirely in DuckDB, with DuckDB's semantics (collations, NaN ordering, and so on).
+- Filters are pushed down only where DuckDB gives the same answer as DataFusion: comparisons and `IN` lists on integer (up to 64-bit, not HUGEINT), DECIMAL, DATE, BOOLEAN and second/millisecond/microsecond TIMESTAMP columns, `IS [NOT] NULL` on any column, and `AND`/`OR`/`NOT` over those. Everything else is evaluated by DataFusion. With the federation optimizer, federated subplans run entirely in DuckDB, with DuckDB's semantics (collations, NaN ordering, and so on), and their results are cast to the types DataFusion planned: an out-of-range value is an error, while lossy conversions such as DOUBLE to DECIMAL follow Arrow's cast.
 - Types map as `quack_protocol` maps them. HUGEINT and UHUGEINT arrive as `Decimal256(39, 0)`; ENUM, UUID and JSON as `Utf8`; BIT and GEOMETRY as `Binary` (DuckDB's bitstring bytes and WKB); VARIANT as DuckDB's shredded struct. TIMETZ, UNION and BIGNUM follow `UnsupportedTypeAction`.
 - Dropping a stream releases its session but does not cancel the query on the server.
 - HTTPS works only with a CA-trusted certificate. A server that isn't bound to localhost serves a self-signed certificate by default, and the client can't pin it yet.

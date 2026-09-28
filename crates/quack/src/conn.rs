@@ -305,7 +305,8 @@ impl AsyncDbConnection<QuackSession, ()> for QuackConnection {
 
     /// Runs a query and streams its result as `projected_schema` (or the result's own
     /// schema when none is given). Columns are matched by position and cast when their
-    /// type differs; a value that doesn't fit the target type fails the stream.
+    /// type differs. A value out of range for the target type fails the stream; other
+    /// conversions (e.g. float to decimal, nanoseconds to microseconds) follow Arrow's cast.
     async fn query_arrow(
         &self,
         sql: &str,
@@ -372,7 +373,9 @@ fn probe_sql(table: &str, columns: &[&str]) -> String {
 }
 
 /// Casts `batch` to `schema` column by column. Unlike Arrow's default cast, a value that
-/// doesn't fit the target type is an error rather than NULL.
+/// is out of range for the target type, or can't be parsed as it, is an error rather than
+/// NULL. Other lossy conversions, such as float to decimal or nanoseconds to microseconds,
+/// follow Arrow's cast.
 pub(crate) fn cast_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch, Error> {
     ensure!(
         batch.num_columns() == schema.fields().len(),

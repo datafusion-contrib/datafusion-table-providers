@@ -12,7 +12,7 @@ use datafusion_table_providers::{
 /// 2. Create table providers for two of its tables with QuackTableFactory
 /// 3. Query them with DataFusion, with the join federated to DuckDB
 ///
-/// Prerequisites: a DuckDB 2.0 (or later) server with the quack extension, holding the
+/// Prerequisites: a DuckDB 2.0 (Quack protocol v3) server with the quack extension, holding the
 /// example tables. Start one with the DuckDB CLI and leave it running:
 /// ```bash
 /// duckdb -cmd "

@@ -1,5 +1,5 @@
-//! A read-only DataFusion table provider for a remote DuckDB 2.0 (or later) served over
-//! DuckDB's Quack protocol.
+//! A read-only DataFusion table provider for a remote DuckDB served over DuckDB's Quack
+//! protocol, version 3 (DuckDB 2.0).
 //!
 //! Build a [`pool::QuackConnectionPool`] for a server, then a [`QuackTableFactory`] on it
 //! for each table, or register [`QuackTableProviderFactory`] to use

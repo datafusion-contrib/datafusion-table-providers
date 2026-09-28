@@ -49,7 +49,7 @@ pub enum Error {
         expected: &'static str,
     },
 
-    #[snafu(display("Unable to connect to the Quack server at '{endpoint}': {source}. Check the endpoint and token, and that the server is DuckDB 2.0 or later running quack_serve."))]
+    #[snafu(display("Unable to connect to the Quack server at '{endpoint}': {source}. Check the endpoint and token, and that the server is DuckDB 2.0 (Quack protocol v3) running quack_serve."))]
     UnableToConnect {
         endpoint: String,
         source: GenericError,
