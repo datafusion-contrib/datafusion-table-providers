@@ -279,6 +279,63 @@ jobs:
       - name: Run Oracle integration tests
         run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
 
+  quack-integration-test:
+    name: Quack Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # A DuckDB 2.0 build with the quack extension. 2.0 has no release yet, so this pins a
+      # staged alpha build (as the install script's DUCKDB_STAGED names it); switch to the
+      # release download once 2.0 ships.
+      DUCKDB_STAGED: 09eb7f7004/v2.0.0-alpha43586
+      QUACK_SERVER_URI: quack:127.0.0.1:9495
+      QUACK_AUTH_TOKEN: quack_ci_token
+      RUST_LOG: info
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install DuckDB CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          curl -fsSL "https://duckdb-staging.duckdb.org/${DUCKDB_STAGED}/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz" \
+            | tar -C "$RUNNER_TEMP/duckdb" -xzf -
+          echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/duckdb/duckdb" --version
+
+      # Build the test binary first so compilation doesn't count against the server's
+      # startup window.
+      - name: Build integration test binary
+        run: cargo build --tests -p datafusion-table-providers --no-default-features --features quack
+
+      - name: Start Quack server
+        run: |
+          set -euo pipefail
+          startup_sql="INSTALL quack; LOAD quack; CALL quack_serve('${QUACK_SERVER_URI}', token => '${QUACK_AUTH_TOKEN}');"
+          tail -f /dev/null | duckdb -init /dev/null -cmd "$startup_sql" > "$RUNNER_TEMP/quack-server.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:9495/"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/quack-server.log"
+          exit 1
+
+      - name: Run Quack integration tests
+        run: cargo test -p datafusion-table-providers --test integration --no-default-features --features quack -- quack --nocapture
+
+      - name: Show Quack server log
+        if: failure()
+        run: cat "$RUNNER_TEMP/quack-server.log" || true
+
   python-integration-test:
     name: Python Tests
     runs-on: ubuntu-latest
