@@ -23,6 +23,8 @@ use crate::pool::QuackConnectionPool;
 use crate::sql_table::QuackTable;
 
 pub mod conn;
+#[cfg(feature = "federation")]
+mod federation;
 pub mod pool;
 mod sql_table;
 
@@ -36,6 +38,10 @@ pub enum Error {
         source: sql_provider_datafusion::Error,
     },
 
+    #[cfg(feature = "federation")]
+    #[snafu(display("Unable to create the federated Quack table provider: {source}"))]
+    UnableToCreateFederatedTableProvider { source: DataFusionError },
+
     #[snafu(display("Quack tables take their schema from the server. Remove the column list from CREATE EXTERNAL TABLE."))]
     DeclaredSchemaNotSupported,
 }
@@ -44,6 +50,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Creates table providers for tables that already exist on one Quack server. Every table
 /// shares the factory's pool.
+///
+/// With the `federation` feature (on by default) the providers take part in
+/// datafusion-federation: under its optimizer, whole subplans over tables sharing a pool,
+/// joins included, run on the server as one DuckDB query.
 pub struct QuackTableFactory {
     pool: Arc<QuackConnectionPool>,
 }
@@ -64,10 +74,20 @@ impl QuackTableFactory {
         &self,
         table_reference: impl Into<TableReference>,
     ) -> Result<Arc<dyn TableProvider + 'static>> {
-        let table = QuackTable::new(&self.pool, table_reference)
-            .await
-            .context(UnableToCreateTableProviderSnafu)?;
-        Ok(Arc::new(table))
+        let table = Arc::new(
+            QuackTable::new(&self.pool, table_reference)
+                .await
+                .context(UnableToCreateTableProviderSnafu)?,
+        );
+
+        #[cfg(feature = "federation")]
+        let table = Arc::new(
+            table
+                .create_federated_table_provider()
+                .context(UnableToCreateFederatedTableProviderSnafu)?,
+        );
+
+        Ok(table)
     }
 }
 
