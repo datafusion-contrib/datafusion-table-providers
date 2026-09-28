@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{Constraints, Statistics};
@@ -14,11 +15,12 @@ use datafusion::logical_expr::{
     BinaryExpr, Expr, Operator, TableProviderFilterPushDown, TableType,
 };
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
 use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
@@ -28,6 +30,7 @@ use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use datafusion_table_providers_common::sql::sql_provider_datafusion::{self, SqlTable};
 use datafusion_table_providers_common::SOURCE_TYPE_METADATA_KEY;
+use futures::StreamExt;
 
 use crate::conn::QuackSession;
 use crate::pool::QuackConnectionPool;
@@ -106,7 +109,10 @@ impl TableProvider for QuackTable {
             .base_table
             .scan(state, projection, filters, limit)
             .await?;
-        Ok(Arc::new(QuackSqlExec::new(plan)))
+        Ok(Arc::new(QuackSqlExec::new(
+            plan,
+            projection.is_some_and(Vec::is_empty),
+        )))
     }
 }
 
@@ -115,7 +121,8 @@ impl TableProvider for QuackTable {
 ///
 /// Allowed: a comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) or `IN` list between a column
 /// whose DuckDB type [`has_duckdb_ordering`] and literals of the column's own Arrow type;
-/// `IS [NOT] NULL` on any column; and `AND`, `OR`, `NOT` over those. Anything else,
+/// `IS [NOT] NULL` on any column; a BOOLEAN column on its own; and `AND`, `OR`, `NOT` over
+/// those. Anything else,
 /// including casts, arithmetic and functions, is not.
 pub(crate) fn filter_is_exact(filter: &Expr, schema: &Schema) -> bool {
     match filter {
@@ -135,6 +142,13 @@ pub(crate) fn filter_is_exact(filter: &Expr, schema: &Schema) -> bool {
             _ => false,
         },
         Expr::Not(inner) => filter_is_exact(inner, schema),
+        Expr::Column(column) => schema.field_with_name(&column.name).is_ok_and(|field| {
+            field
+                .metadata()
+                .get(SOURCE_TYPE_METADATA_KEY)
+                .map(String::as_str)
+                == Some("BOOLEAN")
+        }),
         Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
             matches!(inner.as_ref(), Expr::Column(c) if schema.field_with_name(&c.name).is_ok())
         }
@@ -205,18 +219,33 @@ pub(crate) fn has_duckdb_ordering(field: &Field) -> bool {
 /// DataFusion move a filter the table answered `Unsupported` (a float comparison, say) to
 /// DuckDB and drop its own copy. This wrapper refuses those filters, and only lets a sort
 /// through when every key has the same ordering in DuckDB and DataFusion.
+///
+/// For an empty projection (`COUNT(*)`), `SqlExec` selects a constant `1`; the wrapper
+/// presents the zero-column plan DataFusion asked for and emits batches with only a row
+/// count.
 #[derive(Debug)]
 struct QuackSqlExec {
     inner: Arc<dyn ExecutionPlan>,
+    /// Set for an empty projection: the plan's own, zero-column properties.
+    no_columns: Option<Arc<PlanProperties>>,
 }
 
 impl QuackSqlExec {
-    fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
-        Self { inner }
+    fn new(inner: Arc<dyn ExecutionPlan>, empty_projection: bool) -> Self {
+        let no_columns = empty_projection.then(|| {
+            Arc::new(
+                PlanProperties::clone(inner.properties())
+                    .with_eq_properties(EquivalenceProperties::new(Arc::new(Schema::empty()))),
+            )
+        });
+        Self { inner, no_columns }
     }
 
-    fn wrap(inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(Self::new(inner))
+    fn wrap(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(Self {
+            inner,
+            no_columns: self.no_columns.clone(),
+        })
     }
 }
 
@@ -232,12 +261,10 @@ impl ExecutionPlan for QuackSqlExec {
         "QuackSqlExec"
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.inner.schema()
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
-        self.inner.properties()
+        self.no_columns
+            .as_ref()
+            .unwrap_or_else(|| self.inner.properties())
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -260,7 +287,7 @@ impl ExecutionPlan for QuackSqlExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit).map(Self::wrap)
+        self.inner.with_fetch(limit).map(|inner| self.wrap(inner))
     }
 
     fn try_pushdown_sort(
@@ -279,10 +306,10 @@ impl ExecutionPlan for QuackSqlExec {
         }
         Ok(match self.inner.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => SortOrderPushdownResult::Exact {
-                inner: Self::wrap(inner),
+                inner: self.wrap(inner),
             },
             SortOrderPushdownResult::Inexact { inner } => SortOrderPushdownResult::Inexact {
-                inner: Self::wrap(inner),
+                inner: self.wrap(inner),
             },
             SortOrderPushdownResult::Unsupported => SortOrderPushdownResult::Unsupported,
         })
@@ -304,10 +331,27 @@ impl ExecutionPlan for QuackSqlExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        self.inner.execute(partition, context)
+        let stream = self.inner.execute(partition, context)?;
+        if self.no_columns.is_none() {
+            return Ok(stream);
+        }
+        let schema = self.schema();
+        let batch_schema = Arc::clone(&schema);
+        let row_counts = stream.map(move |batch| {
+            let batch = batch?;
+            Ok(RecordBatch::try_new_with_options(
+                Arc::clone(&batch_schema),
+                vec![],
+                &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+            )?)
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, row_counts)))
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> DataFusionResult<Arc<Statistics>> {
+        if self.no_columns.is_some() {
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
+        }
         self.inner.partition_statistics(partition)
     }
 }
@@ -465,6 +509,8 @@ mod tests {
         assert!(!exact(good.clone().and(bad.clone())));
         assert!(!exact(good.or(bad.clone())));
         assert!(!exact(not(bad)));
+        assert!(exact(col("b").or(not(col("b")))));
+        assert!(!exact(col("i")));
     }
 
     #[test]
@@ -519,7 +565,7 @@ mod tests {
                 Arc::new(DuckDBDialect::new()),
             )
             .unwrap();
-            QuackSqlExec::new(Arc::new(inner))
+            QuackSqlExec::new(Arc::new(inner), false)
         }
 
         fn sql(plan: &dyn ExecutionPlan) -> String {

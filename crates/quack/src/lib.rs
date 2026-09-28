@@ -14,6 +14,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::sql_provider_datafusion;
+use datafusion_table_providers_common::util::remove_prefix_from_hashmap_keys;
 use datafusion_table_providers_common::util::secrets::to_secret_map;
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
@@ -122,7 +123,8 @@ impl QuackTableProviderFactory {
     }
 
     async fn pool(&self, options: &HashMap<String, String>) -> Result<Arc<QuackConnectionPool>> {
-        let params = to_secret_map(options.clone());
+        // DataFusion prefixes option keys it doesn't recognize with `format.`.
+        let params = to_secret_map(remove_prefix_from_hashmap_keys(options.clone(), "format."));
         let mut key: Vec<(String, SecretString)> =
             params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         key.sort_by(|a, b| a.0.cmp(&b.0));
