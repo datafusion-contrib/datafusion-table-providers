@@ -141,6 +141,11 @@ name = "duckdb_function"
 path = "examples/duckdb_function.rs"
 required-features = ["duckdb"]
 
+[[example]]
+name = "quack"
+path = "examples/quack.rs"
+required-features = ["quack"]
+
 [[bin]]
 name = "sqlite_insert_benchmark"
 path = "../benches/sqlite_insert_benchmark.rs"

@@ -697,11 +697,18 @@ async fn table_names_resolve_like_duckdb_and_missing_tables_are_reported() {
     let name = format!("Mixed{}", table_name("Case"));
     run(&pool, &format!("CREATE TABLE \"{name}\" (id INTEGER)")).await;
     run(&pool, &format!("INSERT INTO \"{name}\" VALUES (7)")).await;
+    let view = table_name("view");
+    run(
+        &pool,
+        &format!("CREATE VIEW {view} AS SELECT id FROM \"{name}\""),
+    )
+    .await;
 
     for reference in [
         TableReference::bare(name.as_str()),
         TableReference::bare(name.to_lowercase()),
         TableReference::partial("main", name.as_str()),
+        TableReference::bare(view.as_str()),
     ] {
         let table = QuackTableFactory::new(Arc::clone(&pool))
             .table_provider(reference.clone())

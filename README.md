@@ -226,6 +226,43 @@ echo "Oracle is ready!"
 cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- oracle
 ```
 
+### Quack (remote DuckDB)
+
+The Quack provider reads tables from a remote DuckDB over DuckDB's [Quack protocol](https://github.com/duckdb/duckdb-quack), using the [`quack_protocol`](https://github.com/bnjjj/quack_protocol_rs) client. It needs a DuckDB 2.0 (or later) server; older servers are refused when the pool connects. Start one with the DuckDB CLI and leave it running:
+
+```bash
+duckdb -cmd "
+  CREATE TABLE companies (id INTEGER PRIMARY KEY, name VARCHAR);
+  INSERT INTO companies VALUES (1, 'Acme Corporation'), (2, 'Globex');
+  CREATE TABLE projects (id INTEGER, company_id INTEGER, title VARCHAR);
+  INSERT INTO projects VALUES (1, 1, 'Rocket skates'), (2, 1, 'Giant magnet'), (3, 2, 'Doomsday device');
+  INSTALL quack; LOAD quack;
+  CALL quack_serve('quack:localhost:9494', token => 'demo_token');"
+```
+
+```bash
+# Run from repo folder
+cargo run -p datafusion-table-providers --example quack --features quack
+```
+
+Tables can also be attached with `CREATE EXTERNAL TABLE companies STORED AS QUACK LOCATION 'companies' OPTIONS ('endpoint' 'quack:localhost:9494', 'token' 'demo_token')` after registering `QuackTableProviderFactory` under `QUACK`.
+
+Things to know:
+
+- The provider is read-only and attaches to existing tables and views; it never creates anything on the server.
+- Each open scan holds one pooled session until its stream ends. Size `connection_pool_size` (default 4) for the scans a query runs at once; a query that can't get a session within `connection_pool_acquire_timeout` seconds (default 30) fails with an error saying so.
+- Filters are pushed down only where DuckDB gives the same answer as DataFusion: comparisons on integers, DECIMAL, DATE, BOOLEAN and µs/ms/s TIMESTAMP columns, and `IS [NOT] NULL`. Everything else is evaluated by DataFusion. With the federation optimizer, federated subplans run entirely in DuckDB, with DuckDB's semantics (collations, NaN ordering, and so on).
+- Types map as `quack_protocol` maps them. HUGEINT and UHUGEINT arrive as `Decimal256(39, 0)`; ENUM, UUID and JSON as `Utf8`; BIT and GEOMETRY as `Binary` (DuckDB's bitstring bytes and WKB); VARIANT as DuckDB's shredded struct. TIMETZ, UNION and BIGNUM follow `UnsupportedTypeAction`.
+- Dropping a stream releases its session but does not cancel the query on the server.
+- HTTPS works only with a CA-trusted certificate. A server that isn't bound to localhost serves a self-signed certificate by default, and the client can't pin it yet.
+
+To run the integration tests, start a server as above (any port and token) and point the tests at it:
+
+```bash
+QUACK_SERVER_URI=quack:localhost:9494 QUACK_AUTH_TOKEN=demo_token \
+  cargo test -p datafusion-table-providers --test integration --no-default-features --features quack -- quack
+```
+
 ### MongoDB
 
 In order to run the MongoDB example, you need to have a MongoDB server running. You can use the following command to start a MongoDB server in a Docker container the example can use:
