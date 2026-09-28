@@ -51,6 +51,8 @@ pub mod sql {
         pub use datafusion_table_providers_oracle::pool as oraclepool;
         #[cfg(feature = "postgres")]
         pub use datafusion_table_providers_postgres::pool as postgrespool;
+        #[cfg(feature = "quack")]
+        pub use datafusion_table_providers_quack::pool as quackpool;
         #[cfg(feature = "sqlite")]
         pub use datafusion_table_providers_sqlite::pool as sqlitepool;
 
@@ -71,6 +73,8 @@ pub mod sql {
             pub use datafusion_table_providers_oracle::conn as oracleconn;
             #[cfg(feature = "postgres")]
             pub use datafusion_table_providers_postgres::conn as postgresconn;
+            #[cfg(feature = "quack")]
+            pub use datafusion_table_providers_quack::conn as quackconn;
             #[cfg(feature = "sqlite")]
             pub use datafusion_table_providers_sqlite::conn as sqliteconn;
         }
