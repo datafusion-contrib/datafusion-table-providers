@@ -5564,7 +5564,7 @@ dependencies = [
 [[package]]
 name = "quack_protocol"
 version = "0.3.0-alpha.1"
-source = "git+https://github.com/bnjjj/quack_protocol_rs?rev=2150f35#2150f35049eeedb15cc988d8d18eb1ab53ea29f9"
+source = "git+https://github.com/smithclay/quack_protocol_rs?rev=ab5785d#ab5785d38389807fd5614ef3ac194f03fb4e3107"
 dependencies = [
  "arrow-array 58.4.1",
  "arrow-buffer 58.4.1",
