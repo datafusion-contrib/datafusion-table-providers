@@ -218,7 +218,8 @@ pub(crate) fn has_duckdb_ordering(field: &Field) -> bool {
 /// `SqlExec` accepts any physical filter it can render into its SQL, which would let
 /// DataFusion move a filter the table answered `Unsupported` (a float comparison, say) to
 /// DuckDB and drop its own copy. This wrapper refuses those filters, and only lets a sort
-/// through when every key has the same ordering in DuckDB and DataFusion.
+/// through when every key has the same ordering in DuckDB and DataFusion, and only once:
+/// `SqlExec` appends its `ORDER BY` to the SQL, so a second one would be invalid.
 ///
 /// For an empty projection (`COUNT(*)`), `SqlExec` selects a constant `1`; the wrapper
 /// presents the zero-column plan DataFusion asked for and emits batches with only a row
@@ -228,6 +229,8 @@ struct QuackSqlExec {
     inner: Arc<dyn ExecutionPlan>,
     /// Set for an empty projection: the plan's own, zero-column properties.
     no_columns: Option<Arc<PlanProperties>>,
+    /// Whether the SQL already has a pushed-down `ORDER BY`.
+    sorted: bool,
 }
 
 impl QuackSqlExec {
@@ -238,13 +241,26 @@ impl QuackSqlExec {
                     .with_eq_properties(EquivalenceProperties::new(Arc::new(Schema::empty()))),
             )
         });
-        Self { inner, no_columns }
+        Self {
+            inner,
+            no_columns,
+            sorted: false,
+        }
     }
 
     fn wrap(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(Self {
             inner,
             no_columns: self.no_columns.clone(),
+            sorted: self.sorted,
+        })
+    }
+
+    fn wrap_sorted(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(Self {
+            inner,
+            no_columns: self.no_columns.clone(),
+            sorted: true,
         })
     }
 }
@@ -301,15 +317,15 @@ impl ExecutionPlan for QuackSqlExec {
                 .and_then(|column| schema.field_with_name(column.name()).ok())
                 .is_some_and(has_duckdb_ordering)
         });
-        if !sortable {
+        if self.sorted || !sortable {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
         Ok(match self.inner.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => SortOrderPushdownResult::Exact {
-                inner: self.wrap(inner),
+                inner: self.wrap_sorted(inner),
             },
             SortOrderPushdownResult::Inexact { inner } => SortOrderPushdownResult::Inexact {
-                inner: self.wrap(inner),
+                inner: self.wrap_sorted(inner),
             },
             SortOrderPushdownResult::Unsupported => SortOrderPushdownResult::Unsupported,
         })
@@ -635,6 +651,18 @@ mod tests {
 
             assert!(matches!(
                 exec.try_pushdown_sort(&sort_on(&exec, "f")).unwrap(),
+                SortOrderPushdownResult::Unsupported
+            ));
+
+            // A second push would append another ORDER BY; it's refused, and a limit pushed
+            // afterwards keeps the flag.
+            assert!(matches!(
+                inner.try_pushdown_sort(&sort_on(&exec, "i")).unwrap(),
+                SortOrderPushdownResult::Unsupported
+            ));
+            let limited = inner.with_fetch(Some(2)).unwrap();
+            assert!(matches!(
+                limited.try_pushdown_sort(&sort_on(&exec, "i")).unwrap(),
                 SortOrderPushdownResult::Unsupported
             ));
         }

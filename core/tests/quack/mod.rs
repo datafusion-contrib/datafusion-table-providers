@@ -487,6 +487,16 @@ async fn limit_projection_count_and_sort() {
         pretty(&query(&ctx, &sql.replace(" t ", " expected ")).await)
     );
 
+    // DataFusion may offer the same sort twice (here through a projection that keeps
+    // `i`); it's pushed once.
+    let sql = "SELECT make_array(i, id) AS x FROM t ORDER BY i, id";
+    let plan = physical_plan(&ctx, sql).await;
+    assert_eq!(scan(&plan).matches("ORDER BY").count(), 1, "{plan}");
+    assert_eq!(
+        pretty(&query(&ctx, sql).await),
+        pretty(&query(&ctx, &sql.replace(" t ", " expected ")).await)
+    );
+
     // VARCHAR (collation) and DOUBLE (NaN, -0.0) sorts stay in DataFusion.
     for sql in [
         "SELECT id, s FROM t ORDER BY s, id",

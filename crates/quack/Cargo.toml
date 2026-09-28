@@ -18,7 +18,6 @@ quack_protocol = { git = "https://github.com/smithclay/quack_protocol_rs", rev =
 secrecy = "0.10"
 snafu = "0.9"
 tokio = { version = "1.52", features = ["macros", "time", "rt-multi-thread"] }
-tracing = "0.1"
 
 [features]
 default = ["federation"]
