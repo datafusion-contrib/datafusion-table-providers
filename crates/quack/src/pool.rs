@@ -18,12 +18,14 @@ use crate::conn::{QuackConnection, QuackSession};
 const ENDPOINT: &str = "endpoint";
 const TOKEN: &str = "token";
 const SSL: &str = "ssl";
+const SSL_FINGERPRINT: &str = "ssl_fingerprint";
 const CONNECTION_POOL_SIZE: &str = "connection_pool_size";
 const CONNECTION_POOL_ACQUIRE_TIMEOUT: &str = "connection_pool_acquire_timeout";
-const PARAMETERS: [&str; 5] = [
+const PARAMETERS: [&str; 6] = [
     ENDPOINT,
     TOKEN,
     SSL,
+    SSL_FINGERPRINT,
     CONNECTION_POOL_SIZE,
     CONNECTION_POOL_ACQUIRE_TIMEOUT,
 ];
@@ -104,8 +106,11 @@ impl QuackConnectionPool {
     ///   or `http://localhost:9494`.
     /// - `token`: the server's auth token.
     /// - `ssl`: `true` or `false`; use HTTPS for addresses that don't name a scheme. The
-    ///   certificate must be trusted by a CA; self-signed server certificates are not
-    ///   supported.
+    ///   certificate must be trusted by a CA unless `ssl_fingerprint` is set.
+    /// - `ssl_fingerprint`: SHA-256 fingerprint of the server's TLS certificate (hex,
+    ///   optionally colon-separated), as `quack_generate_keys()` returns it. The client
+    ///   then trusts exactly that certificate, which is how a self-signed server
+    ///   certificate is authenticated. Implies HTTPS.
     /// - `connection_pool_size`: sessions opened at most (default 4).
     /// - `connection_pool_acquire_timeout`: seconds to wait for a free session (default 30).
     ///
@@ -150,6 +155,9 @@ impl QuackConnectionPool {
         let options = QuackClientOptions {
             auth_token: params.get(TOKEN).map(|t| t.expose_secret().to_string()),
             ssl,
+            ssl_fingerprint: params
+                .get(SSL_FINGERPRINT)
+                .map(|f| f.expose_secret().to_string()),
             min_supported_quack_version: Some(QUACK_PROTOCOL_VERSION),
             max_supported_quack_version: Some(QUACK_PROTOCOL_VERSION),
             ..Default::default()
@@ -279,6 +287,31 @@ mod tests {
                 matches!(err, Error::InvalidParameter { parameter: p, .. } if p == parameter),
                 "{parameter}={value}: {err}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_unusable_ssl_fingerprint() {
+        let pin = "00".repeat(32);
+        for pairs in [
+            vec![
+                (ENDPOINT, "127.0.0.1:1"),
+                (SSL_FINGERPRINT, "not-a-fingerprint"),
+            ],
+            vec![
+                (ENDPOINT, "127.0.0.1:1"),
+                (SSL, "false"),
+                (SSL_FINGERPRINT, pin.as_str()),
+            ],
+            vec![
+                (ENDPOINT, "http://127.0.0.1:1"),
+                (SSL_FINGERPRINT, pin.as_str()),
+            ],
+        ] {
+            let err = new_error(&pairs).await;
+            let message = err.to_string();
+            assert!(matches!(err, Error::UnableToConnect { .. }), "{message}");
+            assert!(message.contains("fingerprint"), "{message}");
         }
     }
 

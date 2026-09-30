@@ -254,7 +254,7 @@ Things to know:
 - Filters are pushed down only where DuckDB gives the same answer as DataFusion: comparisons and `IN` lists on integer (up to 64-bit, not HUGEINT), DECIMAL, DATE, BOOLEAN and second/millisecond/microsecond TIMESTAMP columns, `IS [NOT] NULL` on any column, and `AND`/`OR`/`NOT` over those. Everything else is evaluated by DataFusion. With the federation optimizer, federated subplans run entirely in DuckDB, with DuckDB's semantics (collations, NaN ordering, and so on), and their results are cast to the types DataFusion planned: an out-of-range value is an error, while lossy conversions such as DOUBLE to DECIMAL follow Arrow's cast.
 - Types map as `quack_protocol` maps them. HUGEINT and UHUGEINT arrive as `Decimal256(39, 0)`; ENUM, UUID and JSON as `Utf8`; BIT and GEOMETRY as `Binary` (DuckDB's bitstring bytes and WKB); VARIANT as DuckDB's shredded struct. TIMETZ, UNION and BIGNUM follow `UnsupportedTypeAction`.
 - Dropping a stream releases its session but does not cancel the query on the server.
-- HTTPS works only with a CA-trusted certificate. A server that isn't bound to localhost serves a self-signed certificate by default, and the client can't pin it yet.
+- A server that isn't bound to localhost serves HTTPS with a self-signed certificate by default. Set `ssl_fingerprint` to that certificate's SHA-256 fingerprint (as `quack_generate_keys()` returns it) to trust exactly that certificate; without it, the certificate must be CA-trusted.
 
 To run the integration tests, start a server as above (any port and token) and point the tests at it:
 

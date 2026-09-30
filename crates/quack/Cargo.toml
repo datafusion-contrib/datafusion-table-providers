@@ -14,7 +14,7 @@ datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true }
 futures = "0.3"
-quack_protocol = { git = "https://github.com/smithclay/quack_protocol_rs", rev = "ab5785d", features = ["arrow"] }
+quack_protocol = { version = "0.3", features = ["arrow"] }
 secrecy = "0.10"
 snafu = "0.9"
 tokio = { version = "1.52", features = ["macros", "time", "rt-multi-thread"] }
