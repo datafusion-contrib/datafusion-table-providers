@@ -16,7 +16,10 @@
 # under the License.
 
 [workspace]
-members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse", "crates/flightsql", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/duckdb", "crates/adbc", "crates/oracle"]
+members = ["core", "crates/common", "python", "crates/clickhouse", "crates/flightsql", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/oracle", "crates/duckdb", "crates/odbc", "crates/adbc"]
+# duckdb, odbc and adbc are left out of the default build until arrow-59 compatible
+# releases of duckdb, arrow-odbc and adbc_core are available.
+default-members = ["core", "crates/common", "python", "crates/clickhouse", "crates/flightsql", "crates/mongodb", "crates/mysql", "crates/sqlite", "crates/postgres", "crates/oracle"]
 resolver = "2"
 
 [workspace.package]
@@ -28,15 +31,15 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [workspace.dependencies]
-arrow = "=59.2.0"
-arrow-array = { version = "=59.2.0" }
-arrow-flight = { version = "=59.2.0", features = [
+arrow = "59.2"
+arrow-array = { version = "59.2" }
+arrow-flight = { version = "59.2", features = [
     "flight-sql-experimental",
     "tls-ring",
 ] }
-arrow-ipc = { version = "=59.2.0" }
-arrow-schema = { version = "=59.2.0", features = ["serde"] }
-arrow-json = "=59.2.0"
+arrow-ipc = { version = "59.2" }
+arrow-schema = { version = "59.2", features = ["serde"] }
+arrow-json = "59.2"
 arrow-odbc = { version = "25.3" }
 datafusion = { version = "55.1", default-features = false }
 datafusion-expr = { version = "55.1" }
@@ -63,22 +66,3 @@ adbc_driver_manager = { version = "0.24" }
 
 [workspace.metadata.cargo-machete]
 ignored = ["datafusion-federation"]
-
-
-# -----------------------------------------------------------------
-# Force every crate that depends on `arrow` to use the same version.
-# -----------------------------------------------------------------
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow", features = [
-    "prettyprint",
-    "ffi",
-] }
-arrow-arith = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-arith" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-array" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-flight" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-schema" }
-arrow-json = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-json" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", tag = "59.2.0", version = "59.2.0", package = "arrow-ipc" }
-
-#[replace]
-#'arrow:58.4.0' = { git = "https://github.com/apache/arrow-rs.git", tag = "59.3.0", version = "59.3.0" }

@@ -50,7 +50,7 @@ pub use exec::enforce_schema;
 /// ```
 /// # use arrow_flight::{FlightClient, FlightDescriptor};
 /// # use datafusion::prelude::SessionContext;
-/// # use datafusion_table_providers::flight::{FlightDriver, FlightMetadata, FlightTableFactory};
+/// # use datafusion_table_providers_flightsql::{FlightDriver, FlightMetadata, FlightTableFactory};
 /// # use std::collections::HashMap;
 /// # use std::sync::Arc;
 /// # use tonic::transport::Channel;
