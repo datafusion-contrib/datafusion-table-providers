@@ -1,9 +1,10 @@
 use crate::conn::DuckDbConnection;
 use crate::pool::DuckDbConnectionPool;
-use duckdb::arrow::{array::RecordBatch, datatypes::SchemaRef};
+use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::common::TableReference;
+use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::sql::arrow_sql_gen::statement::IndexBuilder;
 use datafusion_table_providers_common::util::on_conflict::OnConflict;
 use duckdb::{vtab::arrow::arrow_recordbatch_to_query_params, Transaction};
@@ -439,6 +440,9 @@ impl TableManager {
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&self.table_definition.schema));
+        // duckdb uses arrow 58, DataFusion uses a newer version
+        let empty_batch = arrow_bridge::record_batch_to_58(&empty_batch)
+            .context(super::UnableToConvertArrowDataSnafu)?;
         let params = arrow_recordbatch_to_query_params(empty_batch);
         let sql =
             format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM arrow(?, ?)"#,);
@@ -706,7 +710,8 @@ impl TableManager {
         let result: duckdb::Arrow<'_> = stmt
             .query_arrow([])
             .context(super::UnableToQueryDataSnafu)?;
-        Ok(result.get_schema())
+        arrow_bridge::schema_ref_from_58(&result.get_schema())
+            .context(super::UnableToConvertArrowDataSnafu)
     }
 
     pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {
@@ -725,8 +730,8 @@ impl TableManager {
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::{conn::DuckDbConnection, make_initial_table};
-    use duckdb::arrow::array::RecordBatch;
-    use datafusion::{datasource::sink::DataSink};
+    use arrow::array::RecordBatch;
+    use datafusion::datasource::sink::DataSink;
     use datafusion::{
         common::{Constraint, SchemaExt},
         execution::{SendableRecordBatchStream, TaskContext},
@@ -781,7 +786,7 @@ pub(crate) mod tests {
             .expect("to build parquet reader");
 
         parquet_reader
-            .collect::<Result<Vec<_>, duckdb::arrow::error::ArrowError>>()
+            .collect::<Result<Vec<_>, arrow::error::ArrowError>>()
             .expect("to get records")
     }
 
@@ -804,9 +809,9 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn get_basic_table_definition() -> Arc<TableDefinition> {
-        let schema = Arc::new(duckdb::arrow::datatypes::Schema::new(vec![
-            duckdb::arrow::datatypes::Field::new("id", duckdb::arrow::datatypes::DataType::Int64, false),
-            duckdb::arrow::datatypes::Field::new("name", duckdb::arrow::datatypes::DataType::Utf8, false),
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
         ]));
 
         Arc::new(TableDefinition::new(
@@ -1348,9 +1353,9 @@ pub(crate) mod tests {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
 
-        let schema = Arc::new(duckdb::arrow::datatypes::Schema::new(vec![
-            duckdb::arrow::datatypes::Field::new("id", duckdb::arrow::datatypes::DataType::Int64, false),
-            duckdb::arrow::datatypes::Field::new("name", duckdb::arrow::datatypes::DataType::Utf8, false),
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
         ]));
 
         let table_definition = Arc::new(
@@ -1431,9 +1436,9 @@ pub(crate) mod tests {
         let _guard = init_tracing(None);
         let pool = get_mem_duckdb();
 
-        let schema = Arc::new(duckdb::arrow::datatypes::Schema::new(vec![
-            duckdb::arrow::datatypes::Field::new("id", duckdb::arrow::datatypes::DataType::Int64, false),
-            duckdb::arrow::datatypes::Field::new("name", duckdb::arrow::datatypes::DataType::Utf8, false),
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
         ]));
 
         let table_definition = Arc::new(

@@ -30,10 +30,12 @@ tokio = { version = "1.52", features = [
 
 [features]
 default = [
+    "duckdb",
     "clickhouse",
     "sqlite",
     "mysql",
     "postgres",
+    "odbc",
     "flight",
     "mongodb",
 ]

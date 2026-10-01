@@ -30,6 +30,9 @@ use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_table_providers_common::arrow_bridge::{
+    self, arrow58::datatypes::Schema as Schema58,
+};
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
     runtime::run_async_with_tokio,
@@ -173,8 +176,11 @@ where
                     .boxed()
                     .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?;
 
+                let schema = arrow_schema_from(&mut prepared, None, false)
+                    .boxed()
+                    .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?;
                 let schema = Arc::new(
-                    arrow_schema_from(&mut prepared, None, false)
+                    arrow_bridge::schema_from_58(&schema)
                         .boxed()
                         .map_err(|e| dbconnection::Error::UnableToGetSchema { source: e })?,
                 );
@@ -216,8 +222,10 @@ where
                 let cxn = handle.block_on(async { conn.lock().await });
 
                 let mut prepared = cxn.prepare(&sql)?;
-                let schema = Arc::new(arrow_schema_from(&mut prepared, None, false)?);
-                blocking_channel_send(&schema_tx, Arc::clone(&schema))?;
+                // arrow-odbc uses arrow 58, DataFusion uses a newer version
+                let odbc_schema = Arc::new(arrow_schema_from(&mut prepared, None, false)?);
+                let schema = arrow_bridge::schema_from_58(&odbc_schema).context(ArrowSnafu)?;
+                blocking_channel_send(&schema_tx, Arc::new(schema))?;
 
                 let mut statement = prepared.into_handle();
 
@@ -235,9 +243,13 @@ where
                     Ok::<_, GenericError>(CursorImpl::new(statement.as_stmt_ref()))
                 }?;
 
-                let reader = build_odbc_reader(cursor, &schema, &secrets)?;
+                let reader = build_odbc_reader(cursor, &odbc_schema, &secrets)?;
                 for batch in reader {
-                    blocking_channel_send(&batch_tx, batch.context(ArrowSnafu)?)?;
+                    let batch = batch
+                        .map_err(arrow_bridge::error_from_58)
+                        .and_then(|batch| arrow_bridge::record_batch_from_58(&batch))
+                        .context(ArrowSnafu)?;
+                    blocking_channel_send(&batch_tx, batch)?;
                 }
 
                 Ok::<_, GenericError>(())
@@ -321,7 +333,7 @@ where
 
 fn build_odbc_reader<C: Cursor>(
     cursor: C,
-    schema: &Arc<Schema>,
+    schema: &Arc<Schema58>,
     params: &HashMap<String, SecretString>,
 ) -> Result<OdbcReader<C>, Error> {
     let mut builder = OdbcReaderBuilder::new();

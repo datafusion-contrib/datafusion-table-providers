@@ -178,6 +178,13 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
         self.base_exec.children()
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        self.base_exec.apply_expressions(f)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,

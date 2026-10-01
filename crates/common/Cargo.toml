@@ -8,7 +8,8 @@ license = { workspace = true }
 description = "Shared infrastructure for DataFusion table providers"
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["ffi"] }
+arrow58 = { package = "arrow", version = "58", default-features = false, features = ["ffi"], optional = true }
 async-trait = "0.1"
 bigdecimal = "0.4"
 chrono = "0.4.44"
@@ -40,6 +41,9 @@ url = "2.5"
 [features]
 default = ["federation"]
 federation = ["dep:datafusion-federation"]
+# Conversions between arrow 58 and the arrow version used by DataFusion,
+# for drivers that are still built against arrow 58.
+arrow58 = ["dep:arrow58"]
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }

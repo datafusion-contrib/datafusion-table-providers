@@ -2508,6 +2508,7 @@ dependencies = [
 name = "datafusion-table-providers-common"
 version = "0.14.0"
 dependencies = [
+ "arrow 58.4.0",
  "arrow 59.2.0",
  "async-trait",
  "bigdecimal",
