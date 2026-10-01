@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use super::sql_table::{get_cte, DuckDBTable};
 use datafusion::{
+    common::TableReference,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::SendableRecordBatchStream,
     physical_plan::stream::RecordBatchStreamAdapter,
-    sql::TableReference,
 };
 
 impl<T, P> DuckDBTable<T, P> {
@@ -31,7 +31,7 @@ impl<T, P> DuckDBTable<T, P> {
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
         let table_reference = self.base_table.table_reference.clone();
-        let schema = Arc::clone(&Arc::clone(&self).base_table.schema());
+        let schema: SchemaRef = Arc::clone(&Arc::clone(&self).base_table.schema());
         let fed_provider = Arc::new(SQLFederationProvider::new(self));
         Ok(Arc::new(SQLTableSource::new_with_schema(
             fed_provider,

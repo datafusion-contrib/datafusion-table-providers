@@ -4,17 +4,17 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::compute::cast;
-use arrow_schema::ArrowError;
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::{DataType, Field};
+use arrow::error::ArrowError;
 use async_stream::stream;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::{dialect::DuckDbDialect, tokenizer::Tokenizer};
-use datafusion::sql::TableReference;
 use duckdb::vtab::to_duckdb_type_id;
 use duckdb::ToSql;
 use duckdb::{Connection, DuckdbConnectionManager};
@@ -23,6 +23,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
+use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::sql::db_connection_pool::runtime::run_sync_with_tokio;
 use datafusion_table_providers_common::util::schema::SchemaValidator;
 use datafusion_table_providers_common::UnsupportedTypeAction;
@@ -336,8 +337,10 @@ impl SchemaValidator for DuckDbConnection {
     }
 
     fn is_field_supported(field: &Arc<Field>) -> bool {
-        let duckdb_type_id = to_duckdb_type_id(field.data_type());
-        Self::is_data_type_supported(field.data_type()) && duckdb_type_id.is_ok()
+        // duckdb uses arrow 58, DataFusion uses a newer version
+        let is_duckdb_type = arrow_bridge::data_type_to_58(field.data_type())
+            .is_ok_and(|data_type| to_duckdb_type_id(&data_type).is_ok());
+        Self::is_data_type_supported(field.data_type()) && is_duckdb_type
     }
 
     fn unsupported_type_error(data_type: &DataType, field_name: &str) -> Self::Error {
@@ -522,7 +525,11 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        Self::handle_unsupported_schema(&result.get_schema(), self.unsupported_type_action)
+        let schema = arrow_bridge::schema_ref_from_58(&result.get_schema())
+            .boxed()
+            .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
+
+        Self::handle_unsupported_schema(&schema, self.unsupported_type_action)
     }
 
     fn query_arrow(
@@ -549,7 +556,12 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        let schema = projected_schema.unwrap_or_else(|| result.get_schema());
+        let schema = match projected_schema {
+            Some(schema) => schema,
+            None => arrow_bridge::schema_ref_from_58(&result.get_schema())
+                .boxed()
+                .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?,
+        };
         let cast_schema = Arc::clone(&schema);
 
         let params = params.iter().map(dyn_clone::clone).collect::<Vec<_>>();
@@ -566,6 +578,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 let result: duckdb::ArrowStream<'_> =
                     stmt.stream_arrow(params).context(DuckDBQuerySnafu)?;
                 for batch in result {
+                    let batch = arrow_bridge::record_batch_from_58(&batch)?;
                     let batch = cast_batch_to_schema(batch, &cast_schema)?;
                     blocking_channel_send(&batch_tx, batch)?;
                 }

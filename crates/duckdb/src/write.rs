@@ -23,6 +23,7 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
+use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::{
     sql::db_connection_pool::Mode,
     util::{
@@ -949,6 +950,10 @@ pub(super) fn write_to_table(
         while let Some(batch) = data_batches.blocking_recv() {
             let batch = decode_dictionary_columns(batch)
                 .context(super::UnableToDecodeDictionaryColumnsSnafu)
+                .map_err(to_datafusion_error)?;
+            // duckdb uses arrow 58, DataFusion uses a newer version
+            let batch = arrow_bridge::record_batch_to_58(&batch)
+                .context(super::UnableToConvertArrowDataSnafu)
                 .map_err(to_datafusion_error)?;
             appender
                 .append_record_batch(batch)

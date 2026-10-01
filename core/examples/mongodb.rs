@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     mongodb::{connection_pool::MongoDBConnectionPool, MongoDBTableFactory},
     util::secrets::to_secret_map,

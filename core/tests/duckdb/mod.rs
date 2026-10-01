@@ -24,7 +24,7 @@ async fn arrow_duckdb_round_trip(
     let cmd = CreateExternalTable {
         schema: Arc::new(arrow_record.schema().to_dfschema().expect("to df schema")),
         name: table_name.into(),
-        location: "".to_string(),
+        locations: vec![],
         file_type: "".to_string(),
         table_partition_cols: vec![],
         if_not_exists: false,
@@ -146,7 +146,7 @@ async fn test_multi_batch_append() {
     let cmd = CreateExternalTable {
         schema: Arc::new(Arc::clone(&schema).to_dfschema().expect("to df schema")),
         name: "multi_batch_append".into(),
-        location: String::new(),
+        locations: vec![],
         file_type: String::new(),
         table_partition_cols: vec![],
         if_not_exists: false,
@@ -225,7 +225,7 @@ mod sort_limit_pushdown {
         let cmd = CreateExternalTable {
             schema: Arc::new(batch.schema().to_dfschema().unwrap()),
             name: name.into(),
-            location: String::new(),
+            locations: vec![],
             file_type: String::new(),
             table_partition_cols: vec![],
             if_not_exists: false,

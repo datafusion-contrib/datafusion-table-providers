@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     odbc::ODBCTableFactory, sql::db_connection_pool::odbcpool::ODBCPool,
     util::secrets::to_secret_map,

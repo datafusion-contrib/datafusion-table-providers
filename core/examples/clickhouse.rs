@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     clickhouse::{Arg, ClickHouseTableFactory},
     sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use futures::TryStreamExt;
@@ -9,6 +11,7 @@ use std::{fmt, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
+    common::TableReference,
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -21,7 +24,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
     },
-    sql::{unparser::dialect::DuckDBDialect, TableReference},
+    sql::unparser::dialect::DuckDBDialect,
 };
 use datafusion_table_providers_common::sql::sql_provider_datafusion::{
     get_stream, to_execution_error, Result as SqlResult, SqlExec, SqlTable,
@@ -173,6 +176,13 @@ impl<T: 'static, P: 'static> ExecutionPlan for DuckSqlExec<T, P> {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.base_exec.children()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        self.base_exec.apply_expressions(f)
     }
 
     fn with_new_children(

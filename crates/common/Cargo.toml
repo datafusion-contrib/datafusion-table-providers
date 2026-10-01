@@ -8,23 +8,17 @@ license = { workspace = true }
 description = "Shared infrastructure for DataFusion table providers"
 
 [dependencies]
-arrow = { workspace = true }
-arrow-json = { workspace = true }
+arrow = { workspace = true, features = ["ffi"] }
+arrow58 = { package = "arrow", version = "58", default-features = false, features = ["ffi"], optional = true }
 async-trait = "0.1"
 bigdecimal = "0.4"
-byteorder = "1.5"
 chrono = "0.4.44"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 dashmap = "6.1"
-fallible-iterator = "0.3"
-fundu = "2.0"
 futures = "0.3"
-geo-types = "0.7"
 itertools = "0.15"
 num-bigint = "0.4"
-rand = { version = "0.10" }
-regex = { version = "1" }
 sea-query = { version = "1.0.0", features = [
   "backend-sqlite",
   "backend-postgres",
@@ -37,7 +31,6 @@ sea-query = { version = "1.0.0", features = [
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.11"
 snafu = "0.9"
 time = "0.3"
 tokio = { version = "1.52", features = ["macros", "fs"] }
@@ -48,8 +41,12 @@ url = "2.5"
 [features]
 default = ["federation"]
 federation = ["dep:datafusion-federation"]
+# Conversions between arrow 58 and the arrow version used by DataFusion,
+# for drivers that are still built against arrow 58.
+arrow58 = ["dep:arrow58"]
 
 [dev-dependencies]
+datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
 reqwest = "0.13"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

@@ -10,6 +10,10 @@ use crate::sql::db_connection_pool::{
     DbConnectionPool,
 };
 use async_trait::async_trait;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ChildrenPropertiesMode;
+use datafusion::physical_plan::ReplaceChildrenOptions;
 use datafusion::{
     catalog::Session,
     physical_plan::execution_plan::{Boundedness, EmissionType},
@@ -26,6 +30,7 @@ use std::{
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema, SchemaRef},
     common::Constraints,
+    common::TableReference,
     config::ConfigOptions,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
@@ -44,7 +49,7 @@ use datafusion::{
         DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream,
     },
-    sql::{unparser::Unparser, TableReference},
+    sql::unparser::Unparser,
 };
 
 mod expr;
@@ -515,11 +520,29 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -714,8 +737,8 @@ pub fn to_execution_error(
 mod tests {
     use std::{error::Error, sync::Arc};
 
+    use datafusion::common::TableReference;
     use datafusion::execution::context::SessionContext;
-    use datafusion::sql::TableReference;
     use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Dispatch};
 
     use crate::sql::sql_provider_datafusion::SqlTable;
@@ -736,8 +759,8 @@ mod tests {
         use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
         use datafusion::sql::unparser::dialect::{Dialect, SqliteDialect};
         use datafusion::{
+            common::TableReference,
             logical_expr::{col, lit},
-            sql::TableReference,
         };
 
         use crate::sql::db_connection_pool::{

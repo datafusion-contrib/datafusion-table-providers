@@ -20,7 +20,7 @@ members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse"
 resolver = "2"
 
 [workspace.package]
-version = "0.13.1"
+version = "0.14.0"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
@@ -28,36 +28,38 @@ license = "Apache-2.0"
 description = "Extend the capabilities of DataFusion to support additional data sources via implementations of the `TableProvider` trait."
 
 [workspace.dependencies]
-arrow = "58.0"
-arrow-array = { version = "58.0" }
-arrow-flight = { version = "58.0", features = [
+arrow = "59.2"
+arrow-array = { version = "59.2" }
+arrow-flight = { version = "59.2", features = [
     "flight-sql-experimental",
     "tls-ring",
 ] }
-arrow-ipc = { version = "58.0" }
-arrow-schema = { version = "58.0", features = ["serde"] }
-arrow-json = "58.0"
+arrow-ipc = { version = "59.2" }
+arrow-schema = { version = "59.2", features = ["serde"] }
+arrow-json = "59.2"
 arrow-odbc = { version = "25.3" }
-datafusion = { version = "54.0", default-features = false }
-datafusion-expr = { version = "54.0" }
-datafusion-federation = { version = "0.5.5" }
-datafusion-ffi = { version = "54.0" }
-datafusion-proto = { version = "54.0" }
-datafusion-physical-expr = { version = "54.0" }
-datafusion-physical-plan = { version = "54.0" }
-datafusion-python = { version = "54.0" }
-datafusion-table-providers = { version = "0.13.1", path = "core" }
-datafusion-table-providers-common = { version = "0.13.1", path = "crates/common" }
-datafusion-table-providers-odbc = { version = "0.13.1", path = "crates/odbc" }
-datafusion-table-providers-clickhouse = { version = "0.13.1", path = "crates/clickhouse" }
-datafusion-table-providers-flightsql = { version = "0.13.1", path = "crates/flightsql" }
-datafusion-table-providers-mongodb = { version = "0.13.1", path = "crates/mongodb" }
-datafusion-table-providers-mysql = { version = "0.13.1", path = "crates/mysql" }
-datafusion-table-providers-sqlite = { version = "0.13.1", path = "crates/sqlite" }
-datafusion-table-providers-postgres = { version = "0.13.1", path = "crates/postgres" }
-datafusion-table-providers-duckdb = { version = "0.13.1", path = "crates/duckdb" }
-datafusion-table-providers-adbc = { version = "0.13.1", path = "crates/adbc" }
-datafusion-table-providers-oracle = { version = "0.13.1", path = "crates/oracle" }
-duckdb = { version = "=1.10505.0" }
+datafusion = { version = "55.1", default-features = false }
+datafusion-expr = { version = "55.1" }
+datafusion-federation = { version = "0.5.7" }
+datafusion-ffi = { version = "55.1" }
+datafusion-proto = { version = "55.1" }
+datafusion-physical-expr = { version = "55.1" }
+datafusion-physical-plan = { version = "55.1" }
+datafusion-table-providers = { version = "0.14.0", path = "core" }
+datafusion-table-providers-common = { version = "0.14.0", path = "crates/common" }
+datafusion-table-providers-odbc = { version = "0.14.0", path = "crates/odbc" }
+datafusion-table-providers-clickhouse = { version = "0.14.0", path = "crates/clickhouse" }
+datafusion-table-providers-flightsql = { version = "0.14.0", path = "crates/flightsql" }
+datafusion-table-providers-mongodb = { version = "0.14.0", path = "crates/mongodb" }
+datafusion-table-providers-mysql = { version = "0.14.0", path = "crates/mysql" }
+datafusion-table-providers-sqlite = { version = "0.14.0", path = "crates/sqlite" }
+datafusion-table-providers-postgres = { version = "0.14.0", path = "crates/postgres" }
+datafusion-table-providers-duckdb = { version = "0.14.0", path = "crates/duckdb" }
+datafusion-table-providers-adbc = { version = "0.14.0", path = "crates/adbc" }
+datafusion-table-providers-oracle = { version = "0.14.0", path = "crates/oracle" }
+duckdb = { version = "1.10505.0" }
 adbc_core = { version = "0.24" }
 adbc_driver_manager = { version = "0.24" }
+
+[workspace.metadata.cargo-machete]
+ignored = ["datafusion-federation"]

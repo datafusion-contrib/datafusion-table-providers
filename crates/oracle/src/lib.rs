@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::common::TableReference;
 use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::CreateExternalTable;
-use datafusion::sql::TableReference;
 use secrecy::SecretString;
 use snafu::prelude::*;
 use std::collections::HashMap;

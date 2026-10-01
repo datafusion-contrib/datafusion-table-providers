@@ -23,6 +23,7 @@ use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::{
     arrow::datatypes::SchemaRef,
     catalog::Session,
+    common::TableReference,
     datasource::{
         sink::{DataSink, DataSinkExec},
         TableProvider,
@@ -30,8 +31,8 @@ use datafusion::{
     execution::TaskContext,
     logical_expr::{dml::InsertOp, Expr, TableType},
     physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream},
-    sql::TableReference,
 };
+use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::util::retriable_error::{
     check_and_mark_retriable_error, to_retriable_data_write_error,
 };
@@ -340,7 +341,11 @@ where
             .map_err(to_retriable_data_write_error)?,
     }
 
-    stmt.bind_stream(Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)))
+    // adbc_core uses arrow 58, DataFusion uses a newer version
+    let reader =
+        arrow_bridge::reader_to_58(Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)))
+            .map_err(to_retriable_data_write_error)?;
+    stmt.bind_stream(Box::new(reader))
         .map_err(to_retriable_data_write_error)?;
 
     let count = stmt

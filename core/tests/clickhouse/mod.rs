@@ -1,6 +1,6 @@
 use clickhouse::Client;
 use common::{get_clickhouse_params, start_clickhouse_docker_container};
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::{common::TableReference, prelude::SessionContext};
 use datafusion_table_providers::{
     clickhouse::ClickHouseTableFactory,
     sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,

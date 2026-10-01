@@ -24,7 +24,7 @@ use crate::to_df_err;
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 
 /// Physical extension codec for FlightExec
 #[derive(Clone, Debug, Default)]
@@ -36,6 +36,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if inputs.is_empty() {
             let config: FlightConfig = serde_json::from_slice(buf).map_err(to_df_err)?;
@@ -51,6 +52,7 @@ impl PhysicalExtensionCodec for FlightPhysicalCodec {
         &self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> datafusion::common::Result<()> {
         if let Some(flight) = node.downcast_ref::<FlightExec>() {
             let mut bytes = serde_json::to_vec(flight.config()).map_err(to_df_err)?;
