@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 
@@ -8,7 +9,7 @@ def run_docker_container():
     """Run the Docker container with the postgres image"""
     result = subprocess.run(
         ["docker", "run", "--name", "postgres", "-e", "POSTGRES_PASSWORD=password", "-e", "POSTGRES_DB=postgres_db", 
-         "-p", "5432:5432", "-d", "postgres:16-alpine"],
+         "-p", "5432:5432", "-d", os.environ.get("PG_DOCKER_IMAGE", "postgres:16-alpine")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )

@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 
@@ -8,7 +9,7 @@ def run_docker_container():
     """Run the Docker container with the MySQL image"""
     result = subprocess.run(
         ["docker", "run", "--name", "mysql", "-e", "MYSQL_ROOT_PASSWORD=password", "-e", "MYSQL_DATABASE=mysql_db", 
-         "-p", "3306:3306", "-d", "mysql:9.0"],
+         "-p", "3306:3306", "-d", os.environ.get("MYSQL_DOCKER_IMAGE", "mysql:9.0")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
