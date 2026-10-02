@@ -10,7 +10,7 @@ def run_docker_container():
         "-e", "CLICKHOUSE_USER=user",
         "-e", "CLICKHOUSE_PASSWORD=secret",
         "-p", "8123:8123",
-        "-d", os.environ.get("CLICKHOUSE_DOCKER_IMAGE", "clickhouse/clickhouse-server:latest")],
+        "-d", os.environ.get("CLICKHOUSE_DOCKER_IMAGE", "clickhouse/clickhouse-server:24.8")],
         check=True,
     )
     time.sleep(20)
