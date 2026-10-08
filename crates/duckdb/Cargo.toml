@@ -5,36 +5,63 @@ readme = { workspace = true }
 edition = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
-description = "DataFusion duckdb table provider"
+description = "DataFusion DuckDB table provider, in-process or remote over the Quack protocol"
 
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
-async-stream = "0.3"
+arrow-schema = { workspace = true, optional = true }
+async-stream = { version = "0.3", optional = true }
 async-trait = "0.1"
-byte-unit = "5.2"
+byte-unit = { version = "5.2", optional = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
-datafusion-table-providers-common = { workspace = true, features = ["arrow60"] }
-duckdb = { workspace = true, features = ["bundled", "r2d2", "vtab", "vtab-arrow", "appender-arrow"] }
-dyn-clone = "1.0"
+datafusion-table-providers-common = { workspace = true }
+duckdb = { workspace = true, features = ["bundled", "r2d2", "vtab", "vtab-arrow", "appender-arrow"], optional = true }
+dyn-clone = { version = "1.0", optional = true }
 futures = "0.3"
-itertools = "0.15"
-r2d2 = "0.8"
-rand = { version = "0.10" }
+itertools = { version = "0.15", optional = true }
+quack_protocol = { version = "0.4.1", features = ["arrow"], optional = true }
+r2d2 = { version = "0.8", optional = true }
+rand = { version = "0.10", optional = true }
+secrecy = { version = "0.10", optional = true }
 snafu = "0.9"
-tokio = { version = "1.52", features = ["macros", "fs"] }
-tracing = "0.1"
+tokio = { version = "1.52", features = ["macros", "fs", "sync"] }
+tracing = { version = "0.1", optional = true }
 
 [features]
-default = ["federation"]
+default = ["embedded", "federation"]
+# In-process DuckDB, linked from a bundled libduckdb.
+embedded = [
+    "datafusion-table-providers-common/arrow60",
+    "dep:arrow-schema",
+    "dep:async-stream",
+    "dep:byte-unit",
+    "dep:duckdb",
+    "dep:dyn-clone",
+    "dep:itertools",
+    "dep:r2d2",
+    "dep:rand",
+    "dep:tracing",
+]
+# Remote DuckDB over the Quack protocol. Needs no libduckdb.
+quack = ["dep:quack_protocol", "dep:secrecy", "tokio/time"]
 federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
 
 [dev-dependencies]
-datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
+datafusion = { workspace = true, default-features = false, features = ["nested_expressions", "parquet", "sql"] }
+rand = "0.10"
+tokio = { version = "1.52", features = ["rt-multi-thread"] }
 reqwest = "0.13"
 tempfile = "3.27.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[test]]
+name = "quack"
+required-features = ["quack", "federation"]
+
+[[example]]
+name = "quack"
+required-features = ["quack", "federation"]
 
 [package.metadata.docs.rs]
 all-features = true

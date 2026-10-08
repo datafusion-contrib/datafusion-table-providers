@@ -7,15 +7,14 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use async_trait::async_trait;
-use datafusion::error::DataFusionError;
+use datafusion::common::TableReference;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::sql::sqlparser::ast::Ident;
-use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
     self, AsyncDbConnection, DbConnection, GenericError,
 };
-use datafusion_table_providers_common::util::handle_unsupported_type_error;
+use datafusion_table_providers_common::util::{handle_unsupported_type_error, to_datafusion_error};
 use datafusion_table_providers_common::{UnsupportedTypeAction, SOURCE_TYPE_METADATA_KEY};
 use futures::{StreamExt, TryStreamExt};
 use quack_protocol::{sql_literal, PooledClient, QuackError, Row, SqlParameter, Value};
@@ -56,7 +55,7 @@ pub enum Error {
     ExecuteNotSupported,
 }
 
-/// A session leased from a [`QuackConnectionPool`](crate::pool::QuackConnectionPool). It
+/// A session leased from a [`QuackConnectionPool`](crate::quack::pool::QuackConnectionPool). It
 /// returns to the pool when the connection built on it, and every result stream it
 /// produced, is dropped.
 pub struct QuackSession(PooledClient);
@@ -321,8 +320,8 @@ impl AsyncDbConnection<QuackSession, ()> for QuackConnection {
         let schema = projected_schema.unwrap_or(result_schema);
         let batch_schema = Arc::clone(&schema);
         let stream = batches.map(move |batch| {
-            let batch = batch.map_err(|e| DataFusionError::External(Box::new(query_error(e))))?;
-            cast_batch(&batch, &batch_schema).map_err(|e| DataFusionError::External(Box::new(e)))
+            let batch = batch.map_err(|e| to_datafusion_error(query_error(e)))?;
+            cast_batch(&batch, &batch_schema).map_err(to_datafusion_error)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -376,6 +375,9 @@ fn probe_sql(table: &str, columns: &[&str]) -> String {
 /// is out of range for the target type, or can't be parsed as it, is an error rather than
 /// NULL. Other lossy conversions, such as float to decimal or nanoseconds to microseconds,
 /// follow Arrow's cast.
+///
+/// Not datafusion-federation's `try_cast_to`: it turns out-of-range values into NULL, and
+/// this crate's `quack` feature builds without federation.
 pub(crate) fn cast_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch, Error> {
     ensure!(
         batch.num_columns() == schema.fields().len(),
@@ -396,10 +398,12 @@ pub(crate) fn cast_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<Reco
             if column.data_type() == field.data_type() {
                 Ok(Arc::clone(column))
             } else {
-                cast_with_options(column, field.data_type(), &options).context(CastColumnSnafu {
-                    column: field.name().clone(),
-                    from: column.data_type().clone(),
-                    to: field.data_type().clone(),
+                cast_with_options(column, field.data_type(), &options).with_context(|_| {
+                    CastColumnSnafu {
+                        column: field.name().clone(),
+                        from: column.data_type().clone(),
+                        to: field.data_type().clone(),
+                    }
                 })
             }
         })

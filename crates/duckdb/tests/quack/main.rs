@@ -1,4 +1,5 @@
-//! Integration tests against a live Quack server (DuckDB 2.0, Quack protocol v3, running `quack_serve`).
+//! Integration tests against a live Quack server: DuckDB 1.5 (Quack protocol v1) or 2.0
+//! (Quack protocol v3), running `quack_serve`.
 //! They run when `QUACK_SERVER_URI` (and, if the server has one, `QUACK_AUTH_TOKEN`) is
 //! set, and pass without doing anything otherwise.
 
@@ -7,21 +8,19 @@ use std::sync::Arc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::arrow::util::display::array_value_to_string;
+use datafusion::common::TableReference;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::sql::TableReference;
-use datafusion_table_providers::quack::{QuackTableFactory, QuackTableProviderFactory};
-use datafusion_table_providers::{UnsupportedTypeAction, SOURCE_TYPE_METADATA_KEY};
+use datafusion_table_providers_common::{UnsupportedTypeAction, SOURCE_TYPE_METADATA_KEY};
+use datafusion_table_providers_duckdb::quack::pool::QuackConnectionPool;
+use datafusion_table_providers_duckdb::quack::{QuackTableFactory, QuackTableProviderFactory};
 use futures::StreamExt;
 
 mod common;
 use common::*;
 
-async fn provider(
-    pool: &Arc<datafusion_table_providers::sql::db_connection_pool::quackpool::QuackConnectionPool>,
-    table: &str,
-) -> Arc<dyn TableProvider> {
+async fn provider(pool: &Arc<QuackConnectionPool>, table: &str) -> Arc<dyn TableProvider> {
     QuackTableFactory::new(Arc::clone(pool))
         .table_provider(TableReference::bare(table))
         .await
@@ -72,7 +71,7 @@ const TYPES_ROW: &str = "(
 #[tokio::test]
 async fn round_trips_every_supported_type() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("types");
     run(&pool, &format!("CREATE TABLE {t} {TYPES_TABLE}")).await;
     run(&pool, &format!("INSERT INTO {t} VALUES {TYPES_ROW}")).await;
@@ -179,7 +178,7 @@ async fn round_trips_every_supported_type() {
 async fn unsupported_types_follow_the_unsupported_type_action() {
     let Some(server) = server() else { return };
     let t = table_name("unsupported");
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     run(
         &pool,
         &format!(
@@ -230,7 +229,7 @@ async fn unsupported_types_follow_the_unsupported_type_action() {
 #[tokio::test]
 async fn nullability_comes_from_the_catalog_and_batches_match_the_plan_schema() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("nullability");
     run(
         &pool,
@@ -315,7 +314,7 @@ const PUSHDOWN_ROWS: &str = "
 /// A session with the table registered as `t` through the provider, and the same rows
 /// in a `MemTable` registered as `expected` that DataFusion filters itself.
 async fn pushdown_context(server: &Server) -> SessionContext {
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("pushdown");
     run(&pool, &format!("CREATE TABLE {t} {PUSHDOWN_TABLE}")).await;
     run(&pool, &format!("INSERT INTO {t} VALUES {PUSHDOWN_ROWS}")).await;
@@ -515,7 +514,7 @@ async fn limit_projection_count_and_sort() {
 #[tokio::test]
 async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let (orders, customers) = (table_name("orders"), table_name("customers"));
     run(&pool, &format!("CREATE TABLE {orders} AS SELECT x AS id, x % 3 AS customer_id, x * 10 AS amount FROM range(9) r(x)")).await;
     run(
@@ -550,7 +549,7 @@ async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
     assert_eq!(pretty(&query(&ctx, sql).await), expected);
 
     // Tables on different pools are joined by DataFusion.
-    let other_pool = shared(server.pool(&[]).await);
+    let other_pool = Arc::new(server.pool(&[]).await);
     let ctx = federated_context();
     ctx.register_table("o", provider(&pool, &orders).await)
         .unwrap();
@@ -564,7 +563,7 @@ async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
 #[tokio::test]
 async fn federated_scan_applies_filters_pushed_into_it_at_execution() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("runtime_filters");
     run(
         &pool,
@@ -614,7 +613,7 @@ async fn federated_scan_applies_filters_pushed_into_it_at_execution() {
 #[tokio::test]
 async fn federated_aggregate_that_overflows_the_plan_type_is_an_error() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("overflow");
     run(&pool, &format!("CREATE TABLE {t} (v BIGINT)")).await;
     run(
@@ -641,7 +640,7 @@ async fn federated_aggregate_that_overflows_the_plan_type_is_an_error() {
 #[tokio::test]
 async fn exhausted_pool_times_out_and_a_dropped_stream_frees_its_session() {
     let Some(server) = server() else { return };
-    let pool = shared(
+    let pool = Arc::new(
         server
             .pool(&[
                 ("connection_pool_size", "1"),
@@ -703,7 +702,7 @@ async fn exhausted_pool_times_out_and_a_dropped_stream_frees_its_session() {
 #[tokio::test]
 async fn table_names_resolve_like_duckdb_and_missing_tables_are_reported() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let name = format!("Mixed{}", table_name("Case"));
     run(&pool, &format!("CREATE TABLE \"{name}\" (id INTEGER)")).await;
     run(&pool, &format!("INSERT INTO \"{name}\" VALUES (7)")).await;
@@ -746,7 +745,7 @@ async fn table_names_resolve_like_duckdb_and_missing_tables_are_reported() {
 #[tokio::test]
 async fn create_external_table_attaches_to_an_existing_table() {
     let Some(server) = server() else { return };
-    let pool = shared(server.pool(&[]).await);
+    let pool = Arc::new(server.pool(&[]).await);
     let (a, b) = (table_name("ext_a"), table_name("ext_b"));
     run(
         &pool,
@@ -823,14 +822,16 @@ fn pool_opens_and_hands_out_sessions_without_a_tokio_runtime() {
     let pool = futures::executor::block_on(server.pool(&[]));
     for _ in 0..2 {
         let conn = futures::executor::block_on(
-            datafusion_table_providers::sql::db_connection_pool::DbConnectionPool::connect(&pool),
+            datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool::connect(
+                &pool,
+            ),
         )
         .expect("a session without a runtime");
         drop(conn);
     }
 
     // The sessions stay usable from an ordinary runtime afterwards.
-    let pool = shared(pool);
+    let pool = Arc::new(pool);
     let t = table_name("no_runtime");
     tokio::runtime::Runtime::new()
         .expect("runtime")

@@ -274,24 +274,6 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "58.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b11eb61b95868592ad6edbd537465a6940eb3c81a875addecec24283301b267"
-dependencies = [
- "ahash",
- "arrow-buffer 58.4.1",
- "arrow-data 58.4.1",
- "arrow-schema 58.4.1",
- "chrono",
- "half",
- "hashbrown 0.17.1",
- "num-complex",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "arrow-array"
 version = "59.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc9a4a4b2b5ecd0e04df03471661cb61f28bed3c7fd50994715129b01b2edb97"
@@ -326,18 +308,6 @@ dependencies = [
  "libc",
  "num-complex",
  "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "arrow-buffer"
-version = "58.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53ee609a07eb721c2e4a7669d7bb88e2106c560e7dec1219096fecf5eae356d1"
-dependencies = [
- "bytes",
- "half",
- "num-bigint 0.4.8",
  "num-traits",
 ]
 
@@ -433,19 +403,6 @@ dependencies = [
  "csv",
  "csv-core",
  "regex",
-]
-
-[[package]]
-name = "arrow-data"
-version = "58.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10791765e6927cdd8ace5bf0e51a69f38a1c3aded2db93561b003c332d02ee2a"
-dependencies = [
- "arrow-buffer 58.4.1",
- "arrow-schema 58.4.1",
- "half",
- "num-integer",
- "num-traits",
 ]
 
 [[package]]
@@ -610,12 +567,6 @@ dependencies = [
  "arrow-schema 60.0.0",
  "half",
 ]
-
-[[package]]
-name = "arrow-schema"
-version = "58.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8506ad465ebb9483bb6efa1e2e78a313549122c6dd67dc2f7087297b762eaede"
 
 [[package]]
 name = "arrow-schema"
@@ -2528,7 +2479,6 @@ dependencies = [
  "datafusion-table-providers-odbc",
  "datafusion-table-providers-oracle",
  "datafusion-table-providers-postgres",
- "datafusion-table-providers-quack",
  "datafusion-table-providers-sqlite",
  "duckdb",
  "futures",
@@ -2641,9 +2591,11 @@ dependencies = [
  "dyn-clone",
  "futures",
  "itertools 0.15.0",
+ "quack_protocol",
  "r2d2",
  "rand 0.10.3",
  "reqwest 0.13.5",
+ "secrecy",
  "snafu",
  "tempfile",
  "tokio",
@@ -2801,22 +2753,6 @@ dependencies = [
  "datafusion-table-providers",
  "duckdb",
  "pyo3",
- "tokio",
-]
-
-[[package]]
-name = "datafusion-table-providers-quack"
-version = "0.14.0"
-dependencies = [
- "arrow 59.2.0",
- "async-trait",
- "datafusion",
- "datafusion-federation",
- "datafusion-table-providers-common",
- "futures",
- "quack_protocol",
- "secrecy",
- "snafu",
  "tokio",
 ]
 
@@ -5640,13 +5576,13 @@ dependencies = [
 
 [[package]]
 name = "quack_protocol"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4036100915320125cac93c648b09b240f8bca8b019b91cbf2edaae6202bdec2"
+checksum = "87e2e88410aec105be81c9508bff96117b2d384fa9e1c76d292d7118f4765332"
 dependencies = [
- "arrow-array 58.4.1",
- "arrow-buffer 58.4.1",
- "arrow-schema 58.4.1",
+ "arrow-array 59.2.0",
+ "arrow-buffer 59.3.0",
+ "arrow-schema 59.3.0",
  "async-stream",
  "base64 0.22.1",
  "chrono",

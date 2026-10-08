@@ -1,15 +1,14 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::displayable;
-use datafusion_table_providers::sql::db_connection_pool::quackpool::QuackConnectionPool;
-use datafusion_table_providers::sql::db_connection_pool::DbConnectionPool;
+use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
+use datafusion_table_providers_common::util::secrets::to_secret_map;
+use datafusion_table_providers_duckdb::quack::pool::QuackConnectionPool;
 use futures::TryStreamExt;
 use rand::RngExt;
-use secrecy::SecretString;
 
 /// A Quack server given by `QUACK_SERVER_URI` (and `QUACK_AUTH_TOKEN`).
 pub struct Server {
@@ -18,8 +17,15 @@ pub struct Server {
 }
 
 /// Returns the configured server, or `None` (after saying so) when the tests should skip.
+/// With `QUACK_REQUIRE_SERVER` set, a missing server is a failure instead.
 pub fn server() -> Option<Server> {
     let Ok(uri) = std::env::var("QUACK_SERVER_URI") else {
+        // The CI job that starts a server sets this, so a broken setup fails instead of
+        // skipping every test.
+        assert!(
+            std::env::var_os("QUACK_REQUIRE_SERVER").is_none(),
+            "QUACK_REQUIRE_SERVER is set but QUACK_SERVER_URI is not"
+        );
         eprintln!("QUACK_SERVER_URI is not set; skipping the Quack integration test");
         return None;
     };
@@ -42,12 +48,7 @@ impl Server {
     }
 
     pub async fn pool(&self, extra: &[(&str, &str)]) -> QuackConnectionPool {
-        let params = self
-            .options(extra)
-            .into_iter()
-            .map(|(k, v)| (k, SecretString::from(v)))
-            .collect();
-        QuackConnectionPool::new(params)
+        QuackConnectionPool::new(to_secret_map(self.options(extra)))
             .await
             .expect("connect to the Quack server")
     }
@@ -98,8 +99,4 @@ pub async fn physical_plan(ctx: &SessionContext, sql: &str) -> String {
 
 pub fn federated_context() -> SessionContext {
     SessionContext::new_with_state(datafusion_federation::default_session_state())
-}
-
-pub fn shared(pool: QuackConnectionPool) -> Arc<QuackConnectionPool> {
-    Arc::new(pool)
 }

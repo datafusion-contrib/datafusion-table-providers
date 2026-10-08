@@ -1,27 +1,45 @@
 //! A read-only DataFusion table provider for a remote DuckDB served over DuckDB's Quack
-//! protocol, version 3 (DuckDB 2.0).
+//! protocol: v1 (DuckDB 1.5) or v3 (DuckDB 2.0). Enabled by the `quack` feature.
 //!
 //! Build a [`pool::QuackConnectionPool`] for a server, then a [`QuackTableFactory`] on it
 //! for each table, or register [`QuackTableProviderFactory`] to use
 //! `CREATE EXTERNAL TABLE ... STORED AS QUACK`.
+//!
+//! - Read-only: tables and views must already exist on the server; nothing is created there.
+//! - Each open scan holds one pooled session until its stream ends, so size
+//!   `connection_pool_size` for the scans a query runs at once. Dropping a stream releases
+//!   its session but does not cancel the query on the server.
+//! - Filters are pushed down only where DuckDB gives the same answer as DataFusion:
+//!   comparisons and `IN` lists on integer (up to 64-bit, not HUGEINT), DECIMAL, DATE,
+//!   BOOLEAN and second, millisecond or microsecond TIMESTAMP columns; `IS [NOT] NULL` on
+//!   any column; and `AND`, `OR`, `NOT` over those. DataFusion evaluates the rest. Under
+//!   the federation optimizer, federated subplans run entirely in DuckDB, with DuckDB's
+//!   semantics (collations, NaN ordering, ...), and their results are cast to the types
+//!   DataFusion planned: an out-of-range value is an error, while lossy conversions such as
+//!   DOUBLE to DECIMAL follow Arrow's cast.
+//! - Types map as `quack_protocol` maps them: HUGEINT and UHUGEINT arrive as
+//!   `Decimal256(39, 0)`; ENUM, UUID and JSON as `Utf8`; BIT and GEOMETRY as `Binary`
+//!   (DuckDB's bitstring bytes and WKB); VARIANT as DuckDB's shredded struct. TIMETZ, UNION
+//!   and BIGNUM follow the pool's `UnsupportedTypeAction`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::common::{plan_err, TableReference};
 use datafusion::datasource::TableProvider;
-use datafusion::error::DataFusionError;
 use datafusion::logical_expr::CreateExternalTable;
-use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::sql_provider_datafusion;
-use datafusion_table_providers_common::util::remove_prefix_from_hashmap_keys;
 use datafusion_table_providers_common::util::secrets::to_secret_map;
+use datafusion_table_providers_common::util::{
+    remove_prefix_from_hashmap_keys, to_datafusion_error,
+};
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::pool::QuackConnectionPool;
-use crate::sql_table::QuackTable;
+use crate::quack::pool::QuackConnectionPool;
+use crate::quack::sql_table::QuackTable;
 
 pub mod conn;
 #[cfg(feature = "federation")]
@@ -41,7 +59,9 @@ pub enum Error {
 
     #[cfg(feature = "federation")]
     #[snafu(display("Unable to create the federated Quack table provider: {source}"))]
-    UnableToCreateFederatedTableProvider { source: DataFusionError },
+    UnableToCreateFederatedTableProvider {
+        source: datafusion::error::DataFusionError,
+    },
 
     #[snafu(display("Quack tables take their schema from the server. Remove the column list from CREATE EXTERNAL TABLE."))]
     DeclaredSchemaNotSupported,
@@ -160,17 +180,18 @@ impl TableProviderFactory for QuackTableProviderFactory {
         cmd: &CreateExternalTable,
     ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
         if !cmd.schema.fields().is_empty() {
-            return Err(DataFusionError::External(Box::new(
-                Error::DeclaredSchemaNotSupported,
-            )));
+            return Err(to_datafusion_error(Error::DeclaredSchemaNotSupported));
         }
-        let pool = self
-            .pool(&cmd.options)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let [location] = cmd.locations.as_slice() else {
+            return plan_err!(
+                "Quack table requires exactly one LOCATION, got {}",
+                cmd.locations.len()
+            );
+        };
+        let pool = self.pool(&cmd.options).await.map_err(to_datafusion_error)?;
         QuackTableFactory::new(pool)
-            .table_provider(TableReference::from(cmd.location.as_str()))
+            .table_provider(TableReference::from(location.as_str()))
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            .map_err(to_datafusion_error)
     }
 }

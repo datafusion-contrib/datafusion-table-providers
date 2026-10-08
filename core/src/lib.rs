@@ -43,6 +43,8 @@ pub mod sql {
         pub use datafusion_table_providers_clickhouse::pool as clickhousepool;
         #[cfg(feature = "duckdb")]
         pub use datafusion_table_providers_duckdb::pool as duckdbpool;
+        #[cfg(feature = "quack")]
+        pub use datafusion_table_providers_duckdb::quack::pool as quackpool;
         #[cfg(feature = "mysql")]
         pub use datafusion_table_providers_mysql::pool as mysqlpool;
         #[cfg(feature = "odbc")]
@@ -51,8 +53,6 @@ pub mod sql {
         pub use datafusion_table_providers_oracle::pool as oraclepool;
         #[cfg(feature = "postgres")]
         pub use datafusion_table_providers_postgres::pool as postgrespool;
-        #[cfg(feature = "quack")]
-        pub use datafusion_table_providers_quack::pool as quackpool;
         #[cfg(feature = "sqlite")]
         pub use datafusion_table_providers_sqlite::pool as sqlitepool;
 
@@ -65,6 +65,8 @@ pub mod sql {
             pub use datafusion_table_providers_clickhouse::conn as clickhouseconn;
             #[cfg(feature = "duckdb")]
             pub use datafusion_table_providers_duckdb::conn as duckdbconn;
+            #[cfg(feature = "quack")]
+            pub use datafusion_table_providers_duckdb::quack::conn as quackconn;
             #[cfg(feature = "mysql")]
             pub use datafusion_table_providers_mysql::conn as mysqlconn;
             #[cfg(feature = "odbc")]
@@ -73,8 +75,6 @@ pub mod sql {
             pub use datafusion_table_providers_oracle::conn as oracleconn;
             #[cfg(feature = "postgres")]
             pub use datafusion_table_providers_postgres::conn as postgresconn;
-            #[cfg(feature = "quack")]
-            pub use datafusion_table_providers_quack::conn as quackconn;
             #[cfg(feature = "sqlite")]
             pub use datafusion_table_providers_sqlite::conn as sqliteconn;
         }
@@ -87,6 +87,8 @@ pub use datafusion_table_providers_adbc as adbc;
 pub use datafusion_table_providers_clickhouse as clickhouse;
 #[cfg(feature = "duckdb")]
 pub use datafusion_table_providers_duckdb as duckdb;
+#[cfg(feature = "quack")]
+pub use datafusion_table_providers_duckdb::quack;
 #[cfg(feature = "flight")]
 pub use datafusion_table_providers_flightsql as flight;
 #[cfg(feature = "mongodb")]
@@ -99,7 +101,5 @@ pub use datafusion_table_providers_odbc as odbc;
 pub use datafusion_table_providers_oracle as oracle;
 #[cfg(feature = "postgres")]
 pub use datafusion_table_providers_postgres as postgres;
-#[cfg(feature = "quack")]
-pub use datafusion_table_providers_quack as quack;
 #[cfg(feature = "sqlite")]
 pub use datafusion_table_providers_sqlite as sqlite;

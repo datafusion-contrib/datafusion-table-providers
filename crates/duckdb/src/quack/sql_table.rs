@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::TableReference;
 use datafusion::common::{Constraints, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
@@ -15,25 +17,25 @@ use datafusion::logical_expr::{
     BinaryExpr, Expr, Operator, TableProviderFilterPushDown, TableType,
 };
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{EquivalenceProperties, PhysicalSortExpr};
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
 use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::sql::unparser::dialect::DuckDBDialect;
 use datafusion::sql::unparser::Unparser;
-use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 use datafusion_table_providers_common::sql::sql_provider_datafusion::{self, SqlTable};
 use datafusion_table_providers_common::SOURCE_TYPE_METADATA_KEY;
 use futures::StreamExt;
 
-use crate::conn::QuackSession;
-use crate::pool::QuackConnectionPool;
+use crate::quack::conn::QuackSession;
+use crate::quack::pool::QuackConnectionPool;
 
 /// A table on a Quack server, scanned through [`SqlTable`] with DuckDB's SQL dialect.
 ///
@@ -287,6 +289,13 @@ impl ExecutionPlan for QuackSqlExec {
         vec![]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DataFusionResult<TreeNodeRecursion>,
+    ) -> DataFusionResult<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
@@ -364,11 +373,15 @@ impl ExecutionPlan for QuackSqlExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, row_counts)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> DataFusionResult<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> DataFusionResult<Arc<Statistics>> {
         if self.no_columns.is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
-        self.inner.partition_statistics(partition)
+        self.inner.statistics_from_inputs(input_stats, args)
     }
 }
 

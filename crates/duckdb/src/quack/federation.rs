@@ -17,7 +17,7 @@ use datafusion_federation::sql::{
 use datafusion_federation::{FederatedTableProviderAdaptor, FederatedTableSource};
 use futures::StreamExt;
 
-use crate::sql_table::QuackTable;
+use crate::quack::sql_table::QuackTable;
 
 impl QuackTable {
     fn create_federated_table_source(

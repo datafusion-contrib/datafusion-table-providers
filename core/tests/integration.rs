@@ -24,8 +24,6 @@ mod mysql;
 mod oracle;
 #[cfg(feature = "postgres")]
 mod postgres;
-#[cfg(feature = "quack")]
-mod quack;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 

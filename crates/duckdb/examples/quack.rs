@@ -1,18 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
-use datafusion_table_providers::{
-    quack::QuackTableFactory, sql::db_connection_pool::quackpool::QuackConnectionPool,
-    util::secrets::to_secret_map,
-};
+use datafusion_table_providers_common::util::secrets::to_secret_map;
+use datafusion_table_providers_duckdb::quack::{pool::QuackConnectionPool, QuackTableFactory};
 
 /// This example demonstrates how to:
 /// 1. Create a Quack connection pool for a remote DuckDB
 /// 2. Create table providers for two of its tables with QuackTableFactory
 /// 3. Query them with DataFusion, with the join federated to DuckDB
 ///
-/// Prerequisites: a DuckDB 2.0 (Quack protocol v3) server with the quack extension, holding the
+/// Prerequisites: a DuckDB 1.5 or 2.0 server with the quack extension, holding the
 /// example tables. Start one with the DuckDB CLI and leave it running:
 /// ```bash
 /// duckdb -cmd "

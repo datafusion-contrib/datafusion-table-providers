@@ -5,7 +5,7 @@ all:
 test:
 	cargo test --features clickhouse,duckdb,flight,mysql,postgres,sqlite,adbc,quack -p datafusion-table-providers --lib
 	cargo test -p datafusion-table-providers-oracle
-	cargo test -p datafusion-table-providers-quack
+	cargo test -p datafusion-table-providers-duckdb --no-default-features --features quack,federation
 
 .PHONY: lint
 lint:
@@ -13,4 +13,4 @@ lint:
 
 .PHONY: test-integration
 test-integration:
-	RUST_LOG=$${RUST_LOG:-info} cargo test -p datafusion-table-providers --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,duckdb,adbc,quack -- --nocapture
+	RUST_LOG=$${RUST_LOG:-info} cargo test -p datafusion-table-providers --test integration --no-default-features --features postgres,sqlite,mysql,flight,clickhouse,duckdb,adbc -- --nocapture

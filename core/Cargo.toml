@@ -23,7 +23,6 @@ datafusion-table-providers-odbc = { workspace = true, optional = true }
 datafusion-table-providers-postgres = { workspace = true, optional = true }
 datafusion-table-providers-sqlite = { workspace = true, optional = true }
 datafusion-table-providers-oracle = { workspace = true, optional = true }
-datafusion-table-providers-quack = { workspace = true, optional = true }
 
 [dev-dependencies]
 adbc_core = { workspace = true }
@@ -76,7 +75,11 @@ default = []
 
 adbc = ["dep:datafusion-table-providers-adbc"]
 clickhouse = ["dep:datafusion-table-providers-clickhouse"]
-duckdb = ["dep:datafusion-table-providers-duckdb"]
+duckdb = [
+  "dep:datafusion-table-providers-duckdb",
+  "datafusion-table-providers-duckdb/embedded",
+  "datafusion-table-providers-duckdb/federation",
+]
 flight = ["dep:datafusion-table-providers-flightsql"]
 mongodb = ["dep:datafusion-table-providers-mongodb"]
 mysql = ["dep:datafusion-table-providers-mysql"]
@@ -84,7 +87,11 @@ odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
 sqlite = ["dep:datafusion-table-providers-sqlite"]
 oracle = ["dep:datafusion-table-providers-oracle"]
-quack = ["dep:datafusion-table-providers-quack"]
+quack = [
+  "dep:datafusion-table-providers-duckdb",
+  "datafusion-table-providers-duckdb/quack",
+  "datafusion-table-providers-duckdb/federation",
+]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
@@ -140,11 +147,6 @@ required-features = ["duckdb"]
 name = "duckdb_function"
 path = "examples/duckdb_function.rs"
 required-features = ["duckdb"]
-
-[[example]]
-name = "quack"
-path = "examples/quack.rs"
-required-features = ["quack"]
 
 [[bin]]
 name = "sqlite_insert_benchmark"

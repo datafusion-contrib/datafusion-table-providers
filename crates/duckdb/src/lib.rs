@@ -1,63 +1,100 @@
+//! DataFusion table providers for DuckDB. Pick the connection implementation with features:
+//!
+//! - `embedded` (default): an in-process DuckDB, from a bundled libduckdb. Read and write,
+//!   through `DuckDBTableFactory` and `DuckDBTableProviderFactory`.
+//! - `quack`: a remote DuckDB served over the Quack protocol, read-only, through the
+//!   `quack` module. It doesn't link libduckdb, so a remote-only build can turn off
+//!   default features: `default-features = false, features = ["quack", "federation"]`.
+//!
+//! Both can be enabled together.
+
+// Before 0.14 the in-process provider was always built, so `default-features = false` only
+// dropped federation. Builds that relied on that now fail here, with the fix in the message,
+// rather than on every missing item.
+#[cfg(not(any(feature = "embedded", feature = "quack")))]
+compile_error!(
+    "datafusion-table-providers-duckdb needs a connection implementation: enable the \
+     `embedded` feature (in-process DuckDB, on by default) or `quack` (remote DuckDB). With \
+     `default-features = false`, add `features = [\"embedded\"]` to keep the previous behavior."
+);
+
+#[cfg(feature = "quack")]
+pub mod quack;
+
+#[cfg(feature = "embedded")]
 pub mod conn;
+#[cfg(feature = "embedded")]
 pub mod pool;
 
-use crate::conn::{
-    flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
-};
-use crate::pool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder};
-use datafusion_table_providers_common::sql::sql_provider_datafusion;
-use datafusion_table_providers_common::util::{
-    self,
-    column_reference::{self, ColumnReference},
-    constraints,
-    indexes::IndexType,
-    on_conflict::{self, OnConflict},
-};
-use datafusion_table_providers_common::{
-    sql::db_connection_pool::{
-        self,
-        dbconnection::{get_schema, DbConnection},
-        DbConnectionPool, DbInstanceKey, Mode,
+#[cfg(feature = "embedded")]
+use {
+    self::sql_table::DuckDBTable,
+    crate::conn::{
+        flatten_table_function_name, is_table_function, DuckDBParameter, DuckDbConnection,
     },
-    UnsupportedTypeAction,
+    crate::pool::{DuckDbConnectionPool, DuckDbConnectionPoolBuilder},
+    arrow::datatypes::SchemaRef,
+    async_trait::async_trait,
+    datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect},
+    datafusion::{
+        catalog::{Session, TableProviderFactory},
+        common::Constraints,
+        common::TableReference,
+        datasource::TableProvider,
+        error::{DataFusionError, Result as DataFusionResult},
+        logical_expr::CreateExternalTable,
+    },
+    datafusion_table_providers_common::sql::sql_provider_datafusion,
+    datafusion_table_providers_common::util::{
+        self,
+        column_reference::{self, ColumnReference},
+        constraints,
+        indexes::IndexType,
+        on_conflict::{self, OnConflict},
+    },
+    datafusion_table_providers_common::{
+        sql::db_connection_pool::{
+            self,
+            dbconnection::{get_schema, DbConnection},
+            DbConnectionPool, DbInstanceKey, Mode,
+        },
+        UnsupportedTypeAction,
+    },
+    duckdb::{AccessMode, DuckdbConnectionManager},
+    itertools::Itertools,
+    snafu::prelude::*,
+    std::{collections::HashMap, sync::Arc},
+    tokio::sync::Mutex,
+    write::DuckDBTableWriterBuilder,
 };
 
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use datafusion::sql::unparser::dialect::{Dialect, DuckDBDialect};
-use datafusion::{
-    catalog::{Session, TableProviderFactory},
-    common::Constraints,
-    common::TableReference,
-    datasource::TableProvider,
-    error::{DataFusionError, Result as DataFusionResult},
-    logical_expr::CreateExternalTable,
-};
-use duckdb::{AccessMode, DuckdbConnectionManager};
-use itertools::Itertools;
-use snafu::prelude::*;
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
-use write::DuckDBTableWriterBuilder;
-
+#[cfg(feature = "embedded")]
 pub use self::settings::{
     DuckDBSetting, DuckDBSettingScope, DuckDBSettingsRegistry, MemoryLimitSetting,
     PreserveInsertionOrderSetting, TempDirectorySetting,
 };
-use self::sql_table::DuckDBTable;
 
-#[cfg(feature = "federation")]
+#[cfg(all(feature = "embedded", feature = "federation"))]
 mod federation;
 
+#[cfg(feature = "embedded")]
 mod creator;
+#[cfg(feature = "embedded")]
 mod file_swap;
+#[cfg(feature = "embedded")]
 mod settings;
+#[cfg(feature = "embedded")]
 mod sql_table;
+#[cfg(feature = "embedded")]
 pub mod write;
+#[cfg(feature = "embedded")]
 pub mod write_settings;
+#[cfg(feature = "embedded")]
 pub use creator::{RelationName, TableDefinition, TableManager};
+#[cfg(feature = "embedded")]
 pub use file_swap::{recover_database_file_generations, SwapFileRecovery};
 
+#[cfg(feature = "embedded")]
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("DbConnectionError: {source}"))]
@@ -217,12 +254,17 @@ pub enum Error {
     FileSwapFileReplaced { path: String },
 }
 
+#[cfg(feature = "embedded")]
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[cfg(feature = "embedded")]
 const DUCKDB_DB_PATH_PARAM: &str = "open";
+#[cfg(feature = "embedded")]
 const DUCKDB_DB_BASE_FOLDER_PARAM: &str = "data_directory";
+#[cfg(feature = "embedded")]
 const DUCKDB_ATTACH_DATABASES_PARAM: &str = "attach_databases";
 
+#[cfg(feature = "embedded")]
 pub struct DuckDBTableProviderFactory {
     access_mode: AccessMode,
     instances: Arc<Mutex<HashMap<DbInstanceKey, DuckDbConnectionPool>>>,
@@ -232,6 +274,7 @@ pub struct DuckDBTableProviderFactory {
 }
 
 // Dialect trait does not implement Debug so we implement Debug manually
+#[cfg(feature = "embedded")]
 impl std::fmt::Debug for DuckDBTableProviderFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DuckDBTableProviderFactory")
@@ -242,6 +285,7 @@ impl std::fmt::Debug for DuckDBTableProviderFactory {
     }
 }
 
+#[cfg(feature = "embedded")]
 impl DuckDBTableProviderFactory {
     #[must_use]
     pub fn new(access_mode: AccessMode) -> Self {
@@ -414,10 +458,12 @@ impl DuckDBTableProviderFactory {
     }
 }
 
+#[cfg(feature = "embedded")]
 type DynDuckDbConnectionPool = dyn DbConnectionPool<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBParameter>
     + Send
     + Sync;
 
+#[cfg(feature = "embedded")]
 #[async_trait]
 impl TableProviderFactory for DuckDBTableProviderFactory {
     #[allow(clippy::too_many_lines)]
@@ -561,10 +607,12 @@ impl TableProviderFactory for DuckDBTableProviderFactory {
     }
 }
 
+#[cfg(feature = "embedded")]
 fn to_datafusion_error(error: Error) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
 
+#[cfg(feature = "embedded")]
 pub struct DuckDB {
     table_name: String,
     pool: Arc<DuckDbConnectionPool>,
@@ -572,6 +620,7 @@ pub struct DuckDB {
     constraints: Constraints,
 }
 
+#[cfg(feature = "embedded")]
 impl std::fmt::Debug for DuckDB {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DuckDB")
@@ -582,6 +631,7 @@ impl std::fmt::Debug for DuckDB {
     }
 }
 
+#[cfg(feature = "embedded")]
 impl DuckDB {
     #[must_use]
     pub fn existing_table(
@@ -630,12 +680,14 @@ impl DuckDB {
     }
 }
 
+#[cfg(feature = "embedded")]
 fn remove_option(options: &mut HashMap<String, String>, key: &str) -> Option<String> {
     options
         .remove(key)
         .or_else(|| options.remove(&format!("duckdb.{key}")))
 }
 
+#[cfg(feature = "embedded")]
 fn extract_connection_pool_size(options: &HashMap<String, String>) -> Result<Option<u32>> {
     options
         .get("connection_pool_size")
@@ -647,6 +699,7 @@ fn extract_connection_pool_size(options: &HashMap<String, String>) -> Result<Opt
         .transpose()
 }
 
+#[cfg(feature = "embedded")]
 pub struct DuckDBTableFactory {
     pool: Arc<DuckDbConnectionPool>,
     dialect: Arc<dyn Dialect>,
@@ -654,6 +707,7 @@ pub struct DuckDBTableFactory {
     indexes: Vec<(ColumnReference, IndexType)>,
 }
 
+#[cfg(feature = "embedded")]
 impl DuckDBTableFactory {
     #[must_use]
     pub fn new(pool: Arc<DuckDbConnectionPool>) -> Self {
@@ -743,6 +797,7 @@ impl DuckDBTableFactory {
     }
 }
 
+#[cfg(feature = "embedded")]
 /// For a [`TableReference`] that is a table function, create a name for a view on the original [`TableReference`]
 ///
 /// ### Example
@@ -767,6 +822,7 @@ fn create_table_function_view_name(table_reference: &TableReference) -> TableRef
     TableReference::from(&tbl_ref_view)
 }
 
+#[cfg(feature = "embedded")]
 pub(crate) fn make_initial_table(
     table_definition: Arc<TableDefinition>,
     pool: &Arc<DuckDbConnectionPool>,
@@ -814,6 +870,7 @@ pub(crate) fn make_initial_table(
     Ok(())
 }
 
+#[cfg(feature = "embedded")]
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::write::DuckDBTableWriter;

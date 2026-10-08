@@ -13,7 +13,7 @@ use quack_protocol::{QuackClientOptions, QuackPool, QuackPoolOptions, DEFAULT_MA
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
 
-use crate::conn::{QuackConnection, QuackSession};
+use crate::quack::conn::{QuackConnection, QuackSession};
 
 const ENDPOINT: &str = "endpoint";
 const TOKEN: &str = "token";
@@ -32,8 +32,11 @@ const PARAMETERS: [&str; 6] = [
 
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Quack protocol v3, spoken by DuckDB 2.0 and later. Older servers are refused.
-const QUACK_PROTOCOL_VERSION: u64 = 3;
+/// The Quack protocol versions the pool speaks: v1 (DuckDB 1.5) and v3 (DuckDB 2.0). It
+/// offers v3 first and falls back to v1 when the server refuses it; servers speaking any
+/// other version are refused.
+const MIN_QUACK_PROTOCOL_VERSION: u64 = 1;
+const MAX_QUACK_PROTOCOL_VERSION: u64 = 3;
 
 static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -52,7 +55,7 @@ pub enum Error {
         expected: &'static str,
     },
 
-    #[snafu(display("Unable to connect to the Quack server at '{endpoint}': {source}. Check the endpoint and token, and that the server is DuckDB 2.0 (Quack protocol v3) running quack_serve."))]
+    #[snafu(display("Unable to connect to the Quack server at '{endpoint}': {source}. Check the endpoint and token, and that the server is DuckDB 1.5 or 2.0 (Quack protocol v1 or v3) running quack_serve."))]
     UnableToConnect {
         endpoint: String,
         source: GenericError,
@@ -99,7 +102,8 @@ impl std::fmt::Debug for QuackConnectionPool {
 
 impl QuackConnectionPool {
     /// Connects to a Quack server and opens a pool. One session is opened now, so a bad
-    /// endpoint or token, or a server older than DuckDB 2.0 (Quack protocol v3), fails here.
+    /// endpoint or token, or a server speaking a Quack protocol other than v1 (DuckDB 1.5)
+    /// or v3 (DuckDB 2.0), fails here.
     ///
     /// Parameters:
     /// - `endpoint` (required): server address, e.g. `quack:localhost:9494`, `localhost:9494`
@@ -158,8 +162,8 @@ impl QuackConnectionPool {
             ssl_fingerprint: params
                 .get(SSL_FINGERPRINT)
                 .map(|f| f.expose_secret().to_string()),
-            min_supported_quack_version: Some(QUACK_PROTOCOL_VERSION),
-            max_supported_quack_version: Some(QUACK_PROTOCOL_VERSION),
+            min_supported_quack_version: Some(MIN_QUACK_PROTOCOL_VERSION),
+            max_supported_quack_version: Some(MAX_QUACK_PROTOCOL_VERSION),
             ..Default::default()
         };
         let pool = run_async_with_tokio(|| {

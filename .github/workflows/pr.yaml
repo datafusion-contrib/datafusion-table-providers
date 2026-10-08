@@ -73,7 +73,6 @@ jobs:
           - datafusion-table-providers-odbc
           - datafusion-table-providers-oracle
           - datafusion-table-providers-postgres
-          - datafusion-table-providers-quack
           - datafusion-table-providers-sqlite
 
     steps:
@@ -95,6 +94,10 @@ jobs:
 
       - name: Check ${{ matrix.crate }}
         run: cargo check -p ${{ matrix.crate }}
+
+      - name: Check ${{ matrix.crate }} (in-process DuckDB without federation)
+        if: matrix.crate == 'datafusion-table-providers-duckdb'
+        run: cargo check -p ${{ matrix.crate }} --no-default-features --features embedded
 
   unit-test:
     name: Unit Tests
@@ -280,18 +283,29 @@ jobs:
         run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
 
   quack-integration-test:
-    name: Quack Integration Tests
+    name: Quack Integration Tests (DuckDB ${{ matrix.duckdb }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Quack protocol v1.
+          - duckdb: "1.5"
+            cli_url: https://github.com/duckdb/duckdb/releases/download/v1.5.6/duckdb_cli-linux-amd64.gz
+          # Quack protocol v3. 2.0 has no release yet, so this pins a staged alpha build;
+          # switch to the release download once 2.0 ships.
+          - duckdb: "2.0"
+            cli_url: https://duckdb-staging.duckdb.org/09eb7f7004/v2.0.0-alpha43586/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz
+
     env:
-      # A DuckDB 2.0 build with the quack extension. 2.0 has no release yet, so this pins a
-      # staged alpha build (as the install script's DUCKDB_STAGED names it); switch to the
-      # release download once 2.0 ships.
-      DUCKDB_STAGED: 09eb7f7004/v2.0.0-alpha43586
       QUACK_SERVER_URI: quack:127.0.0.1:9495
       QUACK_AUTH_TOKEN: quack_ci_token
+      QUACK_REQUIRE_SERVER: "1"
       RUST_LOG: info
+      # The quack feature alone, so libduckdb is never built.
+      QUACK_CARGO_ARGS: -p datafusion-table-providers-duckdb --no-default-features --features quack,federation
 
     steps:
       - uses: actions/checkout@v7
@@ -302,18 +316,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install DuckDB CLI
+        env:
+          CLI_URL: ${{ matrix.cli_url }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/duckdb"
-          curl -fsSL "https://duckdb-staging.duckdb.org/${DUCKDB_STAGED}/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz" \
-            | tar -C "$RUNNER_TEMP/duckdb" -xzf -
+          case "$CLI_URL" in
+            *.tar.gz) curl -fsSL "$CLI_URL" | tar -C "$RUNNER_TEMP/duckdb" -xzf - ;;
+            *.gz) curl -fsSL "$CLI_URL" | gunzip > "$RUNNER_TEMP/duckdb/duckdb" ;;
+          esac
+          chmod +x "$RUNNER_TEMP/duckdb/duckdb"
           echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/duckdb/duckdb" --version
 
       # Build the test binary first so compilation doesn't count against the server's
       # startup window.
       - name: Build integration test binary
-        run: cargo build --tests -p datafusion-table-providers --no-default-features --features quack
+        run: cargo test --no-run $QUACK_CARGO_ARGS --test quack
+
+      # Everything else builds quack with federation on. Once is enough, so only on one leg.
+      - name: Check quack without federation
+        if: matrix.duckdb == '1.5'
+        run: cargo clippy -p datafusion-table-providers-duckdb --no-default-features --features quack --all-targets -- -D warnings
 
       - name: Start Quack server
         run: |
@@ -330,7 +354,7 @@ jobs:
           exit 1
 
       - name: Run Quack integration tests
-        run: cargo test -p datafusion-table-providers --test integration --no-default-features --features quack -- quack --nocapture
+        run: cargo test $QUACK_CARGO_ARGS --test quack -- --nocapture
 
       - name: Show Quack server log
         if: failure()
