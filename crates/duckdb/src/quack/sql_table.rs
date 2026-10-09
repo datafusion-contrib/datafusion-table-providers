@@ -124,8 +124,7 @@ impl TableProvider for QuackTable {
 /// Allowed: a comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) or `IN` list between a column
 /// whose DuckDB type [`has_duckdb_ordering`] and literals of the column's own Arrow type;
 /// `IS [NOT] NULL` on any column; a BOOLEAN column on its own; and `AND`, `OR`, `NOT` over
-/// those. Anything else,
-/// including casts, arithmetic and functions, is not.
+/// those. Anything else, including casts, arithmetic and functions, is not.
 pub(crate) fn filter_is_exact(filter: &Expr, schema: &Schema) -> bool {
     match filter {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
@@ -250,19 +249,12 @@ impl QuackSqlExec {
         }
     }
 
-    fn wrap(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    /// The same wrapper around a rewritten `inner`, marked sorted if `sorted` or already so.
+    fn wrap(&self, inner: Arc<dyn ExecutionPlan>, sorted: bool) -> Arc<dyn ExecutionPlan> {
         Arc::new(Self {
             inner,
             no_columns: self.no_columns.clone(),
-            sorted: self.sorted,
-        })
-    }
-
-    fn wrap_sorted(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(Self {
-            inner,
-            no_columns: self.no_columns.clone(),
-            sorted: true,
+            sorted: self.sorted || sorted,
         })
     }
 }
@@ -312,13 +304,18 @@ impl ExecutionPlan for QuackSqlExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit).map(|inner| self.wrap(inner))
+        self.inner
+            .with_fetch(limit)
+            .map(|inner| self.wrap(inner, false))
     }
 
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
     ) -> DataFusionResult<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        if self.sorted {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
         let schema = self.schema();
         let sortable = order.iter().all(|sort| {
             sort.expr
@@ -326,15 +323,15 @@ impl ExecutionPlan for QuackSqlExec {
                 .and_then(|column| schema.field_with_name(column.name()).ok())
                 .is_some_and(has_duckdb_ordering)
         });
-        if self.sorted || !sortable {
+        if !sortable {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
         Ok(match self.inner.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => SortOrderPushdownResult::Exact {
-                inner: self.wrap_sorted(inner),
+                inner: self.wrap(inner, true),
             },
             SortOrderPushdownResult::Inexact { inner } => SortOrderPushdownResult::Inexact {
-                inner: self.wrap_sorted(inner),
+                inner: self.wrap(inner, true),
             },
             SortOrderPushdownResult::Unsupported => SortOrderPushdownResult::Unsupported,
         })

@@ -95,9 +95,12 @@ jobs:
       - name: Check ${{ matrix.crate }}
         run: cargo check -p ${{ matrix.crate }}
 
-      - name: Check ${{ matrix.crate }} (in-process DuckDB without federation)
+      # Every other job builds the DuckDB crate with federation on.
+      - name: Check ${{ matrix.crate }} without federation
         if: matrix.crate == 'datafusion-table-providers-duckdb'
-        run: cargo check -p ${{ matrix.crate }} --no-default-features --features embedded
+        run: |
+          cargo check -p ${{ matrix.crate }} --no-default-features --features embedded
+          cargo clippy -p ${{ matrix.crate }} --no-default-features --features quack --all-targets -- -D warnings
 
   unit-test:
     name: Unit Tests
@@ -303,7 +306,6 @@ jobs:
       QUACK_SERVER_URI: quack:127.0.0.1:9495
       QUACK_AUTH_TOKEN: quack_ci_token
       QUACK_REQUIRE_SERVER: "1"
-      RUST_LOG: info
       # The quack feature alone, so libduckdb is never built.
       QUACK_CARGO_ARGS: -p datafusion-table-providers-duckdb --no-default-features --features quack,federation
 
@@ -333,11 +335,6 @@ jobs:
       # startup window.
       - name: Build integration test binary
         run: cargo test --no-run $QUACK_CARGO_ARGS --test quack
-
-      # Everything else builds quack with federation on. Once is enough, so only on one leg.
-      - name: Check quack without federation
-        if: matrix.duckdb == '1.5'
-        run: cargo clippy -p datafusion-table-providers-duckdb --no-default-features --features quack --all-targets -- -D warnings
 
       - name: Start Quack server
         run: |

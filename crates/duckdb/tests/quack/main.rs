@@ -172,6 +172,7 @@ async fn round_trips_every_supported_type() {
             row(&batches, 1)
         );
     }
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -224,6 +225,7 @@ async fn unsupported_types_follow_the_unsupported_type_action() {
             ["id: 1", "v: a"]
         );
     }
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -290,6 +292,7 @@ async fn nullability_comes_from_the_catalog_and_batches_match_the_plan_schema() 
             "DECIMAL(10,2)"
         );
     }
+    drop_tables(&pool, &[&t]).await;
 }
 
 /// Rows chosen so that pushing any `Unsupported` filter to DuckDB would change the answer:
@@ -313,7 +316,9 @@ const PUSHDOWN_ROWS: &str = "
 
 /// A session with the table registered as `t` through the provider, and the same rows
 /// in a `MemTable` registered as `expected` that DataFusion filters itself.
-async fn pushdown_context(server: &Server) -> SessionContext {
+/// A context with the pushdown table as `t` and an in-memory copy as `expected`, plus the
+/// pool and table name to drop it with.
+async fn pushdown_context(server: &Server) -> (SessionContext, Arc<QuackConnectionPool>, String) {
     let pool = Arc::new(server.pool(&[]).await);
     let t = table_name("pushdown");
     run(&pool, &format!("CREATE TABLE {t} {PUSHDOWN_TABLE}")).await;
@@ -325,13 +330,13 @@ async fn pushdown_context(server: &Server) -> SessionContext {
     let rows = query(&ctx, "SELECT * FROM t").await;
     let copy = MemTable::try_new(table.schema(), vec![rows]).unwrap();
     ctx.register_table("expected", Arc::new(copy)).unwrap();
-    ctx
+    (ctx, pool, t)
 }
 
 #[tokio::test]
 async fn filters_are_pushed_down_only_when_exact() {
     let Some(server) = server() else { return };
-    let ctx = pushdown_context(&server).await;
+    let (ctx, pool, t) = pushdown_context(&server).await;
 
     let cases = [
         // (filter, pushed down to DuckDB as Exact)
@@ -407,12 +412,13 @@ async fn filters_are_pushed_down_only_when_exact() {
         );
         assert_eq!(actual, expected, "{filter}");
     }
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
 async fn limit_projection_count_and_sort() {
     let Some(server) = server() else { return };
-    let ctx = pushdown_context(&server).await;
+    let (ctx, pool, t) = pushdown_context(&server).await;
 
     let scan = |plan: &str| {
         plan.lines()
@@ -509,6 +515,7 @@ async fn limit_projection_count_and_sort() {
             "{sql}"
         );
     }
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -558,6 +565,7 @@ async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
     let plan = physical_plan(&ctx, sql).await;
     assert_eq!(plan.matches("VirtualExecutionPlan").count(), 2, "{plan}");
     assert_eq!(pretty(&query(&ctx, sql).await), expected);
+    drop_tables(&pool, &[&orders, &customers]).await;
 }
 
 #[tokio::test]
@@ -608,6 +616,7 @@ async fn federated_scan_applies_filters_pushed_into_it_at_execution() {
         pretty(&query(&ctx, sql).await),
         "+-----+\n| k   |\n+-----+\n| 5   |\n| 17  |\n| 123 |\n+-----+"
     );
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -635,6 +644,7 @@ async fn federated_aggregate_that_overflows_the_plan_type_is_an_error() {
     let message = err.to_string();
     assert!(message.contains("Cannot convert column"), "{message}");
     assert!(message.contains("Int64"), "{message}");
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -697,6 +707,7 @@ async fn exhausted_pool_times_out_and_a_dropped_stream_frees_its_session() {
         row(&query(&ctx, "SELECT count(*) AS n FROM t").await, 0),
         ["n: 1000000"]
     );
+    drop_tables(&pool, &[&t]).await;
 }
 
 #[tokio::test]
@@ -740,6 +751,8 @@ async fn table_names_resolve_like_duckdb_and_missing_tables_are_reported() {
         message.contains(&missing) && message.contains("not found"),
         "{message}"
     );
+    run(&pool, &format!("DROP VIEW IF EXISTS {view}")).await;
+    drop_tables(&pool, &[&format!("\"{name}\"")]).await;
 }
 
 #[tokio::test]
@@ -813,6 +826,7 @@ async fn create_external_table_attaches_to_an_existing_table() {
         };
         assert!(err.to_string().contains(expected), "{statement}: {err}");
     }
+    drop_tables(&pool, &[&a, &b]).await;
 }
 
 /// A caller across an FFI boundary (e.g. Python) has no Tokio runtime of its own.
@@ -843,5 +857,6 @@ fn pool_opens_and_hands_out_sessions_without_a_tokio_runtime() {
                 row(&query(&ctx, "SELECT answer FROM t").await, 0),
                 ["answer: 42"]
             );
+            drop_tables(&pool, &[&t]).await;
         });
 }

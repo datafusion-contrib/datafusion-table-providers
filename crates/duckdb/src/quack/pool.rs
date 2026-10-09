@@ -21,13 +21,15 @@ const SSL: &str = "ssl";
 const SSL_FINGERPRINT: &str = "ssl_fingerprint";
 const CONNECTION_POOL_SIZE: &str = "connection_pool_size";
 const CONNECTION_POOL_ACQUIRE_TIMEOUT: &str = "connection_pool_acquire_timeout";
-const PARAMETERS: [&str; 6] = [
+const REQUEST_TIMEOUT: &str = "request_timeout";
+const PARAMETERS: [&str; 7] = [
     ENDPOINT,
     TOKEN,
     SSL,
     SSL_FINGERPRINT,
     CONNECTION_POOL_SIZE,
     CONNECTION_POOL_ACQUIRE_TIMEOUT,
+    REQUEST_TIMEOUT,
 ];
 
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -41,6 +43,7 @@ const MAX_QUACK_PROTOCOL_VERSION: u64 = 3;
 static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Missing required parameter '{parameter}'. Provide the Quack server address, e.g. 'quack:localhost:9494'."))]
     MissingParameter { parameter: &'static str },
@@ -117,6 +120,11 @@ impl QuackConnectionPool {
     ///   certificate is authenticated. Implies HTTPS.
     /// - `connection_pool_size`: sessions opened at most (default 4).
     /// - `connection_pool_acquire_timeout`: seconds to wait for a free session (default 30).
+    /// - `request_timeout`: seconds to wait for each request to the server, such as a
+    ///   query's first response or one fetched batch (default 300). It doesn't bound a
+    ///   whole scan.
+    ///
+    /// Values are trimmed, and `ssl` ignores case.
     ///
     /// # Errors
     ///
@@ -141,7 +149,7 @@ impl QuackConnectionPool {
             .expose_secret()
             .to_string();
         let ssl = parse_param(&params, SSL, "'true' or 'false'", |v| {
-            v.parse::<bool>().ok()
+            v.to_ascii_lowercase().parse::<bool>().ok()
         })?;
         let max_connections =
             parse_param(&params, CONNECTION_POOL_SIZE, "a positive integer", |v| {
@@ -155,8 +163,15 @@ impl QuackConnectionPool {
             |v| v.parse::<u64>().ok().filter(|n| *n > 0),
         )?
         .map_or(DEFAULT_ACQUIRE_TIMEOUT, Duration::from_secs);
+        let request_timeout = parse_param(
+            &params,
+            REQUEST_TIMEOUT,
+            "a positive number of seconds",
+            |v| v.parse::<u64>().ok().filter(|n| *n > 0),
+        )?
+        .map(Duration::from_secs);
 
-        let options = QuackClientOptions {
+        let mut options = QuackClientOptions {
             auth_token: params.get(TOKEN).map(|t| t.expose_secret().to_string()),
             ssl,
             ssl_fingerprint: params
@@ -166,6 +181,9 @@ impl QuackConnectionPool {
             max_supported_quack_version: Some(MAX_QUACK_PROTOCOL_VERSION),
             ..Default::default()
         };
+        if request_timeout.is_some() {
+            options.timeout = request_timeout;
+        }
         let pool = run_async_with_tokio(|| {
             QuackPool::connect(&endpoint, options, QuackPoolOptions { max_connections })
         })
@@ -205,7 +223,7 @@ fn parse_param<T>(
         .get(parameter)
         .map(|value| {
             let value = value.expose_secret();
-            parse(value).context(InvalidParameterSnafu {
+            parse(value.trim()).context(InvalidParameterSnafu {
                 parameter,
                 value,
                 expected,
@@ -285,6 +303,8 @@ mod tests {
             (CONNECTION_POOL_SIZE, "-1"),
             (CONNECTION_POOL_ACQUIRE_TIMEOUT, "0"),
             (CONNECTION_POOL_ACQUIRE_TIMEOUT, "1.5"),
+            (REQUEST_TIMEOUT, "0"),
+            (REQUEST_TIMEOUT, "soon"),
         ] {
             let err = new_error(&[(ENDPOINT, "localhost:1"), (parameter, value)]).await;
             assert!(
@@ -292,6 +312,21 @@ mod tests {
                 "{parameter}={value}: {err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn accepts_padded_and_uppercase_values() {
+        // Valid values get past parsing; the connection then fails, as nothing listens on
+        // port 1.
+        let err = new_error(&[
+            (ENDPOINT, "127.0.0.1:1"),
+            (SSL, " FALSE "),
+            (CONNECTION_POOL_SIZE, " 2"),
+            (CONNECTION_POOL_ACQUIRE_TIMEOUT, "5 "),
+            (REQUEST_TIMEOUT, " 10 "),
+        ])
+        .await;
+        assert!(matches!(err, Error::UnableToConnect { .. }), "{err}");
     }
 
     #[tokio::test]

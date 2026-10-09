@@ -21,9 +21,13 @@ use quack_protocol::{sql_literal, PooledClient, QuackError, Row, SqlParameter, V
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Quack query failed: {source}"))]
     Query { source: GenericError },
+
+    #[snafu(display("Unable to render '{value}' as a SQL literal: {source}"))]
+    InvalidLiteral { value: String, source: GenericError },
 
     #[snafu(display("Unexpected response from the Quack server: {message}"))]
     UnexpectedResponse { message: String },
@@ -228,7 +232,8 @@ impl AsyncDbConnection<QuackSession, ()> for QuackConnection {
     async fn tables(&self, schema: &str) -> Result<Vec<String>, dbconnection::Error> {
         let sql = format!(
             "SELECT table_name FROM information_schema.tables \
-             WHERE table_catalog = current_database() AND table_schema = {} ORDER BY table_name",
+             WHERE table_catalog = current_database() AND lower(table_schema) = lower({}) \
+             ORDER BY table_name",
             literal(schema)
                 .boxed()
                 .context(dbconnection::UnableToGetTablesSnafu)?
@@ -338,7 +343,10 @@ fn query_error(e: QuackError) -> Error {
 }
 
 fn literal(value: &str) -> Result<String, Error> {
-    sql_literal(&SqlParameter::from(value)).map_err(query_error)
+    sql_literal(&SqlParameter::from(value)).map_err(|e| Error::InvalidLiteral {
+        value: value.to_string(),
+        source: Box::new(e),
+    })
 }
 
 fn literal_or(value: Option<&str>, default: &str) -> Result<String, Error> {

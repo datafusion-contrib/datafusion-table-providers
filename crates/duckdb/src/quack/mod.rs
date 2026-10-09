@@ -36,7 +36,7 @@ use datafusion_table_providers_common::util::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 
 use crate::quack::pool::QuackConnectionPool;
 use crate::quack::sql_table::QuackTable;
@@ -48,6 +48,7 @@ pub mod pool;
 mod sql_table;
 
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Unable to create the Quack connection pool: {source}"))]
     UnableToCreateConnectionPool { source: pool::Error },
@@ -117,16 +118,17 @@ impl QuackTableFactory {
 /// `LOCATION` names a table (optionally `schema.table` or `catalog.schema.table`) that must
 /// already exist on the server; nothing is created there. `OPTIONS` are the
 /// [`QuackConnectionPool::new`] parameters. Tables created with the same options share one
-/// pool, which stays open for the life of the factory.
+/// pool, which stays open for the life of the factory. Opening a pool for one set of
+/// options doesn't hold up tables with other options.
 #[derive(Default)]
 pub struct QuackTableProviderFactory {
     pools: Mutex<Vec<CachedPool>>,
 }
 
-/// A pool and the options, sorted by key, it was created with.
+/// The options, sorted by key, and the pool for them, set once its first connect succeeds.
 struct CachedPool {
     options: Vec<(String, SecretString)>,
-    pool: Arc<QuackConnectionPool>,
+    pool: Arc<OnceCell<Arc<QuackConnectionPool>>>,
 }
 
 impl std::fmt::Debug for QuackTableProviderFactory {
@@ -149,26 +151,37 @@ impl QuackTableProviderFactory {
             params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         key.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut pools = self.pools.lock().await;
-        let same_options = |other: &[(String, SecretString)]| {
-            other.len() == key.len()
-                && other.iter().zip(&key).all(|((ka, va), (kb, vb))| {
-                    ka == kb && va.expose_secret() == vb.expose_secret()
-                })
+        // Hold the lock only to find or add the entry, not while connecting.
+        let cell = {
+            let mut pools = self.pools.lock().await;
+            let same_options = |other: &[(String, SecretString)]| {
+                other.len() == key.len()
+                    && other.iter().zip(&key).all(|((ka, va), (kb, vb))| {
+                        ka == kb && va.expose_secret() == vb.expose_secret()
+                    })
+            };
+            match pools.iter().find(|cached| same_options(&cached.options)) {
+                Some(cached) => Arc::clone(&cached.pool),
+                None => {
+                    let cell = Arc::new(OnceCell::new());
+                    pools.push(CachedPool {
+                        options: key,
+                        pool: Arc::clone(&cell),
+                    });
+                    cell
+                }
+            }
         };
-        if let Some(cached) = pools.iter().find(|cached| same_options(&cached.options)) {
-            return Ok(Arc::clone(&cached.pool));
-        }
-        let pool = Arc::new(
+        // Callers with the same options share one connect; a failed one is retried by the
+        // next caller.
+        cell.get_or_try_init(|| async {
             QuackConnectionPool::new(params)
                 .await
-                .context(UnableToCreateConnectionPoolSnafu)?,
-        );
-        pools.push(CachedPool {
-            options: key,
-            pool: Arc::clone(&pool),
-        });
-        Ok(pool)
+                .map(Arc::new)
+                .context(UnableToCreateConnectionPoolSnafu)
+        })
+        .await
+        .cloned()
     }
 }
 

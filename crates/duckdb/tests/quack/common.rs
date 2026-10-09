@@ -66,6 +66,14 @@ pub async fn run(pool: &QuackConnectionPool, sql: &str) {
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
 }
 
+/// Drops the tables a test created, at its end: the server may outlive the test run. A
+/// test that fails leaves its tables behind; their names are random.
+pub async fn drop_tables(pool: &QuackConnectionPool, tables: &[&str]) {
+    for table in tables {
+        run(pool, &format!("DROP TABLE IF EXISTS {table}")).await;
+    }
+}
+
 /// A table name no other test run uses.
 pub fn table_name(prefix: &str) -> String {
     format!("{prefix}_{}", rand::rng().random_range(0..u32::MAX))
