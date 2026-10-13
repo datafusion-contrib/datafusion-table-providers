@@ -38,13 +38,13 @@ arrow-ipc = { version = "59.2" }
 arrow-schema = { version = "59.2", features = ["serde"] }
 arrow-json = "59.2"
 arrow-odbc = { version = "25.3" }
-datafusion = { version = "55.1", default-features = false }
-datafusion-expr = { version = "55.1" }
+datafusion = { version = "55.2", default-features = false }
+datafusion-expr = { version = "55.2" }
 datafusion-federation = { version = "0.5.7" }
-datafusion-ffi = { version = "55.1" }
-datafusion-proto = { version = "55.1" }
-datafusion-physical-expr = { version = "55.1" }
-datafusion-physical-plan = { version = "55.1" }
+datafusion-ffi = { version = "55.2" }
+datafusion-proto = { version = "55.2" }
+datafusion-physical-expr = { version = "55.2" }
+datafusion-physical-plan = { version = "55.2" }
 datafusion-table-providers = { version = "0.14.0", path = "core" }
 datafusion-table-providers-common = { version = "0.14.0", path = "crates/common" }
 datafusion-table-providers-odbc = { version = "0.14.0", path = "crates/odbc" }
