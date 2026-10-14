@@ -33,10 +33,10 @@ fn maybe_db_source_err(err: tokio_postgres::Error) -> Box<dyn Error + Send + Syn
 // between the two modules (postgrespool imports PostgresConnection, which uses
 // this alias).
 pub type PostgresPooledConnection = bb8::PooledConnection<'static, ConnectionManager>;
+use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::sql::TableReference;
 use futures::stream;
 use futures::StreamExt;
 

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion::{common::TableReference, prelude::SessionContext};
 use datafusion_table_providers::{
     common::DatabaseCatalogProvider,
     sql::db_connection_pool::{sqlitepool::SqliteConnectionPoolFactory, Mode},

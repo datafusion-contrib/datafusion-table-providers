@@ -18,10 +18,10 @@ use snafu::ResultExt;
 use std::sync::Arc;
 
 use datafusion::{
+    common::TableReference,
     error::{DataFusionError, Result as DataFusionResult},
     execution::SendableRecordBatchStream,
     physical_plan::stream::RecordBatchStreamAdapter,
-    sql::TableReference,
 };
 
 use super::ClickHouseTable;

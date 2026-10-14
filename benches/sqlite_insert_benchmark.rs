@@ -168,7 +168,7 @@ async fn run_benchmark(
     let external_table = CreateExternalTable {
         schema: df_schema,
         name: TableReference::bare(table_name),
-        location: String::new(),
+        locations: vec![],
         file_type: String::new(),
         table_partition_cols: vec![],
         if_not_exists: true,

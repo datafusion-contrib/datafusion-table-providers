@@ -8,7 +8,7 @@ license = { workspace = true }
 description = "DataFusion odbc table provider"
 
 [dependencies]
-arrow = { workspace = true }
+arrow-odbc = { workspace = true }
 async-stream = "0.3"
 async-trait = "0.1"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
@@ -17,7 +17,6 @@ datafusion-table-providers-common = { workspace = true }
 dyn-clone = "1.0"
 futures = "0.3"
 odbc-api = "29.0"
-arrow-odbc = { workspace = true }
 snafu = "0.9"
 tokio = { version = "1.52", features = ["macros", "fs"] }
 tracing = "0.1"
