@@ -1,7 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use datafusion::{
-    arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream, sql::TableReference,
+    arrow::datatypes::SchemaRef, common::TableReference, execution::SendableRecordBatchStream,
 };
 use snafu::prelude::*;
 
@@ -215,7 +215,7 @@ pub async fn get_schemas<T: 'static, P: 'static>(
 /// Returns an error if the schema cannot be retrieved.
 pub async fn get_schema<T: 'static, P: 'static>(
     conn: Box<dyn DbConnection<T, P>>,
-    table_reference: &datafusion::sql::TableReference,
+    table_reference: &datafusion::common::TableReference,
 ) -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
     if conn.as_sync().is_some() {
         let table_reference = table_reference.clone();

@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 
+#[cfg(feature = "arrow58")]
+pub mod arrow_bridge;
 pub mod common;
 pub mod schema_projection;
 pub mod sql;

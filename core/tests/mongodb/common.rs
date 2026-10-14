@@ -6,14 +6,14 @@ use std::collections::HashMap;
 use tracing::instrument;
 
 use crate::{
-    container_registry,
+    docker::container_registry,
     docker::{ContainerRunnerBuilder, RunningContainer},
 };
 
 const MONGODB_DOCKER_CONTAINER: &str = "runtime-integration-test-mongodb";
 
 pub(super) fn get_mongodb_params(
-    port: usize,
+    port: u16,
     unnest_depth: Option<usize>,
 ) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
@@ -71,15 +71,13 @@ pub(super) fn get_mongodb_params(
 }
 
 #[instrument]
-pub async fn start_mongodb_docker_container(
-    port: usize,
-) -> Result<RunningContainer, anyhow::Error> {
+pub async fn start_mongodb_docker_container(port: u16) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{MONGODB_DOCKER_CONTAINER}-{port}");
 
     let port = port.try_into().unwrap_or(27017);
 
     let mongodb_docker_image = std::env::var("MONGODB_DOCKER_IMAGE")
-        .unwrap_or_else(|_| format!("{}/mongo:7", container_registry()));
+        .unwrap_or_else(|_| format!("{}mongo:7", container_registry()));
 
     let running_container = ContainerRunnerBuilder::new(container_name)
         .image(mongodb_docker_image)
@@ -113,7 +111,7 @@ pub async fn start_mongodb_docker_container(
 
 #[instrument]
 pub(super) async fn get_mongodb_connection_pool(
-    port: usize,
+    port: u16,
     unnest_depth: Option<usize>,
 ) -> Result<MongoDBConnectionPool, anyhow::Error> {
     let mongodb_pool = MongoDBConnectionPool::new(get_mongodb_params(port, unnest_depth))
@@ -124,7 +122,7 @@ pub(super) async fn get_mongodb_connection_pool(
 }
 
 #[instrument]
-pub(super) async fn get_mongodb_client(port: usize) -> Result<Client, anyhow::Error> {
+pub(super) async fn get_mongodb_client(port: u16) -> Result<Client, anyhow::Error> {
     let connection_string =
         format!("mongodb://root:integration-test-pw@localhost:{port}/testdb?authSource=admin");
 

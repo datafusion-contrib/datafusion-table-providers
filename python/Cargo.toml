@@ -20,7 +20,7 @@ datafusion-ffi = { workspace = true }
 datafusion-table-providers = { workspace = true }
 duckdb = { workspace = true, optional = true }
 
-pyo3 = { version = "0.28" }
+pyo3 = { version = "0.29" }
 tokio = { version = "1.52", features = [
     "macros",
     "rt",

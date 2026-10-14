@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::{
     catalog::{CatalogProvider, SchemaProvider, TableProvider},
-    sql::TableReference,
+    common::TableReference,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

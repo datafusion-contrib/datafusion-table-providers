@@ -35,7 +35,7 @@ async-trait = "0.1"
 bollard = "=0.21.1"
 chrono = "0.4.44"
 clickhouse = "0.15"
-datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
 datafusion-federation = { workspace = true, features = ["sql"] }
 duckdb = { workspace = true, features = [
   "bundled",
@@ -46,6 +46,7 @@ duckdb = { workspace = true, features = [
 ] }
 futures = "0.3"
 insta = { version = "1.46.0", features = ["filters"] }
+linktime = { default-features = false, version = "0.19.0", features = ["ctor", "dtor", "proc_macro"]  }
 mongodb = { version = "3.6.0", features = ["openssl-tls"] }
 mysql_async = { version = "0.37", features = [
   "native-tls-tls",
