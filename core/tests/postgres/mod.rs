@@ -179,6 +179,81 @@ async fn test_arrow_postgres_one_way() {
     test_postgres_composite_array_list_struct(port).await;
     test_postgres_sort_limit(port).await;
     test_postgres_unconstrained_numeric_precision(port).await;
+    test_postgres_connection_pool_with_schema(port).await;
+}
+
+/// A pool created with `with_schema` must return the provided schema from `get_schema`
+/// instead of inferring it from the database.
+async fn test_postgres_connection_pool_with_schema(port: u16) {
+    use datafusion::common::TableReference;
+    use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
+
+    let table_reference = TableReference::bare("with_schema_table");
+
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    let conn = pool.connect_direct().await.expect("connect should work");
+    conn.conn
+        .execute(
+            "CREATE TABLE with_schema_table (id INTEGER, name TEXT)",
+            &[],
+        )
+        .await
+        .expect("table should be created");
+    conn.conn
+        .execute("INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')", &[])
+        .await
+        .expect("row should be inserted");
+
+    // the schema is inferred from the database when none is provided
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let conn = sqltable_pool.connect().await.expect("connect should work");
+    let inferred = conn
+        .as_async()
+        .expect("should be async connection")
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(
+        inferred.fields.len(),
+        2,
+        "There should be 2 fields in the inferred table"
+    );
+    let field1 = inferred.field(0);
+    assert_eq!(field1.name(), "id");
+    assert_eq!(field1.data_type(), &DataType::Int32);
+    assert_eq!(field1.is_nullable(), true);
+    let field2 = inferred.field(1);
+    assert_eq!(field2.name(), "name");
+    assert_eq!(field2.data_type(), &DataType::Utf8); // PostgresConnection::get_schema() infers it correctly
+    assert_eq!(field2.is_nullable(), true);
+
+    // the provided schema is used as-is
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::LargeUtf8, true),
+    ]));
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created")
+        .with_schema(Arc::clone(&schema));
+
+    let direct_conn = pool.connect_direct().await.expect("connect should work");
+    let actual = AsyncDbConnection::get_schema(&direct_conn, &table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
+
+    let sqltable_pool: Arc<DynPostgresConnectionPool> = Arc::new(pool);
+    let conn = sqltable_pool.connect().await.expect("connect should work");
+    let actual = conn
+        .as_async()
+        .expect("should be async connection")
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
 }
 
 /// An unconstrained `numeric` column (what `max()`, `avg()` and arithmetic over `numeric`

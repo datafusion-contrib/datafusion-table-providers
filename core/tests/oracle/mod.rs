@@ -951,3 +951,83 @@ async fn test_oracle_large_query_streaming() {
         batch_count
     );
 }
+
+/// A pool created with `with_schema` must return the provided schema from `get_schema`
+/// instead of inferring it from the database.
+#[tokio::test]
+async fn test_oracle_connection_pool_with_schema() {
+    use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
+
+    let Some(pool) = common::get_oracle_connection_pool().await else {
+        return;
+    };
+    let conn = pool
+        .connect_direct()
+        .await
+        .expect("Failed to get connection");
+    let oracle_conn = conn.conn.clone();
+
+    // Create table with test data
+    let table_name = "TEST_TABLE_WITH_SCHEMA";
+    let _ = oracle_conn.execute(&format!("DROP TABLE {table_name}"), &[]);
+    oracle_conn
+        .execute(
+            &format!("CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"),
+            &[],
+        )
+        .expect("Failed to create table");
+
+    let sql = format!("INSERT INTO {table_name} (id, name) VALUES (1, NULL), (2, 'a')");
+    oracle_conn.execute(&sql, &[]).expect("Execute failed");
+
+    let table_reference = TableReference::bare(table_name);
+    // the schema is inferred from the database when none is provided
+    let inferred = conn
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(
+        inferred.fields.len(),
+        2,
+        "There should be 2 fields in the inferred table"
+    );
+    let field1 = inferred.field(0);
+    assert_eq!(field1.name(), "id");
+    assert_eq!(field1.data_type(), &DataType::Int32);
+    assert_eq!(field1.is_nullable(), true);
+    let field2 = inferred.field(1);
+    assert_eq!(field2.name(), "name");
+    assert_eq!(field2.data_type(), &DataType::Utf8); // OracleConnection::get_schema() infers it correctly
+    assert_eq!(field2.is_nullable(), true);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int8, false),
+        Field::new("name", DataType::LargeUtf8, true),
+    ]));
+
+    // the provided schema is used as-is
+    let pool = OracleConnectionPool::new(common::get_oracle_params())
+        .await
+        .expect("Failed to create Oracle connection pool")
+        .with_schema(Arc::clone(&schema));
+
+    let direct_conn = pool
+        .connect_direct()
+        .await
+        .expect("Failed to get connection");
+    let actual = direct_conn
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
+
+    let conn: Box<dyn DbConnection<OraclePooledConnection, oracle::sql_type::OracleType>> =
+        pool.connect().await.expect("Failed to get connection");
+    let actual = conn
+        .as_async()
+        .expect("should be async connection")
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
+}

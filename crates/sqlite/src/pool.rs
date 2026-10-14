@@ -451,21 +451,33 @@ mod tests {
         let pool = factory.build().await.unwrap();
         let conn = pool.connect().await.unwrap();
         let conn = conn.as_async().unwrap();
-        conn.execute("CREATE TABLE t (id INTEGER, name TEXT)", &[])
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO t VALUES (1, 'a')", &[])
+        conn.execute("INSERT INTO t VALUES (1, NULL), (2, 'a')", &[])
             .await
             .unwrap();
 
         // the schema is inferred from the data when none is provided
         let inferred = conn.get_schema(&TableReference::bare("t")).await.unwrap();
-        assert_eq!(inferred.field(0).data_type(), &DataType::Int64);
+        assert_eq!(
+            inferred.fields.len(),
+            2,
+            "There should be 2 fields in the inferred table"
+        );
+        let field1 = inferred.field(0);
+        assert_eq!(field1.name(), "id");
+        assert_eq!(field1.data_type(), &DataType::Int64);
+        assert_eq!(field1.is_nullable(), true);
+        let field2 = inferred.field(1);
+        assert_eq!(field2.name(), "name");
+        assert_eq!(field2.data_type(), &DataType::Null);
+        assert_eq!(field2.is_nullable(), true);
 
         // the provided schema is used as-is
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::LargeUtf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]));
         let factory = SqliteConnectionPoolFactory::new(
             "./test.sqlite",
@@ -473,12 +485,14 @@ mod tests {
             Duration::from_millis(5000),
         )
         .with_schema(Arc::clone(&schema));
+
+        let table_reference = TableReference::bare("t");
         let pool = factory.build().await.unwrap();
         let conn = pool.connect().await.unwrap();
         let actual = conn
             .as_async()
             .unwrap()
-            .get_schema(&TableReference::bare("t"))
+            .get_schema(&table_reference)
             .await
             .unwrap();
         assert_eq!(actual, schema);
@@ -487,7 +501,7 @@ mod tests {
             .connect_sync()
             .as_async()
             .unwrap()
-            .get_schema(&TableReference::bare("t"))
+            .get_schema(&table_reference)
             .await
             .unwrap();
         assert_eq!(actual, schema);
