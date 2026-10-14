@@ -202,7 +202,10 @@ async fn test_postgres_connection_pool_with_schema(port: u16) {
         .await
         .expect("table should be created");
     conn.conn
-        .execute("INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')", &[])
+        .execute(
+            "INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')",
+            &[],
+        )
         .await
         .expect("row should be inserted");
 

@@ -48,9 +48,12 @@ async fn test_odbc_connection_pool_with_schema() {
     )
     .await
     .expect("table should be created");
-    conn.execute("INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')", &[])
-        .await
-        .expect("row should be inserted");
+    conn.execute(
+        "INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')",
+        &[],
+    )
+    .await
+    .expect("row should be inserted");
 
     // the schema is inferred from the database when none is provided
     let inferred = conn

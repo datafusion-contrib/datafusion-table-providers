@@ -1023,9 +1023,12 @@ async fn test_mysql_connection_pool_with_schema(port: u16) {
     )
     .await
     .expect("MySQL table should be created");
-    conn.execute("INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')", &[])
-        .await
-        .expect("MySQL table data should be inserted");
+    conn.execute(
+        "INSERT INTO with_schema_table VALUES (1, NULL), (2, 'a')",
+        &[],
+    )
+    .await
+    .expect("MySQL table data should be inserted");
 
     // the schema is inferred from the database when none is provided
     let inferred = conn
