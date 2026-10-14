@@ -43,6 +43,8 @@ pub mod sql {
         pub use datafusion_table_providers_clickhouse::pool as clickhousepool;
         #[cfg(feature = "duckdb")]
         pub use datafusion_table_providers_duckdb::pool as duckdbpool;
+        #[cfg(feature = "quack")]
+        pub use datafusion_table_providers_duckdb::quack::pool as quackpool;
         #[cfg(feature = "mysql")]
         pub use datafusion_table_providers_mysql::pool as mysqlpool;
         #[cfg(feature = "odbc")]
@@ -63,6 +65,8 @@ pub mod sql {
             pub use datafusion_table_providers_clickhouse::conn as clickhouseconn;
             #[cfg(feature = "duckdb")]
             pub use datafusion_table_providers_duckdb::conn as duckdbconn;
+            #[cfg(feature = "quack")]
+            pub use datafusion_table_providers_duckdb::quack::conn as quackconn;
             #[cfg(feature = "mysql")]
             pub use datafusion_table_providers_mysql::conn as mysqlconn;
             #[cfg(feature = "odbc")]
@@ -83,6 +87,8 @@ pub use datafusion_table_providers_adbc as adbc;
 pub use datafusion_table_providers_clickhouse as clickhouse;
 #[cfg(feature = "duckdb")]
 pub use datafusion_table_providers_duckdb as duckdb;
+#[cfg(feature = "quack")]
+pub use datafusion_table_providers_duckdb::quack;
 #[cfg(feature = "flight")]
 pub use datafusion_table_providers_flightsql as flight;
 #[cfg(feature = "mongodb")]

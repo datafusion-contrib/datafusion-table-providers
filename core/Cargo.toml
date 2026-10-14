@@ -81,7 +81,11 @@ default = []
 
 adbc = ["dep:datafusion-table-providers-adbc"]
 clickhouse = ["dep:datafusion-table-providers-clickhouse"]
-duckdb = ["dep:datafusion-table-providers-duckdb"]
+duckdb = [
+  "dep:datafusion-table-providers-duckdb",
+  "datafusion-table-providers-duckdb/embedded",
+  "datafusion-table-providers-duckdb/federation",
+]
 flight = ["dep:datafusion-table-providers-flightsql"]
 mongodb = ["dep:datafusion-table-providers-mongodb"]
 mysql = ["dep:datafusion-table-providers-mysql"]
@@ -89,6 +93,11 @@ odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
 sqlite = ["dep:datafusion-table-providers-sqlite"]
 oracle = ["dep:datafusion-table-providers-oracle"]
+quack = [
+  "dep:datafusion-table-providers-duckdb",
+  "datafusion-table-providers-duckdb/quack",
+  "datafusion-table-providers-duckdb/federation",
+]
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
