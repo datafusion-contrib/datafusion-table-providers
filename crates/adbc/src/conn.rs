@@ -18,12 +18,11 @@ use std::any::Any;
 use std::cell::RefCell;
 
 use adbc_core::options::ObjectDepth;
-use arrow::array::{AsArray, RecordBatch, RecordBatchIterator};
+use arrow::array::{AsArray, RecordBatch, RecordBatchIterator, RecordBatchReader};
 use arrow_schema::SchemaRef;
 use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion_table_providers_common::arrow_bridge;
 use r2d2_adbc::AdbcConnectionManager;
 use snafu::{prelude::*, ResultExt};
 use std::marker::Send;
@@ -133,12 +132,7 @@ where
             // 3: list<CONSTRAINT_SCHEMA>
             //
             // so we need to drill down to the table names
-            // adbc_core uses arrow 58, DataFusion uses a newer version
-            let b = batch
-                .map_err(arrow_bridge::error_from_58)
-                .and_then(|batch| arrow_bridge::record_batch_from_58(&batch))
-                .boxed()
-                .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetTablesSnafu)?;
+            let b = batch.boxed().context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetTablesSnafu)?;
             b.column(1).as_list::<i32>().iter().for_each(|value| {
                 if let Some(db_schema_schema) = value {
                     db_schema_schema
@@ -193,12 +187,7 @@ where
             // 1: list<TABLE_INFO>
             //
             // so we need to drill down to the schema names
-            // adbc_core uses arrow 58, DataFusion uses a newer version
-            let b = batch
-                .map_err(arrow_bridge::error_from_58)
-                .and_then(|batch| arrow_bridge::record_batch_from_58(&batch))
-                .boxed()
-                .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
+            let b = batch.boxed().context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
             b.column(1).as_list::<i32>().iter().for_each(|value| {
                 if let Some(db_schema_schema) = value {
                     db_schema_schema
@@ -233,9 +222,7 @@ where
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        arrow_bridge::schema_ref_from_58(&Arc::new(schema))
-            .boxed()
-            .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)
+        Ok(Arc::new(schema))
     }
 
     fn query_arrow(
@@ -258,7 +245,7 @@ where
                 stmt.set_sql_query(sql)?;
 
                 match stmt.execute_schema() {
-                    Ok(s) => schema = Arc::new(arrow_bridge::schema_from_58(&s)?),
+                    Ok(s) => schema = s.into(),
                     // not all drivers implement execute_schema, so fall back to executing
                     // with LIMIT 0 to get the schema.
                     Err(_) => {
@@ -269,7 +256,7 @@ where
                             .execute()
                             .boxed()
                             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
-                        schema = arrow_bridge::schema_ref_from_58(&result.schema())?;
+                        schema = result.schema();
                     }
                 }
             }
@@ -290,7 +277,7 @@ where
 
                 match params_owned.len() {
                     0 => {}
-                    1 => stmt.bind(arrow_bridge::record_batch_to_58(&params_owned[0])?)?,
+                    1 => stmt.bind(params_owned[0].clone())?,
                     _ => {
                         let param_schema = params_owned[0].schema();
                         let reader = RecordBatchIterator::new(
@@ -298,7 +285,7 @@ where
                             param_schema,
                         );
 
-                        stmt.bind_stream(Box::new(arrow_bridge::reader_to_58(Box::new(reader))?))?;
+                        stmt.bind_stream(Box::new(reader))?;
                     }
                 }
 
@@ -307,10 +294,7 @@ where
                     .boxed()
                     .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
                 for batch in results {
-                    let b = batch
-                        .map_err(arrow_bridge::error_from_58)
-                        .and_then(|batch| arrow_bridge::record_batch_from_58(&batch))
-                        .boxed().context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
+                    let b = batch.boxed().context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
                     blocking_channel_send(&batch_tx, b)?;
                 }
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
@@ -354,13 +338,13 @@ where
         let params_owned = params.to_vec();
         match params.len() {
             0 => {}
-            1 => stmt.bind(arrow_bridge::record_batch_to_58(&params_owned[0])?)?,
+            1 => stmt.bind(params_owned[0].clone())?,
             _ => {
                 let param_schema = params_owned[0].schema();
                 let reader =
                     RecordBatchIterator::new(params_owned.into_iter().map(Ok), param_schema);
 
-                stmt.bind_stream(Box::new(arrow_bridge::reader_to_58(Box::new(reader))?))?;
+                stmt.bind_stream(Box::new(reader))?;
             }
         }
 

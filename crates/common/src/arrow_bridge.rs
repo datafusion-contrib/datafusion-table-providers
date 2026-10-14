@@ -1,11 +1,10 @@
 //! Bridge between arrow 58 and the arrow version used by DataFusion.
 //!
-//! Some database drivers (duckdb, arrow-odbc, adbc_core) are still built against
-//! arrow 58, while DataFusion uses a newer arrow release. Their types are
-//! distinct to the Rust compiler, so values are moved across the boundary
-//! using the [Arrow C Data Interface], which is ABI stable between arrow
-//! versions. Conversions are zero-copy: only ownership of the underlying
-//! buffers is handed over.
+//! The duckdb driver is still built against arrow 58, while DataFusion uses a
+//! newer arrow release. Their types are distinct to the Rust compiler, so
+//! values are moved across the boundary using the [Arrow C Data Interface],
+//! which is ABI stable between arrow versions. Conversions are zero-copy: only
+//! ownership of the underlying buffers is handed over.
 //!
 //! [Arrow C Data Interface]: https://arrow.apache.org/docs/format/CDataInterface.html
 
