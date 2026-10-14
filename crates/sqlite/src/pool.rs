@@ -468,11 +468,11 @@ mod tests {
         let field1 = inferred.field(0);
         assert_eq!(field1.name(), "id");
         assert_eq!(field1.data_type(), &DataType::Int64);
-        assert_eq!(field1.is_nullable(), true);
+        assert!(field1.is_nullable());
         let field2 = inferred.field(1);
         assert_eq!(field2.name(), "name");
         assert_eq!(field2.data_type(), &DataType::Null);
-        assert_eq!(field2.is_nullable(), true);
+        assert!(field2.is_nullable());
 
         // the provided schema is used as-is
         let schema = Arc::new(Schema::new(vec![
