@@ -5,14 +5,14 @@ use std::collections::HashMap;
 use tracing::instrument;
 
 use crate::{
-    container_registry,
+    docker::container_registry,
     docker::{ContainerRunnerBuilder, RunningContainer},
 };
 
 const MYSQL_ROOT_PASSWORD: &str = "integration-test-pw";
 const MYSQL_DOCKER_CONTAINER: &str = "runtime-integration-test-mysql";
 
-pub(super) fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
+pub(super) fn get_mysql_params(port: u16) -> HashMap<String, SecretString> {
     let mut params = HashMap::new();
     params.insert(
         "mysql_host".to_string(),
@@ -50,7 +50,7 @@ pub(super) fn get_mysql_params(port: usize) -> HashMap<String, SecretString> {
 }
 
 #[instrument]
-pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContainer, anyhow::Error> {
+pub async fn start_mysql_docker_container(port: u16) -> Result<RunningContainer, anyhow::Error> {
     let container_name = format!("{MYSQL_DOCKER_CONTAINER}-{port}");
 
     let port = port.try_into().unwrap_or(15432);
@@ -86,7 +86,7 @@ pub async fn start_mysql_docker_container(port: usize) -> Result<RunningContaine
 
 #[instrument]
 pub(super) async fn get_mysql_connection_pool(
-    port: usize,
+    port: u16,
 ) -> Result<MySQLConnectionPool, anyhow::Error> {
     let mysql_pool = MySQLConnectionPool::new(get_mysql_params(port))
         .await

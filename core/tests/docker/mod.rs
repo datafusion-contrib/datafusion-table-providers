@@ -1,5 +1,3 @@
-use std::{borrow::Cow, collections::HashMap, sync::Arc};
-
 use bollard::{
     models::{
         ContainerCreateBody, ContainerState, ContainerStateStatusEnum, Health, HealthConfig,
@@ -7,16 +5,27 @@ use bollard::{
     },
     query_parameters::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectContainerOptions,
-        ListContainersOptions, ListImagesOptions, RemoveContainerOptionsBuilder,
+        ListContainersOptionsBuilder, ListImagesOptions, RemoveContainerOptionsBuilder,
         StartContainerOptions, StopContainerOptions,
     },
     Docker,
 };
 use futures::StreamExt;
+use std::fmt::Debug;
+use std::future::Future;
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 pub struct RunningContainer {
     name: Arc<str>,
     docker: Docker,
+}
+
+impl Debug for RunningContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningContainer")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RunningContainer {
@@ -121,7 +130,7 @@ pub struct ContainerRunner<'a> {
 
 impl ContainerRunner<'_> {
     pub async fn run(self) -> Result<RunningContainer, anyhow::Error> {
-        if self.is_container_running().await? {
+        if self.does_container_exists().await? {
             remove(&self.docker, &self.name).await?;
         }
 
@@ -196,7 +205,7 @@ impl ContainerRunner<'_> {
                 ..
             }) = inspect_container.state
             {
-                tracing::debug!("Container running & healthy");
+                tracing::info!("Container {} running & healthy", self.name);
                 break;
             }
 
@@ -245,10 +254,12 @@ impl ContainerRunner<'_> {
         Ok(())
     }
 
-    async fn is_container_running(&self) -> Result<bool, anyhow::Error> {
+    async fn does_container_exists(&self) -> Result<bool, anyhow::Error> {
         let containers = self
             .docker
-            .list_containers(Option::<ListContainersOptions>::None)
+            .list_containers(Some(
+                ListContainersOptionsBuilder::default().all(true).build(),
+            ))
             .await?;
         for container in containers {
             let Some(names) = container.names else {
@@ -258,11 +269,79 @@ impl ContainerRunner<'_> {
                 tracing::debug!("Docker container: {n}");
                 n == &self.name || n == &format!("/{}", self.name)
             }) {
-                tracing::debug!("Docker container {} already running", self.name);
+                tracing::debug!("Docker container {} already exists", self.name);
                 return Ok(true);
             }
         }
 
         Ok(false)
     }
+}
+
+pub struct ContainerManager {
+    pub port: u16,
+    pub claimed: bool,
+    pub running_container: Option<RunningContainer>,
+}
+
+impl ContainerManager {
+    pub async fn start_container<F, Fut>(&mut self, container_factory: F)
+    where
+        F: Fn(u16) -> Fut,
+        Fut: Future<Output = Result<RunningContainer, anyhow::Error>> + Send + 'static,
+    {
+        if !self.claimed {
+            self.claimed = true;
+            let running_container = container_factory(self.port)
+                .await
+                .expect("Docker container to start");
+
+            tracing::info!("Container {:?} started", &running_container);
+            self.running_container = Some(running_container);
+        }
+    }
+}
+
+impl Drop for ContainerManager {
+    fn drop(&mut self) {
+        tracing::info!("ContainerManager dropped");
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(drop_container(self.running_container.take(), self.port));
+    }
+}
+
+impl Default for ContainerManager {
+    fn default() -> Self {
+        ContainerManager {
+            port: crate::get_random_port(),
+            claimed: false,
+            running_container: None,
+        }
+    }
+}
+
+async fn drop_container(running_container: Option<RunningContainer>, port: u16) {
+    if let Some(running_container) = running_container {
+        match std::env::var("DF_TABLE_PROVIDERS_DEBUG").ok() {
+            Some(_) => {
+                // Just stop the container, so the developer could re-start if needed
+                tracing::info!("Stopping Docker container on port {port}");
+                if let Err(e) = running_container.stop().await {
+                    tracing::error!("Error stopping Docker container: {e}");
+                }
+            }
+            None => {
+                tracing::info!("Removing Docker container on port {port}");
+                if let Err(e) = running_container.remove().await {
+                    tracing::error!("Error removing Docker container: {e}");
+                }
+            }
+        }
+    }
+}
+
+pub fn container_registry() -> String {
+    std::env::var("CONTAINER_REGISTRY")
+        .unwrap_or_else(|_| "public.ecr.aws/docker/library/".to_string())
 }

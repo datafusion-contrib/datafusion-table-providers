@@ -4,8 +4,8 @@ use datafusion_table_providers::sql::{
     db_connection_pool::DbConnectionPool, sql_provider_datafusion::SqlTable,
 };
 use mysql_async::prelude::ToValue;
-use rstest::{fixture, rstest};
-use std::sync::Arc;
+use rstest::rstest;
+use std::sync::{Arc, Mutex};
 
 use arrow::{
     array::*,
@@ -15,7 +15,6 @@ use arrow::{
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 use crate::arrow_record_batch_gen::*;
-use crate::docker::RunningContainer;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
 use datafusion::common::{Constraints, ToDFSchema};
@@ -23,14 +22,15 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 
+use crate::docker::ContainerManager;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 use datafusion_table_providers::mysql::MySQLTableProviderFactory;
+use linktime::{ctor, dtor};
 use secrecy::ExposeSecret;
-use tokio::sync::Mutex;
 
 mod common;
 
-async fn test_mysql_timestamp_types(port: usize) {
+async fn test_mysql_timestamp_types(port: u16) {
     let create_table_stmt = "
         CREATE TABLE timestamp_table (
     timestamp_no_fraction TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP, 
@@ -126,7 +126,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_datetime_types(port: usize) {
+async fn test_mysql_datetime_types(port: u16) {
     let create_table_stmt = "
 CREATE TABLE datetime_table (
     dt0 DATETIME(0),  
@@ -214,7 +214,7 @@ VALUES (
     .await;
 }
 
-async fn test_mysql_time_types(port: usize) {
+async fn test_mysql_time_types(port: u16) {
     let create_table_stmt = "
 CREATE TABLE time_table (
     t0 TIME(0),  
@@ -286,7 +286,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_enum_types(port: usize) {
+async fn test_mysql_enum_types(port: u16) {
     let create_table_stmt = "
 CREATE TABLE enum_table (
     status ENUM('active', 'inactive', 'pending', 'suspended')
@@ -332,7 +332,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_blob_types(port: usize) {
+async fn test_mysql_blob_types(port: u16) {
     let create_table_stmt = "
 CREATE TABLE blobs_table (
     tinyblob_col    TINYBLOB,
@@ -394,7 +394,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_string_types(port: usize) {
+async fn test_mysql_string_types(port: u16) {
     let create_table_stmt = "
 CREATE TABLE string_table (
     name VARCHAR(255),
@@ -446,7 +446,7 @@ VALUES
     .await;
 }
 
-async fn test_mysql_decimal_types_to_decimal256(port: usize) {
+async fn test_mysql_decimal_types_to_decimal256(port: u16) {
     let create_table_stmt = "
 CREATE TABLE high_precision_decimal (
     decimal_values DECIMAL(50, 10)
@@ -501,7 +501,7 @@ INSERT INTO high_precision_decimal (decimal_values) VALUES
     .await;
 }
 
-async fn test_mysql_zero_date_type(port: usize) {
+async fn test_mysql_zero_date_type(port: u16) {
     let create_table_stmt = "
         CREATE TABLE zero_datetime_test_table (
             col_date DATE,
@@ -576,7 +576,7 @@ async fn test_mysql_zero_date_type(port: usize) {
     .await;
 }
 
-async fn test_mysql_decimal_types_to_decimal128(port: usize) {
+async fn test_mysql_decimal_types_to_decimal128(port: u16) {
     let create_table_stmt = "
         CREATE TABLE IF NOT EXISTS decimal_table (decimal_col DECIMAL(10, 2));
         ";
@@ -611,7 +611,7 @@ async fn test_mysql_decimal_types_to_decimal128(port: usize) {
 }
 
 async fn arrow_mysql_one_way(
-    port: usize,
+    port: u16,
     table_name: &str,
     create_table_stmt: &str,
     insert_table_stmt: &str,
@@ -683,7 +683,7 @@ async fn arrow_mysql_one_way(
 
 #[allow(unused_variables)]
 async fn arrow_mysql_round_trip(
-    port: usize,
+    port: u16,
     arrow_record: RecordBatch,
     source_schema: SchemaRef,
     table_name: &str,
@@ -755,29 +755,22 @@ async fn arrow_mysql_round_trip(
     assert_eq!(arrow_record, casted_result);
 }
 
-#[derive(Debug)]
-struct ContainerManager {
-    port: usize,
-    claimed: bool,
+static CONTAINER_MANAGER_INSTANCE: Mutex<Option<ContainerManager>> = Mutex::new(None);
+
+#[ctor(unsafe)]
+fn global_setup() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+    *guard = Some(ContainerManager::default());
 }
 
-#[fixture]
-#[once]
-fn container_manager() -> Mutex<ContainerManager> {
-    Mutex::new(ContainerManager {
-        port: crate::get_random_port(),
-        claimed: false,
-    })
-}
-
-async fn start_mysql_container(port: usize) -> RunningContainer {
-    let running_container = common::start_mysql_docker_container(port)
-        .await
-        .expect("MySQL container to start");
-
-    tracing::debug!("Container started");
-
-    running_container
+#[dtor(unsafe)]
+fn global_teardown() {
+    let mut guard = CONTAINER_MANAGER_INSTANCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(container_manager) = guard.take() {
+        drop(container_manager);
+    }
 }
 
 #[rstest]
@@ -801,23 +794,19 @@ async fn start_mysql_container(port: usize) -> RunningContainer {
 #[case::bytea_array(get_arrow_bytea_array_record_batch(), "bytea_array")]
 #[test_log::test(tokio::test)]
 async fn test_arrow_mysql_roundtrip(
-    container_manager: &Mutex<ContainerManager>,
     #[case] arrow_result: (RecordBatch, SchemaRef),
     #[case] table_name: &str,
 ) {
-    let mut container_manager = container_manager.lock().await;
-    if !container_manager.claimed {
-        container_manager.claimed = true;
-        start_mysql_container(container_manager.port).await;
-    }
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_mysql_docker_container)
+            .await;
+        container_manager.port
+    };
 
-    arrow_mysql_round_trip(
-        container_manager.port,
-        arrow_result.0,
-        arrow_result.1,
-        table_name,
-    )
-    .await;
+    arrow_mysql_round_trip(port, arrow_result.0, arrow_result.1, table_name).await;
 }
 
 /// When SqlTable is created with new_with_schema, the projected schema may
@@ -825,7 +814,7 @@ async fn test_arrow_mysql_roundtrip(
 /// rows_to_arrow must reorder and filter the result columns to match the
 /// projected schema. This covers both the reordering fix (c26c407) and the
 /// column count mismatch fix (43ec55a) that caused BatchCoalescer to panic.
-async fn test_mysql_projected_schema_column_reorder(port: usize) {
+async fn test_mysql_projected_schema_column_reorder(port: u16) {
     let create_table_stmt = "
 CREATE TABLE reorder_table (
     a INT,
@@ -898,7 +887,7 @@ INSERT INTO reorder_table (a, b, c, d) VALUES (1, 'hello', 3.14, true);
     assert_eq!(batch.schema().field(2).name(), "a");
 }
 
-async fn test_mysql_sort_limit(port: usize) {
+async fn test_mysql_sort_limit(port: u16) {
     let ctx = SessionContext::new();
     let pool = common::get_mysql_connection_pool(port)
         .await
@@ -991,8 +980,14 @@ async fn test_mysql_sort_limit(port: usize) {
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {
-    let port = crate::get_random_port();
-    let mysql_container = start_mysql_container(port).await;
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_mysql_docker_container)
+            .await;
+        container_manager.port
+    };
 
     test_mysql_timestamp_types(port).await;
     test_mysql_datetime_types(port).await;
@@ -1005,6 +1000,4 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_zero_date_type(port).await;
     test_mysql_projected_schema_column_reorder(port).await;
     test_mysql_sort_limit(port).await;
-
-    mysql_container.remove().await.expect("container to stop");
 }
