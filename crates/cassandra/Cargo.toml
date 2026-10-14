@@ -1,0 +1,27 @@
+[package]
+name = "datafusion-table-providers-cassandra"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion Apache Cassandra table provider"
+
+[dependencies]
+arrow = { workspace = true }
+async-trait = "0.1"
+bigdecimal = "0.4"
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-table-providers-common = { workspace = true }
+futures = "0.3"
+num-bigint = "0.4"
+scylla = { version = "1.9", features = ["bigdecimal-04", "num-bigint-04"] }
+secrecy = "0.10"
+snafu = "0.9"
+
+[dev-dependencies]
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

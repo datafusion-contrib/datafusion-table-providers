@@ -25,6 +25,7 @@ Prefer a single-provider leaf crate when you only need one backend — for examp
 - Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature.
 - The existing `datafusion-table-providers` facade keeps the same module paths and provider feature names (`duckdb`, `postgres`, `sqlite`, etc.). Enabling a provider feature pulls in that leaf crate with its defaults (including federation). There is no separate `federation` / `*-federation` feature on the facade.
 - ClickHouse pool connections are exposed as `ClickHouseConnection` (wrapping the ClickHouse `Client`) under `sql::db_connection_pool::dbconnection::clickhouseconn`.
+- Cassandra pool connections are exposed as `CassandraConnection` (wrapping a shared `scylla` driver `Session`) under `sql::db_connection_pool::dbconnection::cassandraconn`. The Cassandra crate has no `federation` feature: CQL cannot run the queries federation pushes down, so only projections and `LIMIT` are pushed down to Cassandra.
 
 Existing examples continue to use the facade crate and its feature flags.
 
@@ -40,6 +41,7 @@ Existing examples continue to use the facade crate and its feature flags.
 - ADBC (`datafusion-table-providers-adbc`)
 - ODBC (`datafusion-table-providers-odbc`)
 - Oracle (`datafusion-table-providers-oracle`)
+- Apache Cassandra (`datafusion-table-providers-cassandra`)
 
 ## Development
 
