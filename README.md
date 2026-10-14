@@ -6,7 +6,7 @@ The goal of this repo is to extend the capabilities of DataFusion to support add
 
 Many of the table providers in this repo are for querying data from other database systems. Those providers also integrate with the [`datafusion-federation`](https://github.com/datafusion-contrib/datafusion-federation/) crate to allow for more efficient query execution, such as pushing down joins between multiple tables from the same database system, or efficiently implementing TopK style queries (`SELECT * FROM table ORDER BY foo LIMIT 10`).
 
-To use these table providers with efficient federation push-down, add the `datafusion-federation` crate and create a DataFusion `SessionContext` using the Federation optimizer rule and query planner with:
+To use these table providers with efficient federation push-down, make sure the `federation` feature is enabled and create a DataFusion `SessionContext` using the Federation optimizer rule and query planner with:
 
 ```rust
 use datafusion::prelude::SessionContext;
@@ -46,7 +46,7 @@ Existing examples continue to use the facade crate and its feature flags.
 During development, and especially before opening a PR, it is recommended to run:
 
 ```bash
-cargo check --all-features --all
+cargo check --all-features --workspace
 ```
 
 This verifies that all features and all crates compile without building
