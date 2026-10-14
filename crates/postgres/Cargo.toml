@@ -37,7 +37,6 @@ tokio = { version = "1.52", features = ["macros", "fs"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1", "with-geo-types-0_7"] }
 tracing = "0.1"
 uuid = { version = "1.18" }
-url = "2.5"
 
 [features]
 default = ["federation"]

@@ -1,10 +1,8 @@
 use std::ops::ControlFlow;
 
-use datafusion::sql::{
-    sqlparser::ast::{
-        FunctionArg, Ident, ObjectName, TableAlias, TableFactor, TableFunctionArgs, VisitorMut,
-    },
-    TableReference,
+use datafusion::common::TableReference;
+use datafusion::sql::sqlparser::ast::{
+    FunctionArg, Ident, ObjectName, TableAlias, TableFactor, TableFunctionArgs, VisitorMut,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

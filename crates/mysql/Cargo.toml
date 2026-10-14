@@ -23,9 +23,7 @@ sea-query = { version = "1.0.0", features = ["backend-mysql", "with-rust_decimal
 secrecy = "0.10"
 snafu = "0.9"
 time = "0.3"
-tokio = { version = "1.52", features = ["macros", "fs"] }
 tracing = "0.1"
-url = "2.5"
 
 [features]
 default = ["federation"]

@@ -1,7 +1,4 @@
-use std::{
-    ffi::CString,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use datafusion::{catalog::TableProvider, execution::TaskContextProvider, prelude::SessionContext};
 use datafusion_ffi::table_provider::FFI_TableProvider;
@@ -34,8 +31,6 @@ impl RawTableProvider {
         py: Python<'py>,
         _session: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        let name = CString::new("datafusion_table_provider").unwrap();
-
         let runtime = if cfg!(feature = "clickhouse") {
             Some(get_tokio_runtime().handle().clone())
         } else {
@@ -51,7 +46,7 @@ impl RawTableProvider {
             None,
         );
 
-        PyCapsule::new(py, provider, Some(name.clone()))
+        PyCapsule::new_with_value(py, provider, c"datafusion_table_provider")
     }
 }
 

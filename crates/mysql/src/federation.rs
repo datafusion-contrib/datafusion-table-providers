@@ -20,11 +20,11 @@ use std::sync::Arc;
 use super::mysql_window::MySQLWindowVisitor;
 use super::sql_table::MySQLTable;
 use datafusion::{
+    common::TableReference,
     datasource::TableProvider,
     error::{DataFusionError, Result as DataFusionResult},
     execution::SendableRecordBatchStream,
     physical_plan::stream::RecordBatchStreamAdapter,
-    sql::TableReference,
 };
 
 impl MySQLTable {

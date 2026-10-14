@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     common::DatabaseCatalogProvider, duckdb::DuckDBTableFactory,
     sql::db_connection_pool::duckdbpool::DuckDbConnectionPool,

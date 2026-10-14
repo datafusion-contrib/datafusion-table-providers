@@ -3,8 +3,8 @@ use datafusion::arrow::datatypes::{
     DataType, Field, IntervalMonthDayNano, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::TableReference;
 use datafusion::execution::context::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::oracle::OracleTableFactory;
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::oracleconn::OraclePooledConnection;
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::DbConnection;

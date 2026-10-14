@@ -1,3 +1,7 @@
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ChildrenPropertiesMode;
+use datafusion::physical_plan::ReplaceChildrenOptions;
 use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
@@ -95,11 +99,29 @@ impl ExecutionPlan for DeletionExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> datafusion::error::Result<TreeNodeRecursion>,
+    ) -> datafusion::error::Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -172,11 +194,29 @@ impl ExecutionPlan for UpdateExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> datafusion::error::Result<TreeNodeRecursion>,
+    ) -> datafusion::error::Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
