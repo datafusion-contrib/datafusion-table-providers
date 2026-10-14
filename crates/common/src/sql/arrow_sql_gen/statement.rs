@@ -9,7 +9,7 @@ use datafusion::arrow::{
     datatypes::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit},
     util::display::array_value_to_string,
 };
-use datafusion::sql::TableReference;
+use datafusion::common::TableReference;
 use num_bigint::BigInt;
 use sea_query::{
     Alias, ColumnDef, ColumnType, Expr, GenericBuilder, Index, InsertStatement, IntoIden,

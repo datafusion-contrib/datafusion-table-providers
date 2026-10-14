@@ -8,7 +8,7 @@ use clickhouse::{Client, Row};
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::EmptyRecordBatchStream;
-use datafusion::{execution::SendableRecordBatchStream, sql::TableReference};
+use datafusion::{common::TableReference, execution::SendableRecordBatchStream};
 use regex::Regex;
 use serde::Deserialize;
 use snafu::ResultExt;

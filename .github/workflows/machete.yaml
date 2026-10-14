@@ -1,0 +1,27 @@
+---
+name: Unused dependencies
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - spiceai
+    paths:
+      - .github/workflows/machete.yml
+      - ./**/Cargo.toml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-unused-dependencies:
+    name: Unused dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Machete
+        uses: bnjbvr/cargo-machete@main

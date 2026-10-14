@@ -44,7 +44,7 @@ async fn arrow_postgres_round_trip(
     let cmd = CreateExternalTable {
         schema: Arc::new(arrow_record.schema().to_dfschema().expect("to df schema")),
         name: table_name.into(),
-        location: "".to_string(),
+        locations: vec![],
         file_type: "".to_string(),
         table_partition_cols: vec![],
         if_not_exists: false,

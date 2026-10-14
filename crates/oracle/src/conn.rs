@@ -2,8 +2,8 @@ use async_stream::stream;
 use async_trait::async_trait;
 use bb8_oracle::OracleConnectionManager;
 use datafusion::{
-    arrow::datatypes::SchemaRef, execution::SendableRecordBatchStream,
-    physical_plan::stream::RecordBatchStreamAdapter, sql::TableReference,
+    arrow::datatypes::SchemaRef, common::TableReference, execution::SendableRecordBatchStream,
+    physical_plan::stream::RecordBatchStreamAdapter,
 };
 use std::{any::Any, sync::Arc};
 

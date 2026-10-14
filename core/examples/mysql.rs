@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use datafusion::common::TableReference;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 use datafusion_table_providers::{
     common::DatabaseCatalogProvider, mysql::MySQLTableFactory,
     sql::db_connection_pool::mysqlpool::MySQLConnectionPool, util::secrets::to_secret_map,
