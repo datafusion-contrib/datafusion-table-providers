@@ -93,6 +93,7 @@ pub enum Error {
 pub struct ODBCConnection<'a> {
     pub conn: Arc<Mutex<Connection<'a>>>,
     pub params: Arc<HashMap<String, SecretString>>,
+    pub schema: Option<SchemaRef>,
 }
 
 impl<'a> DbConnection<Connection<'a>, ODBCParameter> for ODBCConnection<'a>
@@ -131,6 +132,15 @@ where
         ODBCConnection {
             conn: Arc::new(conn.into()),
             params: Arc::new(HashMap::new()),
+            schema: None,
+        }
+    }
+
+    fn new_with_schema(conn: Connection<'a>, schema: SchemaRef) -> Self {
+        ODBCConnection {
+            conn: Arc::new(conn.into()),
+            params: Arc::new(HashMap::new()),
+            schema: Some(schema),
         }
     }
 
@@ -157,6 +167,10 @@ where
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, dbconnection::Error> {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         let conn = Arc::clone(&self.conn);
         let sql = format!(
             "SELECT * FROM {} LIMIT 1",

@@ -21,11 +21,12 @@ pub type OraclePooledConnection = bb8::PooledConnection<'static, OracleConnectio
 
 pub struct OracleConnection {
     pub conn: OraclePooledConnection,
+    pub schema: Option<SchemaRef>,
 }
 
 impl OracleConnection {
     pub fn new(conn: OraclePooledConnection) -> Self {
-        Self { conn }
+        Self { conn, schema: None }
     }
 }
 
@@ -48,13 +49,24 @@ impl DbConnection<OraclePooledConnection, oracle::sql_type::OracleType> for Orac
 #[async_trait]
 impl AsyncDbConnection<OraclePooledConnection, oracle::sql_type::OracleType> for OracleConnection {
     fn new(conn: OraclePooledConnection) -> Self {
-        Self { conn }
+        Self { conn, schema: None }
+    }
+
+    fn new_with_schema(conn: OraclePooledConnection, schema: SchemaRef) -> Self {
+        Self {
+            conn,
+            schema: Some(schema),
+        }
     }
 
     async fn get_schema(
         &self,
         table_reference: &TableReference,
     ) -> std::result::Result<SchemaRef, Error> {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         let table_name = table_reference.table().to_uppercase();
         let schema_name = table_reference.schema().map(|s| s.to_uppercase());
 

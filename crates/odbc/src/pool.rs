@@ -17,6 +17,7 @@ limitations under the License.
 use crate::conn::ODBCConnection;
 use crate::conn::{ODBCDbConnection, ODBCParameter};
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     runtime::run_async_with_tokio, DbConnectionPool, JoinPushDown,
 };
@@ -59,6 +60,7 @@ pub struct ODBCPool {
     params: Arc<HashMap<String, SecretString>>,
     connection_string: String,
     connection_id: String,
+    schema: Option<SchemaRef>,
 }
 
 fn hash_string(val: &str) -> String {
@@ -92,7 +94,15 @@ impl ODBCPool {
             connection_string,
             connection_id,
             pool: &ENV,
+            schema: None,
         })
+    }
+
+    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
     }
 
     #[must_use]
@@ -112,6 +122,7 @@ where
         let pool: &'static Environment = self.pool;
         let connection_string = self.connection_string.clone();
         let params = Arc::clone(&self.params);
+        let schema = self.schema.clone();
 
         let connect = async move || -> Result<
             Box<ODBCDbConnection<'a>>,
@@ -129,6 +140,7 @@ where
             Ok(Box::new(ODBCConnection {
                 conn: Arc::new(cxn.into()),
                 params,
+                schema,
             }) as Box<ODBCDbConnection<'a>>)
         };
         run_async_with_tokio(connect).await

@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use crate::arrow_sql_gen::rows_to_arrow;
 use arrow::datatypes::SchemaRef;
@@ -33,6 +33,7 @@ pub enum Error {
 
 pub struct SqliteConnection {
     pub conn: Connection,
+    pub schema: Option<SchemaRef>,
 }
 
 impl SchemaValidator for SqliteConnection {
@@ -86,7 +87,14 @@ impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection 
 #[async_trait]
 impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
     fn new(conn: Connection) -> Self {
-        SqliteConnection { conn }
+        SqliteConnection { conn, schema: None }
+    }
+
+    fn new_with_schema(conn: Connection, schema: SchemaRef) -> Self {
+        SqliteConnection {
+            conn,
+            schema: Some(schema),
+        }
     }
 
     async fn tables(
@@ -129,6 +137,10 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         let table_reference = table_reference.to_quoted_string();
         let schema: SchemaRef = self
             .conn

@@ -46,6 +46,7 @@ pub enum Error {
 
 pub struct MySQLConnection {
     pub conn: Arc<Mutex<Conn>>,
+    pub schema: Option<SchemaRef>,
 }
 
 impl MySQLConnection {
@@ -91,6 +92,14 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     fn new(conn: Conn) -> Self {
         MySQLConnection {
             conn: Arc::new(Mutex::new(conn)),
+            schema: None,
+        }
+    }
+
+    fn new_with_schema(conn: Conn, schema: SchemaRef) -> Self {
+        MySQLConnection {
+            conn: Arc::new(Mutex::new(conn)),
+            schema: Some(schema),
         }
     }
 
@@ -153,6 +162,10 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 

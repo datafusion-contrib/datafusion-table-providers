@@ -298,6 +298,7 @@ fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> 
 pub struct PostgresConnection {
     pub conn: PostgresPooledConnection,
     unsupported_type_action: UnsupportedTypeAction,
+    schema: Option<SchemaRef>,
 }
 
 impl SchemaValidator for PostgresConnection {
@@ -339,6 +340,15 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         PostgresConnection {
             conn,
             unsupported_type_action: UnsupportedTypeAction::default(),
+            schema: None,
+        }
+    }
+
+    fn new_with_schema(conn: PostgresPooledConnection, schema: SchemaRef) -> Self {
+        PostgresConnection {
+            conn,
+            unsupported_type_action: UnsupportedTypeAction::default(),
+            schema: Some(schema),
         }
     }
 
@@ -392,6 +402,10 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         let (variant, columns) = self.query_variant_and_schema(table_reference).await?;
 
         // Native inference can return zero rows even though the table exists and is

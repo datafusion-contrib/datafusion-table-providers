@@ -100,6 +100,14 @@ pub trait AsyncDbConnection<T, P>: DbConnection<T, P> + Sync {
     where
         Self: Sized;
 
+    /// Creates a new connection that uses the provided `schema` instead of inferring it.
+    ///
+    /// When a schema is provided, [`AsyncDbConnection::get_schema`] returns it as-is
+    /// instead of querying the database for it.
+    fn new_with_schema(conn: T, schema: SchemaRef) -> Self
+    where
+        Self: Sized;
+
     async fn tables(&self, schema: &str) -> Result<Vec<String>, Error>;
 
     async fn schemas(&self) -> Result<Vec<String>, Error>;

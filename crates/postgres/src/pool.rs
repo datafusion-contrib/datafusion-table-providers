@@ -1,4 +1,5 @@
-use crate::conn::PostgresConnection;
+use crate::conn::{PostgresConnection, PostgresPooledConnection};
+use arrow::datatypes::SchemaRef;
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
@@ -231,6 +232,7 @@ pub struct PostgresConnectionPool {
     join_push_down: JoinPushDown,
     unsupported_type_action: UnsupportedTypeAction,
     io_handle: Option<Handle>,
+    schema: Option<SchemaRef>,
 }
 
 impl PostgresConnectionPool {
@@ -422,6 +424,7 @@ impl PostgresConnectionPool {
             join_push_down,
             unsupported_type_action: UnsupportedTypeAction::default(),
             io_handle: None,
+            schema: None,
         })
     }
 
@@ -439,6 +442,20 @@ impl PostgresConnectionPool {
         self
     }
 
+    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    fn new_connection(&self, conn: PostgresPooledConnection) -> PostgresConnection {
+        match &self.schema {
+            Some(schema) => PostgresConnection::new_with_schema(conn, Arc::clone(schema)),
+            None => PostgresConnection::new(conn),
+        }
+    }
+
     /// Returns a direct connection to the underlying database.
     ///
     /// # Errors
@@ -454,7 +471,7 @@ impl PostgresConnectionPool {
         } else {
             pool.get_owned().await.map_err(map_pool_run_error)?
         };
-        Ok(PostgresConnection::new(conn))
+        Ok(self.new_connection(conn))
     }
 }
 
@@ -666,7 +683,7 @@ impl
             run_async_with_tokio(get_conn).await?
         };
         Ok(Box::new(
-            PostgresConnection::new(conn)
+            self.new_connection(conn)
                 .with_unsupported_type_action(self.unsupported_type_action),
         ))
     }

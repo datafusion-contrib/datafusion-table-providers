@@ -20,6 +20,7 @@ use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
 #[derive(Clone)]
 pub struct ClickHouseConnection {
     pub client: Client,
+    pub schema: Option<SchemaRef>,
 }
 
 impl std::fmt::Debug for ClickHouseConnection {
@@ -32,7 +33,10 @@ impl std::fmt::Debug for ClickHouseConnection {
 impl ClickHouseConnection {
     #[must_use]
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            schema: None,
+        }
     }
 }
 
@@ -60,7 +64,20 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
     where
         Self: Sized,
     {
-        Self { client: conn }
+        Self {
+            client: conn,
+            schema: None,
+        }
+    }
+
+    fn new_with_schema(conn: Client, schema: SchemaRef) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            client: conn,
+            schema: Some(schema),
+        }
     }
 
     async fn tables(&self, schema: &str) -> Result<Vec<String>, Error> {
@@ -103,6 +120,10 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
     ///
     /// * `table_reference` - The table reference.
     async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error> {
+        if let Some(schema) = &self.schema {
+            return Ok(Arc::clone(schema));
+        }
+
         #[derive(Row, Deserialize)]
         struct CatalogRow {
             db: String,

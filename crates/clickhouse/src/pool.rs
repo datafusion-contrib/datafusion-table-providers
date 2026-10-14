@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use clickhouse::{Client, Compression};
+use datafusion::arrow::datatypes::SchemaRef;
 use secrecy::{ExposeSecret, SecretString};
 use snafu::{ResultExt, Snafu};
 
 use crate::conn::ClickHouseConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+    dbconnection::{AsyncDbConnection, DbConnection},
+    DbConnectionPool, JoinPushDown,
 };
 type PoolResult<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
@@ -26,6 +28,7 @@ pub enum Error {
 pub struct ClickHouseConnectionPool {
     pub client: Client,
     pub join_push_down: JoinPushDown,
+    pub schema: Option<SchemaRef>,
 }
 
 impl std::fmt::Debug for ClickHouseConnectionPool {
@@ -108,18 +111,40 @@ impl ClickHouseConnectionPool {
         Ok(Self {
             client,
             join_push_down,
+            schema: None,
         })
+    }
+
+    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    #[must_use]
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
     }
 
     pub fn client(&self) -> Client {
         self.client.clone()
+    }
+
+    /// Returns a direct connection to the underlying database.
+    #[must_use]
+    pub fn connect_direct(&self) -> ClickHouseConnection {
+        match &self.schema {
+            Some(schema) => {
+                <ClickHouseConnection as AsyncDbConnection<Client, ()>>::new_with_schema(
+                    self.client(),
+                    Arc::clone(schema),
+                )
+            }
+            None => ClickHouseConnection::new(self.client()),
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl DbConnectionPool<Client, ()> for ClickHouseConnectionPool {
     async fn connect(&self) -> PoolResult<Box<dyn DbConnection<Client, ()>>> {
-        Ok(Box::new(ClickHouseConnection::new(self.client())))
+        Ok(Box::new(self.connect_direct()))
     }
 
     fn join_push_down(&self) -> JoinPushDown {
