@@ -1030,7 +1030,10 @@ async fn test_mysql_limit_pushdown(port: u16) {
         .await
         .expect("select failed");
 
-    let plan = df.create_physical_plan().await.expect("Should create physical plan");
+    let plan = df
+        .create_physical_plan()
+        .await
+        .expect("Should create physical plan");
     let plan_str = format!(
         "{}",
         DisplayableExecutionPlan::new(plan.as_ref()).indent(true)

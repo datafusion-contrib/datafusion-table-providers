@@ -611,7 +611,10 @@ mod sort_limit_pushdown {
             .sql("SELECT * FROM limit_pushdown WHERE id > 2 LIMIT 3")
             .await
             .unwrap();
-        let plan = df.create_physical_plan().await.expect("Should create physical plan");
+        let plan = df
+            .create_physical_plan()
+            .await
+            .expect("Should create physical plan");
         let plan_str = format!(
             "{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
