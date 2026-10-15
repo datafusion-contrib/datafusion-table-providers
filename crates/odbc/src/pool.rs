@@ -18,8 +18,9 @@ use crate::conn::ODBCConnection;
 use crate::conn::{ODBCDbConnection, ODBCParameter};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    runtime::run_async_with_tokio, DbConnectionPool, JoinPushDown,
+    dbconnection::TableSchemas, runtime::run_async_with_tokio, DbConnectionPool, JoinPushDown,
 };
 use odbc_api::{sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
@@ -60,7 +61,7 @@ pub struct ODBCPool {
     params: Arc<HashMap<String, SecretString>>,
     connection_string: String,
     connection_id: String,
-    schema: Option<SchemaRef>,
+    schemas: Arc<TableSchemas>,
 }
 
 fn hash_string(val: &str) -> String {
@@ -94,14 +95,21 @@ impl ODBCPool {
             connection_string,
             connection_id,
             pool: &ENV,
-            schema: None,
+            schemas: Arc::default(),
         })
     }
 
-    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
     #[must_use]
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
         self
     }
 
@@ -122,7 +130,7 @@ where
         let pool: &'static Environment = self.pool;
         let connection_string = self.connection_string.clone();
         let params = Arc::clone(&self.params);
-        let schema = self.schema.clone();
+        let schemas = Arc::clone(&self.schemas);
 
         let connect = async move || -> Result<
             Box<ODBCDbConnection<'a>>,
@@ -140,7 +148,7 @@ where
             Ok(Box::new(ODBCConnection {
                 conn: Arc::new(cxn.into()),
                 params,
-                schema,
+                schemas,
             }) as Box<ODBCDbConnection<'a>>)
         };
         run_async_with_tokio(connect).await

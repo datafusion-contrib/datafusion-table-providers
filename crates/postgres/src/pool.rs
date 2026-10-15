@@ -1,5 +1,6 @@
 use crate::conn::{PostgresConnection, PostgresPooledConnection};
 use arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use tokio::runtime::Handle;
 use tokio_postgres;
 
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::{AsyncDbConnection, DbConnection},
+    dbconnection::{AsyncDbConnection, DbConnection, TableSchemas},
     runtime::run_async_with_tokio,
     DbConnectionPool, JoinPushDown, PasswordProvider, StaticPasswordProvider,
 };
@@ -232,7 +233,7 @@ pub struct PostgresConnectionPool {
     join_push_down: JoinPushDown,
     unsupported_type_action: UnsupportedTypeAction,
     io_handle: Option<Handle>,
-    schema: Option<SchemaRef>,
+    schemas: Arc<TableSchemas>,
 }
 
 impl PostgresConnectionPool {
@@ -424,7 +425,7 @@ impl PostgresConnectionPool {
             join_push_down,
             unsupported_type_action: UnsupportedTypeAction::default(),
             io_handle: None,
-            schema: None,
+            schemas: Arc::default(),
         })
     }
 
@@ -442,18 +443,22 @@ impl PostgresConnectionPool {
         self
     }
 
-    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
     #[must_use]
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
         self
     }
 
     fn new_connection(&self, conn: PostgresPooledConnection) -> PostgresConnection {
-        match &self.schema {
-            Some(schema) => PostgresConnection::new_with_schema(conn, Arc::clone(schema)),
-            None => PostgresConnection::new(conn),
-        }
+        PostgresConnection::new_with_schemas(conn, Arc::clone(&self.schemas))
     }
 
     /// Returns a direct connection to the underlying database.

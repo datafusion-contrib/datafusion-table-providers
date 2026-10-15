@@ -2,12 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use clickhouse::{Client, Compression};
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use secrecy::{ExposeSecret, SecretString};
 use snafu::{ResultExt, Snafu};
 
 use crate::conn::ClickHouseConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::{AsyncDbConnection, DbConnection},
+    dbconnection::{AsyncDbConnection, DbConnection, TableSchemas},
     DbConnectionPool, JoinPushDown,
 };
 type PoolResult<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
@@ -28,7 +29,7 @@ pub enum Error {
 pub struct ClickHouseConnectionPool {
     pub client: Client,
     pub join_push_down: JoinPushDown,
-    pub schema: Option<SchemaRef>,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl std::fmt::Debug for ClickHouseConnectionPool {
@@ -111,14 +112,21 @@ impl ClickHouseConnectionPool {
         Ok(Self {
             client,
             join_push_down,
-            schema: None,
+            schemas: Arc::default(),
         })
     }
 
-    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
     #[must_use]
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
         self
     }
 
@@ -127,17 +135,11 @@ impl ClickHouseConnectionPool {
     }
 
     /// Returns a direct connection to the underlying database.
-    #[must_use]
     pub fn connect_direct(&self) -> PoolResult<ClickHouseConnection> {
-        let connection = match &self.schema {
-            Some(schema) => {
-                <ClickHouseConnection as AsyncDbConnection<Client, ()>>::new_with_schema(
-                    self.client(),
-                    Arc::clone(schema),
-                )
-            }
-            None => ClickHouseConnection::new(self.client()),
-        };
+        let connection = <ClickHouseConnection as AsyncDbConnection<Client, ()>>::new_with_schemas(
+            self.client(),
+            Arc::clone(&self.schemas),
+        );
         Ok(connection)
     }
 }
@@ -145,7 +147,8 @@ impl ClickHouseConnectionPool {
 #[async_trait::async_trait]
 impl DbConnectionPool<Client, ()> for ClickHouseConnectionPool {
     async fn connect(&self) -> PoolResult<Box<dyn DbConnection<Client, ()>>> {
-        self.connect_direct().map(|c| Box::new(c) as Box<dyn DbConnection<Client, ()>>)
+        self.connect_direct()
+            .map(|c| Box::new(c) as Box<dyn DbConnection<Client, ()>>)
     }
 
     fn join_push_down(&self) -> JoinPushDown {

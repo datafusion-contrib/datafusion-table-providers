@@ -151,8 +151,8 @@ async fn clickhouse_insert_and_read() {
     assert_eq!(record_batch[0].num_columns(), 9);
 }
 
-/// A pool created with `with_schema` must return the provided schema from `get_schema`
-/// instead of inferring it from the database.
+/// A pool created with `with_schema` must return the schema provided for a table from
+/// `get_schema` instead of inferring it from the database.
 #[tokio::test]
 async fn clickhouse_connection_pool_with_schema() {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -192,7 +192,8 @@ async fn clickhouse_connection_pool_with_schema() {
 
     // the schema is inferred from the database when none is provided
     let inferred = pool
-        .connect_direct().unwrap()
+        .connect_direct()
+        .unwrap()
         .get_schema(&table_reference)
         .await
         .expect("schema should be inferred");
@@ -210,36 +211,72 @@ async fn clickhouse_connection_pool_with_schema() {
     assert_eq!(field2.data_type(), &DataType::Utf8); // ClickHouseConnection::get_schema() infers it correctly
     assert_eq!(field2.is_nullable(), false);
 
-    // the provided schema is used as-is
+    // the provided schemas are used as-is, each one for its own table
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
+    // not created in the database, so its schema can only come from the pool
+    let other_table_reference = TableReference::bare("other_table");
+    let other_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Float64,
+        true,
+    )]));
     let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
         .await
         .unwrap()
-        .with_schema(Arc::clone(&schema));
+        .with_schema(table_reference.clone(), Arc::clone(&schema))
+        .with_schema(other_table_reference.clone(), Arc::clone(&other_schema));
 
-    let actual = pool
-        .connect_direct().unwrap()
+    let direct_conn = pool.connect_direct().unwrap();
+    let actual = direct_conn
         .get_schema(&table_reference)
         .await
         .expect("schema should be returned");
     assert_eq!(actual, schema);
+    let actual = direct_conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
 
     let conn = pool.connect().await.expect("connect should work");
+    let conn = conn.as_async().expect("should be async connection");
     let actual = conn
-        .as_async()
-        .expect("should be async connection")
         .get_schema(&table_reference)
         .await
         .expect("schema should be returned");
     assert_eq!(actual, schema);
+    let actual = conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
 
-    // the table factory uses the pool's schema too
-    let table_provider = ClickHouseTableFactory::new(pool)
-        .table_provider(table_reference, None)
+    // the table factory uses the pool's schemas too
+    let table_factory = ClickHouseTableFactory::new(pool);
+    let table_provider = table_factory
+        .table_provider(table_reference.clone(), None)
         .await
         .expect("table provider should be created");
     assert_eq!(table_provider.schema(), schema);
+    let table_provider = table_factory
+        .table_provider(other_table_reference.clone(), None)
+        .await
+        .expect("table provider should be created");
+    assert_eq!(table_provider.schema(), other_schema);
+
+    // the schema of a table without a provided schema is still inferred
+    let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
+        .await
+        .unwrap()
+        .with_schema(other_table_reference, other_schema);
+    let actual = pool
+        .connect_direct()
+        .unwrap()
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(actual, inferred);
 }

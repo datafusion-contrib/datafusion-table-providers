@@ -31,7 +31,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::{self, AsyncDbConnection, DbConnection, GenericError},
+    dbconnection::{self, AsyncDbConnection, DbConnection, GenericError, TableSchemas},
     runtime::run_async_with_tokio,
     DbConnectionPool,
 };
@@ -93,7 +93,7 @@ pub enum Error {
 pub struct ODBCConnection<'a> {
     pub conn: Arc<Mutex<Connection<'a>>>,
     pub params: Arc<HashMap<String, SecretString>>,
-    pub schema: Option<SchemaRef>,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl<'a> DbConnection<Connection<'a>, ODBCParameter> for ODBCConnection<'a>
@@ -132,15 +132,15 @@ where
         ODBCConnection {
             conn: Arc::new(conn.into()),
             params: Arc::new(HashMap::new()),
-            schema: None,
+            schemas: Arc::default(),
         }
     }
 
-    fn new_with_schema(conn: Connection<'a>, schema: SchemaRef) -> Self {
+    fn new_with_schemas(conn: Connection<'a>, schemas: Arc<TableSchemas>) -> Self {
         ODBCConnection {
             conn: Arc::new(conn.into()),
             params: Arc::new(HashMap::new()),
-            schema: Some(schema),
+            schemas,
         }
     }
 
@@ -167,7 +167,7 @@ where
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, dbconnection::Error> {
-        if let Some(schema) = &self.schema {
+        if let Some(schema) = self.schemas.get(table_reference) {
             return Ok(Arc::clone(schema));
         }
 

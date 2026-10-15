@@ -16,6 +16,7 @@ use tokio_rusqlite::Connection;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::DbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result;
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::TableSchemas;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -33,7 +34,7 @@ pub enum Error {
 
 pub struct SqliteConnection {
     pub conn: Connection,
-    pub schema: Option<SchemaRef>,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl SchemaValidator for SqliteConnection {
@@ -87,14 +88,14 @@ impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection 
 #[async_trait]
 impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
     fn new(conn: Connection) -> Self {
-        SqliteConnection { conn, schema: None }
-    }
-
-    fn new_with_schema(conn: Connection, schema: SchemaRef) -> Self {
         SqliteConnection {
             conn,
-            schema: Some(schema),
+            schemas: Arc::default(),
         }
+    }
+
+    fn new_with_schemas(conn: Connection, schemas: Arc<TableSchemas>) -> Self {
+        SqliteConnection { conn, schemas }
     }
 
     async fn tables(
@@ -137,7 +138,7 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
-        if let Some(schema) = &self.schema {
+        if let Some(schema) = self.schemas.get(table_reference) {
             return Ok(Arc::clone(schema));
         }
 

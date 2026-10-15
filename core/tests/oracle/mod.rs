@@ -973,8 +973,8 @@ async fn test_oracle_large_query_streaming() {
     );
 }
 
-/// A pool created with `with_schema` must return the provided schema from `get_schema`
-/// instead of inferring it from the database.
+/// A pool created with `with_schema` must return the schema provided for a table from
+/// `get_schema` instead of inferring it from the database.
 #[tokio::test]
 async fn test_oracle_connection_pool_with_schema() {
     use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
@@ -1019,16 +1019,23 @@ async fn test_oracle_connection_pool_with_schema() {
     assert_eq!(field2.data_type(), &DataType::Utf8); // OracleConnection::get_schema() infers it correctly
     assert_eq!(field2.is_nullable(), true);
 
+    // the provided schemas are used as-is, each one for its own table
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int8, false),
         Field::new("name", DataType::LargeUtf8, true),
     ]));
-
-    // the provided schema is used as-is
+    // not created in the database, so its schema can only come from the pool
+    let other_table_reference = TableReference::bare("OTHER_TABLE");
+    let other_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Float64,
+        true,
+    )]));
     let pool = OracleConnectionPool::new(common::get_oracle_params(container_port()))
         .await
         .expect("Failed to create Oracle connection pool")
-        .with_schema(Arc::clone(&schema));
+        .with_schema(table_reference.clone(), Arc::clone(&schema))
+        .with_schema(other_table_reference.clone(), Arc::clone(&other_schema));
 
     let direct_conn = pool
         .connect_direct()
@@ -1039,14 +1046,38 @@ async fn test_oracle_connection_pool_with_schema() {
         .await
         .expect("schema should be returned");
     assert_eq!(actual, schema);
+    let actual = direct_conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
 
     let conn: Box<dyn DbConnection<OraclePooledConnection, oracle::sql_type::OracleType>> =
         pool.connect().await.expect("Failed to get connection");
+    let conn = conn.as_async().expect("should be async connection");
     let actual = conn
-        .as_async()
-        .expect("should be async connection")
         .get_schema(&table_reference)
         .await
         .expect("schema should be returned");
     assert_eq!(actual, schema);
+    let actual = conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
+
+    // the schema of a table without a provided schema is still inferred
+    let pool = OracleConnectionPool::new(common::get_oracle_params(container_port()))
+        .await
+        .expect("Failed to create Oracle connection pool")
+        .with_schema(other_table_reference, other_schema);
+    let direct_conn = pool
+        .connect_direct()
+        .await
+        .expect("Failed to get connection");
+    let actual = direct_conn
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(actual, inferred);
 }
