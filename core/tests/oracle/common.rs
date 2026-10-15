@@ -70,11 +70,39 @@ pub(super) async fn start_oracle_docker_container(
     Ok(running_container)
 }
 
-/// Starts the Oracle container shared by all Oracle tests on first use and
-/// returns its host port.
+/// Polls until a real login to the container succeeds, so tests never see a
+/// database that is "healthy" but not yet accepting sessions (e.g. before the
+/// listener has registered the PDB service).
 ///
-/// Memoized separately from the pool so that a failed pool creation does not
-/// start (and leak) another container on the next test's retry.
+/// Connects directly instead of through the bb8 pool, which only reports
+/// `TimedOut` and hides the Oracle error; every failed attempt is printed so CI
+/// logs show the real cause.
+async fn wait_until_connectable(port: u16, timeout: Duration) {
+    let connect_string = format!("//localhost:{port}/{ORACLE_SERVICE}");
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let cs = connect_string.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            oracle::Connection::connect(ORACLE_USER, ORACLE_PASSWORD, cs)
+        })
+        .await
+        .expect("Oracle connect task panicked");
+        match result {
+            Ok(conn) => {
+                let _ = conn.close();
+                return;
+            }
+            Err(e) if tokio::time::Instant::now() < deadline => {
+                eprintln!("Oracle at {connect_string} not accepting sessions yet: {e}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => panic!("Oracle at {connect_string} never accepted a session: {e}"),
+        }
+    }
+}
+
+/// Starts the Oracle container shared by all Oracle tests on first use and
+/// returns its host port once the database accepts logins.
 async fn ensure_oracle_container() -> u16 {
     static PORT: tokio::sync::OnceCell<u16> = tokio::sync::OnceCell::const_new();
 
@@ -85,30 +113,26 @@ async fn ensure_oracle_container() -> u16 {
                 .await
                 .expect("Oracle Docker container to start");
             super::register_container(running_container);
+            wait_until_connectable(port, Duration::from_secs(300)).await;
             port
         })
         .await
 }
 
-/// Returns the connection pool shared by all Oracle tests, starting the
-/// Oracle container on first use.
+/// Returns a new connection pool to the Oracle container shared by all Oracle
+/// tests, starting the container on first use.
 ///
-/// Each `#[tokio::test]` runs in its own runtime, so the pool and the
-/// container are memoized across tests: only the first caller pays for the
-/// (slow) Oracle boot, the others wait for it and reuse the same container.
+/// Only the container is shared, never the pool: each `#[tokio::test]` runs on
+/// its own runtime, and bb8 spawns its connection tasks on the runtime of the
+/// test that triggered them. Those tasks die with that runtime, and the
+/// connections they were opening stay counted as pending, so a pool shared
+/// across tests can end up permanently timing out.
 pub async fn get_oracle_connection_pool() -> Arc<OracleConnectionPool> {
-    static POOL: tokio::sync::OnceCell<Arc<OracleConnectionPool>> =
-        tokio::sync::OnceCell::const_new();
+    let port = ensure_oracle_container().await;
 
-    POOL.get_or_init(|| async {
-        let port = ensure_oracle_container().await;
-
-        Arc::new(
-            OracleConnectionPool::new(get_oracle_params(port))
-                .await
-                .expect("Failed to create Oracle connection pool"),
-        )
-    })
-    .await
-    .clone()
+    Arc::new(
+        OracleConnectionPool::new(get_oracle_params(port))
+            .await
+            .expect("Failed to create Oracle connection pool"),
+    )
 }
