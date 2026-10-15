@@ -163,14 +163,16 @@ async fn test_arrow_adbc_roundtrip(
 /// Tests for ADBC pushdown optimizations: projection, filter, limit, sort
 mod pushdown_tests {
     use super::*;
+    use datafusion::physical_plan::display::DisplayableExecutionPlan;
     use datafusion::prelude::SessionContext;
 
-    /// Helper: create an ADBC-backed table with test data.
+    /// Helper: create an ADBC-backed table with test data and return the
+    /// factory owning its (in-memory) database.
     /// Returns None if the ADBC driver is not available.
-    async fn setup_adbc_table(
+    async fn create_adbc_table(
         ctx: &SessionContext,
         table_name: &str,
-    ) -> Option<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> Option<AdbcTableFactory<ManagedDatabase>> {
         let db = try_get_db("sqlite")?;
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
@@ -205,6 +207,17 @@ mod pushdown_tests {
         let _ = collect(create_plan, ctx.task_ctx())
             .await
             .expect("Table creation failed");
+
+        Some(table_factory)
+    }
+
+    /// Helper: create an ADBC-backed table with test data and register its read provider.
+    /// Returns None if the ADBC driver is not available.
+    async fn setup_adbc_table(
+        ctx: &SessionContext,
+        table_name: &str,
+    ) -> Option<Arc<dyn datafusion::datasource::TableProvider>> {
+        let table_factory = create_adbc_table(ctx, table_name).await?;
 
         let table_provider = table_factory
             .table_provider(table_name.into(), None)
@@ -295,6 +308,44 @@ mod pushdown_tests {
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert!(total_rows <= 2);
+    }
+
+    /// The `ADBCTableWriter` must report the read provider's filter support,
+    /// otherwise DataFusion keeps the filter above the scan and cannot push the
+    /// LIMIT down into the generated SQL.
+    #[test_log::test(tokio::test)]
+    async fn test_adbc_writer_filter_and_limit_pushdown() {
+        let ctx = SessionContext::new();
+        let table_name = "writer_limit_test";
+        let Some(table_factory) = create_adbc_table(&ctx, table_name).await else {
+            eprintln!("Skipping test: ADBC SQLite driver not found");
+            return;
+        };
+        let table_provider = table_factory
+            .read_write_table_provider(table_name.into(), None)
+            .await
+            .expect("Failed to get read-write table provider");
+        ctx.register_table(table_name, table_provider)
+            .expect("Failed to register table");
+
+        let df = ctx
+            .sql("SELECT * FROM writer_limit_test WHERE age >= 25 LIMIT 3")
+            .await
+            .expect("Query should succeed");
+        let plan = df
+            .create_physical_plan()
+            .await
+            .expect("Should create physical plan");
+        let plan_str = format!(
+            "{}",
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+        assert!(!plan_str.contains("LimitExec"), "{plan_str}");
+        assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
+
+        let batches = df.collect().await.expect("Should collect results");
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
     }
 
     #[test_log::test(tokio::test)]

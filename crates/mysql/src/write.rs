@@ -6,7 +6,7 @@ use datafusion::{
     catalog::Session,
     datasource::{TableProvider, TableType},
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::{dml::InsertOp, Expr},
+    logical_expr::{dml::InsertOp, Expr, TableProviderFilterPushDown},
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use datafusion_table_providers_common::util::on_conflict::OnConflict;
@@ -51,6 +51,13 @@ impl TableProvider for MySQLTableWriter {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::common::Result<Vec<TableProviderFilterPushDown>> {
+        self.read_provider.supports_filters_pushdown(filters)
     }
 
     async fn scan(
