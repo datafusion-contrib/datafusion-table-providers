@@ -385,12 +385,13 @@ async fn test_postgres_limit_pushdown(port: u16) {
         .await
         .expect("select failed");
 
-    let plan = df.create_physical_plan().await.unwrap();
-    let sql_exec_as_str = format!(
+    let plan = df.create_physical_plan().await.expect("Should create physical plan");
+    let plan_str = format!(
         "{}",
         DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
     );
-    assert!(sql_exec_as_str.contains("LIMIT 3"), "{sql_exec_as_str}");
+    assert!(!plan_str.contains("LimitExec"), "{plan_str}");
+    assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
 
     let batches = df.collect().await.expect("Should collect results");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

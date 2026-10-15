@@ -321,11 +321,12 @@ mod sort_limit_pushdown {
             .sql("SELECT * FROM limit_pushdown WHERE id > 2 LIMIT 3")
             .await
             .unwrap();
-        let plan = df.clone().create_physical_plan().await.unwrap();
+        let plan = df.create_physical_plan().await.expect("Should create physical plan");
         let plan_str = format!(
             "{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
+        assert!(!plan_str.contains("LimitExec"), "{plan_str}");
         assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
 
         let batches = df.collect().await.unwrap();

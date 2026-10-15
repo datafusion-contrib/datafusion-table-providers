@@ -333,7 +333,6 @@ mod pushdown_tests {
             .await
             .expect("Query should succeed");
         let plan = df
-            .clone()
             .create_physical_plan()
             .await
             .expect("Should create physical plan");
@@ -341,6 +340,7 @@ mod pushdown_tests {
             "{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
+        assert!(!plan_str.contains("LimitExec"), "{plan_str}");
         assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
 
         let batches = df.collect().await.expect("Should collect results");
