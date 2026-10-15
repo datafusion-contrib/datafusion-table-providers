@@ -969,7 +969,7 @@ async fn test_oracle_connection_pool_with_schema() {
 
     // Create table with test data
     let table_name = "TEST_TABLE_WITH_SCHEMA";
-    let _ = oracle_conn.execute(&format!("DROP TABLE {table_name}"), &[]);
+    let _ = oracle_conn.execute(&format!("DROP TABLE IF EXISTS {table_name}"), &[]);
     oracle_conn
         .execute(
             &format!("CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"),
@@ -992,11 +992,11 @@ async fn test_oracle_connection_pool_with_schema() {
         "There should be 2 fields in the inferred table"
     );
     let field1 = inferred.field(0);
-    assert_eq!(field1.name(), "id");
+    assert_eq!(field1.name(), "ID");
     assert_eq!(field1.data_type(), &DataType::Int32);
     assert_eq!(field1.is_nullable(), true);
     let field2 = inferred.field(1);
-    assert_eq!(field2.name(), "name");
+    assert_eq!(field2.name(), "NAME");
     assert_eq!(field2.data_type(), &DataType::Utf8); // OracleConnection::get_schema() infers it correctly
     assert_eq!(field2.is_nullable(), true);
 
