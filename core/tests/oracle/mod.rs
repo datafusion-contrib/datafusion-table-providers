@@ -972,7 +972,7 @@ async fn test_oracle_connection_pool_with_schema() {
     let _ = oracle_conn.execute(&format!("DROP TABLE IF EXISTS {table_name}"), &[]);
     oracle_conn
         .execute(
-            &format!("CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"),
+            &format!("CREATE TABLE {table_name} (id LONG PRIMARY KEY, name VARCHAR2(50))"),
             &[],
         )
         .expect("Failed to create table");
@@ -993,7 +993,7 @@ async fn test_oracle_connection_pool_with_schema() {
     );
     let field1 = inferred.field(0);
     assert_eq!(field1.name(), "ID");
-    assert_eq!(field1.data_type(), &DataType::Int32);
+    assert_eq!(field1.data_type(), &DataType::Int64);
     assert_eq!(field1.is_nullable(), true);
     let field2 = inferred.field(1);
     assert_eq!(field2.name(), "NAME");
