@@ -331,6 +331,9 @@ async fn test_postgres_sort_limit(port: u16) {
     assert_eq!(total, 7);
 }
 
+/// The `PostgresTableWriter` must report the read provider's filter support,
+/// otherwise DataFusion keeps the filter above the scan and cannot push the
+/// LIMIT down into the generated SQL.
 async fn test_postgres_limit_pushdown(port: u16) {
     let pool = common::get_postgres_connection_pool(port)
         .await
@@ -388,6 +391,10 @@ async fn test_postgres_limit_pushdown(port: u16) {
         DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
     );
     assert!(sql_exec_as_str.contains("LIMIT 3"), "{sql_exec_as_str}");
+
+    let batches = df.collect().await.expect("Should collect results");
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 3);
 }
 
 async fn test_postgres_enum_type(port: u16) {

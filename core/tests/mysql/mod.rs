@@ -23,8 +23,10 @@ use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
 
 use crate::docker::ContainerManager;
+use datafusion::common::TableReference;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
-use datafusion_table_providers::mysql::MySQLTableProviderFactory;
+use datafusion_table_providers::mysql::{MySQLTableFactory, MySQLTableProviderFactory};
 use linktime::{ctor, dtor};
 use secrecy::ExposeSecret;
 
@@ -977,6 +979,69 @@ async fn test_mysql_sort_limit(port: u16) {
     assert_eq!(total, 7);
 }
 
+/// The `MySQLTableWriter` must report the read provider's filter support,
+/// otherwise DataFusion keeps the filter above the scan and cannot push the
+/// LIMIT down into the generated SQL.
+async fn test_mysql_limit_pushdown(port: u16) {
+    let pool = common::get_mysql_connection_pool(port)
+        .await
+        .expect("MySQL connection pool should be created");
+
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+
+    let table_name = "limit_pushdown";
+    // Prepare table: 20 rows with id = 1..=20.
+    let _ = db_conn
+        .execute(&format!("DROP TABLE IF EXISTS {table_name}"), &[])
+        .await
+        .expect("table should be droppable");
+    let _ = db_conn
+        .execute(
+            &format!("CREATE TABLE {table_name} (id INT NOT NULL, label VARCHAR(32) NOT NULL)"),
+            &[],
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+    let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
+    let insert_stmt = format!(
+        "INSERT INTO {table_name} (id, label) VALUES {}",
+        values.join(",")
+    );
+    let _ = db_conn
+        .execute(&insert_stmt, &[])
+        .await
+        .expect("INSERT should succeed");
+
+    let table_factory = MySQLTableFactory::new(Arc::new(pool));
+    let table_provider = table_factory
+        .read_write_table_provider(TableReference::bare(table_name))
+        .await
+        .expect("failed to create a table provider");
+
+    let ctx = SessionContext::new();
+    ctx.register_table(table_name, table_provider)
+        .expect("Table should be registered");
+
+    let df = ctx
+        .sql(&format!("SELECT * FROM {table_name} WHERE id > 2 LIMIT 3"))
+        .await
+        .expect("select failed");
+
+    let plan = df.clone().create_physical_plan().await.unwrap();
+    let plan_str = format!(
+        "{}",
+        DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+    );
+    assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
+
+    let batches = df.collect().await.expect("query should succeed");
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3);
+}
+
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_mysql_arrow_oneway() {
@@ -1000,4 +1065,5 @@ async fn test_mysql_arrow_oneway() {
     test_mysql_zero_date_type(port).await;
     test_mysql_projected_schema_column_reorder(port).await;
     test_mysql_sort_limit(port).await;
+    test_mysql_limit_pushdown(port).await;
 }
