@@ -94,15 +94,15 @@ impl SqliteConnectionPoolFactory {
             vec![]
         };
 
-        let mut pool = SqliteConnectionPool::new(
+        let mut pool = SqliteConnectionPool::new_with_schema(
             &self.path,
             self.mode,
             join_push_down,
             attach_databases,
             self.busy_timeout,
+            self.schema.clone()
         )
         .await?;
-        pool.schema = self.schema.clone();
 
         pool.setup().await?;
 
@@ -138,7 +138,18 @@ impl SqliteConnectionPool {
         attach_databases: Vec<Arc<str>>,
         busy_timeout: Duration,
     ) -> PoolResult<Self> {
-        let conn = match mode {
+        Self::new_with_schema(path, mode, join_push_down, attach_databases, busy_timeout, None).await
+    }
+
+    pub async fn new_with_schema(
+        path: &str,
+        mode: Mode,
+        join_push_down: JoinPushDown,
+        attach_databases: Vec<Arc<str>>,
+        busy_timeout: Duration,
+        schema: Option<SchemaRef>,
+    ) -> PoolResult<Self> {
+    let conn = match mode {
             Mode::Memory => Connection::open_in_memory()
                 .await
                 .map_err(|e| Error::ConnectionPoolError { source: e })?,
@@ -155,7 +166,7 @@ impl SqliteConnectionPool {
             attach_databases,
             path: path.into(),
             busy_timeout,
-            schema: None,
+            schema,
         })
     }
 
@@ -283,7 +294,9 @@ impl SqliteConnectionPool {
                 let mut factory =
                     SqliteConnectionPoolFactory::new(&self.path, self.mode, self.busy_timeout)
                         .with_databases(attach_databases);
-                factory.schema = self.schema.clone();
+                if let Some(schema) = &self.schema {
+                    factory = factory.with_schema(schema.clone());
+                }
                 factory.build().await
             }
         }
@@ -471,7 +484,7 @@ mod tests {
         assert!(field1.is_nullable());
         let field2 = inferred.field(1);
         assert_eq!(field2.name(), "name");
-        assert_eq!(field2.data_type(), &DataType::Null);
+        assert_eq!(field2.data_type(), &DataType::Null); // inferring uses only the first row
         assert!(field2.is_nullable());
 
         // the provided schema is used as-is

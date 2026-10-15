@@ -128,8 +128,8 @@ impl ClickHouseConnectionPool {
 
     /// Returns a direct connection to the underlying database.
     #[must_use]
-    pub fn connect_direct(&self) -> ClickHouseConnection {
-        match &self.schema {
+    pub fn connect_direct(&self) -> PoolResult<ClickHouseConnection> {
+        let connection = match &self.schema {
             Some(schema) => {
                 <ClickHouseConnection as AsyncDbConnection<Client, ()>>::new_with_schema(
                     self.client(),
@@ -137,14 +137,15 @@ impl ClickHouseConnectionPool {
                 )
             }
             None => ClickHouseConnection::new(self.client()),
-        }
+        };
+        Ok(connection)
     }
 }
 
 #[async_trait::async_trait]
 impl DbConnectionPool<Client, ()> for ClickHouseConnectionPool {
     async fn connect(&self) -> PoolResult<Box<dyn DbConnection<Client, ()>>> {
-        Ok(Box::new(self.connect_direct()))
+        self.connect_direct().map(|c| Box::new(c) as Box<dyn DbConnection<Client, ()>>)
     }
 
     fn join_push_down(&self) -> JoinPushDown {

@@ -33,7 +33,9 @@ async fn test_odbc_connection_pool_with_schema() {
     let conn = match pool.connect().await {
         Ok(conn) => conn,
         Err(e) => {
-            // The suite skips rather than fails when no SQLite ODBC driver is installed.
+            if std::env::var("CI").is_ok() {
+                panic!("SQLite ODBC driver unavailable in CI: {e}");
+            }
             eprintln!(
                 "Skipping: unable to connect with ODBC driver '{}': {e}",
                 sqlite_odbc_driver()

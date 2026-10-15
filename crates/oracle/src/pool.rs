@@ -172,7 +172,7 @@ impl OracleConnectionPool {
 
     fn new_connection(&self, conn: OraclePooledConnection) -> OracleConnection {
         match &self.schema {
-            Some(schema) => <OracleConnection as AsyncDbConnection<_, _>>::new_with_schema(
+            Some(schema) => OracleConnection::new_with_schema(
                 conn,
                 Arc::clone(schema),
             ),

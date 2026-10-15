@@ -192,7 +192,7 @@ async fn clickhouse_connection_pool_with_schema() {
 
     // the schema is inferred from the database when none is provided
     let inferred = pool
-        .connect_direct()
+        .connect_direct().unwrap()
         .get_schema(&table_reference)
         .await
         .expect("schema should be inferred");
@@ -221,7 +221,7 @@ async fn clickhouse_connection_pool_with_schema() {
         .with_schema(Arc::clone(&schema));
 
     let actual = pool
-        .connect_direct()
+        .connect_direct().unwrap()
         .get_schema(&table_reference)
         .await
         .expect("schema should be returned");
