@@ -1,5 +1,4 @@
 use std::{any::Any, sync::Arc};
-
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::TableReference;
@@ -10,9 +9,7 @@ use scylla::client::session::Session;
 use scylla::value::{CqlValue, Row};
 use snafu::prelude::*;
 
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
-    self, AsyncDbConnection, DbConnection, GenericError, Result,
-};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{self, AsyncDbConnection, DbConnection, GenericError, Result, TableSchemas};
 
 use crate::types::{column_specs_to_schema, rows_to_record_batch};
 
@@ -51,13 +48,13 @@ pub enum Error {
 /// to a shared session.
 pub struct CassandraConnection {
     pub session: Arc<Session>,
-    schema: Option<SchemaRef>,
+    schemas: Arc<TableSchemas>,
 }
 
 impl std::fmt::Debug for CassandraConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CassandraConnection")
-            .field("schema", &self.schema)
+            .field("schemas", &self.schemas)
             .finish_non_exhaustive()
     }
 }
@@ -97,14 +94,17 @@ impl AsyncDbConnection<Arc<Session>, CqlValue> for CassandraConnection {
     fn new(session: Arc<Session>) -> Self {
         Self {
             session,
-            schema: None,
+            schemas: Default::default(),
         }
     }
 
-    fn new_with_schema(session: Arc<Session>, schema: SchemaRef) -> Self {
+    fn new_with_schemas(session: Arc<Session>, schemas: Arc<TableSchemas>) -> Self
+    where
+        Self: Sized
+    {
         Self {
             session,
-            schema: Some(schema),
+            schemas
         }
     }
 
@@ -133,7 +133,7 @@ impl AsyncDbConnection<Arc<Session>, CqlValue> for CassandraConnection {
         &self,
         table_reference: &TableReference,
     ) -> Result<SchemaRef, dbconnection::Error> {
-        if let Some(schema) = &self.schema {
+        if let Some(schema) = self.schemas.get(table_reference) {
             return Ok(Arc::clone(schema));
         }
 

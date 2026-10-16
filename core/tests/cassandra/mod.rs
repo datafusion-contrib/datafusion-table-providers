@@ -423,7 +423,7 @@ async fn test_cassandra_connection_pool_with_schema(port: u16) {
         common::get_cassandra_connection_pool(port)
             .await
             .expect("Cassandra connection pool should be created")
-            .with_schema(Arc::clone(&schema)),
+            .with_schema(table_reference.clone(), Arc::clone(&schema)),
     );
 
     let actual = pool

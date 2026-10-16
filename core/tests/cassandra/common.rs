@@ -26,6 +26,10 @@ pub(super) async fn start_cassandra_docker_container(
         ContainerRunnerBuilder::new(format!("{CASSANDRA_DOCKER_CONTAINER}-{port}"))
             .image(cassandra_docker_image)
             .add_port_binding(9042, port)
+            // The driver connects to the address each node advertises in `system.local`, not to
+            // the contact point. By default that is the container's internal IP, which, combined
+            // with the published host port, isn't reachable from the host.
+            .add_env_var("CASSANDRA_BROADCAST_RPC_ADDRESS", "127.0.0.1")
             // Keep the JVM small so that the node starts quickly in CI
             .add_env_var("MAX_HEAP_SIZE", "512M")
             .add_env_var("HEAP_NEWSIZE", "128M")

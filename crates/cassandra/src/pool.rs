@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::value::CqlValue;
@@ -12,7 +13,7 @@ use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{AsyncDbConnection, DbConnection},
     DbConnectionPool, JoinPushDown,
 };
-
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::TableSchemas;
 use crate::conn::CassandraConnection;
 
 type PoolResult<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
@@ -162,14 +163,14 @@ fn with_default_port(host: &str, port: u16) -> String {
 pub struct CassandraConnectionPool {
     session: Arc<Session>,
     join_push_down: JoinPushDown,
-    schema: Option<SchemaRef>,
+    schemas: Arc<TableSchemas>,
 }
 
 impl std::fmt::Debug for CassandraConnectionPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CassandraConnectionPool")
             .field("join_push_down", &self.join_push_down)
-            .field("schema", &self.schema)
+            .field("schemas", &self.schemas)
             .finish_non_exhaustive()
     }
 }
@@ -211,14 +212,21 @@ impl CassandraConnectionPool {
         Self {
             session,
             join_push_down: JoinPushDown::Disallow,
-            schema: None,
+            schemas: Default::default(),
         }
     }
 
-    /// Use the provided `schema` for all connections instead of inferring it from the database.
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
     #[must_use]
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
         self
     }
 
@@ -231,12 +239,7 @@ impl CassandraConnectionPool {
     /// Returns a direct connection to the underlying database.
     #[must_use]
     pub fn connect_direct(&self) -> CassandraConnection {
-        match &self.schema {
-            Some(schema) => {
-                CassandraConnection::new_with_schema(self.session(), Arc::clone(schema))
-            }
-            None => CassandraConnection::new(self.session()),
-        }
+        CassandraConnection::new_with_schemas(self.session(), Arc::clone(&self.schemas),)
     }
 }
 
