@@ -1,5 +1,7 @@
 //! Conversion between CQL and Arrow types and values.
 
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -10,15 +12,22 @@ use arrow::array::{
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray,
 };
+use arrow::array::{Array, AsArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::cast;
 use arrow::datatypes::{
-    DataType, Field, Fields, IntervalMonthDayNano, Schema, SchemaRef, TimeUnit,
+    DataType, Date32Type, Field, Fields, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalMonthDayNano, IntervalMonthDayNanoType, Schema, SchemaRef,
+    Time64NanosecondType, TimeUnit, TimestampMillisecondType,
 };
 use bigdecimal::BigDecimal;
 use num_bigint::BigInt;
 use scylla::frame::response::result::{CollectionType, ColumnSpec, ColumnType, NativeType};
-use scylla::value::{CqlValue, Row};
+use scylla::value::{
+    CqlDate, CqlDecimal, CqlDuration, CqlTime, CqlTimestamp, CqlTimeuuid, CqlValue, CqlVarint, Row,
+};
 use snafu::prelude::*;
+use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -39,6 +48,17 @@ pub enum Error {
 
     #[snafu(display("Failed to build Arrow data: {source}"))]
     Arrow { source: arrow::error::ArrowError },
+
+    #[snafu(display("Cannot write column '{column_name}' to Cassandra: {message}"))]
+    InvalidValue {
+        column_name: String,
+        message: String,
+    },
+
+    #[snafu(display(
+        "Cannot write column '{column_name}' to Cassandra: CQL collections can't contain nulls"
+    ))]
+    NullInCollection { column_name: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -592,6 +612,415 @@ fn nulls(values: &[Option<&CqlValue>]) -> Option<NullBuffer> {
     }
 }
 
+/// Converts the values of `array` to CQL values of type `typ`, for binding them to a statement.
+///
+/// Returns one value per row, `None` for nulls. The array is first cast to the Arrow type that
+/// [`map_column_type`] maps `typ` to, so any Arrow type that can be cast to it is accepted,
+/// e.g. `Int32` for a `bigint` column or `Utf8` for a `timestamp` column. `decimal`, `varint`,
+/// `uuid`, `timeuuid` and `inet` values are parsed from their string representation; `uuid` and
+/// `timeuuid` values are also accepted as 16 bytes of `FixedSizeBinary(16)`.
+///
+/// # Errors
+///
+/// Returns an error if the array cannot be converted to `typ`, or if a collection contains a
+/// null: CQL collections can't contain nulls.
+pub fn array_to_cql_values(
+    column_name: &str,
+    array: &ArrayRef,
+    typ: &ColumnType<'_>,
+) -> Result<Vec<Option<CqlValue>>> {
+    match typ {
+        ColumnType::Native(native) => native_values(column_name, array, native, typ),
+        ColumnType::Collection {
+            typ: collection, ..
+        } => match collection {
+            CollectionType::List(element) => {
+                list_values(column_name, array, element, typ, CqlValue::List)
+            }
+            CollectionType::Set(element) => {
+                list_values(column_name, array, element, typ, CqlValue::Set)
+            }
+            CollectionType::Map(key, value) => map_values(column_name, array, key, value, typ),
+            _ => unsupported(column_name, typ),
+        },
+        ColumnType::Vector { typ: element, .. } => {
+            list_values(column_name, array, element, typ, CqlValue::Vector)
+        }
+        ColumnType::UserDefinedType { definition, .. } => {
+            let struct_array = as_struct(column_name, array, typ)?;
+            if let Some(field) = struct_array.fields().iter().find(|field| {
+                !definition
+                    .field_types
+                    .iter()
+                    .any(|(name, _)| name == field.name())
+            }) {
+                return InvalidValueSnafu {
+                    column_name,
+                    message: format!(
+                        "field '{}' is not a field of the user-defined type {}.{}",
+                        field.name(),
+                        definition.keyspace,
+                        definition.name
+                    ),
+                }
+                .fail();
+            }
+            let fields = definition
+                .field_types
+                .iter()
+                .map(|(name, typ)| match struct_array.column_by_name(name) {
+                    Some(column) => array_to_cql_values(column_name, column, typ),
+                    None => Ok(vec![None; struct_array.len()]),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((0..struct_array.len())
+                .map(|row| {
+                    struct_array
+                        .is_valid(row)
+                        .then(|| CqlValue::UserDefinedType {
+                            keyspace: definition.keyspace.to_string(),
+                            name: definition.name.to_string(),
+                            fields: definition
+                                .field_types
+                                .iter()
+                                .zip(&fields)
+                                .map(|((name, _), values)| (name.to_string(), values[row].clone()))
+                                .collect(),
+                        })
+                })
+                .collect())
+        }
+        ColumnType::Tuple(types) => {
+            let struct_array = as_struct(column_name, array, typ)?;
+            ensure!(
+                struct_array.num_columns() == types.len(),
+                InvalidValueSnafu {
+                    column_name,
+                    message: format!(
+                        "a tuple of {} elements can't be written from a struct with {} fields",
+                        types.len(),
+                        struct_array.num_columns()
+                    ),
+                }
+            );
+            let elements = struct_array
+                .columns()
+                .iter()
+                .zip(types)
+                .map(|(column, typ)| array_to_cql_values(column_name, column, typ))
+                .collect::<Result<Vec<_>>>()?;
+            Ok((0..struct_array.len())
+                .map(|row| {
+                    struct_array.is_valid(row).then(|| {
+                        CqlValue::Tuple(elements.iter().map(|values| values[row].clone()).collect())
+                    })
+                })
+                .collect())
+        }
+        _ => unsupported(column_name, typ),
+    }
+}
+
+fn native_values(
+    column_name: &str,
+    array: &ArrayRef,
+    native: &NativeType,
+    typ: &ColumnType<'_>,
+) -> Result<Vec<Option<CqlValue>>> {
+    if matches!(native, NativeType::Uuid | NativeType::Timeuuid) {
+        if let DataType::FixedSizeBinary(16) = array.data_type() {
+            let bytes = array.as_fixed_size_binary();
+            return each_value(array, |row| {
+                let uuid = Uuid::from_slice(bytes.value(row)).map_err(|e| e.to_string())?;
+                Ok(uuid_value(native, uuid))
+            })
+            .map_err(|message| invalid_value(column_name, message));
+        }
+    }
+
+    let target_type = match (native, array.data_type()) {
+        // Keep the time zone, so that the cast only changes the unit and not the instant
+        (NativeType::Timestamp, DataType::Timestamp(_, tz)) => {
+            DataType::Timestamp(TimeUnit::Millisecond, tz.clone())
+        }
+        (NativeType::Timestamp, _) => DataType::Timestamp(TimeUnit::Millisecond, None),
+        (NativeType::Counter, _) => {
+            return InvalidValueSnafu {
+                column_name,
+                message: "counter columns can't be written with INSERT, only with UPDATE",
+            }
+            .fail()
+        }
+        _ => map_column_type(column_name, typ)?,
+    };
+    let array = cast(array, &target_type).map_err(|e| {
+        invalid_value(
+            column_name,
+            format!("can't convert {} to CQL {typ:?}: {e}", array.data_type()),
+        )
+    })?;
+
+    let values = match native {
+        NativeType::Ascii => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                Ok(CqlValue::Ascii(strings.value(row).to_string()))
+            })
+        }
+        NativeType::Text => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                Ok(CqlValue::Text(strings.value(row).to_string()))
+            })
+        }
+        NativeType::Boolean => {
+            let booleans = array.as_boolean();
+            each_value(&array, |row| Ok(CqlValue::Boolean(booleans.value(row))))
+        }
+        NativeType::Blob => {
+            let blobs = array.as_binary::<i32>();
+            each_value(&array, |row| Ok(CqlValue::Blob(blobs.value(row).to_vec())))
+        }
+        NativeType::BigInt => {
+            let ints = array.as_primitive::<Int64Type>();
+            each_value(&array, |row| Ok(CqlValue::BigInt(ints.value(row))))
+        }
+        NativeType::Int => {
+            let ints = array.as_primitive::<Int32Type>();
+            each_value(&array, |row| Ok(CqlValue::Int(ints.value(row))))
+        }
+        NativeType::SmallInt => {
+            let ints = array.as_primitive::<Int16Type>();
+            each_value(&array, |row| Ok(CqlValue::SmallInt(ints.value(row))))
+        }
+        NativeType::TinyInt => {
+            let ints = array.as_primitive::<Int8Type>();
+            each_value(&array, |row| Ok(CqlValue::TinyInt(ints.value(row))))
+        }
+        NativeType::Double => {
+            let floats = array.as_primitive::<Float64Type>();
+            each_value(&array, |row| Ok(CqlValue::Double(floats.value(row))))
+        }
+        NativeType::Float => {
+            let floats = array.as_primitive::<Float32Type>();
+            each_value(&array, |row| Ok(CqlValue::Float(floats.value(row))))
+        }
+        NativeType::Date => {
+            let dates = array.as_primitive::<Date32Type>();
+            each_value(&array, |row| {
+                u32::try_from(i64::from(dates.value(row)) + CQL_DATE_UNIX_EPOCH_OFFSET)
+                    .map(|days| CqlValue::Date(CqlDate(days)))
+                    .map_err(|_| format!("date {} is out of range", dates.value(row)))
+            })
+        }
+        NativeType::Timestamp => {
+            let timestamps = array.as_primitive::<TimestampMillisecondType>();
+            each_value(&array, |row| {
+                Ok(CqlValue::Timestamp(CqlTimestamp(timestamps.value(row))))
+            })
+        }
+        NativeType::Time => {
+            let times = array.as_primitive::<Time64NanosecondType>();
+            each_value(&array, |row| Ok(CqlValue::Time(CqlTime(times.value(row)))))
+        }
+        NativeType::Duration => {
+            let intervals = array.as_primitive::<IntervalMonthDayNanoType>();
+            each_value(&array, |row| {
+                let interval = intervals.value(row);
+                Ok(CqlValue::Duration(CqlDuration {
+                    months: interval.months,
+                    days: interval.days,
+                    nanoseconds: interval.nanoseconds,
+                }))
+            })
+        }
+        NativeType::Decimal => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                let decimal = BigDecimal::from_str(strings.value(row).trim())
+                    .map_err(|e| format!("'{}' is not a decimal: {e}", strings.value(row)))?;
+                CqlDecimal::try_from(decimal)
+                    .map(CqlValue::Decimal)
+                    .map_err(|_| format!("the scale of '{}' is too large", strings.value(row)))
+            })
+        }
+        NativeType::Varint => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                BigInt::from_str(strings.value(row).trim())
+                    .map(|v| CqlValue::Varint(CqlVarint::from(v)))
+                    .map_err(|e| format!("'{}' is not an integer: {e}", strings.value(row)))
+            })
+        }
+        NativeType::Uuid | NativeType::Timeuuid => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                Uuid::parse_str(strings.value(row).trim())
+                    .map(|uuid| uuid_value(native, uuid))
+                    .map_err(|e| format!("'{}' is not a UUID: {e}", strings.value(row)))
+            })
+        }
+        NativeType::Inet => {
+            let strings = array.as_string::<i32>();
+            each_value(&array, |row| {
+                IpAddr::from_str(strings.value(row).trim())
+                    .map(CqlValue::Inet)
+                    .map_err(|e| format!("'{}' is not an IP address: {e}", strings.value(row)))
+            })
+        }
+        _ => return unsupported(column_name, typ),
+    };
+    values.map_err(|message| invalid_value(column_name, message))
+}
+
+fn invalid_value(column_name: &str, message: String) -> Error {
+    Error::InvalidValue {
+        column_name: column_name.to_string(),
+        message,
+    }
+}
+
+fn uuid_value(native: &NativeType, uuid: Uuid) -> CqlValue {
+    match native {
+        NativeType::Timeuuid => CqlValue::Timeuuid(CqlTimeuuid::from(uuid)),
+        _ => CqlValue::Uuid(uuid),
+    }
+}
+
+/// Converts the non-null values of `array` with `f`, keeping nulls as `None`.
+fn each_value(
+    array: &dyn Array,
+    mut f: impl FnMut(usize) -> Result<CqlValue, String>,
+) -> Result<Vec<Option<CqlValue>>, String> {
+    (0..array.len())
+        .map(|row| {
+            if array.is_null(row) {
+                Ok(None)
+            } else {
+                f(row).map(Some)
+            }
+        })
+        .collect()
+}
+
+/// Converts a list-like array (`List`, `LargeList` or `FixedSizeList`) to CQL collections built
+/// by `collection`.
+fn list_values(
+    column_name: &str,
+    array: &ArrayRef,
+    element: &ColumnType<'_>,
+    typ: &ColumnType<'_>,
+    collection: fn(Vec<CqlValue>) -> CqlValue,
+) -> Result<Vec<Option<CqlValue>>> {
+    let (values, ranges): (&ArrayRef, Vec<(usize, usize)>) = match array.data_type() {
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            let ranges = list
+                .value_offsets()
+                .windows(2)
+                .map(|w| (w[0] as usize, w[1] as usize))
+                .collect();
+            (list.values(), ranges)
+        }
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            let ranges = list
+                .value_offsets()
+                .windows(2)
+                .map(|w| (w[0] as usize, w[1] as usize))
+                .collect();
+            (list.values(), ranges)
+        }
+        DataType::FixedSizeList(_, _) => {
+            let list = array.as_fixed_size_list();
+            let length = list.value_length() as usize;
+            let ranges = (0..list.len())
+                .map(|row| {
+                    let start = list.value_offset(row) as usize;
+                    (start, start + length)
+                })
+                .collect();
+            (list.values(), ranges)
+        }
+        _ => return incompatible_array(column_name, array, typ),
+    };
+
+    let elements = array_to_cql_values(column_name, values, element)?;
+    ranges
+        .into_iter()
+        .enumerate()
+        .map(|(row, (start, end))| {
+            if array.is_null(row) {
+                return Ok(None);
+            }
+            elements[start..end]
+                .iter()
+                .map(|element| {
+                    element
+                        .clone()
+                        .context(NullInCollectionSnafu { column_name })
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(|elements| Some(collection(elements)))
+        })
+        .collect()
+}
+
+fn map_values(
+    column_name: &str,
+    array: &ArrayRef,
+    key: &ColumnType<'_>,
+    value: &ColumnType<'_>,
+    typ: &ColumnType<'_>,
+) -> Result<Vec<Option<CqlValue>>> {
+    let DataType::Map(_, _) = array.data_type() else {
+        return incompatible_array(column_name, array, typ);
+    };
+    let map = array.as_map();
+    let keys = array_to_cql_values(column_name, map.keys(), key)?;
+    let values = array_to_cql_values(column_name, map.values(), value)?;
+    map.value_offsets()
+        .windows(2)
+        .enumerate()
+        .map(|(row, w)| {
+            if map.is_null(row) {
+                return Ok(None);
+            }
+            (w[0] as usize..w[1] as usize)
+                .map(|i| {
+                    let key = keys[i]
+                        .clone()
+                        .context(NullInCollectionSnafu { column_name })?;
+                    let value = values[i]
+                        .clone()
+                        .context(NullInCollectionSnafu { column_name })?;
+                    Ok((key, value))
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(|entries| Some(CqlValue::Map(entries)))
+        })
+        .collect()
+}
+
+fn as_struct<'a>(
+    column_name: &str,
+    array: &'a ArrayRef,
+    typ: &ColumnType<'_>,
+) -> Result<&'a StructArray> {
+    match array.data_type() {
+        DataType::Struct(_) => Ok(array.as_struct()),
+        _ => incompatible_array(column_name, array, typ),
+    }
+}
+
+fn incompatible_array<T>(column_name: &str, array: &ArrayRef, typ: &ColumnType<'_>) -> Result<T> {
+    InvalidValueSnafu {
+        column_name,
+        message: format!("can't convert {} to CQL {typ:?}", array.data_type()),
+    }
+    .fail()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,5 +1406,235 @@ mod tests {
             true,
         )]));
         assert!(rows_to_record_batch(&schema, &column_names, &rows).is_err());
+    }
+
+    fn write(array: ArrayRef, typ: &ColumnType<'_>) -> Result<Vec<Option<CqlValue>>> {
+        array_to_cql_values("c", &array, typ)
+    }
+
+    fn map_of(key: ColumnType<'static>, value: ColumnType<'static>) -> ColumnType<'static> {
+        ColumnType::Collection {
+            frozen: false,
+            typ: CollectionType::Map(Box::new(key), Box::new(value)),
+        }
+    }
+
+    fn address_udt() -> ColumnType<'static> {
+        ColumnType::UserDefinedType {
+            frozen: true,
+            definition: Arc::new(UserDefinedType {
+                name: Cow::Borrowed("address"),
+                keyspace: Cow::Borrowed("ks"),
+                field_types: vec![
+                    (Cow::Borrowed("street"), native(NativeType::Text)),
+                    (Cow::Borrowed("zip"), native(NativeType::Int)),
+                ],
+            }),
+        }
+    }
+
+    /// Converting CQL values to Arrow and back must give the original values.
+    #[test]
+    fn writes_what_it_reads() {
+        let uuid = Uuid::parse_str("8f2bfa59-4e30-4b0a-8b9a-3c1e26f9a0b1").unwrap();
+        let timeuuid = Uuid::parse_str("e9c0b2a0-6c1e-11ee-8c99-0242ac120002").unwrap();
+        let cases = vec![
+            (native(NativeType::Ascii), CqlValue::Ascii("abc".into())),
+            (native(NativeType::Text), CqlValue::Text("héllo".into())),
+            (native(NativeType::Boolean), CqlValue::Boolean(true)),
+            (native(NativeType::Blob), CqlValue::Blob(vec![1, 2, 3])),
+            (native(NativeType::BigInt), CqlValue::BigInt(i64::MIN)),
+            (native(NativeType::Int), CqlValue::Int(-7)),
+            (native(NativeType::SmallInt), CqlValue::SmallInt(300)),
+            (native(NativeType::TinyInt), CqlValue::TinyInt(-3)),
+            (native(NativeType::Double), CqlValue::Double(1.5)),
+            (native(NativeType::Float), CqlValue::Float(2.5)),
+            (
+                native(NativeType::Date),
+                CqlValue::Date(CqlDate((1 << 31) + 19_000)),
+            ),
+            (
+                native(NativeType::Timestamp),
+                CqlValue::Timestamp(CqlTimestamp(1_700_000_000_123)),
+            ),
+            (native(NativeType::Time), CqlValue::Time(CqlTime(42_000))),
+            (
+                native(NativeType::Duration),
+                CqlValue::Duration(CqlDuration {
+                    months: 1,
+                    days: 2,
+                    nanoseconds: 3,
+                }),
+            ),
+            (
+                native(NativeType::Decimal),
+                CqlValue::Decimal(CqlDecimal::from_signed_be_bytes_slice_and_exponent(
+                    &[0x30, 0x39],
+                    2,
+                )),
+            ),
+            (
+                native(NativeType::Varint),
+                CqlValue::Varint(CqlVarint::from_signed_bytes_be_slice(&[0x01, 0x00, 0x00])),
+            ),
+            (native(NativeType::Uuid), CqlValue::Uuid(uuid)),
+            (
+                native(NativeType::Timeuuid),
+                CqlValue::Timeuuid(CqlTimeuuid::from(timeuuid)),
+            ),
+            (
+                native(NativeType::Inet),
+                CqlValue::Inet("2001:db8::1".parse().unwrap()),
+            ),
+            (
+                list_of(native(NativeType::Int)),
+                CqlValue::List(vec![CqlValue::Int(1), CqlValue::Int(2)]),
+            ),
+            (
+                ColumnType::Collection {
+                    frozen: false,
+                    typ: CollectionType::Set(Box::new(native(NativeType::Text))),
+                },
+                CqlValue::Set(vec![CqlValue::Text("a".into())]),
+            ),
+            (
+                map_of(native(NativeType::Text), native(NativeType::BigInt)),
+                CqlValue::Map(vec![(CqlValue::Text("a".into()), CqlValue::BigInt(1))]),
+            ),
+            (
+                ColumnType::Vector {
+                    typ: Box::new(native(NativeType::Float)),
+                    dimensions: 2,
+                },
+                CqlValue::Vector(vec![CqlValue::Float(1.0), CqlValue::Float(2.0)]),
+            ),
+            (
+                address_udt(),
+                CqlValue::UserDefinedType {
+                    keyspace: "ks".into(),
+                    name: "address".into(),
+                    fields: vec![
+                        ("street".into(), Some(CqlValue::Text("Main".into()))),
+                        ("zip".into(), None),
+                    ],
+                },
+            ),
+            (
+                ColumnType::Tuple(vec![native(NativeType::Int), native(NativeType::Text)]),
+                CqlValue::Tuple(vec![Some(CqlValue::Int(7)), None]),
+            ),
+        ];
+
+        for (typ, value) in cases {
+            let data_type = map_column_type("c", &typ).unwrap();
+            let array = values_to_array(&data_type, &[Some(&value), None]).unwrap();
+            let written = write(array, &typ).unwrap();
+            assert_eq!(written, vec![Some(value), None], "CQL type {typ:?}");
+        }
+    }
+
+    #[test]
+    fn casts_to_the_column_type() {
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        assert_eq!(
+            write(Arc::clone(&ints), &native(NativeType::BigInt)).unwrap(),
+            vec![Some(CqlValue::BigInt(1)), None]
+        );
+        assert_eq!(
+            write(ints, &native(NativeType::Varint)).unwrap(),
+            vec![
+                Some(CqlValue::Varint(CqlVarint::from(BigInt::from(1)))),
+                None
+            ]
+        );
+
+        let large_strings: ArrayRef = Arc::new(LargeStringArray::from(vec!["x"]));
+        assert_eq!(
+            write(large_strings, &native(NativeType::Text)).unwrap(),
+            vec![Some(CqlValue::Text("x".into()))]
+        );
+
+        let decimals: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![12345])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        assert_eq!(
+            write(decimals, &native(NativeType::Decimal)).unwrap(),
+            vec![Some(CqlValue::Decimal(
+                CqlDecimal::from_signed_be_bytes_slice_and_exponent(&[0x30, 0x39], 2)
+            ))]
+        );
+    }
+
+    #[test]
+    fn keeps_the_instant_of_timestamps() {
+        let timestamps: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![1_500_000]).with_timezone("+02:00"));
+        assert_eq!(
+            write(timestamps, &native(NativeType::Timestamp)).unwrap(),
+            vec![Some(CqlValue::Timestamp(CqlTimestamp(1_500)))]
+        );
+    }
+
+    #[test]
+    fn writes_uuids_from_bytes() {
+        let uuid = Uuid::parse_str("8f2bfa59-4e30-4b0a-8b9a-3c1e26f9a0b1").unwrap();
+        let bytes: ArrayRef = Arc::new(
+            arrow::array::FixedSizeBinaryArray::try_from_iter(std::iter::once(uuid.as_bytes()))
+                .unwrap(),
+        );
+        assert_eq!(
+            write(bytes, &native(NativeType::Uuid)).unwrap(),
+            vec![Some(CqlValue::Uuid(uuid))]
+        );
+    }
+
+    #[test]
+    fn fails_for_invalid_values() {
+        let strings: ArrayRef = Arc::new(StringArray::from(vec!["not a uuid"]));
+        let err = write(strings, &native(NativeType::Uuid)).unwrap_err();
+        assert!(err.to_string().contains("is not a UUID"), "{err}");
+
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let err = write(ints, &native(NativeType::Counter)).unwrap_err();
+        assert!(err.to_string().contains("counter"), "{err}");
+
+        let strings: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
+        let err = write(strings, &list_of(native(NativeType::Text))).unwrap_err();
+        assert!(err.to_string().contains("can't convert Utf8"), "{err}");
+    }
+
+    #[test]
+    fn fails_for_nulls_in_collections() {
+        let list = values_to_array(
+            &DataType::List(list_item_field(DataType::Int32)),
+            &[Some(&CqlValue::List(vec![CqlValue::Int(1)]))],
+        )
+        .unwrap();
+        // Replace the element with a null
+        let list = list.as_list::<i32>();
+        let list: ArrayRef = Arc::new(ListArray::new(
+            list_item_field(DataType::Int32),
+            list.offsets().clone(),
+            Arc::new(Int32Array::from(vec![None::<i32>])),
+            None,
+        ));
+        let err = write(list, &list_of(native(NativeType::Int))).unwrap_err();
+        assert!(matches!(err, Error::NullInCollection { .. }), "{err}");
+    }
+
+    #[test]
+    fn fails_for_struct_fields_missing_from_the_udt() {
+        let array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("city", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec!["Sofia"])) as ArrayRef,
+        )]));
+        let err = write(array, &address_udt()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'city' is not a field of the user-defined type ks.address"),
+            "{err}"
+        );
     }
 }

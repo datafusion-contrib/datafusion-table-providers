@@ -16,6 +16,35 @@ mod common;
 
 const KEYSPACE: &str = "it_ks";
 
+/// The columns of the `all_types` table, which has a column of every supported CQL type.
+const ALL_TYPES_COLUMNS: &str = "
+    id int PRIMARY KEY,
+    a_ascii ascii,
+    a_bigint bigint,
+    a_blob blob,
+    a_boolean boolean,
+    a_date date,
+    a_decimal decimal,
+    a_double double,
+    a_duration duration,
+    a_float float,
+    a_inet inet,
+    a_list list<int>,
+    a_map map<text, int>,
+    a_set set<text>,
+    a_smallint smallint,
+    a_text text,
+    a_time time,
+    a_timestamp timestamp,
+    a_timeuuid timeuuid,
+    a_tinyint tinyint,
+    a_tuple tuple<int, text>,
+    a_udt frozen<address>,
+    a_uuid uuid,
+    a_varint varint,
+    a_vector vector<float, 3>
+";
+
 static CONTAINER_MANAGER_INSTANCE: Mutex<Option<ContainerManager>> = Mutex::new(None);
 
 #[ctor(unsafe)]
@@ -60,6 +89,8 @@ async fn test_cassandra() {
     test_cassandra_tables_and_schemas(&pool).await;
     test_cassandra_missing_table(&pool).await;
     test_cassandra_connection_pool_with_schema(port).await;
+    test_cassandra_insert_all_types(&pool).await;
+    test_cassandra_insert_values(&pool).await;
 }
 
 async fn execute(pool: &CassandraConnectionPool, cql: &str) {
@@ -82,39 +113,13 @@ async fn create_test_data(pool: &CassandraConnectionPool) {
         &format!("CREATE TYPE IF NOT EXISTS {KEYSPACE}.address (street text, zip int)"),
     )
     .await;
-    execute(
-        pool,
-        &format!(
-            "CREATE TABLE IF NOT EXISTS {KEYSPACE}.all_types (
-                id int PRIMARY KEY,
-                a_ascii ascii,
-                a_bigint bigint,
-                a_blob blob,
-                a_boolean boolean,
-                a_date date,
-                a_decimal decimal,
-                a_double double,
-                a_duration duration,
-                a_float float,
-                a_inet inet,
-                a_list list<int>,
-                a_map map<text, int>,
-                a_set set<text>,
-                a_smallint smallint,
-                a_text text,
-                a_time time,
-                a_timestamp timestamp,
-                a_timeuuid timeuuid,
-                a_tinyint tinyint,
-                a_tuple tuple<int, text>,
-                a_udt frozen<address>,
-                a_uuid uuid,
-                a_varint varint,
-                a_vector vector<float, 3>
-            )"
-        ),
-    )
-    .await;
+    for table in ["all_types", "all_types_written"] {
+        execute(
+            pool,
+            &format!("CREATE TABLE IF NOT EXISTS {KEYSPACE}.{table} ({ALL_TYPES_COLUMNS})"),
+        )
+        .await;
+    }
     execute(
         pool,
         &format!(
@@ -147,6 +152,13 @@ async fn create_test_data(pool: &CassandraConnectionPool) {
         ),
     )
     .await;
+    execute(
+        pool,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {KEYSPACE}.users_written (id int PRIMARY KEY, name text, age int)"
+        ),
+    )
+    .await;
     for (id, name, age) in [
         (1, "alice", 31),
         (2, "bob", 25),
@@ -169,6 +181,34 @@ async fn register_table(ctx: &SessionContext, pool: &Arc<CassandraConnectionPool
         .expect("table provider should be created");
     ctx.register_table(table, table_provider)
         .expect("table should be registered");
+}
+
+async fn register_writable_table(
+    ctx: &SessionContext,
+    pool: &Arc<CassandraConnectionPool>,
+    table: &str,
+) {
+    let table_provider = CassandraTableFactory::new(Arc::clone(pool))
+        .read_write_table_provider(TableReference::partial(KEYSPACE, table))
+        .await
+        .expect("table provider should be created");
+    ctx.register_table(table, table_provider)
+        .expect("table should be registered");
+}
+
+/// Runs an `INSERT` and returns the number of inserted rows that it reports.
+async fn insert(ctx: &SessionContext, sql: &str) -> u64 {
+    let batches = query(ctx, sql).await;
+    array_value_to_string(batches[0].column(0), 0)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+async fn query_to_string(ctx: &SessionContext, sql: &str) -> String {
+    arrow::util::pretty::pretty_format_batches(&query(ctx, sql).await)
+        .unwrap()
+        .to_string()
 }
 
 async fn query(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
@@ -377,7 +417,15 @@ async fn test_cassandra_tables_and_schemas(pool: &Arc<CassandraConnectionPool>) 
         .await
         .expect("tables should be listed");
     tables.sort();
-    assert_eq!(tables, vec!["all_types".to_string(), "users".to_string()]);
+    assert_eq!(
+        tables,
+        vec![
+            "all_types".to_string(),
+            "all_types_written".to_string(),
+            "users".to_string(),
+            "users_written".to_string(),
+        ]
+    );
 }
 
 async fn test_cassandra_missing_table(pool: &Arc<CassandraConnectionPool>) {
@@ -450,5 +498,100 @@ async fn test_cassandra_connection_pool_with_schema(port: u16) {
     assert_eq!(
         array_value_to_string(batches[0].column(1), 0).unwrap(),
         "carol"
+    );
+}
+
+/// Copying a table with every supported CQL type through `INSERT INTO ... SELECT` must give
+/// back the same data.
+async fn test_cassandra_insert_all_types(pool: &Arc<CassandraConnectionPool>) {
+    let ctx = SessionContext::new();
+    register_table(&ctx, pool, "all_types").await;
+    register_writable_table(&ctx, pool, "all_types_written").await;
+
+    let inserted = insert(
+        &ctx,
+        "INSERT INTO all_types_written SELECT * FROM all_types",
+    )
+    .await;
+    assert_eq!(inserted, 2);
+
+    let expected = query_to_string(&ctx, "SELECT * FROM all_types ORDER BY id").await;
+    let actual = query_to_string(&ctx, "SELECT * FROM all_types_written ORDER BY id").await;
+    assert_eq!(actual, expected);
+}
+
+async fn test_cassandra_insert_values(pool: &Arc<CassandraConnectionPool>) {
+    let ctx = SessionContext::new();
+    register_writable_table(&ctx, pool, "users_written").await;
+
+    // Cassandra orders the columns as the primary key, then the other columns by name, so
+    // the columns of users_written are (id, age, name)
+    let inserted = insert(
+        &ctx,
+        "INSERT INTO users_written VALUES (1, 31, 'alice'), (2, NULL, 'bob')",
+    )
+    .await;
+    assert_eq!(inserted, 2);
+    // the columns that are not given are null
+    let inserted = insert(
+        &ctx,
+        "INSERT INTO users_written (id, name) VALUES (3, 'carol')",
+    )
+    .await;
+    assert_eq!(inserted, 1);
+    assert_eq!(
+        query_to_string(&ctx, "SELECT id, name, age FROM users_written ORDER BY id").await,
+        "+----+-------+-----+
+| id | name  | age |
++----+-------+-----+
+| 1  | alice | 31  |
+| 2  | bob   |     |
+| 3  | carol |     |
++----+-------+-----+"
+    );
+
+    // as in CQL, inserting an existing primary key replaces the row
+    let inserted = insert(
+        &ctx,
+        "INSERT INTO users_written (id, name, age) VALUES (1, 'alicia', 32)",
+    )
+    .await;
+    assert_eq!(inserted, 1);
+    assert_eq!(
+        query_to_string(&ctx, "SELECT id, name, age FROM users_written WHERE id = 1").await,
+        "+----+--------+-----+
+| id | name   | age |
++----+--------+-----+
+| 1  | alicia | 32  |
++----+--------+-----+"
+    );
+
+    // INSERT OVERWRITE replaces all rows
+    let inserted = insert(
+        &ctx,
+        "INSERT OVERWRITE users_written (id, name, age) VALUES (4, 'dave', 35)",
+    )
+    .await;
+    assert_eq!(inserted, 1);
+    assert_eq!(
+        query_to_string(&ctx, "SELECT id, name, age FROM users_written").await,
+        "+----+------+-----+
+| id | name | age |
++----+------+-----+
+| 4  | dave | 35  |
++----+------+-----+"
+    );
+
+    // Cassandra rejects a null primary key
+    let error = ctx
+        .sql("INSERT INTO users_written (id, name) VALUES (NULL, 'nobody')")
+        .await
+        .expect("query should be planned")
+        .collect()
+        .await
+        .expect_err("a null primary key should be rejected");
+    assert!(
+        error.to_string().contains("users_written"),
+        "the error should name the table: {error}"
     );
 }

@@ -194,7 +194,7 @@ cargo run -p datafusion-table-providers --example mysql --features mysql
 
 ### Cassandra
 
-The Cassandra provider is built on the [ScyllaDB Rust driver](https://crates.io/crates/scylla), so it works with ScyllaDB too. CQL has no joins or aggregations and can filter only on key columns, so only projections and `LIMIT` are pushed down to Cassandra; filters, aggregations and joins are evaluated by DataFusion.
+The Cassandra provider is built on the [ScyllaDB Rust driver](https://crates.io/crates/scylla), so it works with ScyllaDB too. CQL has no joins or aggregations and can filter only on key columns, so only projections and `LIMIT` are pushed down to Cassandra; filters, aggregations and joins are evaluated by DataFusion. Tables created with `CassandraTableFactory::read_write_table_provider` also support `INSERT INTO`, which writes each row with a CQL `INSERT` (an upsert), and `INSERT OVERWRITE`, which truncates the table first.
 
 In order to run the Cassandra example, you need to have a Cassandra server running. You can use the following command to start a Cassandra server in a Docker container the example can use:
 

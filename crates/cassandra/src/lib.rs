@@ -4,11 +4,15 @@
 //! CQL is far more restrictive than SQL: it has no joins or aggregations, and `WHERE` clauses
 //! are limited to key columns. Scans therefore only push the projection and `LIMIT` down to
 //! Cassandra. Filters, aggregations and joins are evaluated by DataFusion.
+//!
+//! Tables created with [`CassandraTableFactory::read_write_table_provider`] can also be written
+//! to with `INSERT INTO`; see [`CassandraTableWriter`].
 
 pub mod conn;
 pub mod pool;
 mod table;
 pub mod types;
+pub mod write;
 
 use std::sync::Arc;
 
@@ -19,6 +23,7 @@ use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::As
 
 pub use crate::pool::CassandraConnectionPool;
 pub use crate::table::{CassandraExec, CassandraTable};
+pub use crate::write::CassandraTableWriter;
 
 /// Creates [`TableProvider`]s for Cassandra tables.
 #[derive(Debug)]
@@ -53,5 +58,25 @@ impl CassandraTableFactory {
             Arc::clone(&self.pool),
             schema,
         )))
+    }
+
+    /// Creates a table provider for `table_reference` that also supports `INSERT INTO`.
+    ///
+    /// See [`CassandraTableWriter`] for how the rows are written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema of the table cannot be read.
+    pub async fn read_write_table_provider(
+        &self,
+        table_reference: TableReference,
+    ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
+    {
+        let read_provider = self.table_provider(table_reference.clone()).await?;
+        Ok(CassandraTableWriter::create(
+            read_provider,
+            table_reference,
+            Arc::clone(&self.pool),
+        ))
     }
 }

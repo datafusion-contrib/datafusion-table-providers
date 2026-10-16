@@ -12,6 +12,7 @@ use datafusion_table_providers::{
 /// 2. Create and use CassandraTableFactory to generate TableProvider
 /// 3. Register TableProvider with DataFusion
 /// 4. Use SQL queries to access Cassandra table data
+/// 5. Write data to a Cassandra table with `INSERT INTO`
 ///
 /// Prerequisites:
 /// Start a Cassandra server using Docker:
@@ -53,25 +54,34 @@ async fn main() {
     );
 
     // Create Cassandra table provider factory
-    // Used to generate TableProvider instances that can read Cassandra table data
+    // Used to generate TableProvider instances that can read and write Cassandra table data
     let table_factory = CassandraTableFactory::new(cassandra_pool);
 
     // Create DataFusion session context
     let ctx = SessionContext::new();
 
     // Register the Cassandra "companies" table as "companies"
+    // `read_write_table_provider` also supports INSERT INTO; use `table_provider` for read-only access
     ctx.register_table(
         "companies",
         table_factory
-            .table_provider(TableReference::bare("companies"))
+            .read_write_table_provider(TableReference::bare("companies"))
             .await
             .expect("failed to create table provider"),
     )
     .expect("failed to register table");
 
+    // Write Example: Insert rows into the table.
+    // As in CQL, inserting a row with an existing primary key replaces that row.
+    let df = ctx
+        .sql("INSERT INTO companies (id, name) VALUES (2, 'Initech'), (3, 'Umbrella Corporation')")
+        .await
+        .expect("insert failed");
+    df.show().await.expect("show failed");
+
     // Query Example 1: Read the whole table
     let df = ctx
-        .sql("SELECT * FROM companies")
+        .sql("SELECT * FROM companies ORDER BY id")
         .await
         .expect("select failed");
     df.show().await.expect("show failed");
