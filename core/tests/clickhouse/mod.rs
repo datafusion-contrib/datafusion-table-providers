@@ -1,12 +1,15 @@
 use clickhouse::Client;
 use common::get_clickhouse_params;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{common::TableReference, prelude::SessionContext};
 use datafusion_table_providers::{
     clickhouse::ClickHouseTableFactory,
-    sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
+    sql::db_connection_pool::{
+        clickhousepool::ClickHouseConnectionPool, dbconnection::AsyncDbConnection, DbConnectionPool,
+    },
 };
 use linktime::{ctor, dtor};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 mod common;
 
@@ -155,12 +158,6 @@ async fn clickhouse_insert_and_read() {
 /// `get_schema` instead of inferring it from the database.
 #[tokio::test]
 async fn clickhouse_connection_pool_with_schema() {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_table_providers::sql::db_connection_pool::{
-        dbconnection::AsyncDbConnection, DbConnectionPool,
-    };
-    use std::sync::Arc;
-
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
         let container_manager = guard.as_mut().unwrap();

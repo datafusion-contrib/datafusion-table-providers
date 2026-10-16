@@ -11,13 +11,12 @@ use arrow::{
     array::*,
     datatypes::{i256, DataType, Field, Schema, TimeUnit, UInt16Type},
 };
-
 use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
 use crate::arrow_record_batch_gen::*;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProviderFactory;
-use datafusion::common::{Constraints, ToDFSchema};
+use datafusion::common::{Constraints, TableReference, ToDFSchema};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::physical_plan::collect;
@@ -1006,8 +1005,6 @@ async fn test_mysql_arrow_oneway() {
 /// A pool created with `with_schema` must return the schema provided for a table from
 /// `get_schema` instead of inferring it from the database.
 async fn test_mysql_connection_pool_with_schema(port: u16) {
-    use datafusion::common::TableReference;
-
     let table_reference = TableReference::bare("with_schema_table");
 
     let pool = common::get_mysql_connection_pool(port)

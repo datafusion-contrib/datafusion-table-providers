@@ -11,7 +11,7 @@ use datafusion::physical_plan::collect;
 use datafusion::{catalog::TableProvider, execution::context::SessionContext};
 use datafusion::{catalog::TableProviderFactory, logical_expr::dml::InsertOp};
 use datafusion::{
-    common::{Constraints, ToDFSchema},
+    common::{Constraints, TableReference, ToDFSchema},
     datasource::memory::MemorySourceConfig,
 };
 
@@ -19,7 +19,7 @@ use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
 use datafusion_table_providers::{
     postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
-    sql::sql_provider_datafusion::SqlTable,
+    sql::{db_connection_pool::dbconnection::AsyncDbConnection, sql_provider_datafusion::SqlTable},
     UnsupportedTypeAction,
 };
 
@@ -185,9 +185,6 @@ async fn test_arrow_postgres_one_way() {
 /// A pool created with `with_schema` must return the schema provided for a table from
 /// `get_schema` instead of inferring it from the database.
 async fn test_postgres_connection_pool_with_schema(port: u16) {
-    use datafusion::common::TableReference;
-    use datafusion_table_providers::sql::db_connection_pool::dbconnection::AsyncDbConnection;
-
     let table_reference = TableReference::bare("with_schema_table");
 
     let pool = common::get_postgres_connection_pool(port)

@@ -336,6 +336,8 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::TableReference;
     use datafusion_table_providers_common::sql::db_connection_pool::Mode;
     use rand::RngExt;
     use rstest::rstest;
@@ -470,9 +472,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_sqlite_connection_pool_factory_with_schema() {
-        use datafusion::arrow::datatypes::{DataType, Field, Schema};
-        use datafusion::common::TableReference;
-
         let factory = SqliteConnectionPoolFactory::new(
             "./test.sqlite",
             Mode::Memory,

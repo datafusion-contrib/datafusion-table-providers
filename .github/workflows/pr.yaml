@@ -201,9 +201,7 @@ jobs:
     timeout-minutes: 45
 
     env:
-      # Must match the tag the integration tests start (they pull it only if
-      # an image with exactly this tag is missing).
-      ORACLE_DOCKER_IMAGE: gvenzl/oracle-free:latest
+      ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
       RUST_LOG: info
 
     steps:
