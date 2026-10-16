@@ -10,18 +10,18 @@ description = "DataFusion clickhouse table provider"
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true, features = ["lz4"] }
-async-stream = "0.3"
-async-trait = "0.1"
-clickhouse = "0.15"
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+clickhouse = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 regex = "1"
-serde = { version = "1.0", features = ["derive"] }
-snafu = "0.9"
-secrecy = "0.10"
-url = "2.5"
+serde = { workspace = true }
+snafu = { workspace = true }
+secrecy = { workspace = true }
+url = { workspace = true }
 
 [features]
 default = ["federation"]

@@ -11,7 +11,7 @@ description = { workspace = true }
 arrow = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-table-providers-common = { workspace = true }
-tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "fs", "rt-multi-thread"] }
 
 datafusion-table-providers-adbc = { workspace = true, optional = true }
 datafusion-table-providers-clickhouse = { workspace = true, optional = true }
@@ -31,10 +31,10 @@ anyhow = "1.0"
 arrow-flight = { workspace = true }
 arrow-json = { workspace = true }
 arrow-schema = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 bollard = "=0.21.1"
-chrono = "0.4.44"
-clickhouse = "0.15"
+chrono = { workspace = true }
+clickhouse = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
 datafusion-federation = { workspace = true, features = ["sql"] }
 duckdb = { workspace = true, features = [
@@ -44,30 +44,30 @@ duckdb = { workspace = true, features = [
   "vtab-arrow",
   "appender-arrow",
 ] }
-futures = "0.3"
+futures = { workspace = true }
 insta = { version = "1.46.0", features = ["filters"] }
 linktime = { default-features = false, version = "0.19.0", features = ["ctor", "dtor", "proc_macro"]  }
-mongodb = { version = "3.6.0", features = ["openssl-tls"] }
+mongodb = { workspace = true }
 mysql_async = { version = "0.37", features = [
   "native-tls-tls",
   "chrono",
   "time",
   "bigdecimal",
 ] }
-oracle = { version = "0.6", features = ["chrono"] }
+oracle = { workspace = true }
 prost = { version = "=0.14.4" }
-rand = "0.10"
-reqwest = "0.13"
-rstest = "0.26.1"
-secrecy = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tempfile = "3.27.0"
+rand = { workspace = true }
+reqwest = { workspace = true }
+rstest = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-log = { version = "0.2", features = ["trace"] }
-tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "fs", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = { version = "0.14", features = ["tls-native-roots", "tls-webpki-roots"] }
-tracing = "0.1"
+tonic = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
