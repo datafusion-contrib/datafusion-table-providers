@@ -1,4 +1,3 @@
-use std::{any::Any, sync::Arc};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::TableReference;
@@ -8,8 +7,11 @@ use futures::{StreamExt, TryStreamExt};
 use scylla::client::session::Session;
 use scylla::value::{CqlValue, Row};
 use snafu::prelude::*;
+use std::{any::Any, sync::Arc};
 
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{self, AsyncDbConnection, DbConnection, GenericError, Result, TableSchemas};
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
+    self, AsyncDbConnection, DbConnection, GenericError, Result, TableSchemas,
+};
 
 use crate::types::{column_specs_to_schema, rows_to_record_batch};
 
@@ -100,12 +102,9 @@ impl AsyncDbConnection<Arc<Session>, CqlValue> for CassandraConnection {
 
     fn new_with_schemas(session: Arc<Session>, schemas: Arc<TableSchemas>) -> Self
     where
-        Self: Sized
+        Self: Sized,
     {
-        Self {
-            session,
-            schemas
-        }
+        Self { session, schemas }
     }
 
     /// Returns the tables of the keyspace `schema`.

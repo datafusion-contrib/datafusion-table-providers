@@ -9,12 +9,12 @@ use scylla::value::CqlValue;
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
 
+use crate::conn::CassandraConnection;
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::TableSchemas;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::{AsyncDbConnection, DbConnection},
     DbConnectionPool, JoinPushDown,
 };
-use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::TableSchemas;
-use crate::conn::CassandraConnection;
 
 type PoolResult<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
@@ -239,7 +239,7 @@ impl CassandraConnectionPool {
     /// Returns a direct connection to the underlying database.
     #[must_use]
     pub fn connect_direct(&self) -> CassandraConnection {
-        CassandraConnection::new_with_schemas(self.session(), Arc::clone(&self.schemas),)
+        CassandraConnection::new_with_schemas(self.session(), Arc::clone(&self.schemas))
     }
 }
 
