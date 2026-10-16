@@ -13,19 +13,24 @@ use tokio::task;
 
 use crate::arrow_sql_gen::{map_oracle_type_to_arrow_type, rows_to_arrow};
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
-    AsyncDbConnection, DbConnection, Error, GenericError, Result, UnableToGetSchemaSnafu,
-    UnableToGetSchemasSnafu, UnableToGetTablesSnafu, UnableToQueryArrowSnafu,
+    AsyncDbConnection, DbConnection, Error, GenericError, Result, TableSchemas,
+    UnableToGetSchemaSnafu, UnableToGetSchemasSnafu, UnableToGetTablesSnafu,
+    UnableToQueryArrowSnafu,
 };
 
 pub type OraclePooledConnection = bb8::PooledConnection<'static, OracleConnectionManager>;
 
 pub struct OracleConnection {
     pub conn: OraclePooledConnection,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl OracleConnection {
     pub fn new(conn: OraclePooledConnection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            schemas: Arc::default(),
+        }
     }
 }
 
@@ -48,13 +53,24 @@ impl DbConnection<OraclePooledConnection, oracle::sql_type::OracleType> for Orac
 #[async_trait]
 impl AsyncDbConnection<OraclePooledConnection, oracle::sql_type::OracleType> for OracleConnection {
     fn new(conn: OraclePooledConnection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            schemas: Arc::default(),
+        }
+    }
+
+    fn new_with_schemas(conn: OraclePooledConnection, schemas: Arc<TableSchemas>) -> Self {
+        Self { conn, schemas }
     }
 
     async fn get_schema(
         &self,
         table_reference: &TableReference,
     ) -> std::result::Result<SchemaRef, Error> {
+        if let Some(schema) = self.schemas.get(table_reference) {
+            return Ok(Arc::clone(schema));
+        }
+
         let table_name = table_reference.table().to_uppercase();
         let schema_name = table_reference.schema().map(|s| s.to_uppercase());
 

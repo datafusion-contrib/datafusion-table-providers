@@ -1,4 +1,6 @@
 use crate::conn::MySQLConnection;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
@@ -12,7 +14,7 @@ use snafu::{ResultExt, Snafu};
 
 use datafusion_table_providers_common::{
     sql::db_connection_pool::{
-        dbconnection::{AsyncDbConnection, DbConnection},
+        dbconnection::{AsyncDbConnection, DbConnection, TableSchemas},
         JoinPushDown,
     },
     util::{self, ns_lookup::verify_ns_lookup_and_tcp_connect},
@@ -56,6 +58,7 @@ pub enum Error {
 pub struct MySQLConnectionPool {
     pool: Arc<mysql_async::Pool>,
     join_push_down: JoinPushDown,
+    schemas: Arc<TableSchemas>,
 }
 
 const SETUP_QUERIES: [&str; 4] = [
@@ -209,7 +212,26 @@ impl MySQLConnectionPool {
         Ok(Self {
             pool: Arc::new(pool),
             join_push_down,
+            schemas: Arc::default(),
         })
+    }
+
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
+    #[must_use]
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
+        self
+    }
+
+    fn new_connection(&self, conn: mysql_async::Conn) -> MySQLConnection {
+        MySQLConnection::new_with_schemas(conn, Arc::clone(&self.schemas))
     }
 
     /// Returns a direct connection to the underlying database.
@@ -221,7 +243,7 @@ impl MySQLConnectionPool {
         let pool = Arc::clone(&self.pool);
         let conn = pool.get_conn().await.context(MySQLConnectionSnafu)?;
 
-        Ok(MySQLConnection::new(conn))
+        Ok(self.new_connection(conn))
     }
 
     pub fn metrics(&self) -> Arc<Metrics> {
@@ -291,7 +313,7 @@ impl DbConnectionPool<mysql_async::Conn, &'static (dyn ToValue + Sync)> for MySQ
             .context(MySQLConnectionSnafu)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        Ok(Box::new(MySQLConnection::new(conn)))
+        Ok(Box::new(self.new_connection(conn)))
     }
 
     fn join_push_down(&self) -> JoinPushDown {

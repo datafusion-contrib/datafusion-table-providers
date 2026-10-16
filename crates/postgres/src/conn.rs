@@ -46,6 +46,7 @@ use tokio_postgres::Row;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::DbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result;
+use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::TableSchemas;
 
 const SCHEMA_QUERY: &str = r"
 WITH custom_type_details AS (
@@ -298,6 +299,7 @@ fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> 
 pub struct PostgresConnection {
     pub conn: PostgresPooledConnection,
     unsupported_type_action: UnsupportedTypeAction,
+    schemas: Arc<TableSchemas>,
 }
 
 impl SchemaValidator for PostgresConnection {
@@ -339,6 +341,15 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         PostgresConnection {
             conn,
             unsupported_type_action: UnsupportedTypeAction::default(),
+            schemas: Arc::default(),
+        }
+    }
+
+    fn new_with_schemas(conn: PostgresPooledConnection, schemas: Arc<TableSchemas>) -> Self {
+        PostgresConnection {
+            conn,
+            unsupported_type_action: UnsupportedTypeAction::default(),
+            schemas,
         }
     }
 
@@ -392,6 +403,10 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
+        if let Some(schema) = self.schemas.get(table_reference) {
+            return Ok(Arc::clone(schema));
+        }
+
         let (variant, columns) = self.query_variant_and_schema(table_reference).await?;
 
         // Native inference can return zero rows even though the table exists and is

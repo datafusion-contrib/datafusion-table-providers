@@ -244,37 +244,6 @@ jobs:
             docker save -o /tmp/oracle-image/oracle.tar "${ORACLE_DOCKER_IMAGE}"
           fi
 
-      # Build the test binary first so the Rust compile does not eat into the
-      # Oracle container's boot/health window below or the job timeout.
-      - name: Build integration test binary
-        run: cargo build --tests -p datafusion-table-providers --no-default-features --features oracle
-
-      - name: Start Oracle container
-        run: |
-          docker run -d --name oracle-it \
-            -e ORACLE_PASSWORD=password \
-            -p 1521:1521 \
-            "${ORACLE_DOCKER_IMAGE}"
-          echo "Waiting for Oracle to become ready (cold boot can take ~10 minutes on CI runners)..."
-          # gvenzl/oracle-free ships no Docker HEALTHCHECK, so readiness is
-          # detected via the image's own "DATABASE IS READY TO USE!" marker
-          # plus a successful TCP probe of the published listener port.
-          for i in $(seq 1 360); do
-            if docker logs oracle-it 2>&1 | grep -q "DATABASE IS READY TO USE!" \
-               && (exec 3<>/dev/tcp/127.0.0.1/1521) 2>/dev/null; then
-              echo "Oracle listener is up on 1521"
-              exit 0
-            fi
-            if docker inspect --format '{{.State.Status}}' oracle-it | grep -q exited; then
-              docker logs oracle-it
-              exit 1
-            fi
-            sleep 5
-          done
-          echo "Oracle never became ready" >&2
-          docker logs oracle-it >&2 || true
-          exit 1
-
       - name: Run Oracle integration tests
         run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
 

@@ -738,7 +738,6 @@ mod tests {
     use std::{error::Error, sync::Arc};
 
     use datafusion::common::TableReference;
-    use datafusion::execution::context::SessionContext;
     use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Dispatch};
 
     use crate::sql::sql_provider_datafusion::SqlTable;

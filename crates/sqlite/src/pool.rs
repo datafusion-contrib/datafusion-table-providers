@@ -2,13 +2,15 @@ use crate::conn::SqliteConnection;
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use snafu::prelude::*;
 use tokio_rusqlite::{Connection, ToSql};
 
 use datafusion_table_providers_common::sql::db_connection_pool::DbConnectionPool;
 type PoolResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::{AsyncDbConnection, DbConnection},
+    dbconnection::{AsyncDbConnection, DbConnection, TableSchemas},
     JoinPushDown, Mode,
 };
 
@@ -29,6 +31,7 @@ pub struct SqliteConnectionPoolFactory {
     mode: Mode,
     attach_databases: Option<Vec<Arc<str>>>,
     busy_timeout: Duration,
+    schemas: Arc<TableSchemas>,
 }
 
 impl SqliteConnectionPoolFactory {
@@ -38,7 +41,22 @@ impl SqliteConnectionPoolFactory {
             mode,
             attach_databases: None,
             busy_timeout,
+            schemas: Arc::default(),
         }
+    }
+
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the table data.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `main.users` are different tables.
+    #[must_use]
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
+        self
     }
 
     #[must_use]
@@ -84,12 +102,13 @@ impl SqliteConnectionPoolFactory {
             vec![]
         };
 
-        let pool = SqliteConnectionPool::new(
+        let pool = SqliteConnectionPool::new_with_schemas(
             &self.path,
             self.mode,
             join_push_down,
             attach_databases,
             self.busy_timeout,
+            Arc::clone(&self.schemas),
         )
         .await?;
 
@@ -107,6 +126,7 @@ pub struct SqliteConnectionPool {
     path: Arc<str>,
     attach_databases: Vec<Arc<str>>,
     busy_timeout: Duration,
+    schemas: Arc<TableSchemas>,
 }
 
 impl SqliteConnectionPool {
@@ -126,6 +146,31 @@ impl SqliteConnectionPool {
         attach_databases: Vec<Arc<str>>,
         busy_timeout: Duration,
     ) -> PoolResult<Self> {
+        Self::new_with_schemas(
+            path,
+            mode,
+            join_push_down,
+            attach_databases,
+            busy_timeout,
+            Arc::default(),
+        )
+        .await
+    }
+
+    /// Creates a new instance of `SqliteConnectionPool` whose connections return the provided
+    /// `schemas` from `get_schema` instead of inferring them from the table data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a problem creating the connection pool.
+    pub async fn new_with_schemas(
+        path: &str,
+        mode: Mode,
+        join_push_down: JoinPushDown,
+        attach_databases: Vec<Arc<str>>,
+        busy_timeout: Duration,
+        schemas: Arc<TableSchemas>,
+    ) -> PoolResult<Self> {
         let conn = match mode {
             Mode::Memory => Connection::open_in_memory()
                 .await
@@ -143,6 +188,7 @@ impl SqliteConnectionPool {
             attach_databases,
             path: path.into(),
             busy_timeout,
+            schemas,
         })
     }
 
@@ -233,7 +279,12 @@ impl SqliteConnectionPool {
 
     #[must_use]
     pub fn connect_sync(&self) -> Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>> {
-        Box::new(SqliteConnection::new(self.conn.clone()))
+        Box::new(self.new_connection())
+    }
+
+    fn new_connection(&self) -> SqliteConnection {
+        let conn = self.conn.clone();
+        SqliteConnection::new_with_schemas(conn, Arc::clone(&self.schemas))
     }
 
     /// Will attempt to clone the connection pool. This will always succeed for in-memory mode.
@@ -250,6 +301,7 @@ impl SqliteConnectionPool {
                 path: Arc::clone(&self.path),
                 attach_databases: self.attach_databases.clone(),
                 busy_timeout: self.busy_timeout,
+                schemas: Arc::clone(&self.schemas),
             }),
             Mode::File => {
                 let attach_databases = if self.attach_databases.is_empty() {
@@ -258,10 +310,11 @@ impl SqliteConnectionPool {
                     Some(self.attach_databases.clone())
                 };
 
-                SqliteConnectionPoolFactory::new(&self.path, self.mode, self.busy_timeout)
-                    .with_databases(attach_databases)
-                    .build()
-                    .await
+                let mut factory =
+                    SqliteConnectionPoolFactory::new(&self.path, self.mode, self.busy_timeout)
+                        .with_databases(attach_databases);
+                factory.schemas = Arc::clone(&self.schemas);
+                factory.build().await
             }
         }
     }
@@ -272,9 +325,7 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
     async fn connect(
         &self,
     ) -> PoolResult<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
-        let conn = self.conn.clone();
-
-        Ok(Box::new(SqliteConnection::new(conn)))
+        Ok(Box::new(self.new_connection()))
     }
 
     fn join_push_down(&self) -> JoinPushDown {
@@ -285,6 +336,8 @@ impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnect
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::TableReference;
     use datafusion_table_providers_common::sql::db_connection_pool::Mode;
     use rand::RngExt;
     use rstest::rstest;
@@ -415,5 +468,108 @@ mod tests {
             "Database to attach does not exist: {}",
             db_names[1]
         )));
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_pool_factory_with_schema() {
+        let factory = SqliteConnectionPoolFactory::new(
+            "./test.sqlite",
+            Mode::Memory,
+            Duration::from_millis(5000),
+        );
+        let pool = factory.build().await.unwrap();
+        let conn = pool.connect().await.unwrap();
+        let conn = conn.as_async().unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", &[])
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO t VALUES (1, NULL), (2, 'a')", &[])
+            .await
+            .unwrap();
+
+        // the schema is inferred from the data when none is provided
+        let inferred = conn.get_schema(&TableReference::bare("t")).await.unwrap();
+        assert_eq!(
+            inferred.fields.len(),
+            2,
+            "There should be 2 fields in the inferred table"
+        );
+        let field1 = inferred.field(0);
+        assert_eq!(field1.name(), "id");
+        assert_eq!(field1.data_type(), &DataType::Int64);
+        assert!(field1.is_nullable());
+        let field2 = inferred.field(1);
+        assert_eq!(field2.name(), "name");
+        assert_eq!(field2.data_type(), &DataType::Null); // inferring uses only the first row
+        assert!(field2.is_nullable());
+
+        // the provided schemas are used as-is, each one for its own table
+        let schema_t = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let schema_u = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            true,
+        )]));
+        let factory = SqliteConnectionPoolFactory::new(
+            "./test.sqlite",
+            Mode::Memory,
+            Duration::from_millis(5000),
+        )
+        .with_schema("t", Arc::clone(&schema_t))
+        .with_schema(TableReference::bare("u"), Arc::clone(&schema_u));
+
+        let pool = factory.build().await.unwrap();
+        let conn = pool.connect().await.unwrap();
+        let conn = conn.as_async().unwrap();
+        assert_eq!(
+            conn.get_schema(&TableReference::bare("t")).await.unwrap(),
+            schema_t
+        );
+        assert_eq!(
+            conn.get_schema(&TableReference::bare("u")).await.unwrap(),
+            schema_u
+        );
+
+        let sync_conn = pool.connect_sync();
+        let sync_conn = sync_conn.as_async().unwrap();
+        assert_eq!(
+            sync_conn
+                .get_schema(&TableReference::bare("t"))
+                .await
+                .unwrap(),
+            schema_t
+        );
+
+        // the schema of a table without a provided schema is still inferred
+        conn.execute("CREATE TABLE v (flag INTEGER)", &[])
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO v VALUES (1)", &[]).await.unwrap();
+        let inferred = conn.get_schema(&TableReference::bare("v")).await.unwrap();
+        assert_eq!(inferred.fields.len(), 1);
+        assert_eq!(inferred.field(0).name(), "flag");
+        assert_eq!(inferred.field(0).data_type(), &DataType::Int64);
+
+        // table references are matched exactly
+        assert!(conn
+            .get_schema(&TableReference::partial("main", "t"))
+            .await
+            .is_err());
+
+        // a cloned pool keeps the provided schemas
+        let cloned = pool.try_clone().await.unwrap();
+        let cloned_conn = cloned.connect().await.unwrap();
+        assert_eq!(
+            cloned_conn
+                .as_async()
+                .unwrap()
+                .get_schema(&TableReference::bare("u"))
+                .await
+                .unwrap(),
+            schema_u
+        );
     }
 }

@@ -17,7 +17,7 @@ use snafu::prelude::*;
 
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Result;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
-    AsyncDbConnection, DbConnection,
+    AsyncDbConnection, DbConnection, TableSchemas,
 };
 
 #[derive(Debug, Snafu)]
@@ -46,6 +46,7 @@ pub enum Error {
 
 pub struct MySQLConnection {
     pub conn: Arc<Mutex<Conn>>,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl MySQLConnection {
@@ -91,6 +92,14 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
     fn new(conn: Conn) -> Self {
         MySQLConnection {
             conn: Arc::new(Mutex::new(conn)),
+            schemas: Arc::default(),
+        }
+    }
+
+    fn new_with_schemas(conn: Conn, schemas: Arc<TableSchemas>) -> Self {
+        MySQLConnection {
+            conn: Arc::new(Mutex::new(conn)),
+            schemas,
         }
     }
 
@@ -153,6 +162,10 @@ impl<'a> AsyncDbConnection<Conn, &'a (dyn ToValue + Sync)> for MySQLConnection {
         SchemaRef,
         datafusion_table_providers_common::sql::db_connection_pool::dbconnection::Error,
     > {
+        if let Some(schema) = self.schemas.get(table_reference) {
+            return Ok(Arc::clone(schema));
+        }
+
         let mut conn = self.conn.lock().await;
         let conn = &mut *conn;
 
