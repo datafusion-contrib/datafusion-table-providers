@@ -128,6 +128,11 @@ path = "examples/mysql.rs"
 required-features = ["mysql"]
 
 [[example]]
+name = "cassandra"
+path = "examples/cassandra.rs"
+required-features = ["cassandra"]
+
+[[example]]
 name = "duckdb"
 path = "examples/duckdb.rs"
 required-features = ["duckdb"]

@@ -192,6 +192,41 @@ EOF
 cargo run -p datafusion-table-providers --example mysql --features mysql
 ```
 
+### Cassandra
+
+The Cassandra provider is built on the [ScyllaDB Rust driver](https://crates.io/crates/scylla), so it works with ScyllaDB too. CQL has no joins or aggregations and can filter only on key columns, so only projections and `LIMIT` are pushed down to Cassandra; filters, aggregations and joins are evaluated by DataFusion.
+
+In order to run the Cassandra example, you need to have a Cassandra server running. You can use the following command to start a Cassandra server in a Docker container the example can use:
+
+```bash
+# The driver connects to the address the node advertises, so make it advertise one reachable from the host
+docker run --name cassandra \
+    -e CASSANDRA_BROADCAST_RPC_ADDRESS=127.0.0.1 \
+    -p 9042:9042 \
+    -d cassandra:5.0
+# Wait for the Cassandra server to start (this may take a minute)
+until docker exec cassandra cqlsh -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1; do
+    sleep 5
+done
+
+# Create a table in the Cassandra server and insert some data
+docker exec -i cassandra cqlsh <<EOF
+CREATE KEYSPACE cassandra_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+
+CREATE TABLE cassandra_ks.companies (
+  id INT PRIMARY KEY,
+  name TEXT
+);
+
+INSERT INTO cassandra_ks.companies (id, name) VALUES (1, 'Acme Corporation');
+EOF
+```
+
+```bash
+# Run from repo folder
+cargo run -p datafusion-table-providers --example cassandra --features cassandra
+```
+
 ### Oracle
 
 The Oracle provider is driven by [`rust-oracle`](https://crates.io/crates/oracle) (ODPI-C), so it requires the Oracle Instant Client libraries at runtime. They are `dlopen`'d on first connection — compiling does not need them, running does.
