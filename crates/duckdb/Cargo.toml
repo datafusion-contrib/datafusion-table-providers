@@ -10,21 +10,21 @@ description = "DataFusion duckdb table provider"
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-async-stream = "0.3"
-async-trait = "0.1"
+async-stream = { workspace = true }
+async-trait = { workspace = true }
 byte-unit = "5.2"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true, features = ["arrow58"] }
 duckdb = { workspace = true, features = ["bundled", "r2d2", "vtab", "vtab-arrow", "appender-arrow"] }
 dyn-clone = "1.0"
-futures = "0.3"
-itertools = "0.15"
-r2d2 = "0.8"
-rand = { version = "0.10" }
-snafu = "0.9"
-tokio = { version = "1.52", features = ["macros", "fs"] }
-tracing = "0.1"
+futures = { workspace = true }
+itertools = { workspace = true }
+r2d2 = { workspace = true }
+rand = { workspace = true }
+snafu = { workspace = true }
+tokio = { workspace = true, features = ["macros", "fs"] }
+tracing = { workspace = true }
 
 [features]
 default = ["federation"]
@@ -32,8 +32,8 @@ federation = ["dep:datafusion-federation", "datafusion-table-providers-common/fe
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
-reqwest = "0.13"
-tempfile = "3.27.0"
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [package.metadata.docs.rs]
