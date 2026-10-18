@@ -27,9 +27,9 @@ use crate::pool::CassandraConnectionPool;
 ///
 /// Filters are not pushed down (see the crate documentation), so DataFusion applies them.
 pub struct CassandraTable {
-    table_reference: TableReference,
-    pool: Arc<CassandraConnectionPool>,
-    schema: SchemaRef,
+    pub(crate) table_reference: TableReference,
+    pub(crate) pool: Arc<CassandraConnectionPool>,
+    pub(crate) schema: SchemaRef,
 }
 
 impl fmt::Debug for CassandraTable {
@@ -157,7 +157,11 @@ fn scan_columns(
     }
 }
 
-fn build_cql(table_reference: &TableReference, columns: &[String], limit: Option<usize>) -> String {
+pub(crate) fn build_cql(
+    table_reference: &TableReference,
+    columns: &[String],
+    limit: Option<usize>,
+) -> String {
     let columns = columns
         .iter()
         .map(|c| quote_identifier(c))

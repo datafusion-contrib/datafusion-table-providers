@@ -2505,6 +2505,7 @@ dependencies = [
  "async-trait",
  "bigdecimal",
  "datafusion",
+ "datafusion-federation",
  "datafusion-table-providers-common",
  "futures",
  "num-bigint 0.4.8",

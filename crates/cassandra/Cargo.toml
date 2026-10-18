@@ -12,6 +12,7 @@ arrow = { workspace = true }
 async-trait = "0.1"
 bigdecimal = "0.4"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true }
 futures = "0.3"
 num-bigint = "0.4"
@@ -22,6 +23,10 @@ uuid = "1"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["federation"]
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
 
 [package.metadata.docs.rs]
 all-features = true

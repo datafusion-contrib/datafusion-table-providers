@@ -86,6 +86,7 @@ async fn test_cassandra() {
     test_cassandra_projection_filter_and_limit(&pool).await;
     test_cassandra_count(&pool).await;
     test_cassandra_explain_shows_pushed_down_cql(&pool).await;
+    test_cassandra_federation(&pool).await;
     test_cassandra_tables_and_schemas(&pool).await;
     test_cassandra_missing_table(&pool).await;
     test_cassandra_connection_pool_with_schema(port).await;
@@ -401,6 +402,70 @@ async fn test_cassandra_explain_shows_pushed_down_cql(pool: &Arc<CassandraConnec
     assert!(
         plan.contains(r#"CassandraExec cql=SELECT "name" FROM "it_ks"."users" LIMIT 3"#),
         "the projection and limit should be pushed down:\n{plan}"
+    );
+}
+
+/// In a federated session, only the scans must be sent to Cassandra: CQL can't run the joins,
+/// aggregations and filters federation would push down otherwise.
+async fn test_cassandra_federation(pool: &Arc<CassandraConnectionPool>) {
+    let ctx = SessionContext::new_with_state(datafusion_federation::default_session_state());
+    register_table(&ctx, pool, "users").await;
+
+    assert_eq!(
+        query_to_string(
+            &ctx,
+            "SELECT name, age FROM users WHERE age > 30 ORDER BY age DESC"
+        )
+        .await,
+        "+-------+-----+
+| name  | age |
++-------+-----+
+| carol | 42  |
+| dave  | 35  |
+| alice | 31  |
++-------+-----+"
+    );
+    assert_eq!(
+        query_to_string(
+            &ctx,
+            "SELECT u.name, count(*) AS n FROM users u JOIN users v ON u.id = v.id \
+             WHERE v.age < 30 GROUP BY u.name ORDER BY u.name"
+        )
+        .await,
+        "+------+---+
+| name | n |
++------+---+
+| bob  | 1 |
+| eve  | 1 |
++------+---+"
+    );
+
+    let batches = query(&ctx, "SELECT count(*) FROM users").await;
+    assert_eq!(array_value_to_string(batches[0].column(0), 0).unwrap(), "5");
+
+    // the filter must be applied after the limit
+    let batches = query(
+        &ctx,
+        "SELECT count(*) FROM (SELECT age FROM users LIMIT 3) WHERE age > 0",
+    )
+    .await;
+    assert_eq!(array_value_to_string(batches[0].column(0), 0).unwrap(), "3");
+
+    let batches = query(&ctx, "SELECT id FROM users LIMIT 2").await;
+    let num_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(num_rows, 2);
+
+    let batches = query(
+        &ctx,
+        "EXPLAIN SELECT name FROM users WHERE age > 30 LIMIT 3",
+    )
+    .await;
+    let plan = arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string();
+    assert!(
+        plan.contains(r#"CassandraExec cql=SELECT "age", "name" FROM "it_ks"."users""#),
+        "only the projection should be pushed down:\n{plan}"
     );
 }
 

@@ -9,6 +9,8 @@
 //! to with `INSERT INTO`; see [`CassandraTableWriter`].
 
 pub mod conn;
+#[cfg(feature = "federation")]
+mod federation;
 pub mod pool;
 mod table;
 pub mod types;
@@ -53,11 +55,16 @@ impl CassandraTableFactory {
             .get_schema(&table_reference)
             .await?;
 
-        Ok(Arc::new(CassandraTable::new(
+        let table_provider = Arc::new(CassandraTable::new(
             table_reference,
             Arc::clone(&self.pool),
             schema,
-        )))
+        ));
+
+        #[cfg(feature = "federation")]
+        let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
+
+        Ok(table_provider)
     }
 
     /// Creates a table provider for `table_reference` that also supports `INSERT INTO`.
