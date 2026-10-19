@@ -23,17 +23,26 @@ use crate::conn::quote_identifier;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrimaryKey {
     /// The partition key columns, in order.
-    pub partition_key: Vec<KeyColumn>,
+    partition_key: Vec<KeyColumn>,
     /// The clustering columns, in order.
-    pub clustering_key: Vec<KeyColumn>,
+    clustering_key: Vec<KeyColumn>,
+}
+
+impl PrimaryKey {
+    pub fn new(partition_key: Vec<KeyColumn>, clustering_key: Vec<KeyColumn>) -> Self {
+        PrimaryKey {
+            partition_key,
+            clustering_key,
+        }
+    }
 }
 
 /// A primary key column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyColumn {
-    pub name: String,
+    name: String,
     /// The CQL type, as in `system_schema.columns`, e.g. `int` or `frozen<list<int>>`.
-    pub cql_type: String,
+    cql_type: String,
 }
 
 impl KeyColumn {

@@ -115,10 +115,10 @@ impl CassandraConnection {
                 .map(|(name, _, _, cql_type)| KeyColumn::new(name, cql_type))
                 .collect()
         };
-        Ok(PrimaryKey {
-            partition_key: key_columns("partition_key"),
-            clustering_key: key_columns("clustering"),
-        })
+        Ok(PrimaryKey::new(
+            key_columns("partition_key"),
+            key_columns("clustering"),
+        ))
     }
 }
 
