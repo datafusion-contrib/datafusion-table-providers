@@ -87,6 +87,9 @@ async fn test_cassandra() {
     test_cassandra_count(&pool).await;
     test_cassandra_explain_shows_pushed_down_cql(&pool).await;
     test_cassandra_federation(&pool).await;
+    test_cassandra_filter_pushdown(&pool).await;
+    test_cassandra_filter_pushdown_federated(&pool).await;
+    test_cassandra_scan_with_filters_not_pushed_down(&pool).await;
     test_cassandra_tables_and_schemas(&pool).await;
     test_cassandra_missing_table(&pool).await;
     test_cassandra_connection_pool_with_schema(port).await;
@@ -160,6 +163,32 @@ async fn create_test_data(pool: &CassandraConnectionPool) {
         ),
     )
     .await;
+    execute(
+        pool,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {KEYSPACE}.readings (sensor text, bucket int, ts bigint, \
+             seq int, value int, PRIMARY KEY ((sensor, bucket), ts, seq))"
+        ),
+    )
+    .await;
+    for (sensor, bucket, ts, seq, value) in [
+        ("a", 1, 10, 1, 100),
+        ("a", 1, 10, 2, 101),
+        ("a", 1, 20, 1, 102),
+        ("a", 1, 30, 1, -103),
+        ("a", 2, 10, 1, 104),
+        ("b", 1, 10, 1, 105),
+        ("b", 1, 40, 1, 106),
+    ] {
+        execute(
+            pool,
+            &format!(
+                "INSERT INTO {KEYSPACE}.readings (sensor, bucket, ts, seq, value) \
+                 VALUES ('{sensor}', {bucket}, {ts}, {seq}, {value})"
+            ),
+        )
+        .await;
+    }
     for (id, name, age) in [
         (1, "alice", 31),
         (2, "bob", 25),
@@ -469,6 +498,233 @@ async fn test_cassandra_federation(pool: &Arc<CassandraConnectionPool>) {
     );
 }
 
+/// Returns the `EXPLAIN` output of `sql`.
+async fn explain(ctx: &SessionContext, sql: &str) -> String {
+    query_to_string(ctx, &format!("EXPLAIN {sql}")).await
+}
+
+/// The filters on key columns that make up a valid CQL `WHERE` clause must be pushed down to
+/// Cassandra, the others must be applied by DataFusion.
+async fn test_cassandra_filter_pushdown(pool: &Arc<CassandraConnectionPool>) {
+    let ctx = SessionContext::new();
+    register_table(&ctx, pool, "users").await;
+    register_table(&ctx, pool, "readings").await;
+
+    let sql = "SELECT name FROM users WHERE id = 3";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"CassandraExec cql=SELECT "name" FROM "it_ks"."users" WHERE "id" = 3"#),
+        "the filter on the partition key should be pushed down:\n{plan}"
+    );
+    assert!(!plan.contains("FilterExec"), "{plan}");
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+-------+
+| name  |
++-------+
+| carol |
++-------+"
+    );
+
+    let sql = "SELECT name FROM users WHERE id IN (2, 4) AND age > 30";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"FROM "it_ks"."users" WHERE "id" IN (2, 4)"#),
+        "the IN list on the partition key should be pushed down:\n{plan}"
+    );
+    assert!(plan.contains("FilterExec: age@"), "{plan}");
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+------+
+| name |
++------+
+| dave |
++------+"
+    );
+
+    // the whole partition key, the 1st clustering column by `=` and the 2nd by a range
+    let sql = "SELECT ts, seq, value FROM readings \
+               WHERE sensor = 'a' AND bucket = 1 AND ts = 10 AND seq > 1 AND seq <= 5 \
+               ORDER BY seq";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(
+            r#"WHERE "sensor" = 'a' AND "bucket" = 1 AND "ts" = 10 AND "seq" > 1 AND "seq" <= 5"#
+        ),
+        "the filters on the key columns should be pushed down:\n{plan}"
+    );
+    assert!(!plan.contains("FilterExec"), "{plan}");
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+----+-----+-------+
+| ts | seq | value |
++----+-----+-------+
+| 10 | 2   | 101   |
++----+-----+-------+"
+    );
+
+    // a range on the 1st clustering column, with a filter on a regular column
+    let sql = "SELECT ts, value FROM readings \
+               WHERE sensor = 'a' AND bucket = 1 AND ts >= 20 AND value > 0";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"WHERE "sensor" = 'a' AND "bucket" = 1 AND "ts" >= 20"#),
+        "the filters on the key columns should be pushed down:\n{plan}"
+    );
+    assert!(plan.contains("FilterExec: value@"), "{plan}");
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+----+-------+
+| ts | value |
++----+-------+
+| 20 | 102   |
++----+-------+"
+    );
+
+    // CQL can't restrict a part of the partition key, nor clustering columns without it
+    let sql = "SELECT count(*) FROM readings WHERE sensor = 'a' AND ts = 10";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        !plan.contains("WHERE"),
+        "nothing should be pushed down:\n{plan}"
+    );
+    let batches = query(&ctx, sql).await;
+    assert_eq!(array_value_to_string(batches[0].column(0), 0).unwrap(), "3");
+
+    // only one restriction of a column can be pushed down
+    let sql = "SELECT count(*) FROM readings WHERE sensor = 'a' AND sensor = 'b' AND bucket = 1";
+    let batches = query(&ctx, sql).await;
+    assert_eq!(array_value_to_string(batches[0].column(0), 0).unwrap(), "0");
+
+    // the clustering column after a range can't be restricted
+    let sql = "SELECT count(*) FROM readings \
+               WHERE sensor = 'a' AND bucket = 1 AND ts > 5 AND seq = 1";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"WHERE "sensor" = 'a' AND "bucket" = 1 AND "ts" > 5"#),
+        "the partition key and the range should be pushed down:\n{plan}"
+    );
+    let batches = query(&ctx, sql).await;
+    assert_eq!(array_value_to_string(batches[0].column(0), 0).unwrap(), "3");
+
+    // the limit is pushed down along with the filters
+    let sql = "SELECT seq FROM readings WHERE sensor = 'a' AND bucket = 1 LIMIT 2";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"WHERE "sensor" = 'a' AND "bucket" = 1 LIMIT 2"#),
+        "the filters and the limit should be pushed down:\n{plan}"
+    );
+    let batches = query(&ctx, sql).await;
+    let num_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(num_rows, 2);
+}
+
+/// In a federated session, the filters on key columns must be pushed down too.
+async fn test_cassandra_filter_pushdown_federated(pool: &Arc<CassandraConnectionPool>) {
+    let ctx = SessionContext::new_with_state(datafusion_federation::default_session_state());
+    register_table(&ctx, pool, "users").await;
+    register_table(&ctx, pool, "readings").await;
+
+    let sql = "SELECT name FROM users WHERE id = 3 AND age > 30";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"FROM "it_ks"."users" WHERE "id" = 3"#),
+        "the filter on the partition key should be pushed down:\n{plan}"
+    );
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+-------+
+| name  |
++-------+
+| carol |
++-------+"
+    );
+
+    // The tables of a join are federated separately before DataFusion pushes the filters of
+    // the join down, so only the filters on the table itself reach the federated scan
+    let sql = "SELECT r.value FROM \
+               (SELECT * FROM readings WHERE sensor = 'b' AND bucket = 1 AND ts < 40) r \
+               JOIN users u ON r.bucket = u.id";
+    let plan = explain(&ctx, sql).await;
+    assert!(
+        plan.contains(r#"WHERE "sensor" = 'b' AND "bucket" = 1 AND "ts" < 40"#),
+        "the filters on the key columns should be pushed down:\n{plan}"
+    );
+    assert_eq!(
+        query_to_string(&ctx, sql).await,
+        "+-------+
+| value |
++-------+
+| 105   |
++-------+"
+    );
+}
+
+/// DataFusion may pass `scan` filters that don't make up a valid CQL `WHERE` clause together,
+/// as it decides on them in separate optimizer passes: those not pushed down must be applied.
+async fn test_cassandra_scan_with_filters_not_pushed_down(pool: &Arc<CassandraConnectionPool>) {
+    use datafusion::logical_expr::{col, lit};
+    use datafusion::physical_plan::{collect, displayable};
+
+    let ctx = SessionContext::new();
+    let provider = CassandraTableFactory::new(Arc::clone(pool))
+        .table_provider(TableReference::partial(KEYSPACE, "users"))
+        .await
+        .expect("table provider should be created");
+
+    let num_rows = |filters: Vec<datafusion::logical_expr::Expr>, limit| {
+        let ctx = &ctx;
+        let provider = Arc::clone(&provider);
+        async move {
+            let plan = provider
+                .scan(&ctx.state(), Some(&vec![1]), &filters, limit)
+                .await
+                .expect("scan should be planned");
+            let plan_string = displayable(plan.as_ref()).indent(false).to_string();
+            let batches = collect(plan, ctx.task_ctx())
+                .await
+                .expect("scan should be executed");
+            assert!(
+                batches.iter().all(|b| b.num_columns() == 1),
+                "{plan_string}"
+            );
+            (
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                plan_string,
+            )
+        }
+    };
+
+    let (rows, plan) = num_rows(vec![col("id").eq(lit(1)), col("id").eq(lit(2))], None).await;
+    assert_eq!(rows, 0, "{plan}");
+    assert!(plan.contains(r#"WHERE "id" = 1"#), "{plan}");
+    assert!(plan.contains("FilterExec: id@1 = 2"), "{plan}");
+
+    let (rows, plan) = num_rows(
+        vec![
+            col("id").eq(lit(1)),
+            col("id").in_list(vec![lit(1), lit(2)], false),
+        ],
+        Some(5),
+    )
+    .await;
+    assert_eq!(rows, 1, "{plan}");
+
+    let (rows, plan) = num_rows(
+        vec![
+            col("id").in_list(vec![lit(1), lit(2), lit(3)], false),
+            col("age").gt(lit(26)),
+        ],
+        Some(1),
+    )
+    .await;
+    assert_eq!(rows, 1, "{plan}");
+    assert!(
+        !plan.contains("LIMIT"),
+        "the limit must be applied after the filter: {plan}"
+    );
+}
+
 async fn test_cassandra_tables_and_schemas(pool: &Arc<CassandraConnectionPool>) {
     let conn = pool.connect().await.expect("connection should be created");
     let conn = conn.as_async().expect("connection should be async");
@@ -487,6 +743,7 @@ async fn test_cassandra_tables_and_schemas(pool: &Arc<CassandraConnectionPool>) 
         vec![
             "all_types".to_string(),
             "all_types_written".to_string(),
+            "readings".to_string(),
             "users".to_string(),
             "users_written".to_string(),
         ]

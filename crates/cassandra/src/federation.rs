@@ -3,8 +3,8 @@
 //! The federation optimizer hands a provider the largest sub-plan that only reads from it, to be
 //! run remotely as one SQL query. CQL can't run most such queries: it has no joins or
 //! aggregations, and `WHERE` clauses are limited to key columns. So the sub-plan is narrowed down
-//! to its table scans, which keep their projection and `LIMIT` and run as [`CassandraExec`]s,
-//! and the rest of it is evaluated by DataFusion.
+//! to its table scans, which keep their projection, the filters they can push down and `LIMIT`,
+//! and run as [`CassandraExec`]s. The rest of it is evaluated by DataFusion.
 
 use std::sync::Arc;
 
@@ -15,10 +15,12 @@ use datafusion::common::tree_node::Transformed;
 use datafusion::common::TableReference;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::logical_expr::{Extension, LogicalPlan, TableScan};
+use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion::optimizer::optimize_projections::OptimizeProjections;
 use datafusion::optimizer::optimizer::Optimizer;
+use datafusion::optimizer::push_down_filter::PushDownFilter;
 use datafusion::optimizer::push_down_limit::PushDownLimit;
+use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::OptimizerContext;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -35,8 +37,7 @@ use futures::TryStreamExt;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 use datafusion_table_providers_common::sql::db_connection_pool::{DbConnectionPool, JoinPushDown};
 
-use crate::pool::CassandraConnectionPool;
-use crate::{CassandraExec, CassandraTable};
+use crate::CassandraTable;
 
 impl CassandraTable {
     fn create_federated_table_source(
@@ -88,9 +89,7 @@ impl SQLExecutor for CassandraTable {
 
     fn logical_optimizer(&self) -> Option<LogicalOptimizer> {
         let planner: Arc<dyn FederationPlanner> = Arc::new(CassandraScanPlanner {
-            table_reference: self.table_reference.clone(),
-            pool: Arc::clone(&self.pool),
-            schema: Arc::clone(&self.schema),
+            table: self.clone(),
         });
         Some(Box::new(move |plan| {
             federate_table_scans_only(plan, Arc::clone(&planner))
@@ -138,8 +137,10 @@ impl SQLExecutor for CassandraTable {
 /// federated, to be planned by `planner`, as CQL can run nothing more (see the module
 /// documentation).
 ///
-/// The projections and limits are pushed down to the scans first: once federated, the scans
-/// are opaque to the DataFusion optimizer.
+/// The projections, filters and limits are pushed down to the scans first: once federated, the
+/// scans are opaque to the DataFusion optimizer. The federation runs before the DataFusion
+/// optimizer simplifies the expressions, which the filter push down relies on (e.g. to turn
+/// `CAST(id AS BIGINT) = 1` into `id = 1`), so they are simplified first.
 fn federate_table_scans_only(
     plan: LogicalPlan,
     planner: Arc<dyn FederationPlanner>,
@@ -152,7 +153,9 @@ fn federate_table_scans_only(
     };
 
     let optimizer = Optimizer::with_rules(vec![
+        Arc::new(SimplifyExpressions::new()),
         Arc::new(OptimizeProjections::new()),
+        Arc::new(PushDownFilter::new()),
         Arc::new(PushDownLimit::new()),
     ]);
     let inner = optimizer.optimize(
@@ -171,14 +174,14 @@ fn federate_table_scans_only(
         .map(|transformed| transformed.data)
 }
 
-/// Plans a federated scan of a Cassandra table as a [`CassandraExec`].
+/// Plans a federated scan of a Cassandra table like [`CassandraTable::scan`].
 ///
 /// The SQL federation would plan it as a scan that claims all the filters DataFusion pushes
 /// down to it at runtime, but CQL can't run them.
+///
+/// [`CassandraTable::scan`]: datafusion::catalog::TableProvider::scan
 struct CassandraScanPlanner {
-    table_reference: TableReference,
-    pool: Arc<CassandraConnectionPool>,
-    schema: SchemaRef,
+    table: CassandraTable,
 }
 
 #[async_trait]
@@ -186,23 +189,20 @@ impl FederationPlanner for CassandraScanPlanner {
     async fn plan_federation(
         &self,
         node: &FederatedPlanNode,
-        _session_state: &dyn Session,
+        session_state: &dyn Session,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let scan = match node.plan() {
-            LogicalPlan::TableScan(scan @ TableScan { filters, .. }) if filters.is_empty() => scan,
-            plan => {
-                return Err(DataFusionError::Plan(format!(
-                    "Cassandra can only run plain table scans, not:\n{plan}"
-                )))
-            }
+        let LogicalPlan::TableScan(scan) = node.plan() else {
+            return Err(DataFusionError::Plan(format!(
+                "Cassandra can only run table scans, not:\n{}",
+                node.plan()
+            )));
         };
-        Ok(Arc::new(CassandraExec::try_new(
-            self.table_reference.clone(),
-            Arc::clone(&self.pool),
-            &self.schema,
+        self.table.plan_scan(
+            session_state,
             scan.projection.as_ref(),
+            &scan.filters,
             scan.fetch,
-        )?))
+        )
     }
 }
 
@@ -231,8 +231,9 @@ mod tests {
         })
     }
 
+    /// `LogicalTableSource` supports pushing down all filters exactly.
     #[test]
-    fn federates_only_the_scans_with_projection_and_limit() {
+    fn federates_only_the_scans_with_projection_filters_and_limit() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("name", DataType::Utf8, true),
@@ -267,10 +268,8 @@ mod tests {
             rewritten.display_indent().to_string(),
             "Projection: ks.users.name, ks.pets.name
   Inner Join:  Filter: ks.users.id = ks.pets.id
-    Projection: ks.users.id, ks.users.name
-      Filter: ks.users.age > Int32(30)
-        Federated
- TableScan: ks.users projection=[id, name, age]
+    Federated
+ TableScan: ks.users projection=[id, name], full_filters=[ks.users.age > Int32(30)]
     Limit: skip=0, fetch=5
       Federated
  TableScan: ks.pets projection=[id, name], fetch=5"

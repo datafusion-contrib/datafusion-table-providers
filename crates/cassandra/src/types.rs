@@ -61,7 +61,7 @@ pub enum Error {
     NullInCollection { column_name: String },
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Number of days between -5877641-06-23 (the CQL `date` epoch) and the Unix epoch.
 const CQL_DATE_UNIX_EPOCH_OFFSET: i64 = 1 << 31;

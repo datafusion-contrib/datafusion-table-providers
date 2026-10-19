@@ -12,7 +12,8 @@ use datafusion_table_providers::{
 /// 2. Create and use CassandraTableFactory to generate TableProvider
 /// 3. Register TableProvider with DataFusion
 /// 4. Use SQL queries to access Cassandra table data
-/// 5. Write data to a Cassandra table with `INSERT INTO`
+/// 5. Push filters on key columns down to Cassandra
+/// 6. Write data to a Cassandra table with `INSERT INTO`
 ///
 /// Prerequisites:
 /// Start a Cassandra server using Docker:
@@ -92,5 +93,17 @@ async fn main() {
         .sql("SELECT name FROM companies WHERE name LIKE 'Acme%'")
         .await
         .expect("select failed");
+    df.show().await.expect("show failed");
+
+    // Query Example 3: Filter on the partition key.
+    // CQL can filter on it, so the filter is pushed down to Cassandra and only the matching
+    // rows are read. The plan shows it in the CQL: `... WHERE "id" IN (1, 3)`.
+    let sql = "SELECT name FROM companies WHERE id IN (1, 3)";
+    let df = ctx
+        .sql(&format!("EXPLAIN {sql}"))
+        .await
+        .expect("explain failed");
+    df.show().await.expect("show failed");
+    let df = ctx.sql(sql).await.expect("select failed");
     df.show().await.expect("show failed");
 }

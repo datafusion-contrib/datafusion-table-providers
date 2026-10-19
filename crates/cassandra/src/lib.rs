@@ -2,8 +2,9 @@
 //! [ScyllaDB Rust driver](https://docs.rs/scylla), so it works with ScyllaDB too.
 //!
 //! CQL is far more restrictive than SQL: it has no joins or aggregations, and `WHERE` clauses
-//! are limited to key columns. Scans therefore only push the projection and `LIMIT` down to
-//! Cassandra. Filters, aggregations and joins are evaluated by DataFusion.
+//! are limited to key columns. Scans therefore push the projection, the filters on key columns
+//! that CQL can evaluate (see [`filter`]) and `LIMIT` down to Cassandra. The other filters,
+//! aggregations and joins are evaluated by DataFusion.
 //!
 //! Tables created with [`CassandraTableFactory::read_write_table_provider`] can also be written
 //! to with `INSERT INTO`; see [`CassandraTableWriter`].
@@ -11,6 +12,7 @@
 pub mod conn;
 #[cfg(feature = "federation")]
 mod federation;
+pub mod filter;
 pub mod pool;
 mod table;
 pub mod types;
@@ -23,6 +25,7 @@ use datafusion::common::TableReference;
 
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
+pub use crate::filter::{KeyColumn, PrimaryKey};
 pub use crate::pool::CassandraConnectionPool;
 pub use crate::table::{CassandraExec, CassandraTable};
 pub use crate::write::CassandraTableWriter;
@@ -43,23 +46,20 @@ impl CassandraTableFactory {
     ///
     /// # Errors
     ///
-    /// Returns an error if the schema of the table cannot be read.
+    /// Returns an error if the schema or the primary key of the table cannot be read.
     pub async fn table_provider(
         &self,
         table_reference: TableReference,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
     {
-        let schema = self
-            .pool
-            .connect_direct()
-            .get_schema(&table_reference)
-            .await?;
+        let conn = self.pool.connect_direct();
+        let schema = conn.get_schema(&table_reference).await?;
+        let primary_key = conn.primary_key(&table_reference).await?;
 
-        let table_provider = Arc::new(CassandraTable::new(
-            table_reference,
-            Arc::clone(&self.pool),
-            schema,
-        ));
+        let table_provider = Arc::new(
+            CassandraTable::new(table_reference, Arc::clone(&self.pool), schema)
+                .with_primary_key(primary_key),
+        );
 
         #[cfg(feature = "federation")]
         let table_provider = Arc::new(table_provider.create_federated_table_provider()?);
@@ -73,7 +73,7 @@ impl CassandraTableFactory {
     ///
     /// # Errors
     ///
-    /// Returns an error if the schema of the table cannot be read.
+    /// Returns an error if the schema or the primary key of the table cannot be read.
     pub async fn read_write_table_provider(
         &self,
         table_reference: TableReference,

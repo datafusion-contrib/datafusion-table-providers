@@ -13,6 +13,7 @@ use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
     self, AsyncDbConnection, DbConnection, GenericError, Result, TableSchemas,
 };
 
+use crate::filter::{KeyColumn, PrimaryKey};
 use crate::types::{column_specs_to_schema, rows_to_record_batch};
 
 /// Number of rows converted to Arrow at a time; Cassandra pages are 5000 rows by default.
@@ -49,7 +50,7 @@ pub enum Error {
 /// The driver's [`Session`] manages its own connection pool, so a connection is a cheap handle
 /// to a shared session.
 pub struct CassandraConnection {
-    pub session: Arc<Session>,
+    session: Arc<Session>,
     schemas: Arc<TableSchemas>,
 }
 
@@ -74,6 +75,50 @@ impl CassandraConnection {
             .try_collect()
             .await
             .context(ReadRowsSnafu)
+    }
+
+    /// Returns the primary key of a table, given as `table` (in the session's keyspace) or
+    /// `keyspace.table`. It is empty if the table has no keyspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the columns of the table cannot be read.
+    pub async fn primary_key(&self, table_reference: &TableReference) -> Result<PrimaryKey, Error> {
+        let keyspace = match table_reference.schema() {
+            Some(keyspace) => keyspace.to_string(),
+            None => match self.session.get_keyspace() {
+                Some(keyspace) => keyspace.to_string(),
+                None => return Ok(PrimaryKey::default()),
+            },
+        };
+
+        let mut columns: Vec<(String, String, i32, String)> = self
+            .session
+            .query_iter(
+                "SELECT column_name, kind, position, type FROM system_schema.columns \
+                 WHERE keyspace_name = ? AND table_name = ?",
+                (keyspace, table_reference.table()),
+            )
+            .await
+            .context(QuerySnafu)?
+            .rows_stream::<(String, String, i32, String)>()
+            .context(TypeCheckSnafu)?
+            .try_collect()
+            .await
+            .context(ReadRowsSnafu)?;
+        columns.sort_by_key(|(_, _, position, _)| *position);
+
+        let key_columns = |kind: &str| {
+            columns
+                .iter()
+                .filter(|(_, column_kind, _, _)| column_kind == kind)
+                .map(|(name, _, _, cql_type)| KeyColumn::new(name, cql_type))
+                .collect()
+        };
+        Ok(PrimaryKey {
+            partition_key: key_columns("partition_key"),
+            clustering_key: key_columns("clustering"),
+        })
     }
 }
 

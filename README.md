@@ -25,7 +25,7 @@ Prefer a single-provider leaf crate when you only need one backend — for examp
 - Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature.
 - The existing `datafusion-table-providers` facade keeps the same module paths and provider feature names (`duckdb`, `postgres`, `sqlite`, etc.). Enabling a provider feature pulls in that leaf crate with its defaults (including federation). There is no separate `federation` / `*-federation` feature on the facade.
 - ClickHouse pool connections are exposed as `ClickHouseConnection` (wrapping the ClickHouse `Client`) under `sql::db_connection_pool::dbconnection::clickhouseconn`.
-- Cassandra pool connections are exposed as `CassandraConnection` (wrapping a shared `scylla` driver `Session`) under `sql::db_connection_pool::dbconnection::cassandraconn`. Its `federation` feature works like the other crates', except that CQL cannot run the joins, aggregations and filters that federation pushes down: a federated Cassandra sub-plan is narrowed to its table scans, so only projections and `LIMIT` are pushed down to Cassandra.
+- Cassandra pool connections are exposed as `CassandraConnection` (wrapping a shared `scylla` driver `Session`) under `sql::db_connection_pool::dbconnection::cassandraconn`. Its `federation` feature works like the other crates', except that CQL cannot run the joins, aggregations and filters that federation pushes down: a federated Cassandra sub-plan is narrowed to its table scans, so only projections, filters on key columns and `LIMIT` are pushed down to Cassandra.
 
 Existing examples continue to use the facade crate and its feature flags.
 
@@ -194,7 +194,7 @@ cargo run -p datafusion-table-providers --example mysql --features mysql
 
 ### Cassandra
 
-The Cassandra provider is built on the [ScyllaDB Rust driver](https://crates.io/crates/scylla), so it works with ScyllaDB too. CQL has no joins or aggregations and can filter only on key columns, so only projections and `LIMIT` are pushed down to Cassandra; filters, aggregations and joins are evaluated by DataFusion. Tables created with `CassandraTableFactory::read_write_table_provider` also support `INSERT INTO`, which writes each row with a CQL `INSERT` (an upsert), and `INSERT OVERWRITE`, which truncates the table first.
+The Cassandra provider is built on the [ScyllaDB Rust driver](https://crates.io/crates/scylla), so it works with ScyllaDB too. CQL has no joins or aggregations and can filter only on key columns, so only projections, `LIMIT` and the filters on key columns that make up a valid CQL `WHERE` clause (`=` or `IN` on every partition key column, then `=` on leading clustering columns and optionally a range on the next one) are pushed down to Cassandra; the other filters, aggregations and joins are evaluated by DataFusion. Tables created with `CassandraTableFactory::read_write_table_provider` also support `INSERT INTO`, which writes each row with a CQL `INSERT` (an upsert), and `INSERT OVERWRITE`, which truncates the table first.
 
 In order to run the Cassandra example, you need to have a Cassandra server running. You can use the following command to start a Cassandra server in a Docker container the example can use:
 
