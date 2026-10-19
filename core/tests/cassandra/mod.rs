@@ -105,10 +105,11 @@ async fn execute(pool: &CassandraConnectionPool, cql: &str) {
 }
 
 async fn create_test_data(pool: &CassandraConnectionPool) {
+    // ScyllaDB creates keyspaces with tablets, which don't support `SimpleStrategy`
     execute(
         pool,
         &format!(
-            "CREATE KEYSPACE IF NOT EXISTS {KEYSPACE} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}"
+            "CREATE KEYSPACE IF NOT EXISTS {KEYSPACE} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
         ),
     )
     .await;

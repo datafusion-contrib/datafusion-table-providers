@@ -250,6 +250,44 @@ jobs:
       - name: Run Oracle integration tests
         run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
 
+  scylla-integration-test:
+    name: ScyllaDB Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      # The Cassandra provider is tested against ScyllaDB with the Cassandra integration tests
+      CASSANDRA_DOCKER_IMAGE: scylladb/scylla:2026.3.3
+      RUST_LOG: info
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache ScyllaDB Docker image
+        id: scylla-docker-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/scylla-image
+          key: scylla-image-${{ env.CASSANDRA_DOCKER_IMAGE }}
+
+      - name: Load or pull ScyllaDB image
+        run: |
+          mkdir -p /tmp/scylla-image
+          if [ -f /tmp/scylla-image/scylla.tar ]; then
+            docker load -i /tmp/scylla-image/scylla.tar
+          else
+            docker pull "${CASSANDRA_DOCKER_IMAGE}"
+            docker save -o /tmp/scylla-image/scylla.tar "${CASSANDRA_DOCKER_IMAGE}"
+          fi
+
+      - name: Run ScyllaDB integration tests
+        run: cargo test -p datafusion-table-providers --test integration --no-default-features --features cassandra -- --nocapture cassandra
+
   python-integration-test:
     name: Python Tests
     runs-on: ubuntu-latest
