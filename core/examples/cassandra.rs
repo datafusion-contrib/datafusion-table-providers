@@ -27,7 +27,7 @@ use datafusion_table_providers::{
 ///
 /// # Create a table and insert sample data
 /// docker exec -i cassandra cqlsh <<EOF
-/// CREATE KEYSPACE cassandra_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+/// CREATE KEYSPACE cassandra_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 ///
 /// CREATE TABLE cassandra_ks.companies (
 ///   id INT PRIMARY KEY,
