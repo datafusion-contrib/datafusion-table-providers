@@ -30,6 +30,17 @@ pub(super) async fn start_cassandra_docker_container(
             // the contact point. By default that is the container's internal IP, which, combined
             // with the published host port, isn't reachable from the host.
             .add_env_var("CASSANDRA_BROADCAST_RPC_ADDRESS", "127.0.0.1")
+            // Single-node cluster: the node is its own seed (the image's default), so there is
+            // no one to gossip with. Skip the gossip-settle polling and the 30s ring delay.
+            .add_env_var(
+                "JVM_EXTRA_OPTS",
+                "-Dcassandra.skip_wait_for_gossip_to_settle=0 -Dcassandra.ring_delay_ms=0",
+            )
+            .add_env_var(
+                "CASSANDRA_NUM_TOKENS",
+                &std::env::var("CASSANDRA_NUM_TOKENS").unwrap_or("1".to_string()),
+            )
+            .add_env_var("CASSANDRA_CLUSTER_NAME", "df-t-p-cassandra")
             // Keep the JVM small so that the node starts quickly in CI
             .add_env_var("MAX_HEAP_SIZE", "512M")
             .add_env_var("HEAP_NEWSIZE", "128M")
