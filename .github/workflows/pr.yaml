@@ -115,7 +115,7 @@ jobs:
 
       - name: Install ODBC & Sqlite
         run: |
-          sudo apt-get install -y unixodbc-dev libsqlite3-dev
+          sudo apt-get install -y unixodbc-dev libsqliteodbc libsqlite3-dev
 
       - name: Run unit tests
         run: make test
@@ -184,7 +184,7 @@ jobs:
       - name: Install ODBC & Sqlite
         run: |
           sudo apt-get update
-          sudo apt-get install -y unixodbc-dev libsqlite3-dev
+          sudo apt-get install -y unixodbc-dev libsqliteodbc libsqlite3-dev
 
       - name: Install ADBC drivers
         run: |
