@@ -1,12 +1,15 @@
 use clickhouse::Client;
 use common::get_clickhouse_params;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{common::TableReference, prelude::SessionContext};
 use datafusion_table_providers::{
     clickhouse::ClickHouseTableFactory,
-    sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
+    sql::db_connection_pool::{
+        clickhousepool::ClickHouseConnectionPool, dbconnection::AsyncDbConnection, DbConnectionPool,
+    },
 };
 use linktime::{ctor, dtor};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 mod common;
 
@@ -149,4 +152,128 @@ async fn clickhouse_insert_and_read() {
 
     assert_eq!(record_batch[0].num_rows(), 2);
     assert_eq!(record_batch[0].num_columns(), 9);
+}
+
+/// A pool created with `with_schema` must return the schema provided for a table from
+/// `get_schema` instead of inferring it from the database.
+#[tokio::test]
+async fn clickhouse_connection_pool_with_schema() {
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_clickhouse_docker_container)
+            .await;
+        container_manager.port
+    };
+
+    let table_name = "with_schema_table";
+    let table_reference = TableReference::bare(table_name);
+    let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
+        .await
+        .unwrap();
+    pool.client()
+        .query(&format!(
+            "CREATE TABLE IF NOT EXISTS {table_name} (id Int64, name String) ENGINE = MergeTree() ORDER BY id"
+        ))
+        .execute()
+        .await
+        .unwrap();
+    pool.client()
+        .query(&format!(
+            "INSERT INTO {table_name} VALUES (1, NULL), (2, 'a')"
+        ))
+        .execute()
+        .await
+        .unwrap();
+
+    // the schema is inferred from the database when none is provided
+    let inferred = pool
+        .connect_direct()
+        .unwrap()
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(
+        inferred.fields.len(),
+        2,
+        "There should be 2 fields in the inferred table"
+    );
+    let field1 = inferred.field(0);
+    assert_eq!(field1.name(), "id");
+    assert_eq!(field1.data_type(), &DataType::Int64);
+    assert_eq!(field1.is_nullable(), false);
+    let field2 = inferred.field(1);
+    assert_eq!(field2.name(), "name");
+    assert_eq!(field2.data_type(), &DataType::Utf8); // ClickHouseConnection::get_schema() infers it correctly
+    assert_eq!(field2.is_nullable(), false);
+
+    // the provided schemas are used as-is, each one for its own table
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    // not created in the database, so its schema can only come from the pool
+    let other_table_reference = TableReference::bare("other_table");
+    let other_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Float64,
+        true,
+    )]));
+    let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
+        .await
+        .unwrap()
+        .with_schema(table_reference.clone(), Arc::clone(&schema))
+        .with_schema(other_table_reference.clone(), Arc::clone(&other_schema));
+
+    let direct_conn = pool.connect_direct().unwrap();
+    let actual = direct_conn
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
+    let actual = direct_conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
+
+    let conn = pool.connect().await.expect("connect should work");
+    let conn = conn.as_async().expect("should be async connection");
+    let actual = conn
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, schema);
+    let actual = conn
+        .get_schema(&other_table_reference)
+        .await
+        .expect("schema should be returned");
+    assert_eq!(actual, other_schema);
+
+    // the table factory uses the pool's schemas too
+    let table_factory = ClickHouseTableFactory::new(pool);
+    let table_provider = table_factory
+        .table_provider(table_reference.clone(), None)
+        .await
+        .expect("table provider should be created");
+    assert_eq!(table_provider.schema(), schema);
+    let table_provider = table_factory
+        .table_provider(other_table_reference.clone(), None)
+        .await
+        .expect("table provider should be created");
+    assert_eq!(table_provider.schema(), other_schema);
+
+    // the schema of a table without a provided schema is still inferred
+    let pool = ClickHouseConnectionPool::new(get_clickhouse_params(port))
+        .await
+        .unwrap()
+        .with_schema(other_table_reference, other_schema);
+    let actual = pool
+        .connect_direct()
+        .unwrap()
+        .get_schema(&table_reference)
+        .await
+        .expect("schema should be inferred");
+    assert_eq!(actual, inferred);
 }

@@ -3,12 +3,16 @@ use rand::RngExt;
 #[cfg(feature = "adbc")]
 mod adbc;
 mod arrow_record_batch_gen;
+#[cfg(feature = "cassandra")]
+mod cassandra;
 #[cfg(feature = "clickhouse")]
 mod clickhouse;
 #[cfg(any(
+    feature = "cassandra",
     feature = "clickhouse",
     feature = "mongodb",
     feature = "mysql",
+    feature = "oracle",
     feature = "postgres"
 ))]
 mod docker;
@@ -20,6 +24,8 @@ mod flight;
 mod mongodb;
 #[cfg(feature = "mysql")]
 mod mysql;
+#[cfg(feature = "odbc")]
+mod odbc;
 #[cfg(feature = "oracle")]
 mod oracle;
 #[cfg(feature = "postgres")]

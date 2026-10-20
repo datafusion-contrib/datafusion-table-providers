@@ -27,7 +27,6 @@ use datafusion::sql::unparser;
 use datafusion::{common::Constraints, common::TableReference};
 use std::sync::Arc;
 
-use crate::conn::ClickHouseConnection;
 use crate::pool::ClickHouseConnectionPool;
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::AsyncDbConnection;
 
@@ -50,7 +49,7 @@ impl ClickHouseTableFactory {
         args: Option<Vec<(String, Arg)>>,
     ) -> Result<Arc<dyn TableProvider + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
     {
-        let connection = ClickHouseConnection::new(self.pool.client());
+        let connection = self.pool.connect_direct()?;
         let client: &dyn AsyncDbConnection<Client, ()> = &connection;
         let schema = client.get_schema(&table_reference).await?;
         let table_provider = Arc::new(ClickHouseTable::new(
