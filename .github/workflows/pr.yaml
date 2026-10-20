@@ -136,6 +136,7 @@ jobs:
       MYSQL_DOCKER_IMAGE: mysql:8.0
       CLICKHOUSE_DOCKER_IMAGE: clickhouse/clickhouse-server:24.8
       CASSANDRA_DOCKER_IMAGE: cassandra:5.0
+      ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
       # Keep integration test logs concise for faster CI runs.
       RUST_LOG: info
       # Serialize Docker-backed tests a bit to avoid stampeding many Postgres containers.
@@ -163,7 +164,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: /tmp/docker-images
-          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}-${{ env.CLICKHOUSE_DOCKER_IMAGE }}-${{ env.CASSANDRA_DOCKER_IMAGE }}
+          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}-${{ env.CLICKHOUSE_DOCKER_IMAGE }}-${{ env.CASSANDRA_DOCKER_IMAGE }}-${{ env.ORACLE_DOCKER_IMAGE }}
 
       - name: Load or pull Docker images
         run: |
@@ -185,6 +186,7 @@ jobs:
           load_or_pull mysql "${{ env.MYSQL_DOCKER_IMAGE }}"
           load_or_pull clickhouse "${{ env.CLICKHOUSE_DOCKER_IMAGE }}"
           load_or_pull cassandra "${{ env.CASSANDRA_DOCKER_IMAGE }}"
+          load_or_pull oracle "${{ env.ORACLE_DOCKER_IMAGE }}"
 
       - name: Install ODBC & Sqlite
         run: |
@@ -199,26 +201,6 @@ jobs:
           dbc install sqlite
           dbc install duckdb
           ls -la "${XDG_CONFIG_HOME:-$HOME/.config}/adbc/drivers" || true
-
-      - name: Run integration tests
-        run: make test-integration
-
-  oracle-integration-test:
-    name: Oracle Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    env:
-      ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
-      RUST_LOG: info
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
 
       - name: Install Oracle Instant Client
         run: |
@@ -235,25 +217,8 @@ jobs:
           fi
           echo "LD_LIBRARY_PATH=$IC_DIR" >> "$GITHUB_ENV"
 
-      - name: Cache Oracle Docker image
-        id: oracle-docker-cache
-        uses: actions/cache@v6
-        with:
-          path: /tmp/oracle-image
-          key: oracle-image-${{ env.ORACLE_DOCKER_IMAGE }}
-
-      - name: Load or pull Oracle image
-        run: |
-          mkdir -p /tmp/oracle-image
-          if [ -f /tmp/oracle-image/oracle.tar ]; then
-            docker load -i /tmp/oracle-image/oracle.tar
-          else
-            docker pull "${ORACLE_DOCKER_IMAGE}"
-            docker save -o /tmp/oracle-image/oracle.tar "${ORACLE_DOCKER_IMAGE}"
-          fi
-
-      - name: Run Oracle integration tests
-        run: cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- --test-threads=1 --nocapture
+      - name: Run integration tests
+        run: make test-integration
 
   scylla-integration-test:
     name: ScyllaDB Integration Tests
