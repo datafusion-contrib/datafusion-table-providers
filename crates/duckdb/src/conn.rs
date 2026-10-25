@@ -337,8 +337,8 @@ impl SchemaValidator for DuckDbConnection {
     }
 
     fn is_field_supported(field: &Arc<Field>) -> bool {
-        // duckdb uses arrow 58, DataFusion uses a newer version
-        let is_duckdb_type = arrow_bridge::data_type_to_58(field.data_type())
+        // duckdb uses arrow 60, DataFusion uses a different version
+        let is_duckdb_type = arrow_bridge::data_type_to_60(field.data_type())
             .is_ok_and(|data_type| to_duckdb_type_id(&data_type).is_ok());
         Self::is_data_type_supported(field.data_type()) && is_duckdb_type
     }
@@ -525,7 +525,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        let schema = arrow_bridge::schema_ref_from_58(&result.get_schema())
+        let schema = arrow_bridge::schema_ref_from_60(&result.get_schema())
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
@@ -558,7 +558,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let schema = match projected_schema {
             Some(schema) => schema,
-            None => arrow_bridge::schema_ref_from_58(&result.get_schema())
+            None => arrow_bridge::schema_ref_from_60(&result.get_schema())
                 .boxed()
                 .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?,
         };
@@ -578,7 +578,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 let result: duckdb::ArrowStream<'_> =
                     stmt.stream_arrow(params).context(DuckDBQuerySnafu)?;
                 for batch in result {
-                    let batch = arrow_bridge::record_batch_from_58(&batch)?;
+                    let batch = arrow_bridge::record_batch_from_60(&batch)?;
                     let batch = cast_batch_to_schema(batch, &cast_schema)?;
                     blocking_channel_send(&batch_tx, batch)?;
                 }
