@@ -57,9 +57,9 @@ datafusion-table-providers-postgres = { version = "0.14.0", path = "crates/postg
 datafusion-table-providers-duckdb = { version = "0.14.0", path = "crates/duckdb" }
 datafusion-table-providers-adbc = { version = "0.14.0", path = "crates/adbc" }
 datafusion-table-providers-oracle = { version = "0.14.0", path = "crates/oracle" }
-duckdb = { version = "1.10505.0" }
-adbc_core = { version = "0.24" }
-adbc_driver_manager = { version = "0.24" }
+duckdb = { version = "1.20000.0" }
+adbc_core = { version = "0.25" }
+adbc_driver_manager = { version = "0.25" }
 
 [workspace.metadata.cargo-machete]
 ignored = ["datafusion-federation"]

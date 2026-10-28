@@ -958,8 +958,8 @@ pub(super) fn write_to_table(
             let batch = decode_dictionary_columns(batch)
                 .context(super::UnableToDecodeDictionaryColumnsSnafu)
                 .map_err(to_datafusion_error)?;
-            // duckdb uses arrow 58, DataFusion uses a newer version
-            let batch = arrow_bridge::record_batch_to_58(&batch)
+            // duckdb uses arrow 60, DataFusion uses a different version
+            let batch = arrow_bridge::record_batch_to_60(&batch)
                 .context(super::UnableToConvertArrowDataSnafu)
                 .map_err(to_datafusion_error)?;
             appender

@@ -32,6 +32,7 @@ use datafusion::{
     logical_expr::{dml::InsertOp, Expr, TableProviderFilterPushDown, TableType},
     physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream},
 };
+use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::util::retriable_error::{
     check_and_mark_retriable_error, to_retriable_data_write_error,
 };
@@ -347,7 +348,10 @@ where
             .map_err(to_retriable_data_write_error)?,
     }
 
-    stmt.bind_stream(Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)))
+    let reader =
+        arrow_bridge::reader_to_60(Box::new(RecordBatchReaderFromStream::new(batch_rx, schema)))
+            .map_err(to_retriable_data_write_error)?;
+    stmt.bind_stream(Box::new(reader))
         .map_err(to_retriable_data_write_error)?;
 
     let count = stmt
