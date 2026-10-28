@@ -22,7 +22,7 @@ let ctx = SessionContext::with_state(state);
 
 Prefer a single-provider leaf crate when you only need one backend — for example `datafusion-table-providers-postgres` or `datafusion-table-providers-duckdb`. Leaf crates do not use the facade feature flags.
 
-- Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature.
+- Leaf crates enable `federation` by default (opt out with `default-features = false`). SQLite also defaults to the `bundled` rusqlite feature. The DuckDB crate also defaults to `embedded` (the in-process provider), so opting out of federation there means `default-features = false, features = ["embedded"]`; before 0.14, `default-features = false` alone kept the in-process provider.
 - The existing `datafusion-table-providers` facade keeps the same module paths and provider feature names (`duckdb`, `postgres`, `sqlite`, etc.). Enabling a provider feature pulls in that leaf crate with its defaults (including federation). There is no separate `federation` / `*-federation` feature on the facade.
 - ClickHouse pool connections are exposed as `ClickHouseConnection` (wrapping the ClickHouse `Client`) under `sql::db_connection_pool::dbconnection::clickhouseconn`.
 
@@ -34,7 +34,7 @@ Existing examples continue to use the facade crate and its feature flags.
 - MySQL (`datafusion-table-providers-mysql`)
 - SQLite (`datafusion-table-providers-sqlite`)
 - ClickHouse (`datafusion-table-providers-clickhouse`)
-- DuckDB (`datafusion-table-providers-duckdb`)
+- DuckDB, in-process or remote over the Quack protocol (`datafusion-table-providers-duckdb`, features `embedded` and `quack`)
 - Flight SQL (`datafusion-table-providers-flightsql`)
 - MongoDB (`datafusion-table-providers-mongodb`)
 - ADBC (`datafusion-table-providers-adbc`)
@@ -223,6 +223,31 @@ done
 echo "Oracle is ready!"
 
 cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- oracle
+```
+
+### Quack (remote DuckDB)
+
+The `quack` feature of `datafusion-table-providers-duckdb` reads tables from a remote DuckDB 1.5 or 2.0 over DuckDB's [Quack protocol](https://github.com/duckdb/duckdb-quack). For a remote-only build without libduckdb, use `default-features = false, features = ["quack", "federation"]`. Behavior, connection options and type mapping are documented on the `quack` module.
+
+Start a server with the DuckDB CLI and leave it running:
+
+```bash
+duckdb -cmd "
+  CREATE TABLE companies (id INTEGER PRIMARY KEY, name VARCHAR);
+  INSERT INTO companies VALUES (1, 'Acme Corporation'), (2, 'Globex');
+  CREATE TABLE projects (id INTEGER, company_id INTEGER, title VARCHAR);
+  INSERT INTO projects VALUES (1, 1, 'Rocket skates'), (2, 1, 'Giant magnet'), (3, 2, 'Doomsday device');
+  INSTALL quack; LOAD quack;
+  CALL quack_serve('quack:localhost:9494', token => 'demo_token');"
+```
+
+Then run the example, or the integration tests against the same server:
+
+```bash
+cargo run -p datafusion-table-providers-duckdb --no-default-features --features quack,federation --example quack
+
+QUACK_SERVER_URI=quack:localhost:9494 QUACK_AUTH_TOKEN=demo_token \
+  cargo test -p datafusion-table-providers-duckdb --no-default-features --features quack,federation --test quack
 ```
 
 ### MongoDB
