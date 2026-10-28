@@ -10,16 +10,16 @@ description = "Shared infrastructure for DataFusion table providers"
 [dependencies]
 arrow = { workspace = true, features = ["ffi"] }
 arrow60 = { package = "arrow", version = "60", default-features = false, features = ["ffi"], optional = true }
-async-trait = "0.1"
-bigdecimal = "0.4"
-chrono = "0.4.44"
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 dashmap = "6.1"
-futures = "0.3"
-itertools = "0.15"
-num-bigint = "0.4"
-sea-query = { version = "1.0.0", features = [
+futures = { workspace = true }
+itertools = { workspace = true }
+num-bigint = { workspace = true }
+sea-query = { workspace = true, features = [
   "backend-sqlite",
   "backend-postgres",
   "postgres-array",
@@ -28,15 +28,15 @@ sea-query = { version = "1.0.0", features = [
   "with-time",
   "with-chrono",
 ] }
-secrecy = "0.10"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-snafu = "0.9"
-time = "0.3"
-tokio = { version = "1.52", features = ["macros", "fs"] }
-tracing = "0.1"
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["macros", "fs"] }
+tracing = { workspace = true }
 hickory-resolver = "0.26"
-url = "2.5"
+url = { workspace = true }
 
 [features]
 default = ["federation"]
@@ -47,7 +47,7 @@ arrow60 = ["dep:arrow60"]
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
-reqwest = "0.13"
+reqwest = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [package.metadata.docs.rs]
