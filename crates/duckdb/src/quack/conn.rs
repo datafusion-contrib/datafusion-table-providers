@@ -21,7 +21,6 @@ use quack_protocol::{sql_literal, PooledClient, QuackError, Row, SqlParameter, V
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
-#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Quack query failed: {source}"))]
     Query { source: GenericError },

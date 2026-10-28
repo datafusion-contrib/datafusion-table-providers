@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::hash::{BuildHasher, RandomState};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -40,10 +41,11 @@ const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_QUACK_PROTOCOL_VERSION: u64 = 1;
 const MAX_QUACK_PROTOCOL_VERSION: u64 = 3;
 
-static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
+/// Hashes the token into the join context, so pools for different tokens don't share one
+/// without the token itself appearing in it. Keyed per process, like the contexts it builds.
+static TOKEN_HASHER: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 
 #[derive(Debug, Snafu)]
-#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Missing required parameter '{parameter}'. Provide the Quack server address, e.g. 'quack:localhost:9494'."))]
     MissingParameter { parameter: &'static str },
@@ -80,7 +82,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// pool is exhausted, [`DbConnectionPool::connect`] waits up to the acquire timeout and
 /// then fails.
 ///
-/// Joins are pushed down to the server only between tables that share one pool.
+/// Joins are pushed down to the server between tables whose pools have the same endpoint
+/// and token.
 ///
 /// [`QuackConnectionPool::new`] and [`DbConnectionPool::connect`] may be called without a
 /// Tokio runtime (e.g. across an FFI boundary); they then run on a shared one. Inside a
@@ -196,10 +199,7 @@ impl QuackConnectionPool {
         Ok(Self {
             pool,
             acquire_timeout,
-            join_context: format!(
-                "quack:pool-{}",
-                NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed)
-            ),
+            join_context: join_context(&endpoint, params.get(TOKEN)),
             unsupported_type_action: UnsupportedTypeAction::default(),
         })
     }
@@ -259,9 +259,43 @@ impl DbConnectionPool<QuackSession, ()> for QuackConnectionPool {
     }
 }
 
+/// Identifies the server and the identity used on it, as the Postgres and MySQL pools do
+/// with host, port, database and user.
+fn join_context(endpoint: &str, token: Option<&SecretString>) -> String {
+    let mut context = format!("endpoint={endpoint}");
+    if let Some(token) = token {
+        let token_hash = TOKEN_HASHER.hash_one(token.expose_secret());
+        context.push_str(&format!(",token={token_hash:x}"));
+    }
+    context
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn join_context_identifies_endpoint_and_token_without_the_token() {
+        let token = |t: &str| SecretString::from(t.to_string());
+        let a = join_context("quack:localhost:9494", Some(&token("secret")));
+        assert_eq!(
+            a,
+            join_context("quack:localhost:9494", Some(&token("secret")))
+        );
+        assert!(!a.contains("secret"), "{a}");
+        assert_ne!(
+            a,
+            join_context("quack:localhost:9494", Some(&token("other")))
+        );
+        assert_ne!(
+            a,
+            join_context("quack:otherhost:9494", Some(&token("secret")))
+        );
+        assert_eq!(
+            join_context("quack:localhost:9494", None),
+            "endpoint=quack:localhost:9494"
+        );
+    }
 
     fn params(pairs: &[(&str, &str)]) -> HashMap<String, SecretString> {
         pairs

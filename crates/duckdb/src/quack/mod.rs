@@ -22,7 +22,6 @@
 //!   (DuckDB's bitstring bytes and WKB); VARIANT as DuckDB's shredded struct. TIMETZ, UNION
 //!   and BIGNUM follow the pool's `UnsupportedTypeAction`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::{Session, TableProviderFactory};
@@ -34,9 +33,7 @@ use datafusion_table_providers_common::util::secrets::to_secret_map;
 use datafusion_table_providers_common::util::{
     remove_prefix_from_hashmap_keys, to_datafusion_error,
 };
-use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
-use tokio::sync::{Mutex, OnceCell};
 
 use crate::quack::pool::QuackConnectionPool;
 use crate::quack::sql_table::QuackTable;
@@ -48,7 +45,6 @@ pub mod pool;
 mod sql_table;
 
 #[derive(Debug, Snafu)]
-#[non_exhaustive]
 pub enum Error {
     #[snafu(display("Unable to create the Quack connection pool: {source}"))]
     UnableToCreateConnectionPool { source: pool::Error },
@@ -63,9 +59,6 @@ pub enum Error {
     UnableToCreateFederatedTableProvider {
         source: datafusion::error::DataFusionError,
     },
-
-    #[snafu(display("Quack tables take their schema from the server. Remove the column list from CREATE EXTERNAL TABLE."))]
-    DeclaredSchemaNotSupported,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -116,72 +109,16 @@ impl QuackTableFactory {
 /// Serves `CREATE EXTERNAL TABLE name STORED AS QUACK LOCATION '<table>' OPTIONS (...)`.
 ///
 /// `LOCATION` names a table (optionally `schema.table` or `catalog.schema.table`) that must
-/// already exist on the server; nothing is created there. `OPTIONS` are the
-/// [`QuackConnectionPool::new`] parameters. Tables created with the same options share one
-/// pool, which stays open for the life of the factory. Opening a pool for one set of
-/// options doesn't hold up tables with other options.
-#[derive(Default)]
-pub struct QuackTableProviderFactory {
-    pools: Mutex<Vec<CachedPool>>,
-}
-
-/// The options, sorted by key, and the pool for them, set once its first connect succeeds.
-struct CachedPool {
-    options: Vec<(String, SecretString)>,
-    pool: Arc<OnceCell<Arc<QuackConnectionPool>>>,
-}
-
-impl std::fmt::Debug for QuackTableProviderFactory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QuackTableProviderFactory")
-            .finish_non_exhaustive()
-    }
-}
+/// already exist on the server; nothing is created there. The schema comes from the server,
+/// and a column list in the statement is ignored. `OPTIONS` are the
+/// [`QuackConnectionPool::new`] parameters; each table gets its own pool.
+#[derive(Debug, Default)]
+pub struct QuackTableProviderFactory {}
 
 impl QuackTableProviderFactory {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    async fn pool(&self, options: &HashMap<String, String>) -> Result<Arc<QuackConnectionPool>> {
-        // DataFusion prefixes option keys it doesn't recognize with `format.`.
-        let params = to_secret_map(remove_prefix_from_hashmap_keys(options.clone(), "format."));
-        let mut key: Vec<(String, SecretString)> =
-            params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        key.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Hold the lock only to find or add the entry, not while connecting.
-        let cell = {
-            let mut pools = self.pools.lock().await;
-            let same_options = |other: &[(String, SecretString)]| {
-                other.len() == key.len()
-                    && other.iter().zip(&key).all(|((ka, va), (kb, vb))| {
-                        ka == kb && va.expose_secret() == vb.expose_secret()
-                    })
-            };
-            match pools.iter().find(|cached| same_options(&cached.options)) {
-                Some(cached) => Arc::clone(&cached.pool),
-                None => {
-                    let cell = Arc::new(OnceCell::new());
-                    pools.push(CachedPool {
-                        options: key,
-                        pool: Arc::clone(&cell),
-                    });
-                    cell
-                }
-            }
-        };
-        // Callers with the same options share one connect; a failed one is retried by the
-        // next caller.
-        cell.get_or_try_init(|| async {
-            QuackConnectionPool::new(params)
-                .await
-                .map(Arc::new)
-                .context(UnableToCreateConnectionPoolSnafu)
-        })
-        .await
-        .cloned()
+        Self {}
     }
 }
 
@@ -192,17 +129,22 @@ impl TableProviderFactory for QuackTableProviderFactory {
         _state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::common::Result<Arc<dyn TableProvider>> {
-        if !cmd.schema.fields().is_empty() {
-            return Err(to_datafusion_error(Error::DeclaredSchemaNotSupported));
-        }
         let [location] = cmd.locations.as_slice() else {
             return plan_err!(
                 "Quack table requires exactly one LOCATION, got {}",
                 cmd.locations.len()
             );
         };
-        let pool = self.pool(&cmd.options).await.map_err(to_datafusion_error)?;
-        QuackTableFactory::new(pool)
+        // DataFusion prefixes option keys it doesn't recognize with `format.`.
+        let params = to_secret_map(remove_prefix_from_hashmap_keys(
+            cmd.options.clone(),
+            "format.",
+        ));
+        let pool = QuackConnectionPool::new(params)
+            .await
+            .context(UnableToCreateConnectionPoolSnafu)
+            .map_err(to_datafusion_error)?;
+        QuackTableFactory::new(Arc::new(pool))
             .table_provider(TableReference::from(location.as_str()))
             .await
             .map_err(to_datafusion_error)

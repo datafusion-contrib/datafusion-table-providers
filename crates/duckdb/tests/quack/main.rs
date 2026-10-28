@@ -519,7 +519,7 @@ async fn limit_projection_count_and_sort() {
 }
 
 #[tokio::test]
-async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
+async fn federated_joins_run_on_the_server_when_tables_share_a_server() {
     let Some(server) = server() else { return };
     let pool = Arc::new(server.pool(&[]).await);
     let (orders, customers) = (table_name("orders"), table_name("customers"));
@@ -555,7 +555,7 @@ async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
     assert!(plan.contains(" JOIN "), "{plan}");
     assert_eq!(pretty(&query(&ctx, sql).await), expected);
 
-    // Tables on different pools are joined by DataFusion.
+    // A second pool for the same endpoint and token joins on the server too.
     let other_pool = Arc::new(server.pool(&[]).await);
     let ctx = federated_context();
     ctx.register_table("o", provider(&pool, &orders).await)
@@ -563,7 +563,7 @@ async fn federated_joins_run_on_the_server_when_tables_share_a_pool() {
     ctx.register_table("c", provider(&other_pool, &customers).await)
         .unwrap();
     let plan = physical_plan(&ctx, sql).await;
-    assert_eq!(plan.matches("VirtualExecutionPlan").count(), 2, "{plan}");
+    assert_eq!(plan.matches("VirtualExecutionPlan").count(), 1, "{plan}");
     assert_eq!(pretty(&query(&ctx, sql).await), expected);
     drop_tables(&pool, &[&orders, &customers]).await;
 }
@@ -797,7 +797,7 @@ async fn create_external_table_attaches_to_an_existing_table() {
         pretty(&query(&ctx, sql).await),
         "+------+\n| name |\n+------+\n| n1   |\n| n2   |\n+------+"
     );
-    // Same options, same pool: the join runs on the server.
+    // Same server: the join runs on the server.
     assert_eq!(
         physical_plan(&ctx, sql)
             .await
@@ -807,10 +807,6 @@ async fn create_external_table_attaches_to_an_existing_table() {
     );
 
     for (statement, expected) in [
-        (
-            format!("CREATE EXTERNAL TABLE c (id BIGINT) STORED AS QUACK LOCATION '{a}' OPTIONS ({options})"),
-            "take their schema from the server",
-        ),
         (
             format!("CREATE EXTERNAL TABLE d STORED AS QUACK LOCATION '{a}' OPTIONS ({options}, 'tokn' 'x')"),
             "Unknown parameter 'tokn'",
@@ -826,6 +822,17 @@ async fn create_external_table_attaches_to_an_existing_table() {
         };
         assert!(err.to_string().contains(expected), "{statement}: {err}");
     }
+
+    // A column list is ignored; the schema comes from the server.
+    query(
+        &ctx,
+        &format!("CREATE EXTERNAL TABLE c (unused INT) STORED AS QUACK LOCATION 'main.{b}' OPTIONS ({options})"),
+    )
+    .await;
+    assert_eq!(
+        pretty(&query(&ctx, "SELECT * FROM c WHERE id = 1").await),
+        "+----+------+\n| id | name |\n+----+------+\n| 1  | n1   |\n+----+------+"
+    );
     drop_tables(&pool, &[&a, &b]).await;
 }
 
