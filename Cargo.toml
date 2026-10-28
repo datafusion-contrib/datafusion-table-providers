@@ -65,8 +65,7 @@ datafusion-table-providers-postgres = { version = "0.14.0", path = "crates/postg
 datafusion-table-providers-duckdb = { version = "0.14.0", path = "crates/duckdb" }
 datafusion-table-providers-adbc = { version = "0.14.0", path = "crates/adbc" }
 datafusion-table-providers-oracle = { version = "0.14.0", path = "crates/oracle" }
-duckdb = { version = "1.20000.0" }
-futures = { version = "0.3" }
+duckdb = { version = ">=1.20000.0, <1.20100.0" }futures = { version = "0.3" }
 itertools = { version =  "0.15" }
 mongodb = { version = "3.6.0", features = ["openssl-tls"] }
 oracle = { version = "0.6", features = ["chrono"] }
