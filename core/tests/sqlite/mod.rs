@@ -489,6 +489,7 @@ async fn download_parquet_as_record_batch(url: &str) -> anyhow::Result<RecordBat
 
 mod sort_limit_pushdown {
     use super::*;
+    use datafusion::physical_plan::display::DisplayableExecutionPlan;
 
     async fn setup_table(ctx: &SessionContext, name: &str) {
         let factory = SqliteTableProviderFactory::default();
@@ -595,5 +596,34 @@ mod sort_limit_pushdown {
         let batches = df.collect().await.unwrap();
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 7, "LIMIT without ORDER BY must still cap rows");
+    }
+
+    /// The table registered by `setup_table` is the `SqliteTableWriter` returned by
+    /// the factory. It must report the read provider's filter support,
+    /// otherwise DataFusion keeps the filter above the scan and cannot push
+    /// the LIMIT down into the generated SQL.
+    #[test_log::test(tokio::test)]
+    async fn filter_and_limit_pushdown_through_writer() {
+        let ctx = SessionContext::new();
+        setup_table(&ctx, "limit_pushdown").await;
+
+        let df = ctx
+            .sql("SELECT * FROM limit_pushdown WHERE id > 2 LIMIT 3")
+            .await
+            .unwrap();
+        let plan = df
+            .create_physical_plan()
+            .await
+            .expect("Should create physical plan");
+        let plan_str = format!(
+            "{}",
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+        assert!(!plan_str.contains("LimitExec"), "{plan_str}");
+        assert!(plan_str.contains("LIMIT 3"), "{plan_str}");
+
+        let batches = df.collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 3);
     }
 }

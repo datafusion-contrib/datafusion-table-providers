@@ -3,6 +3,7 @@ use std::{fmt, sync::Arc};
 use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::{
     catalog::Session,
     common::{Constraints, SchemaExt},
@@ -92,6 +93,13 @@ impl TableProvider for PostgresTableWriter {
             )),
             None,
         )) as _)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::common::Result<Vec<TableProviderFilterPushDown>> {
+        self.read_provider.supports_filters_pushdown(filters)
     }
 }
 

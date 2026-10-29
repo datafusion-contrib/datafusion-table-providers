@@ -171,7 +171,7 @@ impl TableDefinition {
             table_names.push((table_name, timestamp));
         }
 
-        table_names.sort_by(|a, b| a.1.cmp(&b.1));
+        table_names.sort_by_key(|a| a.1);
 
         Ok(table_names
             .into_iter()

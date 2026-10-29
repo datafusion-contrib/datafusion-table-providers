@@ -29,7 +29,7 @@ use datafusion::{
         TableProvider,
     },
     execution::TaskContext,
-    logical_expr::{dml::InsertOp, Expr, TableType},
+    logical_expr::{dml::InsertOp, Expr, TableProviderFilterPushDown, TableType},
     physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream},
 };
 use datafusion_table_providers_common::arrow_bridge;
@@ -141,6 +141,13 @@ where
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
+        self.read_provider.supports_filters_pushdown(filters)
     }
 
     async fn scan(
