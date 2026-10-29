@@ -1,8 +1,8 @@
 use crate::{arrow_record_batch_gen::*, docker::ContainerManager};
 use arrow::{
     array::{
-        Array, Decimal128Array, Decimal128Builder, Int32Array, ListArray, ListBuilder, RecordBatch,
-        StringArray, StructArray,
+        Array, Decimal128Array, Decimal128Builder, Int32Array, Int64Array, ListArray, ListBuilder,
+        RecordBatch, StringArray, StructArray, UInt64Array,
     },
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
@@ -17,6 +17,7 @@ use datafusion::{
 
 use datafusion_federation::schema_cast::record_convert::try_cast_to;
 
+use datafusion_table_providers::sql::db_connection_pool::postgrespool::PostgresConnectionPool;
 use datafusion_table_providers::{
     postgres::{DynPostgresConnectionPool, PostgresTableProviderFactory},
     sql::{db_connection_pool::dbconnection::AsyncDbConnection, sql_provider_datafusion::SqlTable},
@@ -183,6 +184,231 @@ async fn test_arrow_postgres_one_way() {
     test_postgres_unconstrained_numeric_precision(port).await;
     test_postgres_limit_pushdown(port).await;
     test_postgres_connection_pool_with_schema(port).await;
+    test_postgres_delete_from(port).await;
+    test_postgres_update(port).await;
+    test_postgres_update_and_delete_without_a_filter(port).await;
+}
+
+/// Test PostgresTableWriter::delete_from() with a filter
+async fn test_postgres_delete_from(port: u16) {
+    let ctx = SessionContext::new();
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    seed(&pool, "dml_delete_test").await;
+
+    let factory = PostgresTableFactory::new(Arc::new(pool));
+    let provider = factory
+        .read_write_table_provider(TableReference::bare("dml_delete_test"))
+        .await
+        .expect("a read-write provider should be built");
+    ctx.register_table("dml_delete_test", provider)
+        .expect("Table should be registered");
+
+    let deleted = count_of(
+        &ctx,
+        "DELETE FROM dml_delete_test WHERE id > 17",
+        "DELETE should execute",
+    )
+    .await;
+    assert_eq!(deleted, 3, "ids 18, 19 and 20 are the three rows over 17");
+
+    let left = rows_of(&ctx, "SELECT id FROM dml_delete_test").await;
+    assert_eq!(
+        left,
+        (1..=17).collect::<Vec<i32>>(),
+        "every row at or below the filter must survive; a DELETE that lost its WHERE clause would \
+         report a plausible count and empty the table"
+    );
+}
+
+/// Test PostgresTableWriter::update() with a filter
+async fn test_postgres_update(port: u16) {
+    let ctx = SessionContext::new();
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    seed(&pool, "dml_update_test").await;
+
+    let factory = PostgresTableFactory::new(Arc::new(pool));
+    let provider = factory
+        .read_write_table_provider(TableReference::bare("dml_update_test"))
+        .await
+        .expect("a read-write provider should be built");
+    ctx.register_table("dml_update_test", provider)
+        .expect("Table should be registered");
+
+    let updated = count_of(
+        &ctx,
+        "UPDATE dml_update_test SET label = 'changed', id = 99 WHERE id = 4",
+        "UPDATE should execute",
+    )
+    .await;
+    assert_eq!(updated, 1, "one row carries id 4");
+
+    let changed = labels_of(&ctx, "SELECT label FROM dml_update_test WHERE id = 99").await;
+    assert_eq!(
+        changed,
+        vec!["changed".to_owned()],
+        "both assignments must land: the row must now carry id 99 AND the new label"
+    );
+    let untouched = labels_of(&ctx, "SELECT label FROM dml_update_test WHERE id = 5").await;
+    assert_eq!(
+        untouched,
+        vec!["row-05".to_owned()],
+        "a row outside the filter must be unchanged; an UPDATE that lost its WHERE clause would change \
+         every row and still report a count"
+    );
+}
+
+/// Test PostgresTableWriter's update() and delete_from() without filters
+async fn test_postgres_update_and_delete_without_a_filter(port: u16) {
+    let ctx = SessionContext::new();
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    seed(&pool, "dml_unfiltered_test").await;
+
+    let factory = PostgresTableFactory::new(Arc::new(pool));
+    let provider = factory
+        .read_write_table_provider(TableReference::bare("dml_unfiltered_test"))
+        .await
+        .expect("a read-write provider should be built");
+    ctx.register_table("dml_unfiltered_test", provider)
+        .expect("Table should be registered");
+
+    let updated = count_of(
+        &ctx,
+        "UPDATE dml_unfiltered_test SET label = 'all'",
+        "an unfiltered UPDATE should execute",
+    )
+    .await;
+    assert_eq!(
+        updated, 20,
+        "an UPDATE with no WHERE clause applies to every row"
+    );
+
+    let deleted = count_of(
+        &ctx,
+        "DELETE FROM dml_unfiltered_test",
+        "an unfiltered DELETE should execute",
+    )
+    .await;
+    assert_eq!(
+        deleted, 20,
+        "a DELETE with no WHERE clause applies to every row"
+    );
+    assert!(
+        rows_of(&ctx, "SELECT id FROM dml_unfiltered_test")
+            .await
+            .is_empty(),
+        "the table must be empty afterwards"
+    );
+}
+
+/// Twenty rows, `id` 1..=20 with a matching label, in a table dropped first so a rerun starts clean.
+async fn seed(pool: &PostgresConnectionPool, table: &str) {
+    let db_conn = pool
+        .connect_direct()
+        .await
+        .expect("Connection should be established");
+    let _ = db_conn
+        .conn
+        .execute(&format!("DROP TABLE IF EXISTS {table}"), &[])
+        .await
+        .expect("table should be droppable");
+    let _ = db_conn
+        .conn
+        .execute(
+            &format!("CREATE TABLE {table} (id INT NOT NULL, label TEXT NOT NULL)"),
+            &[],
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+    let values: Vec<String> = (1..=20).map(|i| format!("({i}, 'row-{i:02}')")).collect();
+    let _ = db_conn
+        .conn
+        .execute(
+            &format!(
+                "INSERT INTO {table} (id, label) VALUES {}",
+                values.join(",")
+            ),
+            &[],
+        )
+        .await
+        .expect("INSERT should succeed");
+}
+
+/// The single count a DML statement answers with.
+async fn count_of(ctx: &SessionContext, sql: &str, expectation: &str) -> u64 {
+    let batches = ctx
+        .sql(sql)
+        .await
+        .unwrap_or_else(|error| panic!("{expectation}: it would not plan: {error}"))
+        .collect()
+        .await
+        .unwrap_or_else(|error| panic!("{expectation}: it would not run: {error}"));
+    let mut total = 0u64;
+    for batch in &batches {
+        let column = batch.column(0);
+        if let Some(counts) = column.as_any().downcast_ref::<UInt64Array>() {
+            for index in 0..counts.len() {
+                total += counts.value(index);
+            }
+        } else if let Some(counts) = column.as_any().downcast_ref::<Int64Array>() {
+            for index in 0..counts.len() {
+                total += u64::try_from(counts.value(index)).unwrap_or_default();
+            }
+        }
+    }
+    total
+}
+
+/// Every `id` a query returns, ascending, so a comparison is order-independent.
+async fn rows_of(ctx: &SessionContext, sql: &str) -> Vec<i32> {
+    let batches = ctx
+        .sql(sql)
+        .await
+        .expect("the read should plan")
+        .collect()
+        .await
+        .expect("the read should run");
+    let mut got = Vec::new();
+    for batch in &batches {
+        let column = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column is Int32");
+        for index in 0..column.len() {
+            got.push(column.value(index));
+        }
+    }
+    got.sort_unstable();
+    got
+}
+
+/// Every label a query returns.
+async fn labels_of(ctx: &SessionContext, sql: &str) -> Vec<String> {
+    let batches = ctx
+        .sql(sql)
+        .await
+        .expect("the read should plan")
+        .collect()
+        .await
+        .expect("the read should run");
+    let mut got = Vec::new();
+    for batch in &batches {
+        let column = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("label column is Utf8");
+        for index in 0..column.len() {
+            got.push(column.value(index).to_owned());
+        }
+    }
+    got
 }
 
 /// A pool created with `with_schema` must return the schema provided for a table from
