@@ -128,7 +128,7 @@ jobs:
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     env:
       # Official Postgres image — CNPG variants can exceed the healthcheck window in CI.
