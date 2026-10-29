@@ -58,6 +58,7 @@ pub struct ContainerRunnerBuilder<'a> {
     image: Option<String>,
     port_bindings: Vec<(u16, u16)>,
     env_vars: Vec<(String, String)>,
+    cmd: Option<Vec<String>>,
     healthcheck: Option<HealthConfig>,
     health_timeout: Option<std::time::Duration>,
 }
@@ -69,6 +70,7 @@ impl<'a> ContainerRunnerBuilder<'a> {
             image: None,
             port_bindings: Vec::new(),
             env_vars: Vec::new(),
+            cmd: None,
             healthcheck: None,
             health_timeout: None,
         }
@@ -87,6 +89,12 @@ impl<'a> ContainerRunnerBuilder<'a> {
 
     pub fn add_env_var(mut self, key: &str, value: &str) -> Self {
         self.env_vars.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Overrides the image's default command, i.e. the arguments passed to its entrypoint.
+    pub fn cmd(mut self, cmd: Vec<String>) -> Self {
+        self.cmd = Some(cmd);
         self
     }
 
@@ -112,6 +120,7 @@ impl<'a> ContainerRunnerBuilder<'a> {
             image,
             port_bindings: self.port_bindings,
             env_vars: self.env_vars,
+            cmd: self.cmd,
             healthcheck: self.healthcheck,
             health_timeout: self.health_timeout,
         })
@@ -124,6 +133,7 @@ pub struct ContainerRunner<'a> {
     image: String,
     port_bindings: Vec<(u16, u16)>,
     env_vars: Vec<(String, String)>,
+    cmd: Option<Vec<String>>,
     healthcheck: Option<HealthConfig>,
     health_timeout: Option<std::time::Duration>,
 }
@@ -179,6 +189,7 @@ impl ContainerRunner<'_> {
         let config = ContainerCreateBody {
             image: Some(self.image.clone()),
             env: Some(env_vars),
+            cmd: self.cmd,
             exposed_ports,
             host_config,
             healthcheck: self.healthcheck,
