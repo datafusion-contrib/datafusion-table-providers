@@ -4,6 +4,7 @@ use arrow::datatypes::SchemaRef;
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion::{
     catalog::Session,
     common::{Constraints, SchemaExt},
@@ -19,7 +20,10 @@ use futures::StreamExt;
 use snafu::prelude::*;
 
 use datafusion_table_providers_common::util::{
-    constraints, on_conflict::OnConflict, retriable_error::check_and_mark_retriable_error,
+    constraints,
+    dml::{assignments_to_sql, filters_to_sql, DeletionExec, DeletionSink, UpdateExec, UpdateSink},
+    on_conflict::OnConflict,
+    retriable_error::check_and_mark_retriable_error,
 };
 
 use crate::Postgres;
@@ -101,6 +105,107 @@ impl TableProvider for PostgresTableWriter {
     ) -> datafusion::common::Result<Vec<TableProviderFilterPushDown>> {
         self.read_provider.supports_filters_pushdown(filters)
     }
+
+    /// Deletes the rows a filter names, or every row when there is no filter.
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let sql_where = where_clause(&filters)?;
+        Ok(Arc::new(DeletionExec::new(Arc::new(
+            PostgresDeletionSink {
+                postgres: Arc::clone(&self.postgres),
+                sql_where,
+            },
+        ))))
+    }
+
+    /// Constructs the execution plan for an UPDATE
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if assignments.is_empty() {
+            return Ok(Arc::new(UpdateExec::new(Arc::new(NoChangeSink))));
+        }
+        let set_clause = assignments_to_sql(&assignments, &PostgreSqlDialect {})?;
+        let sql_where = where_clause(&filters)?;
+        Ok(Arc::new(UpdateExec::new(Arc::new(PostgresUpdateSink {
+            postgres: Arc::clone(&self.postgres),
+            set_clause,
+            sql_where,
+        }))))
+    }
+}
+
+/// One `WHERE` clause, or `None` when there is no filter.
+fn where_clause(filters: &[Expr]) -> datafusion::error::Result<Option<String>> {
+    if filters.is_empty() {
+        return Ok(None);
+    }
+    filters_to_sql(filters, &PostgreSqlDialect {}).map(Some)
+}
+
+struct PostgresDeletionSink {
+    postgres: Arc<Postgres>,
+    sql_where: Option<String>,
+}
+
+#[async_trait]
+impl DeletionSink for PostgresDeletionSink {
+    async fn delete_from(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let table = self.postgres.table.to_quoted_string();
+        let sql = self.sql_where.as_ref().map_or_else(
+            || format!("DELETE FROM {table}"),
+            |filter| format!("DELETE FROM {table} WHERE {filter}"),
+        );
+        execute_in_transaction(&self.postgres, &sql).await
+    }
+}
+
+struct PostgresUpdateSink {
+    postgres: Arc<Postgres>,
+    set_clause: String,
+    sql_where: Option<String>,
+}
+
+#[async_trait]
+impl UpdateSink for PostgresUpdateSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let table = self.postgres.table.to_quoted_string();
+        let set = &self.set_clause;
+        let sql = self.sql_where.as_ref().map_or_else(
+            || format!("UPDATE {table} SET {set}"),
+            |filter| format!("UPDATE {table} SET {set} WHERE {filter}"),
+        );
+        execute_in_transaction(&self.postgres, &sql).await
+    }
+}
+
+/// An update that assigns nothing: zero rows changed, and the table is not opened.
+struct NoChangeSink;
+
+#[async_trait]
+impl UpdateSink for NoChangeSink {
+    async fn execute_update(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(0)
+    }
+}
+
+/// Runs one statement in its own transaction and reports the rows it affected.
+async fn execute_in_transaction(
+    postgres: &Postgres,
+    sql: &str,
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let mut db_conn = postgres.connect().await?;
+    let postgres_conn = Postgres::postgres_conn(&mut db_conn)?;
+    let tx = postgres_conn.conn.transaction().await?;
+    let affected = tx.execute(sql, &[]).await?;
+    tx.commit().await?;
+    Ok(affected)
 }
 
 #[derive(Clone)]
