@@ -39,6 +39,8 @@ pub mod sql {
 
         #[cfg(feature = "adbc")]
         pub use datafusion_table_providers_adbc::pool as adbcpool;
+        #[cfg(feature = "cassandra")]
+        pub use datafusion_table_providers_cassandra::pool as cassandrapool;
         #[cfg(feature = "clickhouse")]
         pub use datafusion_table_providers_clickhouse::pool as clickhousepool;
         #[cfg(feature = "duckdb")]
@@ -59,6 +61,8 @@ pub mod sql {
 
             #[cfg(feature = "adbc")]
             pub use datafusion_table_providers_adbc::conn as adbcconn;
+            #[cfg(feature = "cassandra")]
+            pub use datafusion_table_providers_cassandra::conn as cassandraconn;
             #[cfg(feature = "clickhouse")]
             pub use datafusion_table_providers_clickhouse::conn as clickhouseconn;
             #[cfg(feature = "duckdb")]
@@ -79,6 +83,8 @@ pub mod sql {
 
 #[cfg(feature = "adbc")]
 pub use datafusion_table_providers_adbc as adbc;
+#[cfg(feature = "cassandra")]
+pub use datafusion_table_providers_cassandra as cassandra;
 #[cfg(feature = "clickhouse")]
 pub use datafusion_table_providers_clickhouse as clickhouse;
 #[cfg(feature = "duckdb")]

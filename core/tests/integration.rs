@@ -3,9 +3,12 @@ use rand::RngExt;
 #[cfg(feature = "adbc")]
 mod adbc;
 mod arrow_record_batch_gen;
+#[cfg(feature = "cassandra")]
+mod cassandra;
 #[cfg(feature = "clickhouse")]
 mod clickhouse;
 #[cfg(any(
+    feature = "cassandra",
     feature = "clickhouse",
     feature = "mongodb",
     feature = "mysql",

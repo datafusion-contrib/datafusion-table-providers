@@ -14,6 +14,7 @@ datafusion-table-providers-common = { workspace = true }
 tokio = { workspace = true, features = ["macros", "fs", "rt-multi-thread"] }
 
 datafusion-table-providers-adbc = { workspace = true, optional = true }
+datafusion-table-providers-cassandra = { workspace = true, optional = true }
 datafusion-table-providers-clickhouse = { workspace = true, optional = true }
 datafusion-table-providers-duckdb = { workspace = true, optional = true }
 datafusion-table-providers-flightsql = { workspace = true, optional = true }
@@ -58,6 +59,7 @@ oracle = { workspace = true }
 prost = { version = "=0.14.4" }
 rand = { workspace = true }
 reqwest = { workspace = true }
+scylla = "1.9"
 rstest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
@@ -74,6 +76,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 default = []
 
 adbc = ["dep:datafusion-table-providers-adbc"]
+cassandra = ["dep:datafusion-table-providers-cassandra"]
 clickhouse = ["dep:datafusion-table-providers-clickhouse"]
 duckdb = ["dep:datafusion-table-providers-duckdb"]
 flight = ["dep:datafusion-table-providers-flightsql"]
@@ -123,6 +126,11 @@ required-features = ["postgres"]
 name = "mysql"
 path = "examples/mysql.rs"
 required-features = ["mysql"]
+
+[[example]]
+name = "cassandra"
+path = "examples/cassandra.rs"
+required-features = ["cassandra"]
 
 [[example]]
 name = "duckdb"
