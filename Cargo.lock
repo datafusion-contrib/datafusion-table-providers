@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-adbc"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-cassandra"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "async-trait",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-clickhouse"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow-ipc",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-common"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow 60.0.0",
@@ -2561,7 +2561,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-duckdb"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow-schema 59.3.2",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-flightsql"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow-flight",
  "async-trait",
@@ -2604,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-mongodb"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow-schema 59.3.2",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-mysql"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "async-stream",
@@ -2648,7 +2648,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-odbc"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow-odbc",
  "async-stream",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-oracle"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "async-stream",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-postgres"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow-json",
@@ -2727,7 +2727,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-python"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-table-providers-sqlite"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow 59.3.2",
  "arrow-schema 59.3.2",
