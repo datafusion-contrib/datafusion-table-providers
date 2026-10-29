@@ -21,7 +21,7 @@ use std::sync::Arc;
 /// sleep 30
 ///
 /// # Create a table and insert sample data
-/// docker exec -i postgres psql -U postgres test_db <<EOF
+/// docker exec -i postgres psql -U postgres postgres_db <<EOF
 /// CREATE TABLE companies (
 ///    id SERIAL PRIMARY KEY,
 ///    name VARCHAR(100)

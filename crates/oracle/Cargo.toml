@@ -9,22 +9,22 @@ description = "DataFusion oracle table provider"
 
 [dependencies]
 arrow = { workspace = true }
-async-stream = "0.3"
-async-trait = "0.1"
-bb8 = "0.9"
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+bb8 = { workspace = true }
 bb8-oracle = { version = "0.3", features = ["chrono"] }
-bigdecimal = "0.4"
-chrono = "0.4.44"
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true }
-futures = "0.3"
-num-bigint = "0.4"
-oracle = { version = "0.6", features = ["chrono"] }
-secrecy = "0.10"
-snafu = "0.9"
-tokio = { version = "1.52", features = ["macros", "fs", "rt-multi-thread"] }
-tracing = "0.1"
+futures = { workspace = true }
+num-bigint = { workspace = true }
+oracle = { workspace = true, features = ["chrono"] }
+secrecy = { workspace = true }
+snafu = { workspace = true }
+tokio = { workspace = true, features = ["macros", "fs", "rt-multi-thread"] }
+tracing = { workspace = true }
 
 [features]
 default = ["federation"]

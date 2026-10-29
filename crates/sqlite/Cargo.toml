@@ -10,22 +10,22 @@ description = "DataFusion sqlite table provider"
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
 datafusion-table-providers-common = { workspace = true }
 fundu = "2.0"
-futures = "0.3"
+futures = { workspace = true }
 rusqlite = { version = "0.37" }
-sea-query = { version = "1.0.0", features = ["backend-sqlite", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
-snafu = "0.9"
-tokio = { version = "1.52", features = ["macros", "fs"] }
+sea-query = { workspace = true, features = ["backend-sqlite", "with-rust_decimal", "with-bigdecimal", "with-time", "with-chrono"] }
+snafu = { workspace = true }
+tokio = { workspace = true, features = ["macros", "fs"] }
 tokio-rusqlite = "0.7"
-tracing = "0.1"
+tracing = { workspace = true }
 
 [dev-dependencies]
-rand = "0.10"
-rstest = "0.28.0"
+rand = { workspace = true }
+rstest = { workspace = true }
 
 [features]
 default = ["federation", "bundled"]

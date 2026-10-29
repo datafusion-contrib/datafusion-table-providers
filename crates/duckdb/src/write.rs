@@ -20,7 +20,7 @@ use datafusion::{
     datasource::{TableProvider, TableType},
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
-    logical_expr::Expr,
+    logical_expr::{Expr, TableProviderFilterPushDown},
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
 use datafusion_table_providers_common::arrow_bridge;
@@ -227,6 +227,13 @@ impl TableProvider for DuckDBTableWriter {
 
     fn constraints(&self) -> Option<&Constraints> {
         self.table_definition.constraints()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
+        self.read_provider.supports_filters_pushdown(filters)
     }
 
     async fn scan(
