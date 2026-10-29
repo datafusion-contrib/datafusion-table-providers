@@ -153,10 +153,16 @@ impl ContainerRunner<'_> {
         }
         tracing::debug!("Port bindings: {port_bindings_map:?}");
 
-        let port_bindings = if port_bindings_map.is_empty() {
-            None
+        // A binding only takes effect for an exposed port. Images like
+        // gvenzl/oracle-free declare no EXPOSE, and unlike `docker run -p`, the
+        // API does not expose bound ports implicitly on every Docker version.
+        let (exposed_ports, port_bindings) = if port_bindings_map.is_empty() {
+            (None, None)
         } else {
-            Some(port_bindings_map)
+            (
+                Some(port_bindings_map.keys().cloned().collect()),
+                Some(port_bindings_map),
+            )
         };
 
         let host_config = Some(HostConfig {
@@ -173,6 +179,7 @@ impl ContainerRunner<'_> {
         let config = ContainerCreateBody {
             image: Some(self.image.clone()),
             env: Some(env_vars),
+            exposed_ports,
             host_config,
             healthcheck: self.healthcheck,
             ..Default::default()

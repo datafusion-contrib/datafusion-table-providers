@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::SchemaRef, common::TableReference, execution::SendableRecordBatchStream,
@@ -9,6 +9,12 @@ use crate::sql::db_connection_pool::runtime::run_async_with_tokio;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T, E = GenericError> = std::result::Result<T, E>;
+
+/// Known Arrow schemas, keyed by the table they belong to.
+///
+/// Connections created with [`AsyncDbConnection::new_with_schemas`] return these schemas
+/// from [`AsyncDbConnection::get_schema`] instead of inferring them from the database.
+pub type TableSchemas = HashMap<TableReference, SchemaRef>;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
@@ -97,6 +103,15 @@ pub trait SyncDbConnection<T, P>: DbConnection<T, P> {
 #[async_trait::async_trait]
 pub trait AsyncDbConnection<T, P>: DbConnection<T, P> + Sync {
     fn new(conn: T) -> Self
+    where
+        Self: Sized;
+
+    /// Creates a new connection that uses the provided `schemas` instead of inferring them.
+    ///
+    /// When `schemas` contains the requested table reference, [`AsyncDbConnection::get_schema`]
+    /// returns its schema as-is instead of querying the database for it. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different keys.
+    fn new_with_schemas(conn: T, schemas: Arc<TableSchemas>) -> Self
     where
         Self: Sized;
 

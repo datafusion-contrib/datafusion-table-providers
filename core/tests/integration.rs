@@ -9,6 +9,7 @@ mod clickhouse;
     feature = "clickhouse",
     feature = "mongodb",
     feature = "mysql",
+    feature = "oracle",
     feature = "postgres"
 ))]
 mod docker;
@@ -20,6 +21,8 @@ mod flight;
 mod mongodb;
 #[cfg(feature = "mysql")]
 mod mysql;
+#[cfg(feature = "odbc")]
+mod odbc;
 #[cfg(feature = "oracle")]
 mod oracle;
 #[cfg(feature = "postgres")]

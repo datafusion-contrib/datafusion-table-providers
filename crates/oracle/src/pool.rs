@@ -6,13 +6,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bb8::CustomizeConnection;
 use bb8_oracle::OracleConnectionManager;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::TableReference;
 use oracle::{Connection, Connector};
 use secrecy::{ExposeSecret, SecretString};
 use snafu::prelude::*;
 
 use datafusion_table_providers_common::sql::db_connection_pool::{
-    dbconnection::DbConnection, DbConnectionPool, JoinPushDown,
+    dbconnection::{AsyncDbConnection, DbConnection, TableSchemas},
+    DbConnectionPool, JoinPushDown,
 };
+
+use crate::conn::{OracleConnection, OraclePooledConnection};
 
 /// Default TCP port for Oracle Database
 const DEFAULT_ORACLE_PORT: u16 = 1521;
@@ -80,6 +85,7 @@ impl CustomizeConnection<Arc<Connection>, bb8_oracle::Error> for SetTimezoneCust
 
 pub struct OracleConnectionPool {
     pool: Arc<bb8::Pool<OracleConnectionManager>>,
+    schemas: Arc<TableSchemas>,
 }
 
 impl std::fmt::Debug for OracleConnectionPool {
@@ -154,16 +160,35 @@ impl OracleConnectionPool {
 
         Ok(Self {
             pool: Arc::new(pool),
+            schemas: Arc::default(),
         })
     }
 
-    pub async fn connect_direct(&self) -> Result<crate::conn::OracleConnection> {
+    /// Use the provided `schema` for `table_reference` instead of inferring it from the database.
+    ///
+    /// Call it once per table to provide the schemas of several tables. Table references are
+    /// matched exactly, e.g. `users` and `public.users` are different tables.
+    #[must_use]
+    pub fn with_schema(
+        mut self,
+        table_reference: impl Into<TableReference>,
+        schema: SchemaRef,
+    ) -> Self {
+        Arc::make_mut(&mut self.schemas).insert(table_reference.into(), schema);
+        self
+    }
+
+    fn new_connection(&self, conn: OraclePooledConnection) -> OracleConnection {
+        OracleConnection::new_with_schemas(conn, Arc::clone(&self.schemas))
+    }
+
+    pub async fn connect_direct(&self) -> Result<OracleConnection> {
         let conn = Arc::clone(&self.pool)
             .get_owned()
             .await
             .map_err(|e| Error::PoolRunError { source: e })?;
 
-        Ok(crate::conn::OracleConnection::new(conn))
+        Ok(self.new_connection(conn))
     }
 }
 
@@ -189,7 +214,7 @@ impl
             Box::new(Error::PoolRunError { source: e }) as Box<dyn std::error::Error + Send + Sync>
         })?;
 
-        Ok(Box::new(crate::conn::OracleConnection::new(conn)))
+        Ok(Box::new(self.new_connection(conn)))
     }
 
     fn join_push_down(&self) -> JoinPushDown {

@@ -14,12 +14,13 @@ use serde::Deserialize;
 use snafu::ResultExt;
 
 use datafusion_table_providers_common::sql::db_connection_pool::dbconnection::{
-    AsyncDbConnection, DbConnection, Error, SyncDbConnection,
+    AsyncDbConnection, DbConnection, Error, SyncDbConnection, TableSchemas,
 };
 
 #[derive(Clone)]
 pub struct ClickHouseConnection {
     pub client: Client,
+    pub schemas: Arc<TableSchemas>,
 }
 
 impl std::fmt::Debug for ClickHouseConnection {
@@ -32,7 +33,10 @@ impl std::fmt::Debug for ClickHouseConnection {
 impl ClickHouseConnection {
     #[must_use]
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            schemas: Arc::default(),
+        }
     }
 }
 
@@ -60,7 +64,20 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
     where
         Self: Sized,
     {
-        Self { client: conn }
+        Self {
+            client: conn,
+            schemas: Arc::default(),
+        }
+    }
+
+    fn new_with_schemas(conn: Client, schemas: Arc<TableSchemas>) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            client: conn,
+            schemas,
+        }
     }
 
     async fn tables(&self, schema: &str) -> Result<Vec<String>, Error> {
@@ -103,6 +120,10 @@ impl AsyncDbConnection<Client, ()> for ClickHouseConnection {
     ///
     /// * `table_reference` - The table reference.
     async fn get_schema(&self, table_reference: &TableReference) -> Result<SchemaRef, Error> {
+        if let Some(schema) = self.schemas.get(table_reference) {
+            return Ok(Arc::clone(schema));
+        }
+
         #[derive(Row, Deserialize)]
         struct CatalogRow {
             db: String,
