@@ -137,6 +137,7 @@ jobs:
       CLICKHOUSE_DOCKER_IMAGE: clickhouse/clickhouse-server:24.8
       CASSANDRA_DOCKER_IMAGE: cassandra:5.0
       ORACLE_DOCKER_IMAGE: docker.io/gvenzl/oracle-free:latest
+      MONGODB_DOCKER_IMAGE: mongo:7
       # Keep integration test logs concise for faster CI runs.
       RUST_LOG: info
       # Serialize Docker-backed tests a bit to avoid stampeding many Postgres containers.
@@ -164,7 +165,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: /tmp/docker-images
-          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}-${{ env.CLICKHOUSE_DOCKER_IMAGE }}-${{ env.CASSANDRA_DOCKER_IMAGE }}-${{ env.ORACLE_DOCKER_IMAGE }}
+          key: docker-images-${{ env.PG_DOCKER_IMAGE }}-${{ env.MYSQL_DOCKER_IMAGE }}-${{ env.CLICKHOUSE_DOCKER_IMAGE }}-${{ env.CASSANDRA_DOCKER_IMAGE }}-${{ env.ORACLE_DOCKER_IMAGE }}-${{ env.MONGODB_DOCKER_IMAGE }}
 
       - name: Load or pull Docker images
         run: |
@@ -187,6 +188,7 @@ jobs:
           load_or_pull clickhouse "${{ env.CLICKHOUSE_DOCKER_IMAGE }}"
           load_or_pull cassandra "${{ env.CASSANDRA_DOCKER_IMAGE }}"
           load_or_pull oracle "${{ env.ORACLE_DOCKER_IMAGE }}"
+          load_or_pull mongodb "${{ env.MONGODB_DOCKER_IMAGE }}"
 
       - name: Install ODBC & Sqlite
         run: |
