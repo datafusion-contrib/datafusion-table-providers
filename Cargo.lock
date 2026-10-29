@@ -2876,9 +2876,9 @@ dependencies = [
 
 [[package]]
 name = "duckdb"
-version = "1.20000.0"
+version = "1.20000.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54411716279c39d685e0f3f10346ff503def53fd9b8aa8fbf4ea1db4499c312a"
+checksum = "d807ca47d4fa206f102ff568046e018fb84518eb0a0b5e65a165a2eb7bd4a7c2"
 dependencies = [
  "arrow 60.0.0",
  "cast",
@@ -4034,15 +4034,16 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libduckdb-sys"
-version = "1.20000.0"
+version = "1.20000.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac1dcdcfde48e11bbd46112ed3b0423acd8c644413b3891e7be8104edce7fdda"
+checksum = "0140448c472968ee5cf5ba697435deebe558b366ef1e5c080d24d9696b600725"
 dependencies = [
  "cc",
  "flate2",
  "pkg-config",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tar",
  "ureq",
  "vcpkg",

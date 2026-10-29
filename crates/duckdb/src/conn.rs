@@ -578,6 +578,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                 let result: duckdb::ArrowStream<'_> =
                     stmt.stream_arrow(params).context(DuckDBQuerySnafu)?;
                 for batch in result {
+                    let batch = batch.context(DuckDBQuerySnafu)?;
                     let batch = arrow_bridge::record_batch_from_60(&batch)?;
                     let batch = cast_batch_to_schema(batch, &cast_schema)?;
                     blocking_channel_send(&batch_tx, batch)?;
