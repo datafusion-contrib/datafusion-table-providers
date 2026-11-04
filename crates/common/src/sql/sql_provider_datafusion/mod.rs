@@ -37,7 +37,7 @@ use datafusion::{
     execution::TaskContext,
     logical_expr::{
         logical_plan::builder::LogicalTableSource, Expr, LogicalPlan, LogicalPlanBuilder,
-        TableProviderFilterPushDown, TableType,
+        TableProviderFilterPushDown, TableScanBuilder, TableType,
     },
     physical_expr::{EquivalenceProperties, PhysicalSortExpr},
     physical_plan::{
@@ -129,7 +129,7 @@ impl<T, P> SqlTable<T, P> {
 
     pub fn scan_to_sql(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<String> {
@@ -143,16 +143,16 @@ impl<T, P> SqlTable<T, P> {
 
     fn create_logical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<LogicalPlan> {
         let table_source = LogicalTableSource::new(self.schema());
-        LogicalPlanBuilder::scan_with_filters(
-            self.table_reference.clone(),
-            Arc::new(table_source),
-            projection.cloned(),
-            filters.to_vec(),
+        LogicalPlanBuilder::table_scan(
+            TableScanBuilder::new(self.table_reference.clone(), Arc::new(table_source))
+                .with_projection(projection.map(<[usize]>::to_vec))
+                .with_filters(filters.to_vec())
+                .build()?,
         )?
         .limit(0, limit)?
         .build()
@@ -160,7 +160,7 @@ impl<T, P> SqlTable<T, P> {
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SqlExec::new(
@@ -244,7 +244,7 @@ impl<T, P> TableProvider for SqlTable<T, P> {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -282,7 +282,7 @@ static ONE_COLUMN_SCHEMA: LazyLock<SchemaRef> =
 
 pub fn project_schema_safe(
     schema: &SchemaRef,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
 ) -> DataFusionResult<SchemaRef> {
     let schema = match projection {
         Some(columns) => {
@@ -322,7 +322,7 @@ impl<T, P> Clone for SqlExec<T, P> {
 
 impl<T, P> SqlExec<T, P> {
     pub fn new(
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         schema: &SchemaRef,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
@@ -545,8 +545,8 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
         )
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        true
+    fn limit_behavior(&self) -> datafusion::physical_plan::LimitBehavior {
+        datafusion::physical_plan::LimitBehavior::CopyToChildren
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -737,19 +737,8 @@ pub fn to_execution_error(
 mod tests {
     use std::{error::Error, sync::Arc};
 
-    use datafusion::common::TableReference;
-    use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Dispatch};
-
     use crate::sql::sql_provider_datafusion::SqlTable;
-
-    fn setup_tracing() -> DefaultGuard {
-        let subscriber: tracing_subscriber::FmtSubscriber = tracing_subscriber::fmt()
-            .with_max_level(LevelFilter::DEBUG)
-            .finish();
-
-        let dispatch = Dispatch::new(subscriber);
-        tracing::dispatcher::set_default(&dispatch)
-    }
+    use datafusion::common::TableReference;
 
     mod sql_table_plan_to_sql_tests {
         use std::any::Any;
@@ -830,7 +819,7 @@ mod tests {
         #[tokio::test]
         async fn test_sql_to_string() -> Result<(), Box<dyn Error + Send + Sync>> {
             let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
-            let result = sql_table.scan_to_sql(Some(&vec![0]), &[], None)?;
+            let result = sql_table.scan_to_sql(Some(&[0]), &[], None)?;
             assert_eq!(result, "SELECT `users`.`name` FROM `users`");
             Ok(())
         }
@@ -840,7 +829,7 @@ mod tests {
         ) -> Result<(), Box<dyn Error + Send + Sync>> {
             let filters = vec![col("age").gt_eq(lit(30)).and(col("name").eq(lit("x")))];
             let sql_table = new_sql_table("users", Some(Arc::new(SqliteDialect {})))?;
-            let result = sql_table.scan_to_sql(Some(&vec![0, 1]), &filters, Some(3))?;
+            let result = sql_table.scan_to_sql(Some(&[0, 1]), &filters, Some(3))?;
             assert_eq!(
                 result,
                 "SELECT `users`.`name`, `users`.`age` FROM `users` WHERE ((`users`.`age` >= 30) AND (`users`.`name` = 'x')) LIMIT 3"
@@ -1247,9 +1236,12 @@ mod tests {
         }
 
         #[test]
-        fn test_supports_limit_pushdown() {
+        fn test_limit_behavior() {
             let exec = make_exec("SELECT * FROM t");
-            assert!(exec.supports_limit_pushdown());
+            assert_eq!(
+                exec.limit_behavior(),
+                datafusion::physical_plan::LimitBehavior::CopyToChildren
+            );
         }
     }
 

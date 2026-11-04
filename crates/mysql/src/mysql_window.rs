@@ -99,7 +99,7 @@ mod test {
                         Token::Char('*'),
                     ))),
                     options: sqlparser::ast::OrderByOptions {
-                        asc: None,
+                        sort: None,
                         nulls_first: Some(true),
                     },
                     with_fill: None,
@@ -125,7 +125,7 @@ mod test {
                     Token::Char('*'),
                 ))),
                 options: sqlparser::ast::OrderByOptions {
-                    asc: None,
+                    sort: None,
                     nulls_first: Some(true),
                 },
                 with_fill: None,
@@ -155,7 +155,7 @@ mod test {
                         Token::Char('*'),
                     ))),
                     options: sqlparser::ast::OrderByOptions {
-                        asc: None,
+                        sort: None,
                         nulls_first: Some(true),
                     },
                     with_fill: None,
@@ -181,7 +181,7 @@ mod test {
                     Token::Char('*'),
                 ))),
                 options: sqlparser::ast::OrderByOptions {
-                    asc: None,
+                    sort: None,
                     nulls_first: None,
                 },
                 with_fill: None,

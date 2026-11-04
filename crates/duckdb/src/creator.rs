@@ -4,7 +4,6 @@ use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use datafusion::common::utils::quote_identifier;
 use datafusion::common::Constraints;
 use datafusion::common::TableReference;
-use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::sql::arrow_sql_gen::statement::IndexBuilder;
 use datafusion_table_providers_common::util::on_conflict::OnConflict;
 use duckdb::{vtab::arrow::ArrowBatchRegistration, Transaction};
@@ -440,9 +439,6 @@ impl TableManager {
             .context(super::UnableToBeginTransactionSnafu)?;
         let table_name = self.table_name();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&self.table_definition.schema));
-        // duckdb uses arrow 60, DataFusion uses a different version
-        let empty_batch = arrow_bridge::record_batch_to_60(&empty_batch)
-            .context(super::UnableToConvertArrowDataSnafu)?;
         let registration = ArrowBatchRegistration::new(empty_batch);
         let sql =
             format!(r#"CREATE TABLE IF NOT EXISTS "{table_name}" AS SELECT * FROM arrow(?)"#,);
@@ -710,8 +706,7 @@ impl TableManager {
         let result: duckdb::Arrow<'_> = stmt
             .query_arrow([])
             .context(super::UnableToQueryDataSnafu)?;
-        arrow_bridge::schema_ref_from_60(&result.get_schema())
-            .context(super::UnableToConvertArrowDataSnafu)
+        Ok(result.get_schema())
     }
 
     pub(crate) fn get_row_count(&self, tx: &Transaction<'_>) -> super::Result<u64> {

@@ -111,6 +111,8 @@ fn global_teardown() {
 
 /// inserts data into clickhouse using official client and reads it back for now
 #[tokio::test]
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
 async fn clickhouse_insert_and_read() {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
@@ -157,6 +159,8 @@ async fn clickhouse_insert_and_read() {
 /// A pool created with `with_schema` must return the schema provided for a table from
 /// `get_schema` instead of inferring it from the database.
 #[tokio::test]
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
 async fn clickhouse_connection_pool_with_schema() {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
@@ -202,11 +206,11 @@ async fn clickhouse_connection_pool_with_schema() {
     let field1 = inferred.field(0);
     assert_eq!(field1.name(), "id");
     assert_eq!(field1.data_type(), &DataType::Int64);
-    assert_eq!(field1.is_nullable(), false);
+    assert!(!field1.is_nullable());
     let field2 = inferred.field(1);
     assert_eq!(field2.name(), "name");
     assert_eq!(field2.data_type(), &DataType::Utf8); // ClickHouseConnection::get_schema() infers it correctly
-    assert_eq!(field2.is_nullable(), false);
+    assert!(!field2.is_nullable());
 
     // the provided schemas are used as-is, each one for its own table
     let schema = Arc::new(Schema::new(vec![

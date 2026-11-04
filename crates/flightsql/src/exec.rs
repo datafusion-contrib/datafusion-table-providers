@@ -60,7 +60,7 @@ impl FlightExec {
     /// and origin URL (used as fallback location as per the protocol spec).
     pub fn try_new(
         metadata: &FlightMetadata,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         origin: &str,
     ) -> Result<Self> {
         let partitions = metadata

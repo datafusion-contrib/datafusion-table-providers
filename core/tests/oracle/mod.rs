@@ -1013,11 +1013,11 @@ async fn test_oracle_connection_pool_with_schema() {
     let field1 = inferred.field(0);
     assert_eq!(field1.name(), "ID");
     assert_eq!(field1.data_type(), &DataType::Utf8); // the inferring is wrong here !
-    assert_eq!(field1.is_nullable(), true);
+    assert!(field1.is_nullable());
     let field2 = inferred.field(1);
     assert_eq!(field2.name(), "NAME");
     assert_eq!(field2.data_type(), &DataType::Utf8); // OracleConnection::get_schema() infers it correctly
-    assert_eq!(field2.is_nullable(), true);
+    assert!(field2.is_nullable());
 
     // the provided schemas are used as-is, each one for its own table
     let schema = Arc::new(Schema::new(vec![

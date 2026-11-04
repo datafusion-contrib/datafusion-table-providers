@@ -927,6 +927,8 @@ fn global_teardown() {
 
 #[rstest]
 #[test_log::test(tokio::test)]
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
 async fn test_mongodb_arrow_oneway() {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
@@ -968,7 +970,7 @@ async fn test_mongodb_sort_limit(port: u16) {
     let _ = collection.drop().await;
 
     // Insert 20 documents with id = 1..=20.
-    let docs: Vec<Document> = (1..=20).map(|i| doc! { "id": i as i32 }).collect();
+    let docs: Vec<Document> = (1..=20).map(|i| doc! { "id": i }).collect();
     collection
         .insert_many(docs)
         .await
