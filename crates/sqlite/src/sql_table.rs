@@ -56,7 +56,7 @@ impl<T, P> SQLiteTable<T, P> {
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         schema: &SchemaRef,
         sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -90,7 +90,7 @@ impl<T, P> TableProvider for SQLiteTable<T, P> {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -112,7 +112,7 @@ struct SQLiteSqlExec<T, P> {
 
 impl<T, P> SQLiteSqlExec<T, P> {
     fn new(
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         schema: &SchemaRef,
         pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
         sql: String,
@@ -219,8 +219,8 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         }
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        true
+    fn limit_behavior(&self) -> datafusion::physical_plan::LimitBehavior {
+        datafusion::physical_plan::LimitBehavior::CopyToChildren
     }
 
     fn fetch(&self) -> Option<usize> {

@@ -797,6 +797,12 @@ async fn test_arrow_mysql_roundtrip(
     #[case] arrow_result: (RecordBatch, SchemaRef),
     #[case] table_name: &str,
 ) {
+    run_arrow_mysql_roundtrip(arrow_result, table_name).await;
+}
+
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
+async fn run_arrow_mysql_roundtrip(arrow_result: (RecordBatch, SchemaRef), table_name: &str) {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
         let container_manager = guard.as_mut().unwrap();
@@ -1046,6 +1052,8 @@ async fn test_mysql_limit_pushdown(port: u16) {
 
 #[rstest]
 #[test_log::test(tokio::test)]
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
 async fn test_mysql_arrow_oneway() {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
@@ -1109,11 +1117,11 @@ async fn test_mysql_connection_pool_with_schema(port: u16) {
     let field1 = inferred.field(0);
     assert_eq!(field1.name(), "id");
     assert_eq!(field1.data_type(), &DataType::Int32);
-    assert_eq!(field1.is_nullable(), true);
+    assert!(field1.is_nullable());
     let field2 = inferred.field(1);
     assert_eq!(field2.name(), "name");
     assert_eq!(field2.data_type(), &DataType::Utf8); // MySQLConnection::get_schema() infers it correctly
-    assert_eq!(field2.is_nullable(), true);
+    assert!(field2.is_nullable());
 
     // the provided schemas are used as-is, each one for its own table
     let schema = Arc::new(Schema::new(vec![

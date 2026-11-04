@@ -175,14 +175,4 @@ pub(crate) mod tests {
 
         Constraints::new_unverified(vec![Constraint::Unique(indices)])
     }
-
-    pub(crate) fn get_pk_constraints(cols: &[&str], schema: SchemaRef) -> Constraints {
-        // Convert column names to their corresponding indices
-        let indices: Vec<usize> = cols
-            .iter()
-            .filter_map(|&col_name| schema.column_with_name(col_name).map(|(index, _)| index))
-            .collect();
-
-        Constraints::new_unverified(vec![Constraint::PrimaryKey(indices)])
-    }
 }

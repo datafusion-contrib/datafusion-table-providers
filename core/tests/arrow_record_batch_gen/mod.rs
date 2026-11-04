@@ -396,8 +396,7 @@ pub(crate) fn get_arrow_struct_record_batch() -> (RecordBatch, SchemaRef) {
 }
 
 pub(crate) fn get_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
-    let decimal32_array =
-        Decimal32Array::from(vec![i32::from(123), i32::from(222), i32::from(321)]);
+    let decimal32_array = Decimal32Array::from(vec![123, 222, 321]);
     let decimal64_array =
         Decimal64Array::from(vec![i64::from(123), i64::from(222), i64::from(321)]);
     let decimal128_array =
@@ -427,8 +426,7 @@ pub(crate) fn get_arrow_decimal_record_batch() -> (RecordBatch, SchemaRef) {
 }
 
 pub(crate) fn get_mysql_arrow_decimal_record() -> (RecordBatch, SchemaRef) {
-    let decimal32_array =
-        Decimal32Array::from(vec![i32::from(123), i32::from(222), i32::from(321)]);
+    let decimal32_array = Decimal32Array::from(vec![123, 222, 321]);
     let decimal64_array =
         Decimal64Array::from(vec![i64::from(123), i64::from(222), i64::from(321)]);
     let decimal128_array =

@@ -30,29 +30,29 @@ description = "Extend the capabilities of DataFusion to support additional data 
 [workspace.dependencies]
 adbc_core = { version = "0.25" }
 adbc_driver_manager = { version = "0.25" }
-arrow = "59.2"
-arrow-array = { version = "59.2" }
-arrow-flight = { version = "59.2", features = [
-    "flight-sql-experimental",
+arrow = "60.1"
+arrow-array = { version = "60.1" }
+arrow-flight = { version = "60.1", features = [
+    "flight-sql",
     "tls-ring",
 ] }
-arrow-ipc = { version = "59.2" }
-arrow-schema = { version = "59.2", features = ["serde"] }
-arrow-json = "59.2"
-arrow-odbc = { version = "25.3" }
+arrow-ipc = { version = "60.1" }
+arrow-schema = { version = "60.1", features = ["serde"] }
+arrow-json = "60.1"
+arrow-odbc = { version = "26.0" }
 async-stream = { version = "0.3" }
 async-trait = { version = "0.1" }
 bb8 = { version = "0.9" }
 bigdecimal = { version = "0.4" }
 chrono = { version = "0.4.44" }
 clickhouse = { version = "0.15" }
-datafusion = { version = "55.2", default-features = false }
-datafusion-expr = { version = "55.2" }
-datafusion-federation = { version = "0.5.7" }
-datafusion-ffi = { version = "55.2" }
-datafusion-proto = { version = "55.2" }
-datafusion-physical-expr = { version = "55.2" }
-datafusion-physical-plan = { version = "55.2" }
+datafusion = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev", default-features = false }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev" }
+datafusion-federation = { git = "https://github.com/martin-g/datafusion-federation.git", branch="datafusion-56.0", version = "0.6.0" }
+datafusion-ffi = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", branch = "branch-56", version = "56.0.0-dev" }
 datafusion-table-providers = { version = "0.15.1", path = "core" }
 datafusion-table-providers-cassandra = { version = "0.15.1", path = "crates/cassandra" }
 datafusion-table-providers-common = { version = "0.15.1", path = "crates/common" }

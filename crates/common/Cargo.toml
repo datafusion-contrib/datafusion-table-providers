@@ -9,7 +9,6 @@ description = "Shared infrastructure for DataFusion table providers"
 
 [dependencies]
 arrow = { workspace = true, features = ["ffi"] }
-arrow60 = { package = "arrow", version = "60", default-features = false, features = ["ffi"], optional = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 chrono = { workspace = true }
@@ -41,9 +40,6 @@ url = { workspace = true }
 [features]
 default = ["federation"]
 federation = ["dep:datafusion-federation"]
-# Conversions between arrow 60 and the arrow version used by DataFusion,
-# for drivers that are built against arrow 60.
-arrow60 = ["dep:arrow60"]
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["parquet", "sql"] }
