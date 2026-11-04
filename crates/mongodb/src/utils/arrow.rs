@@ -1633,7 +1633,7 @@ mod tests {
     #[test]
     fn test_float32_builder() {
         let docs = vec![
-            doc! { "val": 3.14_f64 },
+            doc! { "val": 2.5_f64 },
             doc! { "val": 42_i32 },
             doc! { "val": "not_a_number" }, // wrong type → null
         ];
@@ -1648,7 +1648,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float32Array>()
             .unwrap();
-        assert!((arr.value(0) - 3.14_f32).abs() < 0.001);
+        assert!((arr.value(0) - 2.5_f32).abs() < 0.001);
         assert_eq!(arr.value(1), 42.0_f32);
         assert!(arr.is_null(2));
     }

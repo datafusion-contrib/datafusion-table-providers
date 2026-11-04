@@ -65,6 +65,8 @@ fn global_teardown() {
 
 /// All Cassandra tests share one container: Cassandra takes too long to start for one per test.
 #[test_log::test(tokio::test)]
+// Holding the lock while starting the container keeps tests from starting it concurrently.
+#[allow(clippy::await_holding_lock)]
 async fn test_cassandra() {
     let port = {
         let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
@@ -678,7 +680,7 @@ async fn test_cassandra_scan_with_filters_not_pushed_down(pool: &Arc<CassandraCo
         let provider = Arc::clone(&provider);
         async move {
             let plan = provider
-                .scan(&ctx.state(), Some(&vec![1]), &filters, limit)
+                .scan(&ctx.state(), Some(&[1]), &filters, limit)
                 .await
                 .expect("scan should be planned");
             let plan_string = displayable(plan.as_ref()).indent(false).to_string();

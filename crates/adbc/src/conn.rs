@@ -23,7 +23,6 @@ use arrow_schema::SchemaRef;
 use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion_table_providers_common::arrow_bridge::{self, arrow60};
 use r2d2_adbc::AdbcConnectionManager;
 use snafu::{prelude::*, ResultExt};
 use std::marker::Send;
@@ -114,7 +113,7 @@ where
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetTablesSnafu)?;
 
-        use arrow60::array::AsArray;
+        use arrow::array::AsArray;
 
         let mut tables = vec![];
         for batch in result {
@@ -177,7 +176,7 @@ where
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        use arrow60::array::AsArray;
+        use arrow::array::AsArray;
 
         let mut schemas = vec![];
         for batch in result {
@@ -227,9 +226,7 @@ where
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        arrow_bridge::schema_ref_from_60(&Arc::new(schema))
-            .boxed()
-            .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)
+        Ok(Arc::new(schema))
     }
 
     fn query_arrow(
@@ -252,7 +249,7 @@ where
                 stmt.set_sql_query(sql)?;
 
                 match stmt.execute_schema() {
-                    Ok(s) => schema = Arc::new(arrow_bridge::schema_from_60(&s)?),
+                    Ok(s) => schema = Arc::new(s),
                     // not all drivers implement execute_schema, so fall back to executing
                     // with LIMIT 0 to get the schema.
                     Err(_) => {
@@ -263,7 +260,7 @@ where
                             .execute()
                             .boxed()
                             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
-                        schema = arrow_bridge::schema_ref_from_60(&result.schema())?;
+                        schema = result.schema();
                     }
                 }
             }
@@ -290,7 +287,7 @@ where
                     .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
                 for batch in results {
                     let b = batch.boxed().context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToQueryArrowSnafu)?;
-                    blocking_channel_send(&batch_tx, arrow_bridge::record_batch_from_60(&b)?)?;
+                    blocking_channel_send(&batch_tx, b)?;
                 }
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
@@ -338,22 +335,19 @@ where
     }
 }
 
-/// Binds query parameters, converting them to the arrow version used by the ADBC driver.
+/// Binds query parameters.
 fn bind_params(
     stmt: &mut impl Statement,
     params: &[RecordBatch],
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let params = params
-        .iter()
-        .map(arrow_bridge::record_batch_to_60)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let params = params.to_vec();
     match params.len() {
         0 => {}
         1 => stmt.bind(params.into_iter().next().expect("one batch"))?,
         _ => {
             let param_schema = params[0].schema();
             let reader =
-                arrow60::array::RecordBatchIterator::new(params.into_iter().map(Ok), param_schema);
+                arrow::array::RecordBatchIterator::new(params.into_iter().map(Ok), param_schema);
             stmt.bind_stream(Box::new(reader))?;
         }
     }
