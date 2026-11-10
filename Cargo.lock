@@ -4960,9 +4960,9 @@ dependencies = [
 
 [[package]]
 name = "odbc-api"
-version = "29.2.0"
+version = "29.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8532ca21ccfef7f60246ce4f4d25d4a46d2aa501832dfaab17e2a27e621fb52"
+checksum = "b6b1b0916a031befcc283779c63622db4d718a397a85e6f3cdfd009dd96fe381"
 dependencies = [
  "atoi 3.1.1",
  "log",
@@ -4974,9 +4974,9 @@ dependencies = [
 
 [[package]]
 name = "odbc-sys"
-version = "0.31.0"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "245cb4fe8236df4fd352ba96075d754233c6509d654d9f1c1482158b7d6c083d"
+checksum = "19e3a0f2c6531470f498c7cc5054f6b2a5922b5e82a5151065a257c1eb5ee1cd"
 
 [[package]]
 name = "odpic-sys"
