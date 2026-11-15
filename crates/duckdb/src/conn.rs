@@ -23,7 +23,6 @@ use rand::distr::{Alphanumeric, SampleString};
 use snafu::{prelude::*, ResultExt};
 use tokio::sync::mpsc::Sender;
 
-use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::sql::db_connection_pool::runtime::run_sync_with_tokio;
 use datafusion_table_providers_common::util::schema::SchemaValidator;
 use datafusion_table_providers_common::UnsupportedTypeAction;
@@ -337,9 +336,7 @@ impl SchemaValidator for DuckDbConnection {
     }
 
     fn is_field_supported(field: &Arc<Field>) -> bool {
-        // duckdb uses arrow 60, DataFusion uses a different version
-        let is_duckdb_type = arrow_bridge::data_type_to_60(field.data_type())
-            .is_ok_and(|data_type| to_duckdb_type_id(&data_type).is_ok());
+        let is_duckdb_type = to_duckdb_type_id(field.data_type()).is_ok();
         Self::is_data_type_supported(field.data_type()) && is_duckdb_type
     }
 
@@ -525,9 +522,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
             .boxed()
             .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
 
-        let schema = arrow_bridge::schema_ref_from_60(&result.get_schema())
-            .boxed()
-            .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?;
+        let schema = result.get_schema();
 
         Self::handle_unsupported_schema(&schema, self.unsupported_type_action)
     }
@@ -558,9 +553,7 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
 
         let schema = match projected_schema {
             Some(schema) => schema,
-            None => arrow_bridge::schema_ref_from_60(&result.get_schema())
-                .boxed()
-                .context(datafusion_table_providers_common::sql::db_connection_pool::dbconnection::UnableToGetSchemaSnafu)?,
+            None => result.get_schema(),
         };
         let cast_schema = Arc::clone(&schema);
 
@@ -579,7 +572,6 @@ impl SyncDbConnection<r2d2::PooledConnection<DuckdbConnectionManager>, DuckDBPar
                     stmt.stream_arrow(params).context(DuckDBQuerySnafu)?;
                 for batch in result {
                     let batch = batch.context(DuckDBQuerySnafu)?;
-                    let batch = arrow_bridge::record_batch_from_60(&batch)?;
                     let batch = cast_batch_to_schema(batch, &cast_schema)?;
                     blocking_channel_send(&batch_tx, batch)?;
                 }

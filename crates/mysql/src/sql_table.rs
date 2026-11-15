@@ -68,7 +68,7 @@ impl MySQLTable {
 
     fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: &SchemaRef,
         filters: &[Expr],
         limit: Option<usize>,
@@ -104,7 +104,7 @@ impl TableProvider for MySQLTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -124,7 +124,7 @@ struct MySQLSQLExec {
 
 impl MySQLSQLExec {
     fn new(
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: &SchemaRef,
         pool: Arc<MySQLConnectionPool>,
         sql: String,
@@ -231,8 +231,8 @@ impl ExecutionPlan for MySQLSQLExec {
         }
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        true
+    fn limit_behavior(&self) -> datafusion::physical_plan::LimitBehavior {
+        datafusion::physical_plan::LimitBehavior::CopyToChildren
     }
 
     fn fetch(&self) -> Option<usize> {

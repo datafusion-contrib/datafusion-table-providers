@@ -8,7 +8,7 @@ license = { workspace = true }
 description = "DataFusion flight table provider"
 
 [dependencies]
-arrow-flight = { workspace = true, features = ["flight-sql-experimental", "tls-ring"] }
+arrow-flight = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql", "serde"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }

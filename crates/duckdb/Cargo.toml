@@ -15,7 +15,7 @@ async-trait = { workspace = true }
 byte-unit = "5.2"
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
-datafusion-table-providers-common = { workspace = true, features = ["arrow60"] }
+datafusion-table-providers-common = { workspace = true }
 duckdb = { workspace = true, features = ["bundled", "r2d2", "vtab", "vtab-arrow", "appender-arrow"] }
 dyn-clone = "1.0"
 futures = { workspace = true }

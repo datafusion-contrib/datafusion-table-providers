@@ -253,7 +253,6 @@ impl SQLiteIntervalVisitor {
             data_type: ast::DataType::Text,
             format: None,
             kind: ast::CastKind::Cast,
-            array: false,
         }
     }
 
@@ -421,7 +420,6 @@ mod test {
             data_type: ast::DataType::Text,
             format: None,
             kind: ast::CastKind::Cast,
-            array: false,
         };
 
         assert_eq!(datetime_function, expected);
@@ -472,7 +470,6 @@ mod test {
             data_type: ast::DataType::Text,
             format: None,
             kind: ast::CastKind::Cast,
-            array: false,
         };
 
         assert_eq!(datetime_function, expected);
