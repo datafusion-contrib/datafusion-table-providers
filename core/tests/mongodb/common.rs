@@ -96,7 +96,8 @@ pub async fn start_mongodb_docker_container(port: u16) -> Result<RunningContaine
                 "db.runCommand({ ping: 1 }).ok".to_string(),
             ]),
             interval: Some(500_000_000),
-            timeout: Some(500_000_000),
+            // `mongosh` is a Node.js CLI; its cold start alone can exceed 500ms on CI runners.
+            timeout: Some(5_000_000_000),
             retries: Some(10),
             start_period: Some(3_000_000_000),
             start_interval: None,
