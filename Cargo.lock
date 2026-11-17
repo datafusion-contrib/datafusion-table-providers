@@ -27,7 +27,7 @@ dependencies = [
  "regex",
  "toml",
  "windows-registry 0.100.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -510,7 +510,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "log",
- "odbc-api",
+ "odbc-api 29.3.0",
  "simdutf8",
  "thiserror 2.0.21",
 ]
@@ -2649,7 +2649,7 @@ dependencies = [
  "datafusion-table-providers-common",
  "dyn-clone",
  "futures",
- "odbc-api",
+ "odbc-api 30.1.0",
  "secrecy",
  "sha2 0.11.1",
  "snafu",
@@ -2933,7 +2933,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4564,7 +4564,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4927,9 +4927,23 @@ dependencies = [
 
 [[package]]
 name = "odbc-api"
-version = "29.2.0"
+version = "29.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8532ca21ccfef7f60246ce4f4d25d4a46d2aa501832dfaab17e2a27e621fb52"
+checksum = "b6b1b0916a031befcc283779c63622db4d718a397a85e6f3cdfd009dd96fe381"
+dependencies = [
+ "atoi 3.1.1",
+ "log",
+ "odbc-sys",
+ "thiserror 2.0.21",
+ "widestring",
+ "winit",
+]
+
+[[package]]
+name = "odbc-api"
+version = "30.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07df20ae00dc7fc31c9ae32451bb0d83fb9d18ddb970e066b26e43d6a76cd9a0"
 dependencies = [
  "atoi 3.1.1",
  "log",
@@ -4941,9 +4955,9 @@ dependencies = [
 
 [[package]]
 name = "odbc-sys"
-version = "0.31.0"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "245cb4fe8236df4fd352ba96075d754233c6509d654d9f1c1482158b7d6c083d"
+checksum = "19e3a0f2c6531470f498c7cc5054f6b2a5922b5e82a5151065a257c1eb5ee1cd"
 
 [[package]]
 name = "odpic-sys"
@@ -5542,7 +5556,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5942,7 +5956,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6001,7 +6015,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6765,7 +6779,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7617,7 +7631,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
