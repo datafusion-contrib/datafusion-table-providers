@@ -903,8 +903,8 @@ pub fn rows_to_arrow(rows: &[Row], projected_schema: &Option<SchemaRef>) -> Resu
                     ListBuilder<Float64Builder>,
                     f64
                 ),
-                Type::TEXT_ARRAY => handle_primitive_array_type!(
-                    Type::TEXT_ARRAY,
+                Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => handle_primitive_array_type!(
+                    postgres_type,
                     builder,
                     row,
                     i,
@@ -1313,7 +1313,7 @@ fn map_column_type_to_data_type(column_type: &Type, field_name: &str) -> Result<
             DataType::Float64,
             true,
         ))))),
-        Type::TEXT_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
+        Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => Ok(Some(DataType::List(Arc::new(Field::new(
             "item",
             DataType::Utf8,
             true,
