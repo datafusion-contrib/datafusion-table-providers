@@ -16,13 +16,15 @@ limitations under the License.
 
 use crate::conn::ODBCConnection;
 use crate::conn::{ODBCDbConnection, ODBCParameter};
+use arrow_odbc::odbc_api::{
+    sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment,
+};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::{
     dbconnection::TableSchemas, runtime::run_async_with_tokio, DbConnectionPool, JoinPushDown,
 };
-use odbc_api::{sys::AttrConnectionPooling, Connection, ConnectionOptions, Environment};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use sha2::{Digest, Sha256};
 use snafu::prelude::*;

@@ -2649,7 +2649,6 @@ dependencies = [
  "datafusion-table-providers-common",
  "dyn-clone",
  "futures",
- "odbc-api",
  "secrecy",
  "sha2 0.11.1",
  "snafu",
