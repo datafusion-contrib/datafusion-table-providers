@@ -19,6 +19,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_odbc::arrow_schema_from;
+use arrow_odbc::odbc_api::{
+    handles::{SqlResult, Statement, StatementImpl},
+    parameter::InputParameter,
+    Connection, Cursor, CursorImpl, Error as OdbcApiError,
+};
 use arrow_odbc::OdbcReader;
 use arrow_odbc::OdbcReaderBuilder;
 use async_stream::stream;
@@ -37,18 +42,11 @@ use datafusion_table_providers_common::sql::db_connection_pool::{
 };
 use dyn_clone::DynClone;
 use futures::lock::Mutex;
-use odbc_api::handles::SqlResult;
-use odbc_api::handles::Statement;
-use odbc_api::handles::StatementImpl;
-use odbc_api::parameter::InputParameter;
-use odbc_api::Cursor;
-use odbc_api::CursorImpl;
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use snafu::prelude::*;
 use snafu::Snafu;
 use tokio::runtime::Handle;
 
-use odbc_api::Connection;
 use tokio::sync::mpsc::Sender;
 
 type Result<T, E = GenericError> = std::result::Result<T, E>;
@@ -79,7 +77,7 @@ pub enum Error {
     #[snafu(display("arrow_odbc error: {source}"))]
     ArrowODBCError { source: arrow_odbc::Error },
     #[snafu(display("odbc_api Error: {source}"))]
-    ODBCAPIError { source: odbc_api::Error },
+    ODBCAPIError { source: OdbcApiError },
     #[snafu(display("odbc_api Error: {message}"))]
     ODBCAPIErrorNoSource { message: String },
     #[snafu(display("Failed to convert query result to Arrow: {source}"))]
