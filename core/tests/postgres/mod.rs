@@ -2,7 +2,7 @@ use crate::{arrow_record_batch_gen::*, docker::ContainerManager};
 use arrow::{
     array::{
         Array, Decimal128Array, Decimal128Builder, Int32Array, Int64Array, ListArray, ListBuilder,
-        RecordBatch, StringArray, StructArray, UInt64Array,
+        RecordBatch, StringArray, StringBuilder, StructArray, UInt64Array,
     },
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
@@ -175,6 +175,7 @@ async fn test_arrow_postgres_one_way() {
     test_postgres_enum_type(port).await;
     test_postgres_numeric_type(port).await;
     test_postgres_numeric_array_type(port).await;
+    test_postgres_varchar_array_type(port).await;
     test_postgres_jsonb_type(port).await;
     test_postgres_json_type(port).await;
     test_postgres_jsonb_list_struct_with_projected_schema(port).await;
@@ -875,6 +876,35 @@ async fn test_postgres_numeric_array_type(port: u16) {
         UnsupportedTypeAction::default(),
     )
     .await;
+}
+
+async fn test_postgres_varchar_array_type(port: u16) {
+    let pool = common::get_postgres_connection_pool(port)
+        .await
+        .expect("Postgres connection pool should be created");
+    let conn = pool.connect_direct().await.expect("connect should work");
+    let stream = conn
+        .query_arrow(
+            "SELECT names FROM (VALUES
+                 (1, ARRAY['alpha', 'beta']::VARCHAR[]), (2, '{}'::VARCHAR[]), (3, NULL)
+             ) AS t(id, names)
+             ORDER BY id",
+            &[],
+            None,
+        )
+        .await
+        .expect("VARCHAR[] query should work");
+    let batches: Vec<RecordBatch> = futures::TryStreamExt::try_collect(stream)
+        .await
+        .expect("batches should be readable");
+
+    let mut names = ListBuilder::new(StringBuilder::new());
+    names.append_value([Some("alpha"), Some("beta")]);
+    names.append(true);
+    names.append_null();
+    let expected = RecordBatch::try_from_iter([("names", Arc::new(names.finish()) as _)])
+        .expect("expected batch should be valid");
+    assert_eq!(batches, vec![expected]);
 }
 
 async fn test_postgres_jsonb_type(port: u16) {
