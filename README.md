@@ -125,7 +125,7 @@ docker run --name clickhouse \
     -e CLICKHOUSE_PASSWORD=secret \
     -p 8123:8123 \
     -p 9000:9000 \
-    -d clickhouse/clickhouse-server:24.8-alpine
+    -d clickhouse/clickhouse-server:26.10-alpine
 
 # 2. Wait for readiness
 echo "Waiting for ClickHouse to start..."
