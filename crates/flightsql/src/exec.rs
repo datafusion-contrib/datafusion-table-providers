@@ -453,7 +453,7 @@ mod tests {
         .expect_err("got successful result for incompatible schema");
         assert_eq!(
             incompatible_schema_attempt.to_string(),
-            "Cast error: Casting from Boolean to Date32 not supported"
+            "Invalid argument error: Casting from Boolean to Date32 not supported"
         );
 
         let enhanced_with_null_column = enforce_schema(
