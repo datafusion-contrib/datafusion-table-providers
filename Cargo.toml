@@ -20,7 +20,7 @@ members = ["core", "crates/common", "python", "crates/odbc", "crates/clickhouse"
 resolver = "2"
 
 [workspace.package]
-version = "0.15.1"
+version = "0.16.0"
 readme = "README.md"
 edition = "2021"
 repository = "https://github.com/datafusion-contrib/datafusion-table-providers"
@@ -30,42 +30,42 @@ description = "Extend the capabilities of DataFusion to support additional data 
 [workspace.dependencies]
 adbc_core = { version = "0.25" }
 adbc_driver_manager = { version = "0.25" }
-arrow = "59.2"
-arrow-array = { version = "59.2" }
-arrow-flight = { version = "59.2", features = [
-    "flight-sql-experimental",
+arrow = "60.1"
+arrow-array = { version = "60.1" }
+arrow-flight = { version = "60.1", features = [
+    "flight-sql",
     "tls-ring",
 ] }
-arrow-ipc = { version = "59.2" }
-arrow-schema = { version = "59.2", features = ["serde"] }
-arrow-json = "59.2"
-arrow-odbc = { version = "25.3" }
+arrow-ipc = { version = "60.1" }
+arrow-schema = { version = "60.1", features = ["serde"] }
+arrow-json = "60.1"
+arrow-odbc = { version = "26.0" }
 async-stream = { version = "0.3" }
 async-trait = { version = "0.1" }
 bb8 = { version = "0.9" }
 bigdecimal = { version = "0.4" }
 chrono = { version = "0.4.44" }
 clickhouse = { version = "0.15" }
-datafusion = { version = "55.2", default-features = false }
-datafusion-expr = { version = "55.2" }
-datafusion-federation = { version = "0.5.7" }
-datafusion-ffi = { version = "55.2" }
-datafusion-proto = { version = "55.2" }
-datafusion-physical-expr = { version = "55.2" }
-datafusion-physical-plan = { version = "55.2" }
-datafusion-table-providers = { version = "0.15.1", path = "core" }
-datafusion-table-providers-cassandra = { version = "0.15.1", path = "crates/cassandra" }
-datafusion-table-providers-common = { version = "0.15.1", path = "crates/common" }
-datafusion-table-providers-odbc = { version = "0.15.1", path = "crates/odbc" }
-datafusion-table-providers-clickhouse = { version = "0.15.1", path = "crates/clickhouse" }
-datafusion-table-providers-flightsql = { version = "0.15.1", path = "crates/flightsql" }
-datafusion-table-providers-mongodb = { version = "0.15.1", path = "crates/mongodb" }
-datafusion-table-providers-mysql = { version = "0.15.1", path = "crates/mysql" }
-datafusion-table-providers-sqlite = { version = "0.15.1", path = "crates/sqlite" }
-datafusion-table-providers-postgres = { version = "0.15.1", path = "crates/postgres" }
-datafusion-table-providers-duckdb = { version = "0.15.1", path = "crates/duckdb" }
-datafusion-table-providers-adbc = { version = "0.15.1", path = "crates/adbc" }
-datafusion-table-providers-oracle = { version = "0.15.1", path = "crates/oracle" }
+datafusion = { version = "56.0", default-features = false }
+datafusion-expr = { version = "56.0" }
+datafusion-federation = { version = "0.6.0" }
+datafusion-ffi = { version = "56.0" }
+datafusion-proto = { version = "56.0" }
+datafusion-physical-expr = { version = "56.0" }
+datafusion-physical-plan = { version = "56.0" }
+datafusion-table-providers = { version = "0.16.0", path = "core" }
+datafusion-table-providers-cassandra = { version = "0.16.0", path = "crates/cassandra" }
+datafusion-table-providers-common = { version = "0.16.0", path = "crates/common" }
+datafusion-table-providers-odbc = { version = "0.16.0", path = "crates/odbc" }
+datafusion-table-providers-clickhouse = { version = "0.16.0", path = "crates/clickhouse" }
+datafusion-table-providers-flightsql = { version = "0.16.0", path = "crates/flightsql" }
+datafusion-table-providers-mongodb = { version = "0.16.0", path = "crates/mongodb" }
+datafusion-table-providers-mysql = { version = "0.16.0", path = "crates/mysql" }
+datafusion-table-providers-sqlite = { version = "0.16.0", path = "crates/sqlite" }
+datafusion-table-providers-postgres = { version = "0.16.0", path = "crates/postgres" }
+datafusion-table-providers-duckdb = { version = "0.16.0", path = "crates/duckdb" }
+datafusion-table-providers-adbc = { version = "0.16.0", path = "crates/adbc" }
+datafusion-table-providers-oracle = { version = "0.16.0", path = "crates/oracle" }
 duckdb = { version = ">=1.20000.1, <1.20100.0" }
 futures = { version = "0.3" }
 itertools = { version =  "0.15" }

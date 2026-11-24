@@ -23,7 +23,6 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown},
     physical_plan::{metrics::MetricsSet, DisplayAs, DisplayFormatType, ExecutionPlan},
 };
-use datafusion_table_providers_common::arrow_bridge;
 use datafusion_table_providers_common::{
     sql::db_connection_pool::Mode,
     util::{
@@ -239,7 +238,7 @@ impl TableProvider for DuckDBTableWriter {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
@@ -957,10 +956,6 @@ pub(super) fn write_to_table(
         while let Some(batch) = data_batches.blocking_recv() {
             let batch = decode_dictionary_columns(batch)
                 .context(super::UnableToDecodeDictionaryColumnsSnafu)
-                .map_err(to_datafusion_error)?;
-            // duckdb uses arrow 60, DataFusion uses a different version
-            let batch = arrow_bridge::record_batch_to_60(&batch)
-                .context(super::UnableToConvertArrowDataSnafu)
                 .map_err(to_datafusion_error)?;
             appender
                 .append_record_batch(batch)

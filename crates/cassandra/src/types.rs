@@ -936,7 +936,7 @@ fn list_values(
             let length = list.value_length() as usize;
             let ranges = (0..list.len())
                 .map(|row| {
-                    let start = list.value_offset(row) as usize;
+                    let start = list.value_offset_at(row);
                     (start, start + length)
                 })
                 .collect();

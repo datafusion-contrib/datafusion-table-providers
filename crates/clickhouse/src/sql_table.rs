@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, LogicalTableSource};
+use datafusion::logical_expr::{
+    LogicalPlan, LogicalPlanBuilder, LogicalTableSource, TableScanBuilder,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::unparser::Unparser;
@@ -25,16 +27,16 @@ use super::{into_table_args, ClickHouseTable};
 impl ClickHouseTable {
     fn create_logical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<LogicalPlan> {
         let table_source = LogicalTableSource::new(self.schema.clone());
-        LogicalPlanBuilder::scan_with_filters(
-            self.table_reference.clone(),
-            Arc::new(table_source),
-            projection.cloned(),
-            filters.to_vec(),
+        LogicalPlanBuilder::table_scan(
+            TableScanBuilder::new(self.table_reference.clone(), Arc::new(table_source))
+                .with_projection(projection.map(<[usize]>::to_vec))
+                .with_filters(filters.to_vec())
+                .build()?,
         )?
         .limit(0, limit)?
         .build()
@@ -42,7 +44,7 @@ impl ClickHouseTable {
 
     fn create_physical_plan(
         &self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         sql: String,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SqlExec::new(
@@ -76,7 +78,7 @@ impl TableProvider for ClickHouseTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {

@@ -199,7 +199,7 @@ impl FederationPlanner for CassandraScanPlanner {
         };
         self.table.plan_scan(
             session_state,
-            scan.projection.as_ref(),
+            scan.projection.as_deref(),
             &scan.filters,
             scan.fetch,
         )

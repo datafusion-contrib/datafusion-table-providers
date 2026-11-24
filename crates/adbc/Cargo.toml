@@ -16,7 +16,7 @@ async-stream = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-federation = { workspace = true, features = ["sql"], optional = true }
-datafusion-table-providers-common = { workspace = true, features = ["arrow60"] }
+datafusion-table-providers-common = { workspace = true }
 futures = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_adbc = "0.3.0"

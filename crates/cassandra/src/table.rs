@@ -84,7 +84,7 @@ impl CassandraTable {
     pub(crate) fn plan_scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -110,7 +110,7 @@ impl CassandraTable {
 
         // Scan the projected columns, then the other columns the predicate needs
         let mut scan_projection: Vec<usize> = match projection {
-            Some(projection) => projection.clone(),
+            Some(projection) => projection.to_vec(),
             None => (0..self.schema.fields().len()).collect(),
         };
         let output_projection: Vec<usize> = (0..scan_projection.len()).collect();
@@ -172,7 +172,7 @@ impl datafusion::catalog::TableProvider for CassandraTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -204,7 +204,7 @@ impl CassandraExec {
         table_reference: TableReference,
         pool: Arc<CassandraConnectionPool>,
         schema: &SchemaRef,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         relations: Vec<String>,
         limit: Option<usize>,
     ) -> DataFusionResult<Self> {
@@ -332,8 +332,8 @@ impl ExecutionPlan for CassandraExec {
         Ok(self)
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        true
+    fn limit_behavior(&self) -> datafusion::physical_plan::LimitBehavior {
+        datafusion::physical_plan::LimitBehavior::CopyToChildren
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -395,7 +395,7 @@ mod tests {
 
     fn cql(
         table_reference: TableReference,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         limit: Option<usize>,
     ) -> String {
         let schema = schema();
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn selects_projected_columns_with_limit() {
         assert_eq!(
-            cql(TableReference::bare("users"), Some(&vec![2, 1]), Some(10)),
+            cql(TableReference::bare("users"), Some(&[2, 1]), Some(10)),
             "SELECT \"age\", \"Name\" FROM \"users\" LIMIT 10"
         );
     }
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn selects_first_column_for_empty_projection() {
         assert_eq!(
-            cql(TableReference::bare("users"), Some(&vec![]), None),
+            cql(TableReference::bare("users"), Some(&[]), None),
             "SELECT \"id\" FROM \"users\""
         );
     }
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn omits_zero_limit() {
         assert_eq!(
-            cql(TableReference::bare("users"), Some(&vec![0]), Some(0)),
+            cql(TableReference::bare("users"), Some(&[0]), Some(0)),
             "SELECT \"id\" FROM \"users\""
         );
     }

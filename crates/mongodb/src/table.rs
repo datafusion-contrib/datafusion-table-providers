@@ -81,7 +81,7 @@ impl TableProvider for MongoDBTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -136,7 +136,7 @@ impl MongoDBExec {
         table_reference: Arc<TableReference>,
         pool: Arc<MongoDBConnectionPool>,
         schema: SchemaRef,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Self> {
@@ -155,7 +155,7 @@ impl MongoDBExec {
         table_reference: Arc<TableReference>,
         pool: Arc<MongoDBConnectionPool>,
         schema: SchemaRef,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
         schema_projection: Option<SchemaProjection>,
@@ -426,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_supports_filters_pushdown_mixed() {
-        let exprs = vec![
+        let exprs = [
             col("foo").eq(lit(10)),
             col("bar").not_eq(lit("baz")),
             col("foo").is_null(),
@@ -505,7 +505,7 @@ mod tests {
         let schema = test_schema();
         let table_ref = Arc::new(TableReference::bare("users"));
         let exec =
-            MongoDBExec::new(table_ref, stub_pool(), schema, Some(&vec![1, 2]), &[], None).unwrap();
+            MongoDBExec::new(table_ref, stub_pool(), schema, Some(&[1, 2]), &[], None).unwrap();
 
         let display = format_exec(&exec);
         assert!(
@@ -572,7 +572,7 @@ mod tests {
             table_ref,
             stub_pool(),
             schema,
-            Some(&vec![1, 3]),
+            Some(&[1, 3]),
             &filters,
             Some(50),
         )
@@ -617,8 +617,7 @@ mod tests {
     async fn test_exec_empty_projection_falls_back_to_id() {
         let schema = test_schema();
         let table_ref = Arc::new(TableReference::bare("users"));
-        let exec =
-            MongoDBExec::new(table_ref, stub_pool(), schema, Some(&vec![]), &[], None).unwrap();
+        let exec = MongoDBExec::new(table_ref, stub_pool(), schema, Some(&[]), &[], None).unwrap();
 
         let display = format_exec(&exec);
         assert!(
