@@ -189,6 +189,106 @@ async fn test_arrow_postgres_one_way() {
     test_postgres_update_and_delete_without_a_filter(port).await;
 }
 
+#[test_log::test(tokio::test)]
+async fn test_postgres_abandoned_stream_cancels_query() {
+    use datafusion_table_providers::util::secrets::to_secret_map;
+    use futures::StreamExt;
+    use std::time::Duration;
+    use tokio::time::{sleep, timeout};
+
+    let port = {
+        let mut guard = CONTAINER_MANAGER_INSTANCE.lock().unwrap();
+        let container_manager = guard.as_mut().unwrap();
+        container_manager
+            .start_container(common::start_postgres_docker_container)
+            .await;
+        container_manager.port
+    };
+    let observer_pool = common::get_postgres_connection_pool(port).await.unwrap();
+    let observer = observer_pool.connect_direct().await.unwrap();
+    let mut params = common::get_pg_params(port);
+    params.insert("connection_pool_size".into(), "1".into());
+    let pool = PostgresConnectionPool::new(to_secret_map(params))
+        .await
+        .unwrap();
+
+    let conn = pool.connect_direct().await.unwrap();
+    let pid: i32 = conn
+        .conn
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let mut stream = timeout(
+        Duration::from_secs(5),
+        conn.query_arrow(
+            "SELECT i FROM generate_series(1, 5000) AS i
+             CROSS JOIN LATERAL pg_sleep(CASE WHEN i = 4500 THEN 60 ELSE 0 END)",
+            &[],
+            None,
+        ),
+    )
+    .await
+    .expect("first batch should arrive before pg_sleep finishes")
+    .unwrap();
+    drop(conn);
+    assert_eq!(stream.next().await.unwrap().unwrap().num_rows(), 4000);
+    assert!(
+        timeout(Duration::from_millis(100), pool.connect_direct())
+            .await
+            .is_err(),
+        "the live stream should keep the only pool slot checked out"
+    );
+    drop(stream);
+
+    let replacement = timeout(Duration::from_secs(5), pool.connect_direct())
+        .await
+        .expect("the abandoned query should release the pool slot")
+        .unwrap();
+    let replacement_pid: i32 = replacement
+        .conn
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_ne!(pid, replacement_pid);
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let session_exists: bool = observer
+                .conn
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)",
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if !session_exists {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("PostgreSQL should stop the abandoned query and close its session");
+
+    let mut completed = replacement
+        .query_arrow("SELECT 1 AS value", &[], None)
+        .await
+        .unwrap();
+    assert_eq!(completed.next().await.unwrap().unwrap().num_rows(), 1);
+    drop(completed);
+    drop(replacement);
+    let reused = pool.connect_direct().await.unwrap();
+    let reused_pid: i32 = reused
+        .conn
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(replacement_pid, reused_pid);
+}
+
 /// Test PostgresTableWriter::delete_from() with a filter
 async fn test_postgres_delete_from(port: u16) {
     let ctx = SessionContext::new();

@@ -2687,7 +2687,6 @@ dependencies = [
  "arrow 59.3.2",
  "arrow-json",
  "arrow-schema 59.3.2",
- "async-stream",
  "async-trait",
  "bb8",
  "bb8-postgres",
