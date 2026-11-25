@@ -202,7 +202,7 @@ async fn execute_in_transaction(
 ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let mut db_conn = postgres.connect().await?;
     let postgres_conn = Postgres::postgres_conn(&mut db_conn)?;
-    let tx = postgres_conn.conn.transaction().await?;
+    let tx = postgres_conn.client_mut()?.transaction().await?;
     let affected = tx.execute(sql, &[]).await?;
     tx.commit().await?;
     Ok(affected)
@@ -237,7 +237,8 @@ impl DataSink for PostgresDataSink {
         let postgres_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
 
         let tx = postgres_conn
-            .conn
+            .client_mut()
+            .map_err(to_datafusion_error)?
             .transaction()
             .await
             .context(super::UnableToBeginTransactionSnafu)

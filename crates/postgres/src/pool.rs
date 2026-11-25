@@ -1,6 +1,8 @@
 use crate::conn::{PostgresConnection, PostgresPooledConnection};
 use arrow::datatypes::SchemaRef;
 use datafusion::common::TableReference;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
@@ -131,12 +133,12 @@ impl From<tokio_postgres::Error> for ConnectionManagerError {
 /// stored [`Config`] as-is.
 pub struct ConnectionManager {
     config: Config,
-    tls: MakeTlsConnector,
+    tls: TlsConnector,
     password_provider: Option<Arc<dyn PasswordProvider>>,
 }
 
 impl ConnectionManager {
-    fn new(config: Config, tls: MakeTlsConnector) -> Self {
+    fn new(config: Config, tls: TlsConnector) -> Self {
         Self {
             config,
             tls,
@@ -187,11 +189,56 @@ async fn configure_session(
     Ok(())
 }
 
+/// A managed PostgreSQL client and the settings needed to cancel its queries.
+#[derive(Debug)]
+pub struct PooledClient {
+    client: tokio_postgres::Client,
+    tls: TlsConnector,
+    runtime: Handle,
+    retired: AtomicBool,
+}
+
+impl PooledClient {
+    pub(crate) fn cancel_query(&self) {
+        // The driver cannot confirm when the server acted on a cancel request.
+        // Retire the session before sending it so the pool cannot reuse it.
+        if self.retired.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let token = self.client.cancel_token();
+        let tls = MakeTlsConnector::new(self.tls.clone());
+        self.runtime.spawn(async move {
+            if let Err(e) = token.cancel_query(tls).await {
+                tracing::warn!("Failed to cancel an abandoned PostgreSQL query: {e}");
+            }
+        });
+    }
+
+    pub(crate) fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Relaxed)
+    }
+}
+
+impl Deref for PooledClient {
+    type Target = tokio_postgres::Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl DerefMut for PooledClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.client
+    }
+}
+
 impl bb8::ManageConnection for ConnectionManager {
-    type Connection = tokio_postgres::Client;
+    type Connection = PooledClient;
     type Error = ConnectionManagerError;
 
-    async fn connect(&self) -> std::result::Result<tokio_postgres::Client, ConnectionManagerError> {
+    async fn connect(&self) -> std::result::Result<PooledClient, ConnectionManagerError> {
+        let tls = MakeTlsConnector::new(self.tls.clone());
         let (client, connection) = if let Some(provider) = &self.password_provider {
             let password = provider
                 .get_password()
@@ -199,9 +246,9 @@ impl bb8::ManageConnection for ConnectionManager {
                 .map_err(ConnectionManagerError::PasswordProvider)?;
             let mut config = self.config.clone();
             config.password(password.expose_secret());
-            config.connect(self.tls.clone()).await?
+            config.connect(tls).await?
         } else {
-            self.config.connect(self.tls.clone()).await?
+            self.config.connect(tls).await?
         };
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -211,19 +258,24 @@ impl bb8::ManageConnection for ConnectionManager {
 
         configure_session(&client).await?;
 
-        Ok(client)
+        Ok(PooledClient {
+            client,
+            tls: self.tls.clone(),
+            runtime: Handle::current(),
+            retired: AtomicBool::new(false),
+        })
     }
 
     async fn is_valid(
         &self,
-        conn: &mut tokio_postgres::Client,
+        conn: &mut PooledClient,
     ) -> std::result::Result<(), ConnectionManagerError> {
         conn.simple_query("").await.map(|_| ())?;
         Ok(())
     }
 
-    fn has_broken(&self, conn: &mut tokio_postgres::Client) -> bool {
-        conn.is_closed()
+    fn has_broken(&self, conn: &mut PooledClient) -> bool {
+        conn.is_retired() || conn.is_closed()
     }
 }
 
@@ -365,7 +417,7 @@ impl PostgresConnectionPool {
         }
 
         let tls_connector = get_tls_connector(ssl_mode.as_str(), certs)?;
-        let connector = MakeTlsConnector::new(tls_connector);
+        let connector = MakeTlsConnector::new(tls_connector.clone());
 
         // Resolve the password provider: use the caller's, wrap the static password,
         // or leave as None for passwordless auth (trust, cert, etc.).
@@ -382,14 +434,14 @@ impl PostgresConnectionPool {
                 .map_err(|source| Error::PasswordProviderError { source })?;
             let mut test_config = config.clone();
             test_config.password(password.expose_secret());
-            test_connection(&test_config, connector.clone()).await?;
+            test_connection(&test_config, connector).await?;
         } else {
-            test_connection(&config, connector.clone()).await?;
+            test_connection(&config, connector).await?;
         }
 
         let join_push_down = get_join_context(&config);
 
-        let mut manager = ConnectionManager::new(config, connector);
+        let mut manager = ConnectionManager::new(config, tls_connector);
         if let Some(provider) = password_provider {
             manager = manager.with_password_provider(provider);
         }

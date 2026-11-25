@@ -11,7 +11,6 @@ use arrow::datatypes::Field;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
-use async_stream::stream;
 use bb8_postgres::tokio_postgres::types::ToSql;
 use datafusion_table_providers_common::util::handle_unsupported_type_error;
 use datafusion_table_providers_common::util::schema::SchemaValidator;
@@ -37,8 +36,8 @@ use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use futures::stream;
-use futures::StreamExt;
+use futures::stream::{self, FusedStream};
+use futures::{Stream, StreamExt};
 
 use snafu::prelude::*;
 use tokio_postgres::Row;
@@ -270,6 +269,12 @@ pub enum PostgresError {
 
     #[snafu(display("Failed to convert query result to Arrow.\n{source}\nReport a bug to request support: https://github.com/datafusion-contrib/datafusion-table-providers/issues"))]
     ConversionError { source: crate::arrow_sql_gen::Error },
+
+    #[snafu(display("The connection is still reading the result of a previous query."))]
+    ConnectionBusy,
+
+    #[snafu(display("The connection was retired after an abandoned query."))]
+    ConnectionRetired,
 }
 
 fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> String {
@@ -297,7 +302,13 @@ fn format_postgres_query_error(source: &bb8_postgres::tokio_postgres::Error) -> 
 }
 
 pub struct PostgresConnection {
-    pub conn: PostgresPooledConnection,
+    /// Shared with result streams until PostgreSQL finishes sending rows.
+    ///
+    /// Use a separate checkout for overlapping statements when using
+    /// [`AsyncDbConnection::query_arrow`]. Dropping an unfinished stream sends a
+    /// cancellation request to the session, which can interrupt another statement
+    /// on the same connection.
+    pub conn: Arc<PostgresPooledConnection>,
     unsupported_type_action: UnsupportedTypeAction,
     schemas: Arc<TableSchemas>,
 }
@@ -338,16 +349,12 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
     for PostgresConnection
 {
     fn new(conn: PostgresPooledConnection) -> Self {
-        PostgresConnection {
-            conn,
-            unsupported_type_action: UnsupportedTypeAction::default(),
-            schemas: Arc::default(),
-        }
+        Self::new_with_schemas(conn, Arc::default())
     }
 
     fn new_with_schemas(conn: PostgresPooledConnection, schemas: Arc<TableSchemas>) -> Self {
         PostgresConnection {
-            conn,
+            conn: Arc::new(conn),
             unsupported_type_action: UnsupportedTypeAction::default(),
             schemas,
         }
@@ -463,14 +470,26 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
     ) -> Result<SendableRecordBatchStream> {
         // TODO: We should have a way to detect if params have been passed
         // if they haven't we should use .copy_out instead, because it should be much faster
+        ensure!(!self.conn.is_retired(), ConnectionRetiredSnafu);
+        let mut guard = QueryGuard(Some(Arc::clone(&self.conn)));
         let streamable = self
             .conn
-            .query_raw(sql, params.iter().copied()) // use .query_raw to get access to the underlying RowStream
+            .query_raw(sql, params.iter().copied())
             .await
+            .inspect_err(|_| guard.finish())
             .context(QuerySnafu)?;
 
         // chunk the stream into groups of rows
-        let mut stream = streamable.chunks(4_000).boxed().map(move |rows| {
+        let mut stream = Box::pin(streamable.fuse().chunks(4_000));
+        let mut stream = stream::poll_fn(move |cx| {
+            let chunk = stream.as_mut().poll_next(cx);
+            // The final partial chunk may already have consumed PostgreSQL's EOF.
+            if stream.is_terminated() {
+                guard.finish();
+            }
+            chunk
+        })
+        .map(move |rows| {
             let rows = rows
                 .into_iter()
                 .collect::<std::result::Result<Vec<_>, _>>()
@@ -487,21 +506,10 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
         };
 
         let first_chunk = first_chunk?;
-        let schema = first_chunk.schema(); // pull out the schema from the first chunk to use in the DataFusion Stream Adapter
-
-        let output_stream = stream! {
-           yield Ok(first_chunk);
-           while let Some(batch) = stream.next().await {
-                match batch {
-                    Ok(batch) => {
-                        yield Ok(batch); // we can yield the batch as-is because we've already converted to Arrow in the chunk map
-                    }
-                    Err(e) => {
-                        yield Err(DataFusionError::Execution(format!("Failed to fetch batch: {e}")));
-                    }
-                }
-           }
-        };
+        let schema = first_chunk.schema();
+        let output_stream = stream::once(async { Ok(first_chunk) }).chain(stream.map(|batch| {
+            batch.map_err(|e| DataFusionError::Execution(format!("Failed to fetch batch: {e}")))
+        }));
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
@@ -510,11 +518,42 @@ impl<'a> AsyncDbConnection<PostgresPooledConnection, &'a (dyn ToSql + Sync)>
     }
 
     async fn execute(&self, sql: &str, params: &[&'a (dyn ToSql + Sync)]) -> Result<u64> {
+        ensure!(!self.conn.is_retired(), ConnectionRetiredSnafu);
         Ok(self.conn.execute(sql, params).await?)
     }
 }
 
+/// Holds the pooled connection until the row stream reaches EOF or is dropped.
+struct QueryGuard(Option<Arc<PostgresPooledConnection>>);
+
+impl QueryGuard {
+    fn finish(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for QueryGuard {
+    fn drop(&mut self) {
+        if let Some(conn) = &self.0 {
+            conn.cancel_query();
+        }
+    }
+}
+
 impl PostgresConnection {
+    /// The client of this connection, for the statements that need exclusive access to it, like
+    /// transactions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while a query is streaming rows or after the connection is retired.
+    pub fn client_mut(&mut self) -> Result<&mut tokio_postgres::Client, PostgresError> {
+        ensure!(!self.conn.is_retired(), ConnectionRetiredSnafu);
+        Arc::get_mut(&mut self.conn)
+            .map(|conn| &mut ***conn)
+            .context(ConnectionBusySnafu)
+    }
+
     #[must_use]
     pub fn with_unsupported_type_action(mut self, action: UnsupportedTypeAction) -> Self {
         self.unsupported_type_action = action;

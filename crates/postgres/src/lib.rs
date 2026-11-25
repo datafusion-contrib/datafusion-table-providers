@@ -276,7 +276,8 @@ impl TableProviderFactory for PostgresTableProviderFactory {
         let postgres_conn = Postgres::postgres_conn(&mut db_conn).map_err(to_datafusion_error)?;
 
         let tx = postgres_conn
-            .conn
+            .client_mut()
+            .map_err(to_datafusion_error)?
             .transaction()
             .await
             .context(UnableToBeginTransactionSnafu)
