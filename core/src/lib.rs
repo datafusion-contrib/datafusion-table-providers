@@ -16,6 +16,8 @@ pub mod sql {
     pub mod arrow_sql_gen {
         pub use datafusion_table_providers_common::sql::arrow_sql_gen::{arrow, statement};
 
+        #[cfg(feature = "mssql")]
+        pub use datafusion_table_providers_mssql::arrow_sql_gen as mssql;
         #[cfg(feature = "mysql")]
         pub use datafusion_table_providers_mysql::arrow_sql_gen as mysql;
         #[cfg(feature = "oracle")]
@@ -45,6 +47,8 @@ pub mod sql {
         pub use datafusion_table_providers_clickhouse::pool as clickhousepool;
         #[cfg(feature = "duckdb")]
         pub use datafusion_table_providers_duckdb::pool as duckdbpool;
+        #[cfg(feature = "mssql")]
+        pub use datafusion_table_providers_mssql::pool as mssqlpool;
         #[cfg(feature = "mysql")]
         pub use datafusion_table_providers_mysql::pool as mysqlpool;
         #[cfg(feature = "odbc")]
@@ -67,6 +71,8 @@ pub mod sql {
             pub use datafusion_table_providers_clickhouse::conn as clickhouseconn;
             #[cfg(feature = "duckdb")]
             pub use datafusion_table_providers_duckdb::conn as duckdbconn;
+            #[cfg(feature = "mssql")]
+            pub use datafusion_table_providers_mssql::conn as mssqlconn;
             #[cfg(feature = "mysql")]
             pub use datafusion_table_providers_mysql::conn as mysqlconn;
             #[cfg(feature = "odbc")]
@@ -93,6 +99,8 @@ pub use datafusion_table_providers_duckdb as duckdb;
 pub use datafusion_table_providers_flightsql as flight;
 #[cfg(feature = "mongodb")]
 pub use datafusion_table_providers_mongodb as mongodb;
+#[cfg(feature = "mssql")]
+pub use datafusion_table_providers_mssql as mssql;
 #[cfg(feature = "mysql")]
 pub use datafusion_table_providers_mysql as mysql;
 #[cfg(feature = "odbc")]

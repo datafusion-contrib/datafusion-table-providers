@@ -1,0 +1,33 @@
+[package]
+name = "datafusion-table-providers-mssql"
+version = { workspace = true }
+readme = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "DataFusion Microsoft SQL Server table provider"
+
+[dependencies]
+arrow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+bb8 = { workspace = true }
+bb8-tiberius = { version = "0.17", default-features = false, features = ["with-tokio", "tds73", "sql-browser"] }
+chrono = { workspace = true }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-federation = { workspace = true, features = ["sql"], optional = true }
+datafusion-table-providers-common = { workspace = true }
+futures = { workspace = true }
+secrecy = { workspace = true }
+snafu = { workspace = true }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls"] }
+tokio = { workspace = true, features = ["sync", "net"] }
+tracing = { workspace = true }
+
+[features]
+default = ["federation"]
+federation = ["dep:datafusion-federation", "datafusion-table-providers-common/federation"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
