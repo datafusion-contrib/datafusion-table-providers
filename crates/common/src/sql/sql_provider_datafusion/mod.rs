@@ -29,6 +29,7 @@ use std::{
 
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema, SchemaRef},
+    arrow::record_batch::{RecordBatch, RecordBatchOptions},
     common::Constraints,
     common::TableReference,
     config::ConfigOptions,
@@ -302,6 +303,8 @@ pub fn project_schema_safe(
 
 pub struct SqlExec<T, P> {
     projected_schema: SchemaRef,
+    /// The schema the remote query answers for. Differs from `projected_schema` only for an empty projection
+    query_schema: SchemaRef,
     pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
     sql: String,
     properties: Arc<PlanProperties>,
@@ -312,6 +315,7 @@ impl<T, P> Clone for SqlExec<T, P> {
     fn clone(&self) -> Self {
         Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            query_schema: Arc::clone(&self.query_schema),
             pool: Arc::clone(&self.pool),
             sql: self.sql.clone(),
             properties: self.properties.clone(),
@@ -328,10 +332,15 @@ impl<T, P> SqlExec<T, P> {
         sql: String,
         dialect: Arc<dyn Dialect + Send + Sync>,
     ) -> DataFusionResult<Self> {
-        let projected_schema = project_schema_safe(schema, projection)?;
+        let query_schema = project_schema_safe(schema, projection)?;
+        let projected_schema = match projection {
+            Some(columns) if columns.is_empty() => Arc::new(Schema::empty()),
+            _ => Arc::clone(&query_schema),
+        };
 
         Ok(Self {
             projected_schema: Arc::clone(&projected_schema),
+            query_schema,
             pool,
             sql,
             properties: Arc::new(PlanProperties::new(
@@ -602,6 +611,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         let mut new_exec = Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            query_schema: Arc::clone(&self.query_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -642,6 +652,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         Some(Arc::new(Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            query_schema: Arc::clone(&self.query_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -685,6 +696,7 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         let new_exec = Self {
             projected_schema: Arc::clone(&self.projected_schema),
+            query_schema: Arc::clone(&self.query_schema),
             pool: Arc::clone(&self.pool),
             sql: new_sql,
             properties: self.properties.clone(),
@@ -707,9 +719,24 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
 
         let schema = self.schema();
 
-        let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&schema));
+        let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&self.query_schema));
 
         let stream = futures::stream::once(fut).try_flatten();
+        if schema.fields().is_empty() {
+            let empty = Arc::clone(&schema);
+            let stream = stream.and_then(move |batch| {
+                let empty = Arc::clone(&empty);
+                async move {
+                    RecordBatch::try_new_with_options(
+                        empty,
+                        vec![],
+                        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+                    )
+                    .map_err(DataFusionError::from)
+                }
+            });
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)));
+        }
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
@@ -1468,6 +1495,199 @@ mod tests {
         #[test]
         fn test_constraints_default_to_none() {
             assert!(new_sql_table().constraints().is_none());
+        }
+
+        /// A query that reads no column of the table, such as `count(*)` or a select of literals, scans it with an
+        /// empty projection. The scan must then report zero columns, as the logical plan does; reporting the
+        /// unparser's `SELECT 1` column instead failed physical planning with "Physical input schema should be the
+        /// same as the one converted from logical input schema".
+        #[tokio::test]
+        async fn test_an_empty_projection_plans_with_no_columns() {
+            let ctx = datafusion::execution::context::SessionContext::new();
+            ctx.register_table("users", Arc::new(new_sql_table()))
+                .expect("the table registers");
+            for sql in [
+                "SELECT count(*) FROM users",
+                "SELECT 'x' AS literal FROM users",
+            ] {
+                let frame = ctx.sql(sql).await.expect("the statement plans logically");
+                frame
+                    .create_physical_plan()
+                    .await
+                    .unwrap_or_else(|error| panic!("{sql} must plan physically: {error}"));
+            }
+        }
+
+        /// An async connection that answers three rows in whatever schema the scan asks for, as a remote source
+        /// answering `SELECT 1` or `SELECT "id"` does.
+        struct ThreeRows;
+
+        impl DbConnection<(), &'static dyn ToString> for ThreeRows {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+
+            fn as_async(
+                &self,
+            ) -> Option<
+                &dyn crate::sql::db_connection_pool::dbconnection::AsyncDbConnection<
+                    (),
+                    &'static dyn ToString,
+                >,
+            > {
+                Some(self)
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl
+            crate::sql::db_connection_pool::dbconnection::AsyncDbConnection<
+                (),
+                &'static dyn ToString,
+            > for ThreeRows
+        {
+            fn new(_conn: ()) -> Self {
+                Self
+            }
+
+            fn new_with_schemas(
+                _conn: (),
+                _schemas: Arc<crate::sql::db_connection_pool::dbconnection::TableSchemas>,
+            ) -> Self {
+                Self
+            }
+
+            async fn tables(
+                &self,
+                _schema: &str,
+            ) -> Result<Vec<String>, crate::sql::db_connection_pool::dbconnection::Error>
+            {
+                Ok(Vec::new())
+            }
+
+            async fn schemas(
+                &self,
+            ) -> Result<Vec<String>, crate::sql::db_connection_pool::dbconnection::Error>
+            {
+                Ok(Vec::new())
+            }
+
+            async fn get_schema(
+                &self,
+                _table_reference: &datafusion::common::TableReference,
+            ) -> Result<
+                datafusion::arrow::datatypes::SchemaRef,
+                crate::sql::db_connection_pool::dbconnection::Error,
+            > {
+                Ok(Arc::new(Schema::empty()))
+            }
+
+            async fn query_arrow(
+                &self,
+                _sql: &str,
+                _params: &[&'static dyn ToString],
+                projected_schema: Option<datafusion::arrow::datatypes::SchemaRef>,
+            ) -> crate::sql::db_connection_pool::dbconnection::Result<
+                datafusion::execution::SendableRecordBatchStream,
+            > {
+                use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
+                use datafusion::arrow::record_batch::RecordBatch;
+                let schema = projected_schema.expect("the scan names the schema it reads");
+                let columns: Vec<ArrayRef> = schema
+                    .fields()
+                    .iter()
+                    .map(|field| match field.data_type() {
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef
+                        }
+                        _ => Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef,
+                    })
+                    .collect();
+                let batch =
+                    RecordBatch::try_new(Arc::clone(&schema), columns).expect("the rows build");
+                Ok(Box::pin(
+                    datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
+                        schema,
+                        futures::stream::iter(vec![Ok(batch)]),
+                    ),
+                ))
+            }
+
+            async fn execute(
+                &self,
+                _sql: &str,
+                _params: &[&'static dyn ToString],
+            ) -> crate::sql::db_connection_pool::dbconnection::Result<u64> {
+                Ok(0)
+            }
+        }
+
+        struct ThreeRowsPool;
+
+        #[async_trait::async_trait]
+        impl DbConnectionPool<(), &'static dyn ToString> for ThreeRowsPool {
+            async fn connect(
+                &self,
+            ) -> Result<
+                Box<dyn DbConnection<(), &'static dyn ToString>>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(Box::new(ThreeRows))
+            }
+
+            fn join_push_down(&self) -> JoinPushDown {
+                JoinPushDown::Disallow
+            }
+        }
+
+        /// An empty projection answers each of the source's rows and no column: `count(*)` over three rows is 3, and
+        /// a select of a literal answers it three times. A plan that reads a column still answers the column.
+        #[tokio::test]
+        async fn test_an_empty_projection_answers_every_row() {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("email", DataType::Utf8, false),
+            ]));
+            let pool = Arc::new(ThreeRowsPool)
+                as Arc<dyn DbConnectionPool<(), &'static dyn ToString> + Send + Sync>;
+            let ctx = datafusion::execution::context::SessionContext::new();
+            ctx.register_table(
+                "users",
+                Arc::new(SqlTable::new_with_schema("users", &pool, schema, "users")),
+            )
+            .expect("the table registers");
+            let count = ctx
+                .sql("SELECT count(*) AS n FROM users")
+                .await
+                .expect("plans")
+                .collect()
+                .await
+                .expect("count(*) executes");
+            let n = count[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                .expect("a count is an integer")
+                .value(0);
+            assert_eq!(n, 3, "count(*) counts every source row");
+            for (sql, rows) in [
+                ("SELECT 'x' AS literal FROM users", 3),
+                ("SELECT email FROM users", 3),
+            ] {
+                let batches = ctx
+                    .sql(sql)
+                    .await
+                    .expect("plans")
+                    .collect()
+                    .await
+                    .expect("executes");
+                let answered: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+                assert_eq!(answered, rows, "{sql} answers every source row");
+            }
         }
 
         #[test]
