@@ -22,6 +22,7 @@
 #   datafusion-table-providers-adbc
 #   datafusion-table-providers-oracle
 #   datafusion-table-providers-cassandra
+#   datafusion-table-providers-mssql
 #   datafusion-table-providers (facade)
 #
 # Also create a GitHub Environment named "crates-io" (Settings → Environments).
@@ -132,6 +133,7 @@ jobs:
               "datafusion-table-providers-adbc",
               "datafusion-table-providers-oracle",
               "datafusion-table-providers-cassandra",
+              "datafusion-table-providers-mssql",
           )
           cargo_text = cargo_toml.read_text()
           for name in workspace_crate_names:
@@ -255,6 +257,7 @@ jobs:
           - adbc
           - oracle
           - cassandra
+          - mssql
     steps:
       - uses: actions/checkout@v7
         with:

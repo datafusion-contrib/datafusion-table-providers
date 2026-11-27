@@ -11,6 +11,7 @@ mod clickhouse;
     feature = "cassandra",
     feature = "clickhouse",
     feature = "mongodb",
+    feature = "mssql",
     feature = "mysql",
     feature = "oracle",
     feature = "postgres"
@@ -22,6 +23,8 @@ mod duckdb;
 mod flight;
 #[cfg(feature = "mongodb")]
 mod mongodb;
+#[cfg(feature = "mssql")]
+mod mssql;
 #[cfg(feature = "mysql")]
 mod mysql;
 #[cfg(feature = "odbc")]

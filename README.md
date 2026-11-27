@@ -42,6 +42,7 @@ Existing examples continue to use the facade crate and its feature flags.
 - ODBC (`datafusion-table-providers-odbc`)
 - Oracle (`datafusion-table-providers-oracle`)
 - Apache Cassandra (`datafusion-table-providers-cassandra`)
+- Microsoft SQL Server (`datafusion-table-providers-mssql`)
 
 ## Development
 
@@ -260,6 +261,27 @@ done
 echo "Oracle is ready!"
 
 cargo test -p datafusion-table-providers --test integration --no-default-features --features oracle -- oracle
+```
+
+### Microsoft SQL Server
+
+The SQL Server provider is built on the pure-Rust [`tiberius`](https://crates.io/crates/tiberius) TDS driver, so it needs no native client libraries, and works with SQL Server, Azure SQL and Azure SQL Edge. Tables created with `MsSqlTableFactory::read_write_table_provider` or `CREATE EXTERNAL TABLE ... STORED AS MSSQL` support `INSERT INTO`, `INSERT OVERWRITE`, `UPDATE` and `DELETE`; the `on_conflict` option (`do_nothing_all`, `do_nothing:<columns>` or `upsert:<columns>`) inserts with a T-SQL `MERGE`. With the `federation` feature, joins, aggregations, sorts and limits of tables in the same database are pushed down to SQL Server, translated to T-SQL (e.g. `LIMIT` becomes `TOP`/`OFFSET ... FETCH`).
+
+To run the SQL Server example, start a server in Docker. Azure SQL Edge has both arm64 and amd64 images:
+
+```bash
+docker run --name mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Password-123' \
+    -p 1433:1433 -d mcr.microsoft.com/azure-sql-edge:latest
+# Wait for the SQL Server to start
+sleep 20
+
+cargo run -p datafusion-table-providers --example mssql --features mssql
+```
+
+The integration tests start their own container (override the image with `MSSQL_DOCKER_IMAGE`, e.g. `mcr.microsoft.com/mssql/server:2022-latest` on amd64):
+
+```bash
+cargo test -p datafusion-table-providers --test integration --no-default-features --features mssql -- mssql
 ```
 
 ### MongoDB

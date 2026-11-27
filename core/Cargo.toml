@@ -19,6 +19,7 @@ datafusion-table-providers-clickhouse = { workspace = true, optional = true }
 datafusion-table-providers-duckdb = { workspace = true, optional = true }
 datafusion-table-providers-flightsql = { workspace = true, optional = true }
 datafusion-table-providers-mongodb = { workspace = true, optional = true }
+datafusion-table-providers-mssql = { workspace = true, optional = true }
 datafusion-table-providers-mysql = { workspace = true, optional = true }
 datafusion-table-providers-odbc = { workspace = true, optional = true }
 datafusion-table-providers-postgres = { workspace = true, optional = true }
@@ -56,6 +57,7 @@ mysql_async = { version = "0.37", features = [
   "bigdecimal",
 ] }
 oracle = { workspace = true }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls"] }
 prost = { version = "=0.14.4" }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -81,6 +83,7 @@ clickhouse = ["dep:datafusion-table-providers-clickhouse"]
 duckdb = ["dep:datafusion-table-providers-duckdb"]
 flight = ["dep:datafusion-table-providers-flightsql"]
 mongodb = ["dep:datafusion-table-providers-mongodb"]
+mssql = ["dep:datafusion-table-providers-mssql"]
 mysql = ["dep:datafusion-table-providers-mysql"]
 odbc = ["dep:datafusion-table-providers-odbc"]
 postgres = ["dep:datafusion-table-providers-postgres"]
@@ -126,6 +129,11 @@ required-features = ["postgres"]
 name = "mysql"
 path = "examples/mysql.rs"
 required-features = ["mysql"]
+
+[[example]]
+name = "mssql"
+path = "examples/mssql.rs"
+required-features = ["mssql"]
 
 [[example]]
 name = "cassandra"
